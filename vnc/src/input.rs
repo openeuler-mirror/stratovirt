@@ -195,7 +195,6 @@ impl ClientIoHandler {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
         let mut kbd_state = server.keyboard_state.borrow_mut();
-        let dcl_id = self.server.display_listener.lock().unwrap().dcl_id;
 
         let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
             Some(k) => *k,
@@ -206,12 +205,13 @@ impl ClientIoHandler {
         // Switch to the corresponding display device.
         if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
             && down
-            && dcl_id.is_some()
+            && self.server.display_listener.is_some()
             && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
             && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
         {
             kbd_state.keyboard_state_reset();
-            console_select(Some((keycode - KEYCODE_1) as usize));
+            console_select(Some((keycode - KEYCODE_1) as usize))
+                .unwrap_or_else(|e| error!("{:?}", e));
         }
 
         if let Err(e) = kbd_state.keyboard_state_update(keycode, down) {

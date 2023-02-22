@@ -11,18 +11,23 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::pixman::{
-    get_image_height, get_image_width, pixman_glyph_from_vgafont, pixman_glyph_render,
-    unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
+    create_pixman_image, get_image_height, get_image_width, pixman_glyph_from_vgafont,
+    pixman_glyph_render, unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
 };
+use anyhow::Result;
 use log::error;
 use machine_manager::event_loop::EventLoop;
 use once_cell::sync::Lazy;
 use std::{
     cmp, ptr,
-    rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
-use util::pixman::{pixman_format_code_t, pixman_image_create_bits, pixman_image_t};
+use util::pixman::{pixman_format_code_t, pixman_image_t};
+
+static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
+    Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));
+static DISPLAY_STATE: Lazy<Arc<Mutex<DisplayState>>> =
+    Lazy::new(|| Arc::new(Mutex::new(DisplayState::new())));
 
 /// Width of font.
 const FONT_WIDTH: i32 = 8;
@@ -86,7 +91,7 @@ pub trait DisplayChangeListenerOperations {
     /// Switch the image in display surface.
     fn dpy_switch(&self, _surface: &DisplaySurface) {}
     /// Refresh the image.
-    fn dpy_refresh(&self, _dcl: &mut DisplayChangeListener) {}
+    fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) {}
     /// Update image.
     fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) {}
     /// Update the cursor data.
@@ -96,22 +101,24 @@ pub trait DisplayChangeListenerOperations {
 /// Callback functions registered by graphic hardware.
 pub trait HardWareOperations {
     /// Update image.
-    fn hw_update(&self, _con_id: Option<usize>) {}
+    fn hw_update(&self, _con: Arc<Mutex<DisplayConsole>>) {}
 }
 
 /// Listen to the change of image and call the related
 /// interface to update the image on user's desktop.
 pub struct DisplayChangeListener {
     pub con_id: Option<usize>,
+    pub dcl_id: Option<usize>,
     pub active: bool,
     pub update_interval: u64,
-    pub dpy_opts: Rc<dyn DisplayChangeListenerOperations>,
+    pub dpy_opts: Arc<dyn DisplayChangeListenerOperations>,
 }
 
 impl DisplayChangeListener {
-    pub fn new(dpy_opts: Rc<dyn DisplayChangeListenerOperations>) -> Self {
+    pub fn new(dcl_id: Option<usize>, dpy_opts: Arc<dyn DisplayChangeListenerOperations>) -> Self {
         Self {
             con_id: None,
+            dcl_id,
             active: false,
             update_interval: 0,
             dpy_opts,
@@ -122,17 +129,25 @@ impl DisplayChangeListener {
 /// Graphic hardware can register a console during initialization
 /// and store the information of images in this structure.
 pub struct DisplayConsole {
+    pub con_id: Option<usize>,
     pub width: i32,
     pub height: i32,
     pub surface: Option<DisplaySurface>,
-    dev_opts: Rc<dyn HardWareOperations>,
+    pub console_list: Weak<Mutex<ConsoleList>>,
+    dev_opts: Arc<dyn HardWareOperations>,
 }
 
 impl DisplayConsole {
-    pub fn new(dev_opts: Rc<dyn HardWareOperations>) -> Self {
+    pub fn new(
+        con_id: Option<usize>,
+        console_list: Weak<Mutex<ConsoleList>>,
+        dev_opts: Arc<dyn HardWareOperations>,
+    ) -> Self {
         Self {
+            con_id,
             width: DEFAULT_SURFACE_WIDTH,
             height: DEFAULT_SURFACE_HEIGHT,
+            console_list,
             surface: None,
             dev_opts,
         }
@@ -145,15 +160,22 @@ pub struct DisplayState {
     pub interval: u64,
     /// Whether there is a refresh task.
     is_refresh: bool,
+    /// A list of DisplayChangeListeners.
+    listeners: Vec<Option<Arc<Mutex<DisplayChangeListener>>>>,
     /// Total number of refresh task.
     refresh_num: i32,
 }
+
+// SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
+// and only be saved in the single thread. So implement Send is safe.
+unsafe impl Send for DisplayState {}
 
 impl DisplayState {
     fn new() -> Self {
         Self {
             interval: DISPLAY_UPDATE_INTERVAL_DEFAULT,
             is_refresh: false,
+            listeners: Vec::new(),
             refresh_num: 0,
         }
     }
@@ -163,8 +185,15 @@ impl DisplayState {
 /// If no console is specified, the activate console will be used.
 pub struct ConsoleList {
     pub activate_id: Option<usize>,
-    pub console_list: Vec<Option<DisplayConsole>>,
+    pub console_list: Vec<Option<Arc<Mutex<DisplayConsole>>>>,
 }
+
+// SAFETY:
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
+// 2. The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
+// and only be saved in the single thread.
+// So implement Send is safe.
+unsafe impl Send for ConsoleList {}
 
 impl ConsoleList {
     fn new() -> Self {
@@ -173,34 +202,52 @@ impl ConsoleList {
             console_list: Vec::new(),
         }
     }
+
+    /// Get the console by id.
+    fn get_console_by_id(&mut self, con_id: Option<usize>) -> Option<Arc<Mutex<DisplayConsole>>> {
+        if con_id.is_none() && self.activate_id.is_none() {
+            return None;
+        }
+
+        let mut target_id: usize = 0;
+        if let Some(id) = con_id {
+            target_id = id;
+        } else if let Some(id) = self.activate_id {
+            target_id = id;
+        }
+
+        self.console_list.get(target_id)?.clone()
+    }
 }
 
 /// Refresh display image.
 pub fn display_refresh() {
     let mut dcl_interval: u64;
     let mut interval: u64 = DISPLAY_UPDATE_INTERVAL_MAX;
+
     let mut locked_state = DISPLAY_STATE.lock().unwrap();
+    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+    for dcl in &mut locked_state.listeners.iter_mut().flatten() {
+        related_listeners.push(dcl.clone());
+    }
+    drop(locked_state);
 
-    // Update refresh interval.
-    unsafe {
-        for dcl in &mut DISPLAY_LISTS.iter_mut().flatten() {
-            if !dcl.active {
-                continue;
-            }
-            let dcl_opts = dcl.dpy_opts.clone();
-            (*dcl_opts).dpy_refresh(dcl);
+    for dcl in &mut related_listeners.iter() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        (*dcl_opts).dpy_refresh(dcl);
 
-            dcl_interval = dcl.update_interval;
-            if dcl_interval == 0 {
-                dcl_interval = DISPLAY_UPDATE_INTERVAL_MAX;
-            }
+        // Update refresh interval.
+        dcl_interval = dcl.lock().unwrap().update_interval;
+        if dcl_interval == 0 {
+            dcl_interval = DISPLAY_UPDATE_INTERVAL_MAX;
+        }
 
-            if interval > dcl_interval {
-                interval = dcl_interval;
-            }
+        if interval > dcl_interval {
+            interval = dcl_interval
         }
     }
 
+    let mut locked_state = DISPLAY_STATE.lock().unwrap();
     locked_state.interval = interval;
     if locked_state.interval != 0 {
         locked_state.is_refresh = true;
@@ -223,61 +270,81 @@ pub fn setup_refresh(update_interval: u64) {
 }
 
 /// Switch the image of surface in display.
-pub fn display_replace_surface(con_id: Option<usize>, surface: Option<DisplaySurface>) {
-    let _locked_state = DISPLAY_STATE.lock().unwrap();
-    let consoles = get_console_by_id(con_id);
-    let mut con: &mut DisplayConsole;
-    if let Some(c) = consoles {
-        con = c;
-    } else {
-        return;
-    }
+pub fn display_replace_surface(
+    console: &Option<Weak<Mutex<DisplayConsole>>>,
+    surface: Option<DisplaySurface>,
+) -> Result<()> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
 
+    let mut locked_con = con.lock().unwrap();
+    let old_surface = locked_con.surface;
     if surface.is_none() {
         // Create a place holder message.
-        con.surface =
-            create_msg_surface(con.width, con.height, "Display is not active.".to_string());
+        locked_con.surface = create_msg_surface(
+            locked_con.width,
+            locked_con.height,
+            "Display is not active.".to_string(),
+        );
     } else {
-        con.surface = surface;
+        locked_con.surface = surface;
     }
 
-    if let Some(s) = con.surface {
-        con.width = get_image_width(s.image);
-        con.height = get_image_height(s.image);
+    if let Some(s) = locked_con.surface {
+        locked_con.width = get_image_width(s.image);
+        locked_con.height = get_image_height(s.image);
     }
+    let con_id = locked_con.con_id;
+    if let Some(s) = old_surface {
+        unref_pixman_image(s.image);
+    }
+    drop(locked_con);
 
-    unsafe {
-        let activate_id = CONSOLES.activate_id;
-        for dcl in DISPLAY_LISTS.iter_mut().flatten() {
-            let dcl_id = if dcl.con_id.is_none() {
-                activate_id
-            } else {
-                dcl.con_id
-            };
+    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+    let activate_id = CONSOLES.lock().unwrap().activate_id;
+    let locked_state = DISPLAY_STATE.lock().unwrap();
+    for dcl in locked_state.listeners.iter().flatten() {
+        let mut dcl_id = dcl.lock().unwrap().con_id;
+        if dcl_id.is_none() {
+            dcl_id = activate_id;
+        }
 
-            if con_id == dcl_id {
-                let dcl_ops = dcl.dpy_opts.clone();
-                if let Some(s) = &con.surface {
-                    (*dcl_ops).dpy_switch(s);
-                }
-            }
+        if con_id == dcl_id {
+            related_listeners.push(dcl.clone());
         }
     }
-    drop(_locked_state);
+    drop(locked_state);
+
+    for dcl in related_listeners.iter() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        if let Some(s) = &con.lock().unwrap().surface.clone() {
+            (*dcl_opts).dpy_switch(s);
+        }
+    }
+    Ok(())
 }
 
 /// Update area of the image.
 /// `x` `y` `w` `h` marke the area of image.
-pub fn display_graphic_update(con_id: Option<usize>, x: i32, y: i32, w: i32, h: i32) {
-    if con_id.is_none() {
-        return;
-    }
-
+pub fn display_graphic_update(
+    console: &Option<Weak<Mutex<DisplayConsole>>>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<()> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
     let mut width: i32 = w;
     let mut height: i32 = h;
-    if let Some(con) = get_console_by_id(con_id) {
-        width = con.width;
-        height = con.height;
+    let locked_con = con.lock().unwrap();
+    if let Some(s) = locked_con.surface {
+        width = get_image_width(s.image);
+        height = get_image_height(s.image);
     }
     let mut x = cmp::max(x, 0);
     let mut y = cmp::max(y, 0);
@@ -285,22 +352,29 @@ pub fn display_graphic_update(con_id: Option<usize>, x: i32, y: i32, w: i32, h: 
     y = cmp::min(y, height);
     let w = cmp::min(w, width - x);
     let h = cmp::min(h, height - y);
+    let con_id = locked_con.con_id;
+    drop(locked_con);
 
-    unsafe {
-        let activate_id = CONSOLES.activate_id;
-        for dcl in &mut DISPLAY_LISTS.iter_mut().flatten() {
-            let dcl_id = if dcl.con_id.is_none() {
-                activate_id
-            } else {
-                dcl.con_id
-            };
+    let activate_id = CONSOLES.lock().unwrap().activate_id;
+    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+    let locked_state = DISPLAY_STATE.lock().unwrap();
+    for dcl in locked_state.listeners.iter().flatten() {
+        let mut dcl_id = dcl.lock().unwrap().con_id;
+        if dcl_id.is_none() {
+            dcl_id = activate_id;
+        }
 
-            if con_id == dcl_id {
-                let dcl_ops = dcl.dpy_opts.clone();
-                (*dcl_ops).dpy_image_update(x, y, w, h);
-            }
+        if con_id == dcl_id {
+            related_listeners.push(dcl.clone());
         }
     }
+    drop(locked_state);
+
+    for dcl in related_listeners.iter() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        (*dcl_opts).dpy_image_update(x, y, w, h);
+    }
+    Ok(())
 }
 
 /// Update cursor data in dispaly.
@@ -309,73 +383,75 @@ pub fn display_graphic_update(con_id: Option<usize>, x: i32, y: i32, w: i32, h: 
 ///
 /// * `con_id` - console id in console list.
 /// * `cursor` - data of curosr image.
-pub fn display_cursor_define(con_id: Option<usize>, cursor: &mut DisplayMouse) {
-    unsafe {
-        let activate_id = CONSOLES.activate_id;
-        for dcl in &mut DISPLAY_LISTS.iter_mut().flatten() {
-            let dcl_id = if dcl.con_id.is_none() {
-                activate_id
-            } else {
-                dcl.con_id
-            };
+pub fn display_cursor_define(
+    console: &Option<Weak<Mutex<DisplayConsole>>>,
+    cursor: &mut DisplayMouse,
+) -> Result<()> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let activate_id = CONSOLES.lock().unwrap().activate_id;
+    let con_id = con.lock().unwrap().con_id;
+    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+    let locked_state = DISPLAY_STATE.lock().unwrap();
+    for dcl in locked_state.listeners.iter().flatten() {
+        let mut dcl_id = dcl.lock().unwrap().con_id;
+        if dcl_id.is_none() {
+            dcl_id = activate_id;
+        }
 
-            if con_id == dcl_id {
-                let dcl_ops = dcl.dpy_opts.clone();
-                (*dcl_ops).dpy_cursor_update(cursor);
-            }
+        if con_id == dcl_id {
+            related_listeners.push(dcl.clone());
         }
     }
+    drop(locked_state);
+
+    for dcl in related_listeners.iter() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        (*dcl_opts).dpy_cursor_update(cursor);
+    }
+    Ok(())
 }
 
 pub fn graphic_hardware_update(con_id: Option<usize>) {
-    let id: Option<usize>;
-    if con_id.is_none() {
-        unsafe {
-            id = CONSOLES.activate_id;
-        }
-    } else {
-        id = con_id;
-    }
-
-    if let Some(con) = get_console_by_id(id) {
-        let con_opts = con.dev_opts.clone();
-        (*con_opts).hw_update(id);
+    let console = CONSOLES.lock().unwrap().get_console_by_id(con_id);
+    if let Some(con) = console {
+        let con_opts = con.lock().unwrap().dev_opts.clone();
+        (*con_opts).hw_update(con);
     }
 }
 
 /// Register a dcl and return the id.
-pub fn register_display(dcl_opts: Rc<dyn DisplayChangeListenerOperations>) -> Option<usize> {
+pub fn register_display(dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
     let mut dcl_id = 0;
     let mut locked_state = DISPLAY_STATE.lock().unwrap();
-    let mut dcl = DisplayChangeListener::new(dcl_opts.clone());
-    dcl.active = true;
-    let con_id = dcl.con_id;
-    unsafe {
-        let len = DISPLAY_LISTS.len();
-        for dcl in &mut DISPLAY_LISTS.iter_mut() {
-            if dcl.is_none() {
-                break;
-            }
-            dcl_id += 1;
+    let len = locked_state.listeners.len();
+    for dcl in &mut locked_state.listeners.iter() {
+        if dcl.is_none() {
+            break;
         }
-
-        if dcl_id < len {
-            DISPLAY_LISTS[dcl_id] = Some(dcl);
-        } else {
-            DISPLAY_LISTS.push(Some(dcl));
-        }
+        dcl_id += 1;
     }
-
+    if dcl_id < len {
+        locked_state.listeners[dcl_id] = Some(dcl.clone());
+    } else {
+        locked_state.listeners.push(Some(dcl.clone()));
+    }
     locked_state.refresh_num += 1;
     // Register the clock and execute the scheduled refresh event.
     if !locked_state.is_refresh && locked_state.interval != 0 {
         locked_state.is_refresh = true;
         setup_refresh(locked_state.interval);
     }
+    drop(locked_state);
+    dcl.lock().unwrap().dcl_id = Some(dcl_id);
+    let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
 
-    let console = get_console_by_id(con_id);
+    let con_id = dcl.lock().unwrap().con_id;
+    let console = CONSOLES.lock().unwrap().get_console_by_id(con_id);
     if let Some(con) = console {
-        if let Some(surface) = &mut con.surface {
+        if let Some(surface) = &mut con.lock().unwrap().surface.clone() {
             (*dcl_opts).dpy_switch(surface);
         }
     } else {
@@ -389,156 +465,148 @@ pub fn register_display(dcl_opts: Rc<dyn DisplayChangeListenerOperations>) -> Op
         }
     }
 
-    drop(locked_state);
-    Some(dcl_id)
+    Ok(())
 }
 
 /// Unregister display change listener.
-pub fn unregister_display(id: Option<usize>) {
-    if id.is_none() {
-        return;
-    }
-
+pub fn unregister_display(dcl: &Option<Weak<Mutex<DisplayChangeListener>>>) -> Result<()> {
+    let dcl = match dcl.as_ref().and_then(|d| d.upgrade()) {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    let dcl_id = dcl.lock().unwrap().dcl_id;
     let mut locked_state = DISPLAY_STATE.lock().unwrap();
-    unsafe {
-        let len = DISPLAY_LISTS.len();
-        if let Some(i) = id {
-            if i < len {
-                DISPLAY_LISTS[i] = None;
-            }
-        }
+    let len = locked_state.listeners.len();
+    let id = dcl_id.unwrap_or(len);
+    if id >= len {
+        return Ok(());
     }
-
+    locked_state.listeners[id] = None;
     // Stop refreshing if the current refreshing num is 0
     locked_state.refresh_num -= 1;
     if locked_state.refresh_num <= 0 {
         locked_state.is_refresh = false;
     }
-
     drop(locked_state);
+    Ok(())
 }
 
 /// Create a console and add into a gloabl list. Then returen a console id
 /// for later finding the assigned console.
-pub fn console_init(dev_opts: Rc<dyn HardWareOperations>) -> Option<usize> {
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    let mut new_console = DisplayConsole::new(dev_opts);
+pub fn console_init(dev_opts: Arc<dyn HardWareOperations>) -> Option<Weak<Mutex<DisplayConsole>>> {
+    let mut locked_consoles = CONSOLES.lock().unwrap();
+    let len = locked_consoles.console_list.len();
+    let mut con_id = len;
+    for idx in 0..len {
+        if locked_consoles.console_list[idx].is_none() {
+            con_id = idx;
+            break;
+        }
+    }
+    let mut new_console =
+        DisplayConsole::new(Some(con_id), Arc::downgrade(&CONSOLES), dev_opts.clone());
     new_console.surface = create_msg_surface(
         DEFAULT_SURFACE_WIDTH,
         DEFAULT_SURFACE_HEIGHT,
         "Guest has not initialized the display yet.".to_string(),
     );
-
-    let mut con_id: usize;
-    unsafe {
-        let len = CONSOLES.console_list.len();
-        con_id = len;
-        for idx in 0..len {
-            if CONSOLES.console_list[idx].is_none() {
-                con_id = idx;
-                break;
-            }
-        }
-        if con_id < len {
-            CONSOLES.console_list[con_id] = Some(new_console);
-        } else {
-            CONSOLES.console_list.push(Some(new_console));
-        }
-
-        if CONSOLES.activate_id.is_none() {
-            CONSOLES.activate_id = Some(con_id);
-        }
+    new_console.width = DEFAULT_SURFACE_WIDTH;
+    new_console.height = DEFAULT_SURFACE_HEIGHT;
+    let console = Arc::new(Mutex::new(new_console));
+    if con_id < len {
+        locked_consoles.console_list[con_id] = Some(console.clone())
+    } else {
+        locked_consoles.console_list.push(Some(console.clone()));
     }
+    if locked_consoles.activate_id.is_none() {
+        locked_consoles.activate_id = Some(con_id);
+    }
+    drop(locked_consoles);
 
-    drop(locked_state);
-    display_replace_surface(Some(con_id), None);
-
-    Some(con_id)
+    let con = Arc::downgrade(&console);
+    display_replace_surface(&Some(con.clone()), None)
+        .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    Some(con)
 }
 
 /// Close a console.
-pub fn console_close(con_id: Option<usize>) {
+pub fn console_close(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<()> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let con_id = con.lock().unwrap().con_id;
+    let mut locked_consoles = CONSOLES.lock().unwrap();
     if con_id.is_none() {
-        return;
+        return Ok(());
     }
-
-    unsafe {
-        let len = CONSOLES.console_list.len();
-        let id = con_id.unwrap_or(0);
-        if id >= len {
-            return;
-        }
-        CONSOLES.console_list[id] = None;
-        if con_id != CONSOLES.activate_id {
-            return;
-        }
-        CONSOLES.activate_id = None;
-        for i in 0..len {
-            if CONSOLES.console_list[i].is_some() {
-                CONSOLES.activate_id = Some(i);
-                break;
+    let len = locked_consoles.console_list.len();
+    let id = con_id.unwrap_or(len);
+    if id >= len {
+        return Ok(());
+    }
+    locked_consoles.console_list[id] = None;
+    match locked_consoles.activate_id {
+        Some(activate_id) if id == activate_id => {
+            locked_consoles.activate_id = None;
+            for i in 0..len {
+                if locked_consoles.console_list[i].is_some() {
+                    locked_consoles.activate_id = Some(i);
+                    break;
+                }
             }
         }
+        _ => {}
     }
+    drop(locked_consoles);
+    Ok(())
 }
 
 /// Select the default display device.
 /// If con_id is none, then do nothing.
-pub fn console_select(con_id: Option<usize>) {
-    if con_id.is_none() {
-        return;
+pub fn console_select(con_id: Option<usize>) -> Result<()> {
+    let mut locked_consoles = CONSOLES.lock().unwrap();
+    if locked_consoles.activate_id == con_id {
+        return Ok(());
+    }
+    let activate_console: Option<Arc<Mutex<DisplayConsole>>> = match con_id {
+        Some(id) if locked_consoles.console_list.get(id).is_some() => {
+            locked_consoles.activate_id = Some(id);
+            locked_consoles.console_list[id].clone()
+        }
+        _ => None,
+    };
+    let activate_id: Option<usize> = locked_consoles.activate_id;
+    if activate_id.is_none() {
+        return Ok(());
+    }
+    drop(locked_consoles);
+
+    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+    let mut locked_state = DISPLAY_STATE.lock().unwrap();
+    for dcl in locked_state.listeners.iter_mut().flatten() {
+        if dcl.lock().unwrap().con_id.is_some() {
+            continue;
+        }
+
+        related_listeners.push(dcl.clone());
+    }
+    drop(locked_state);
+
+    let con = match activate_console {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let width = con.lock().unwrap().width;
+    let height = con.lock().unwrap().height;
+    for dcl in related_listeners {
+        let dpy_opts = dcl.lock().unwrap().dpy_opts.clone();
+        if let Some(s) = &mut con.lock().unwrap().surface {
+            (*dpy_opts).dpy_switch(s);
+        }
     }
 
-    let _locked_state = DISPLAY_STATE.lock().unwrap();
-    unsafe {
-        if con_id == CONSOLES.activate_id {
-            return;
-        }
-
-        if let Some(con) = get_console_by_id(con_id) {
-            CONSOLES.activate_id = con_id;
-            for dcl in &mut DISPLAY_LISTS.iter_mut().flatten() {
-                if dcl.con_id.is_some() {
-                    continue;
-                }
-
-                let dpy_opts = dcl.dpy_opts.clone();
-                if let Some(s) = &con.surface {
-                    (*dpy_opts).dpy_switch(s);
-                }
-            }
-
-            display_graphic_update(con_id, 0, 0, con.width, con.height);
-        }
-    }
-}
-
-/// Get the console by id.
-pub fn get_console_by_id(con_id: Option<usize>) -> Option<&'static mut DisplayConsole> {
-    unsafe {
-        let mut target_id: usize = 0;
-        if con_id.is_none() && CONSOLES.activate_id.is_none() {
-            return None;
-        }
-
-        if let Some(id) = con_id {
-            target_id = id;
-        } else if let Some(id) = CONSOLES.activate_id {
-            target_id = id;
-        }
-
-        if let Some(con) = CONSOLES.console_list.get_mut(target_id) {
-            match con {
-                Some(c) => {
-                    return Some(c);
-                }
-                None => {
-                    return None;
-                }
-            }
-        }
-        None
-    }
+    display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, width, height)
 }
 
 /// Create a default image to display messages.
@@ -558,10 +626,7 @@ fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySur
     let mut surface = DisplaySurface::default();
 
     // One pixel occupies four bytes.
-    unsafe {
-        surface.image =
-            pixman_image_create_bits(surface.format, width, height, ptr::null_mut(), width * 4);
-    }
+    surface.image = create_pixman_image(surface.format, width, height, ptr::null_mut(), width * 4);
     if surface.image.is_null() {
         error!("create default surface failed!");
         return None;
@@ -588,7 +653,88 @@ fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySur
     Some(surface)
 }
 
-static mut CONSOLES: Lazy<ConsoleList> = Lazy::new(ConsoleList::new);
-static mut DISPLAY_LISTS: Lazy<Vec<Option<DisplayChangeListener>>> = Lazy::new(Vec::new);
-static DISPLAY_STATE: Lazy<Arc<Mutex<DisplayState>>> =
-    Lazy::new(|| Arc::new(Mutex::new(DisplayState::new())));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::VmConfig;
+    pub struct DclOpts {}
+    impl DisplayChangeListenerOperations for DclOpts {}
+    struct HwOpts {}
+    impl HardWareOperations for HwOpts {}
+
+    #[test]
+    fn test_console_select() {
+        let con_opts = Arc::new(HwOpts {});
+        let con_0 = console_init(con_opts.clone());
+        assert_eq!(
+            con_0
+                .clone()
+                .unwrap()
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .con_id,
+            Some(0)
+        );
+        let con_1 = console_init(con_opts.clone());
+        assert_eq!(
+            con_1.unwrap().upgrade().unwrap().lock().unwrap().con_id,
+            Some(1)
+        );
+        let con_2 = console_init(con_opts.clone());
+        assert_eq!(
+            con_2.unwrap().upgrade().unwrap().lock().unwrap().con_id,
+            Some(2)
+        );
+        assert!(console_close(&con_0).is_ok());
+        let con_3 = console_init(con_opts.clone());
+        assert_eq!(
+            con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id,
+            Some(0)
+        );
+        assert!(console_select(Some(0)).is_ok());
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(0));
+        assert!(console_select(Some(1)).is_ok());
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(1));
+        assert!(console_select(Some(2)).is_ok());
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
+        assert!(console_select(Some(3)).is_ok());
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
+        assert!(console_select(None).is_ok());
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
+    }
+
+    #[test]
+    fn test_register_display() {
+        let vm_config = VmConfig::default();
+        assert!(EventLoop::object_init(&vm_config.iothreads).is_ok());
+        let dcl_opts = Arc::new(DclOpts {});
+        let dcl_0 = Arc::new(Mutex::new(DisplayChangeListener::new(
+            None,
+            dcl_opts.clone(),
+        )));
+        let dcl_1 = Arc::new(Mutex::new(DisplayChangeListener::new(
+            None,
+            dcl_opts.clone(),
+        )));
+        let dcl_2 = Arc::new(Mutex::new(DisplayChangeListener::new(
+            None,
+            dcl_opts.clone(),
+        )));
+        let dcl_3 = Arc::new(Mutex::new(DisplayChangeListener::new(
+            None,
+            dcl_opts.clone(),
+        )));
+
+        assert!(register_display(&dcl_0).is_ok());
+        assert_eq!(dcl_0.lock().unwrap().dcl_id, Some(0));
+        assert!(register_display(&dcl_1).is_ok());
+        assert_eq!(dcl_1.lock().unwrap().dcl_id, Some(1));
+        assert!(register_display(&dcl_2).is_ok());
+        assert_eq!(dcl_2.lock().unwrap().dcl_id, Some(2));
+        assert!(unregister_display(&Some(Arc::downgrade(&dcl_0))).is_ok());
+        assert!(register_display(&dcl_3).is_ok());
+        assert_eq!(dcl_3.lock().unwrap().dcl_id, Some(0));
+    }
+}

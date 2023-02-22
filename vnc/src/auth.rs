@@ -200,15 +200,16 @@ impl ClientIoHandler {
         let server = self.server.clone();
         let client = self.client.clone();
         let mut security = server.security_type.borrow_mut();
-        let err: c_int;
         let mut serverout: *const c_char = ptr::null_mut();
         let mut serverout_len: c_uint = 0;
         let mech_name = CString::new(security.saslconfig.mech_name.as_str())?;
 
         // Start authentication.
-        if security.saslconfig.sasl_stage == SaslStage::SaslServerStart {
-            unsafe {
-                err = sasl_server_start(
+        let err: c_int = match security.saslconfig.sasl_stage {
+            // SAFETY: sasl_server_start() and sasl_server_step() is C function. All parameters passed of the
+            // function have been checked. Memory will be allocated for the incoming pointer inside the function.
+            SaslStage::SaslServerStart => unsafe {
+                sasl_server_start(
                     security.saslconfig.sasl_conn,
                     mech_name.as_ptr(),
                     client_data.as_ptr() as *const c_char,
@@ -216,20 +217,21 @@ impl ClientIoHandler {
                     &mut serverout,
                     &mut serverout_len,
                 )
-            }
-        } else {
-            unsafe {
-                err = sasl_server_step(
+            },
+            SaslStage::SaslServerStep => unsafe {
+                sasl_server_step(
                     security.saslconfig.sasl_conn,
                     client_data.as_ptr() as *const c_char,
                     client_len,
                     &mut serverout,
                     &mut serverout_len,
                 )
-            }
-        }
+            },
+        };
 
         if err != SASL_OK && err != SASL_CONTINUE {
+            // SAFETY: sasl_dispose() is C function. All parameters passed of the
+            // function have been checked.
             unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
             error!("Auth failed!");
             return Err(anyhow!(VncError::AuthFailed("Auth failed!".to_string())));
@@ -303,6 +305,8 @@ impl ClientIoHandler {
         info!("local_addr: {} remote_addr: {}", local_addr, remote_addr);
         let local_addr = CString::new(local_addr)?;
         let remote_addr = CString::new(remote_addr)?;
+        // SAFETY: sasl_server_init() and sasl_server_new() is C function. All parameters passed of the
+        // function have been checked. Memory will be allocated for the incoming pointer inside the function.
         // Sasl server init.
         unsafe {
             err = sasl_server_init(ptr::null_mut(), appname.as_ptr());
@@ -346,6 +350,8 @@ impl ClientIoHandler {
         let ssf: sasl_ssf_t = 256;
         let ssf = &ssf as *const sasl_ssf_t;
         let security = self.server.security_type.borrow_mut();
+        // SAFETY: sasl_setprop() and sasl_server_new() is C function. It can be ensure
+        // that security.saslconfig.sasl_conn is not null.
         unsafe {
             err = sasl_setprop(
                 security.saslconfig.sasl_conn,
@@ -374,6 +380,8 @@ impl ClientIoHandler {
         };
 
         let props = &saslprops as *const sasl_security_properties_t;
+        // SAFETY: sasl_setprop() and sasl_server_new() is C function. It can be ensure
+        // that security.saslconfig.sasl_conn is not null.
         unsafe {
             err = sasl_setprop(
                 security.saslconfig.sasl_conn,
@@ -402,6 +410,8 @@ impl ClientIoHandler {
         let mut mechlist: *const c_char = ptr::null_mut();
         let mut security = self.server.security_type.borrow_mut();
         let client = self.client.clone();
+        // SAFETY: sasl_listmech() is C function. It can be ensure
+        // that security.saslconfig.sasl_conn is not null.
         unsafe {
             err = sasl_listmech(
                 security.saslconfig.sasl_conn,
@@ -420,6 +430,7 @@ impl ClientIoHandler {
                 "SASL_FAIL: no support sasl mechlist".to_string()
             )));
         }
+        // SAFETY: It can be ensure that the pointer of mechlist is not null.
         let mech_list = unsafe { CStr::from_ptr(mechlist as *const c_char) };
         security.saslconfig.mech_list = String::from(mech_list.to_str()?);
         let mut buf = Vec::new();
@@ -442,6 +453,8 @@ impl ClientIoHandler {
         }
         let err: c_int;
         let mut val: *const c_void = ptr::null_mut();
+        // SAFETY: sasl_getprop() is C function. It can be ensure
+        // that security.saslconfig.sasl_conn is not null.
         unsafe { err = sasl_getprop(security.saslconfig.sasl_conn, SASL_SSF as c_int, &mut val) }
         if err != SASL_OK {
             error!("sasl_getprop: internal error");
@@ -450,6 +463,7 @@ impl ClientIoHandler {
             ))));
         }
 
+        // SAFETY: It can be ensure that the ptr of val is not null.
         let ssf: usize = unsafe { *(val as *const usize) };
         if ssf < MIN_SSF_LENGTH {
             error!("SASL SSF too weak");
@@ -467,6 +481,8 @@ impl ClientIoHandler {
     fn sasl_check_authz(&mut self) -> Result<()> {
         let security = self.server.security_type.borrow_mut();
         let mut val: *const c_void = ptr::null_mut();
+        // SAFETY: sasl_getprop() is C function. It can be ensure
+        // that security.saslconfig.sasl_conn is not null.
         let err = unsafe {
             sasl_getprop(
                 security.saslconfig.sasl_conn,
@@ -485,6 +501,7 @@ impl ClientIoHandler {
                 "No SASL username set"
             ))));
         }
+        // SAFETY: It can ensure that the pointer val is not null.
         let username = unsafe { CStr::from_ptr(val as *const c_char) };
         let username = String::from(username.to_str()?);
 

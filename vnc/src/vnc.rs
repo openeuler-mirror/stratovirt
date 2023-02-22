@@ -25,8 +25,8 @@ use crate::{
     encoding::enc_hextile::hextile_send_framebuffer_update,
     input::KeyBoardState,
     pixman::{
-        bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
-        unref_pixman_image,
+        bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
+        get_image_width, ref_pixman_image, unref_pixman_image,
     },
     round_up, round_up_div,
     server::{make_server_config, VncConnHandler, VncServer, VncSurface},
@@ -54,7 +54,7 @@ use std::{
 use util::{
     bitmap::Bitmap,
     loop_context::EventNotifierHelper,
-    pixman::{pixman_format_code_t, pixman_image_create_bits, pixman_image_ref, pixman_image_t},
+    pixman::{pixman_format_code_t, pixman_image_t},
 };
 
 /// The number of dirty pixels represented bt one bit in dirty bitmap.
@@ -90,7 +90,7 @@ impl DisplayChangeListenerOperations for VncInterface {
         unref_pixman_image(locked_vnc_surface.guest_image);
 
         // Vnc_pixman_image_ref
-        locked_vnc_surface.guest_image = unsafe { pixman_image_ref(surface.image) };
+        locked_vnc_surface.guest_image = ref_pixman_image(surface.image);
         locked_vnc_surface.guest_format = surface.format;
 
         let guest_width: i32 = get_image_width(locked_vnc_surface.guest_image);
@@ -138,7 +138,7 @@ impl DisplayChangeListenerOperations for VncInterface {
     }
 
     /// Refresh server_image to guest_image.
-    fn dpy_refresh(&self, dcl: &mut DisplayChangeListener) {
+    fn dpy_refresh(&self, dcl: &Arc<Mutex<DisplayChangeListener>>) {
         if VNC_SERVERS.lock().unwrap().is_empty() {
             return;
         }
@@ -146,10 +146,11 @@ impl DisplayChangeListenerOperations for VncInterface {
         if server.client_handlers.lock().unwrap().is_empty() {
             return;
         }
-        graphic_hardware_update(dcl.con_id);
+        let con_id = dcl.lock().unwrap().con_id;
+        graphic_hardware_update(con_id);
 
         // Update refresh interval.
-        let mut update_interval = dcl.update_interval;
+        let mut update_interval = dcl.lock().unwrap().update_interval;
         let dirty_num = server.vnc_surface.lock().unwrap().update_server_image();
         if dirty_num != 0 {
             update_interval /= 2;
@@ -162,7 +163,7 @@ impl DisplayChangeListenerOperations for VncInterface {
                 update_interval = DISPLAY_UPDATE_INTERVAL_MAX;
             }
         }
-        dcl.update_interval = update_interval;
+        dcl.lock().unwrap().update_interval = update_interval;
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
@@ -275,24 +276,27 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
     let keyboard_state: Rc<RefCell<KeyBoardState>> =
         Rc::new(RefCell::new(KeyBoardState::new(max_keycode as usize)));
 
+    let vnc_opts = Arc::new(VncInterface::default());
+    let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));
+
     let server = Arc::new(VncServer::new(
         get_client_image(),
         keyboard_state,
         keysym2keycode,
+        Some(Arc::downgrade(&dcl)),
     ));
+
     // Parameter configuation for VncServeer.
     make_server_config(&server, vnc_cfg, object)?;
 
     // Add an VncServer.
     add_vnc_server(server.clone());
 
-    // Register the event to listen for client's connection.
-    let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server.clone())));
-
     // Register in display console.
-    let vnc_opts = Rc::new(VncInterface::default());
-    let dcl_id = register_display(vnc_opts);
-    server.display_listener.lock().unwrap().dcl_id = dcl_id;
+    register_display(&dcl)?;
+
+    // Register the event to listen for client's connection.
+    let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server)));
 
     // Vnc_thread: a thread to send the framebuffer
     start_vnc_thread()?;
@@ -441,15 +445,13 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
     let g_height = get_image_height(locked_vnc_surface.guest_image);
     let width = vnc_width(g_width);
     let height = vnc_height(g_height);
-    locked_vnc_surface.server_image = unsafe {
-        pixman_image_create_bits(
-            pixman_format_code_t::PIXMAN_x8r8g8b8,
-            width,
-            height,
-            ptr::null_mut(),
-            0,
-        )
-    };
+    locked_vnc_surface.server_image = create_pixman_image(
+        pixman_format_code_t::PIXMAN_x8r8g8b8,
+        width,
+        height,
+        ptr::null_mut(),
+        0,
+    );
 
     locked_vnc_surface.guest_dirty_bitmap.clear_all();
     set_area_dirty(
@@ -531,6 +533,7 @@ pub fn write_pixel(
 ) {
     if !client_dpm.convert {
         let mut con = vec![0; copy_bytes];
+        // SAFETY: it can be ensure the raw pointer will not exceed the range.
         unsafe {
             ptr::copy(data_ptr as *mut u8, con.as_mut_ptr(), copy_bytes);
         }
@@ -539,6 +542,7 @@ pub fn write_pixel(
         let num = copy_bytes >> 2;
         let ptr = data_ptr as *mut u32;
         for i in 0..num {
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             let color = unsafe { *ptr.add(i) };
             convert_pixel(client_dpm, buf, color);
         }
@@ -651,15 +655,13 @@ fn send_framebuffer_update(
 /// Initialize a default image
 /// Default: width is 640, height is 480, stride is 640 * 4
 fn get_client_image() -> *mut pixman_image_t {
-    unsafe {
-        pixman_image_create_bits(
-            pixman_format_code_t::PIXMAN_x8r8g8b8,
-            640,
-            480,
-            ptr::null_mut(),
-            640 * 4,
-        )
-    }
+    create_pixman_image(
+        pixman_format_code_t::PIXMAN_x8r8g8b8,
+        640,
+        480,
+        ptr::null_mut(),
+        640 * 4,
+    )
 }
 
 pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<VncServer>>>> = Lazy::new(|| Mutex::new(Vec::new()));
