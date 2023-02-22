@@ -31,15 +31,15 @@ use vmm_sys_util::eventfd::EventFd;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
-const RTC_DR: u64 = 0x00;
+pub const RTC_DR: u64 = 0x00;
 /// Match Register.
 const RTC_MR: u64 = 0x04;
 /// Load Register.
-const RTC_LR: u64 = 0x08;
+pub const RTC_LR: u64 = 0x08;
 /// Control Register.
-const RTC_CR: u64 = 0x0c;
+pub const RTC_CR: u64 = 0x0c;
 /// Interrupt Mask Set or Clear Register.
-const RTC_IMSC: u64 = 0x10;
+pub const RTC_IMSC: u64 = 0x10;
 /// Raw Interrupt Status Register.
 const RTC_RIS: u64 = 0x14;
 /// Masked Interrupt Status Register.
