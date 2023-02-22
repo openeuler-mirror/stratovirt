@@ -387,6 +387,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    input_event {
+        #[serde(default)]
+        arguments: input_event,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -2063,6 +2069,33 @@ impl Command for query_iothreads {
         Default::default()
     }
 }
+/// input_event
+///
+/// # Arguments
+///
+/// * `key` - the input type such as 'keyboard' or 'pointer'.
+/// * `value` - the input value.
+
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "input_event",
+///      "arguments": { "key": "pointer", "value": "100,200,1" }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct input_event {
+    pub key: String,
+    pub value: String,
+}
+
+impl Command for input_event {
+    type Res = Vec<input_event>;
+
+    fn back(self) -> Vec<input_event> {
+        Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2518,6 +2551,42 @@ mod tests {
         let json_msg = r#"
         {
             "execute": "query-commands"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_input_event() {
+        // key event
+        let json_msg = r#"
+        {
+            "execute": "input_event" ,
+            "arguments": {
+                "key": "keyboard",
+                "value": "2,1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+        // pointer event
+        let json_msg = r#"
+        {
+            "execute": "input_event" ,
+            "arguments": {
+                "key": "pointer",
+                "value": "4,5,1"
+            }
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
