@@ -28,25 +28,25 @@ use util::num_ops::{read_u32, write_u64_low};
 use crate::config::*;
 use crate::usb::{Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter};
-use crate::xhci::xhci_ring::{
-    TRBCCode, TRBType, XhciEventRingSeg, XhciRing, XhciTRB, TRB_EV_ED, TRB_SIZE, TRB_TR_IDT,
-    TRB_TR_IOC, TRB_TR_ISP, TRB_TYPE_SHIFT,
-};
 use crate::UsbError;
 
-use super::xhci_ring::SETUP_TRB_TR_LEN;
-use super::xhci_ring::TRB_TR_DIR;
-use super::xhci_ring::TRB_TR_LEN_MASK;
+use super::xhci_ring::XhciEventRingSeg;
+use super::xhci_ring::XhciRing;
+use super::xhci_ring::XhciTRB;
+use super::{
+    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_SIZE, TRB_TR_DIR, TRB_TR_IDT, TRB_TR_IOC,
+    TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TYPE_SHIFT,
+};
 
 pub const MAX_INTRS: u16 = 16;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
-const EP_STATE_MASK: u32 = 0x7;
-const EP_DISABLED: u32 = 0;
-const EP_RUNNING: u32 = 1;
-const EP_HALTED: u32 = 2;
-const EP_STOPPED: u32 = 3;
-const EP_ERROR: u32 = 4;
+pub const EP_STATE_MASK: u32 = 0x7;
+pub const EP_DISABLED: u32 = 0;
+pub const EP_RUNNING: u32 = 1;
+pub const EP_HALTED: u32 = 2;
+pub const EP_STOPPED: u32 = 3;
+pub const EP_ERROR: u32 = 4;
 /// Endpoint type
 const EP_TYPE_SHIFT: u32 = 3;
 const EP_TYPE_MASK: u32 = 0x7;
@@ -55,13 +55,10 @@ const SLOT_STATE_MASK: u32 = 0x1f;
 const SLOT_STATE_SHIFT: u32 = 27;
 /// 6.2.3 Slot Context. Table 6-7.
 /// The values of both enabled and disabled are 0.
-const SLOT_DISABLED_ENABLED: u32 = 0;
-const SLOT_DEFAULT: u32 = 1;
-const SLOT_ADDRESSED: u32 = 2;
-const SLOT_CONFIGURED: u32 = 3;
-const SLOT_CONTEXT_ENTRIES_MASK: u32 = 0x1f;
-const SLOT_CONTEXT_ENTRIES_SHIFT: u32 = 27;
-const SLOT_CONTEXT_DEVICE_ADDRESS_MASK: u32 = 0xff;
+pub const SLOT_DISABLED_ENABLED: u32 = 0;
+pub const SLOT_DEFAULT: u32 = 1;
+pub const SLOT_ADDRESSED: u32 = 2;
+pub const SLOT_CONFIGURED: u32 = 3;
 /// TRB flags
 const TRB_CR_BSR: u32 = 1 << 9;
 const TRB_CR_EPID_SHIFT: u32 = 16;
@@ -92,15 +89,30 @@ const INPUT_CONTEXT_SIZE: u64 = 0x420;
 const DEVICE_CONTEXT_SIZE: u64 = 0x400;
 /// Slot Context.
 const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
-const SLOT_CTX_MAX_EXIT_LATENCY_MASK: u32 = 0xffff;
-const SLOT_CTX_INTERRUPTER_TARGET_MASK: u32 = 0xffc00000;
+const SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK: u32 = 0xffff;
+const SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT: u32 = 0;
+const SLOT_CONTEXT_INTERRUPTER_TARGET_MASK: u32 = 0x3ff;
+const SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT: u32 = 22;
+const SLOT_CONTEXT_PORT_NUMBER_MASK: u32 = 0xff;
+const SLOT_CONTEXT_PORT_NUMBER_SHIFT: u32 = 16;
+const SLOT_CONTEXT_ENTRIES_MASK: u32 = 0x1f;
+const SLOT_CONTEXT_ENTRIES_SHIFT: u32 = 27;
+const SLOT_CONTEXT_DEVICE_ADDRESS_MASK: u32 = 0xff;
+const SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT: u32 = 0;
 /// Endpoint Context.
 const EP_INPUT_CTX_ENTRY_SIZE: u64 = 0x20;
 const EP_INPUT_CTX_OFFSET: u64 = 0x40;
 const EP_CTX_OFFSET: u64 = 0x20;
 const EP_CTX_TR_DEQUEUE_POINTER_MASK: u64 = !0xf;
 const EP_CTX_DCS: u64 = 1;
-const EP_CTX_MAX_PACKET_SIZE_MASK: u32 = 0xffff0000;
+const EP_CONTEXT_MAX_PACKET_SIZE_MASK: u32 = 0xffff;
+const EP_CONTEXT_MAX_PACKET_SIZE_SHIFT: u32 = 16;
+const EP_CONTEXT_INTERVAL_MASK: u32 = 0xff;
+const EP_CONTEXT_INTERVAL_SHIFT: u32 = 16;
+const EP_CONTEXT_EP_STATE_MASK: u32 = 0x7;
+const EP_CONTEXT_EP_STATE_SHIFT: u32 = 0;
+const EP_CONTEXT_EP_TYPE_MASK: u32 = 0x7;
+const EP_CONTEXT_EP_TYPE_SHIFT: u32 = 3;
 
 type DmaAddr = u64;
 
@@ -405,14 +417,56 @@ pub struct XhciSlotCtx {
 }
 
 impl XhciSlotCtx {
-    fn set_slot_state(&mut self, state: u32) {
+    pub fn set_slot_state(&mut self, state: u32) {
         self.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
         self.dev_state |= (state & SLOT_STATE_MASK) << SLOT_STATE_SHIFT;
     }
 
-    fn set_context_entry(&mut self, num: u32) {
+    pub fn get_slot_state(&self) -> u32 {
+        self.dev_state >> SLOT_STATE_SHIFT & SLOT_STATE_MASK
+    }
+
+    pub fn set_context_entry(&mut self, num: u32) {
         self.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
         self.dev_info |= (num & SLOT_CONTEXT_ENTRIES_MASK) << SLOT_CONTEXT_ENTRIES_SHIFT;
+    }
+
+    pub fn set_port_number(&mut self, port_number: u32) {
+        self.dev_info &= !(SLOT_CONTEXT_PORT_NUMBER_MASK << SLOT_CONTEXT_PORT_NUMBER_SHIFT);
+        self.dev_info2 |=
+            (port_number & SLOT_CONTEXT_PORT_NUMBER_MASK) << SLOT_CONTEXT_PORT_NUMBER_SHIFT;
+    }
+
+    pub fn get_max_exit_latency(&self) -> u32 {
+        self.dev_info2 >> SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT & SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK
+    }
+
+    pub fn set_max_exit_latency(&mut self, state: u32) {
+        self.dev_info2 &=
+            !(SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK << SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT);
+        self.dev_info2 |=
+            (state & SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK) << SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT;
+    }
+
+    pub fn get_interrupter_target(&self) -> u32 {
+        self.tt_info >> SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT & SLOT_CONTEXT_INTERRUPTER_TARGET_MASK
+    }
+
+    pub fn set_interrupter_target(&mut self, state: u32) {
+        self.tt_info &=
+            !(SLOT_CONTEXT_INTERRUPTER_TARGET_MASK << SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT);
+        self.tt_info |=
+            (state & SLOT_CONTEXT_INTERRUPTER_TARGET_MASK) << SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT;
+    }
+
+    pub fn get_usb_device_address(&self) -> u32 {
+        self.dev_state >> SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT & SLOT_CONTEXT_DEVICE_ADDRESS_MASK
+    }
+
+    pub fn set_usb_device_address(&mut self, state: u32) {
+        self.dev_state &= !(SLOT_CONTEXT_DEVICE_ADDRESS_MASK << SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT);
+        self.dev_state |=
+            (state & SLOT_CONTEXT_DEVICE_ADDRESS_MASK) << SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT;
     }
 }
 
@@ -429,9 +483,45 @@ pub struct XhciEpCtx {
     pub tx_info: u32,
 }
 
+impl XhciEpCtx {
+    pub fn set_tr_dequeue_pointer(&mut self, dequeue: u64) {
+        self.deq_lo = dequeue as u32;
+        self.deq_hi = (dequeue >> 32) as u32;
+    }
+
+    pub fn get_max_packet_size(&self) -> u32 {
+        self.ep_info2 >> EP_CONTEXT_MAX_PACKET_SIZE_SHIFT & EP_CONTEXT_MAX_PACKET_SIZE_MASK
+    }
+
+    pub fn set_max_packet_size(&mut self, size: u32) {
+        self.ep_info2 &= !(EP_CONTEXT_MAX_PACKET_SIZE_MASK << EP_CONTEXT_MAX_PACKET_SIZE_SHIFT);
+        self.ep_info2 |=
+            (size & EP_CONTEXT_MAX_PACKET_SIZE_MASK) << EP_CONTEXT_MAX_PACKET_SIZE_SHIFT;
+    }
+
+    pub fn set_interval(&mut self, inter: u32) {
+        self.ep_info &= !(EP_CONTEXT_INTERVAL_MASK << EP_CONTEXT_INTERVAL_SHIFT);
+        self.ep_info |= (inter & EP_CONTEXT_INTERVAL_MASK) << EP_CONTEXT_INTERVAL_SHIFT;
+    }
+
+    pub fn get_ep_state(&self) -> u32 {
+        self.ep_info >> EP_CONTEXT_EP_STATE_SHIFT & EP_CONTEXT_EP_STATE_MASK
+    }
+
+    pub fn set_ep_state(&mut self, state: u32) {
+        self.ep_info &= !(EP_CONTEXT_EP_STATE_MASK << EP_CONTEXT_EP_STATE_SHIFT);
+        self.ep_info |= (state & EP_CONTEXT_EP_STATE_MASK) << EP_CONTEXT_EP_STATE_SHIFT;
+    }
+
+    pub fn set_ep_type(&mut self, state: u32) {
+        self.ep_info2 &= !(EP_CONTEXT_EP_TYPE_MASK << EP_CONTEXT_EP_TYPE_SHIFT);
+        self.ep_info2 |= (state & EP_CONTEXT_EP_TYPE_MASK) << EP_CONTEXT_EP_TYPE_SHIFT;
+    }
+}
+
 impl DwordOrder for XhciEpCtx {}
 
-trait DwordOrder: Default + Copy + Send + Sync {
+pub trait DwordOrder: Default + Copy + Send + Sync {
     fn as_dwords(&self) -> &[u32] {
         unsafe { from_raw_parts(self as *const Self as *const u32, size_of::<Self>() / 4) }
     }
@@ -1007,10 +1097,8 @@ impl XhciDevice {
                 GuestAddress(octx),
                 slot_ctx.as_mut_dwords(),
             )?;
-            slot_ctx.dev_info2 &= !SLOT_CTX_MAX_EXIT_LATENCY_MASK;
-            slot_ctx.dev_info2 |= islot_ctx.dev_info2 & SLOT_CTX_MAX_EXIT_LATENCY_MASK;
-            slot_ctx.tt_info &= !SLOT_CTX_INTERRUPTER_TARGET_MASK;
-            slot_ctx.tt_info |= islot_ctx.tt_info & SLOT_CTX_INTERRUPTER_TARGET_MASK;
+            slot_ctx.set_max_exit_latency(islot_ctx.get_max_exit_latency());
+            slot_ctx.set_interrupter_target(islot_ctx.get_interrupter_target());
             dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         }
         if ictl_ctx.add_flags & 0x2 == 0x2 {
@@ -1033,8 +1121,7 @@ impl XhciDevice {
                 ),
                 ep_ctx.as_mut_dwords(),
             )?;
-            ep_ctx.ep_info2 &= !EP_CTX_MAX_PACKET_SIZE_MASK;
-            ep_ctx.ep_info2 |= iep_ctx.ep_info2 & EP_CTX_MAX_PACKET_SIZE_MASK;
+            ep_ctx.set_max_packet_size(iep_ctx.get_max_packet_size());
             dma_write_u32(
                 &self.mem_space,
                 // It is safe to use plus here becuase we previously verify the address.
@@ -1066,7 +1153,7 @@ impl XhciDevice {
         }
         slot_ctx.set_slot_state(SLOT_DEFAULT);
         slot_ctx.set_context_entry(1);
-        slot_ctx.dev_state &= !SLOT_CONTEXT_DEVICE_ADDRESS_MASK;
+        slot_ctx.set_usb_device_address(0);
         dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
