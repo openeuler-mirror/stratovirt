@@ -534,6 +534,7 @@ name = "mod_test"
 version = "2.2.0"
 dependencies = [
  "acpi",
+ "anyhow",
  "byteorder",
  "devices",
  "hex",
@@ -542,6 +543,7 @@ dependencies = [
  "serde_json",
  "util",
  "virtio",
+ "vmm-sys-util",
 ]
 
 [[package]]
