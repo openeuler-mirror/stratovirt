@@ -107,7 +107,12 @@ impl TestPciDev {
         addr
     }
 
-    pub fn enable_msix(&mut self) {
+    /// Enable MSI-X.
+    ///
+    /// # Arguments
+    ///
+    /// `bar_addr` - Address of the bar where the MSI-X is located. Address allocated by Default.
+    pub fn enable_msix(&mut self, bar_addr: Option<u64>) {
         let addr = self.find_capability(PCI_CAP_ID_MSIX, 0);
         assert!(addr != 0);
         let value = self.config_readw(addr + PCI_MSIX_FLAGS);
@@ -115,7 +120,11 @@ impl TestPciDev {
 
         let table = self.config_readl(addr + PCI_MSIX_TABLE);
         let bar_table = table & PCI_MSIX_TABLE_BIR;
-        self.msix_table_bar = self.io_map(bar_table.try_into().unwrap());
+        self.msix_table_bar = if let Some(addr) = bar_addr {
+            addr
+        } else {
+            self.io_map(bar_table.try_into().unwrap())
+        };
         self.msix_table_off = (table & !PCI_MSIX_TABLE_BIR).try_into().unwrap();
 
         let table = self.config_readl(addr + PCI_MSIX_PBA);

@@ -121,7 +121,7 @@ fn init_device_step(
                 4 => blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1),
                 5 => blk.borrow_mut().set_features_ok(),
                 7 => {
-                    blk.borrow_mut().pci_dev.enable_msix();
+                    blk.borrow_mut().pci_dev.enable_msix(None);
                     blk.borrow_mut()
                         .setup_msix_configuration_vector(alloc.clone(), 0);
                     vqs = blk
@@ -691,7 +691,7 @@ fn virtio_init_device_abnormal_status() {
             blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
         }
         if i % 7 == 0 {
-            blk.borrow_mut().pci_dev.enable_msix();
+            blk.borrow_mut().pci_dev.enable_msix(None);
             blk.borrow_mut()
                 .setup_msix_configuration_vector(alloc.clone(), 0);
             blk.borrow_mut()
@@ -707,7 +707,7 @@ fn virtio_init_device_abnormal_status() {
             blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
         }
         if i % 7 == 0 {
-            blk.borrow_mut().pci_dev.enable_msix();
+            blk.borrow_mut().pci_dev.enable_msix(None);
             blk.borrow_mut()
                 .setup_msix_configuration_vector(alloc.clone(), 0);
             blk.borrow_mut()
@@ -719,7 +719,7 @@ fn virtio_init_device_abnormal_status() {
     blk.borrow_mut().set_driver();
     blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
     blk.borrow_mut().set_features_ok();
-    blk.borrow_mut().pci_dev.enable_msix();
+    blk.borrow_mut().pci_dev.enable_msix(None);
     blk.borrow_mut()
         .setup_msix_configuration_vector(alloc.clone(), 0);
     let vqs = blk
@@ -780,7 +780,7 @@ fn virtio_init_device_abnormal_features() {
         }
         blk.borrow_mut().negotiate_features(features);
         blk.borrow_mut().set_features_ok();
-        blk.borrow_mut().pci_dev.enable_msix();
+        blk.borrow_mut().pci_dev.enable_msix(None);
         blk.borrow_mut()
             .setup_msix_configuration_vector(alloc.clone(), 0);
         let vqs = blk
@@ -884,7 +884,7 @@ fn virtio_init_device_abnormal_vring_info() {
         blk.borrow_mut().set_driver();
         blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
         blk.borrow_mut().set_features_ok();
-        blk.borrow_mut().pci_dev.enable_msix();
+        blk.borrow_mut().pci_dev.enable_msix(None);
         blk.borrow_mut()
             .setup_msix_configuration_vector(alloc.clone(), 0);
 
@@ -1266,7 +1266,7 @@ fn virtio_init_device_repeat() {
     let capability = blk.borrow().config_readq(0);
     assert_eq!(capability, TEST_IMAGE_SIZE / 512);
 
-    blk.borrow_mut().pci_dev.enable_msix();
+    blk.borrow_mut().pci_dev.enable_msix(None);
     blk.borrow_mut()
         .setup_msix_configuration_vector(alloc.clone(), 0);
 
