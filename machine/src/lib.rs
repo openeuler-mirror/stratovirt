@@ -12,7 +12,7 @@
 
 pub mod error;
 mod micro_vm;
-mod standard_vm;
+pub mod standard_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
 
