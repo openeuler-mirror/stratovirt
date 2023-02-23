@@ -47,17 +47,6 @@ pub struct RegionCache {
     pub end: u64,
 }
 
-impl Default for RegionCache {
-    fn default() -> Self {
-        RegionCache {
-            reg_type: RegionType::Ram,
-            host_base: 0,
-            start: 0,
-            end: 0,
-        }
-    }
-}
-
 type ListenerObj = Arc<Mutex<dyn Listener>>;
 
 /// Address Space of memory.
