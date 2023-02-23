@@ -185,9 +185,9 @@ impl HidKeyboard {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HidPointerEvent {
     /// Direction: left to right.
-    pub pos_x: i32,
+    pub pos_x: u32,
     /// Direction: up to down.
-    pub pos_y: i32,
+    pub pos_y: u32,
     /// Wheel up or down.
     pub pos_z: i32,
     pub button_state: u32,
@@ -421,12 +421,12 @@ impl Hid {
             HID_GET_REPORT => match self.kind {
                 HidType::Tablet => {
                     let buf = self.pointer_poll();
-                    data.copy_from_slice(buf.as_slice());
+                    data[0..buf.len()].copy_from_slice(buf.as_slice());
                     packet.actual_length = buf.len() as u32;
                 }
                 HidType::Keyboard => {
                     let buf = self.keyboard_poll();
-                    data.copy_from_slice(buf.as_slice());
+                    data[0..buf.len()].copy_from_slice(buf.as_slice());
                     packet.actual_length = buf.len() as u32;
                 }
                 _ => {

@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
@@ -30,6 +31,8 @@ use crate::xhci::xhci_controller::XhciDevice;
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
+const INPUT_BUTTON_MASK: u32 = 0x7;
+const INPUT_COORDINATES_MAX: u32 = 0x7fff;
 
 /// Tablet device descriptor
 static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -80,7 +83,6 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             iInterface: 0,
         },
         other_desc: vec![Arc::new(UsbDescOther {
-            length: 0,
             /// HID descriptor
             data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0],
         })],
@@ -137,7 +139,7 @@ impl UsbTablet {
 }
 
 // Used for VNC to send pointer event.
-pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32) -> Result<()> {
+pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: u32, y: u32) -> Result<()> {
     let mut locked_tablet = tablet.lock().unwrap();
     if locked_tablet.hid.num >= QUEUE_LENGTH {
         debug!("Pointer queue is full!");
@@ -153,9 +155,9 @@ pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32
     } else {
         evt.pos_z = 0;
     }
-    evt.button_state = button;
-    evt.pos_x = x;
-    evt.pos_y = y;
+    evt.button_state = button & INPUT_BUTTON_MASK;
+    evt.pos_x = min(x, INPUT_COORDINATES_MAX);
+    evt.pos_y = min(y, INPUT_COORDINATES_MAX);
     locked_tablet.hid.num += 1;
     drop(locked_tablet);
     let clone_tablet = tablet.clone();
