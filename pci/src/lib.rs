@@ -17,10 +17,12 @@ pub mod hotplug;
 pub mod msix;
 
 mod bus;
+mod demo_dev;
 mod host;
 mod root_port;
 
 pub use bus::PciBus;
+pub use demo_dev::*;
 pub use host::PciHost;
 pub use msix::init_msix;
 pub use root_port::RootPort;

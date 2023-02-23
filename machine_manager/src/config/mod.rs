@@ -13,6 +13,7 @@
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
+pub use demo_dev::*;
 pub use devices::*;
 pub use drive::*;
 pub use error::ConfigError;
@@ -35,6 +36,7 @@ pub use vnc::*;
 mod balloon;
 mod boot_source;
 mod chardev;
+mod demo_dev;
 mod devices;
 mod drive;
 pub mod error;

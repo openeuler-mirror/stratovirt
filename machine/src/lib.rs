@@ -51,20 +51,20 @@ use hypervisor::kvm::KVM_FDS;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::parse_gpu;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_scsi_controller, parse_scsi_device, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
-    parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
-    BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
-    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
+    parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
+    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_usb_keyboard,
+    parse_usb_tablet, parse_vfio, parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial,
+    parse_vsock, parse_xhci, BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode,
+    NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
+    VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::{
     event_loop::EventLoop,
     machine::{KvmVmState, MachineInterface},
 };
 use migration::MigrationManager;
-use pci::{PciBus, PciDevOps, PciHost, RootPort};
+use pci::{DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
@@ -1262,6 +1262,9 @@ pub trait MachineOps {
                 "ramfb" => {
                     self.add_ramfb()?;
                 }
+                "pcie-demo-dev" => {
+                    self.add_demo_dev(vm_config, cfg_args)?;
+                }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
                 }
@@ -1277,6 +1280,19 @@ pub trait MachineOps {
 
     fn add_ramfb(&mut self) -> Result<()> {
         bail!("ramfb device is not supported!");
+    }
+
+    fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+        let demo_cfg = parse_demo_dev(vm_config, cfg_args.to_string())
+            .with_context(|| "failed to parse cmdline for demo dev.")?;
+
+        let sys_mem = self.get_sys_mem().clone();
+        let demo_dev = DemoDev::new(demo_cfg, devfn, sys_mem, parent_bus);
+
+        demo_dev.realize()
     }
 
     /// Return the syscall whitelist for seccomp.
