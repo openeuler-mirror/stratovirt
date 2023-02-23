@@ -508,10 +508,6 @@ impl MachineOps for StdMachine {
             None
         };
 
-        locked_vm
-            .reset_fwcfg_boot_order()
-            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
-
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             nr_cpus,
@@ -554,6 +550,10 @@ impl MachineOps for StdMachine {
                 .build_acpi_tables(&fwcfg.unwrap())
                 .with_context(|| "Failed to create ACPI tables")?;
         }
+
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
         locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
