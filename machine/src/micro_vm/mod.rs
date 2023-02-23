@@ -30,6 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
+use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 use util::aio::AioEngine;
 
 mod mem_layout;
@@ -1321,6 +1322,13 @@ impl DeviceInterface for LightMachine {
                 qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
             Response::create_error_response(err_resp, None)
         }
+    }
+
+    fn update_region(&mut self, _args: UpdateRegionArgument) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("The micro vm is not supported".to_string()),
+            None,
+        )
     }
 }
 

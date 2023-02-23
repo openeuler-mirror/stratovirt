@@ -373,6 +373,14 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "update_region")]
+    #[strum(serialize = "update_region")]
+    update_region {
+        #[serde(default)]
+        arguments: update_region,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -530,6 +538,62 @@ pub struct device_add {
 pub type DeviceAddArgument = device_add;
 
 impl Command for device_add {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// update_region
+///
+/// # Arguments
+///
+/// * `update_type` - update type: add or delete.
+/// * `region_type` - the type of the region: io, ram_device, rom_device.
+/// * `offset` - the offset of the father region.
+/// * `size` - the size of the region.
+/// * `priority` - the priority of the region.
+/// * `romd` - read only mode.
+/// * `ioeventfd` - is there an ioeventfd.
+/// * `ioeventfd_data` - the matching data for ioeventfd.
+/// * `ioeventfd_size` - the size of matching data.
+///
+/// Additional arguments depend on the type.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "update_region",
+///      "arguments": { "update_type": "add", "region_type": "io_region", "offset": 0, "size": 4096, "priority": 99 }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct update_region {
+    #[serde(rename = "update_type")]
+    pub update_type: String,
+    #[serde(rename = "region_type")]
+    pub region_type: String,
+    #[serde(rename = "offset")]
+    pub offset: u64,
+    #[serde(rename = "size")]
+    pub size: u64,
+    #[serde(rename = "priority")]
+    pub priority: u64,
+    #[serde(rename = "read_only_mode")]
+    pub romd: Option<bool>,
+    #[serde(rename = "ioeventfd")]
+    pub ioeventfd: Option<bool>,
+    #[serde(rename = "ioeventfd_data")]
+    pub ioeventfd_data: Option<u64>,
+    #[serde(rename = "ioeventfd_size")]
+    pub ioeventfd_size: Option<u64>,
+}
+
+pub type UpdateRegionArgument = update_region;
+
+impl Command for update_region {
     type Res = Empty;
 
     fn back(self) -> Empty {

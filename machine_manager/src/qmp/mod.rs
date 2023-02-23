@@ -462,7 +462,8 @@ fn qmp_command_exec(
         (device_add, device_add),
         (blockdev_add, blockdev_add),
         (netdev_add, netdev_add),
-        (chardev_add, chardev_add)
+        (chardev_add, chardev_add),
+        (update_region, update_region)
     );
 
     // Handle the Qmp command which macro can't cover
