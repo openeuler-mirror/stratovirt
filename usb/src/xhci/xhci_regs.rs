@@ -496,7 +496,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_INTR_REG_IMOD => intr.imod = value,
             XHCI_INTR_REG_ERSTSZ => intr.erstsz = value & 0xffff,
             XHCI_INTR_REG_ERSTBA_LO => {
-                intr.erstba = write_u64_low(intr.erstba, value & 0xfffffff0);
+                intr.erstba = write_u64_low(intr.erstba, value & 0xffffffc0);
             }
             XHCI_INTR_REG_ERSTBA_HI => {
                 intr.erstba = write_u64_high(intr.erstba, value);
@@ -663,10 +663,10 @@ fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
         return locked_xhci.reset_port(port, false);
     }
     let mut locked_port = port.lock().unwrap();
-    let mut portsc = locked_port.portsc;
+    let old_portsc = locked_port.portsc;
     let mut notify = 0;
     // Write 1 to clear.
-    portsc &= !(value
+    locked_port.portsc &= !(value
         & (PORTSC_CSC
             | PORTSC_PEC
             | PORTSC_WRC
@@ -675,13 +675,12 @@ fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
             | PORTSC_PLC
             | PORTSC_CEC));
     if value & PORTSC_LWS == PORTSC_LWS {
-        let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
+        let old_pls = (old_portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
         let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
         notify = xhci_portsc_ls_write(&mut locked_port, old_pls, new_pls);
     }
-    portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-    portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-    locked_port.portsc = portsc;
+    locked_port.portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
+    locked_port.portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
     drop(locked_port);
     if notify != 0 {
         locked_xhci.port_notify(port, notify)?;

@@ -53,8 +53,9 @@ const EP_TYPE_MASK: u32 = 0x7;
 /// Slot state
 const SLOT_STATE_MASK: u32 = 0x1f;
 const SLOT_STATE_SHIFT: u32 = 27;
-#[allow(unused)]
-const SLOT_ENABLED: u32 = 0;
+/// 6.2.3 Slot Context. Table 6-7.
+/// The values of both enabled and disabled are 0.
+const SLOT_DISABLED_ENABLED: u32 = 0;
 const SLOT_DEFAULT: u32 = 1;
 const SLOT_ADDRESSED: u32 = 2;
 const SLOT_CONFIGURED: u32 = 3;
@@ -287,15 +288,19 @@ impl XhciSlot {
         Ok(slot_ctx)
     }
 
-    /// Get the slot state from the memory.
-    fn get_slot_state(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
+    /// Get the slot state in slot context.
+    fn get_slot_state_in_context(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
+        // Table 4-1: Device Slot State Code Definitions.
+        if self.slot_ctx_addr == 0 {
+            return Ok(SLOT_DISABLED_ENABLED);
+        }
         let slot_ctx = self.get_slot_ctx(mem)?;
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
         Ok(slot_state)
     }
 
     fn slot_state_is_valid(&self, mem: &Arc<AddressSpace>) -> Result<bool> {
-        let slot_state = self.get_slot_state(mem)?;
+        let slot_state = self.get_slot_state_in_context(mem)?;
         let valid = slot_state == SLOT_DEFAULT
             || slot_state == SLOT_ADDRESSED
             || slot_state == SLOT_CONFIGURED;
@@ -755,6 +760,7 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].enabled = false;
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = 0;
         Ok(TRBCCode::Success)
     }
 
@@ -842,8 +848,8 @@ impl XhciDevice {
 
     fn check_slot_state(&self, slot_ctx: &XhciSlotCtx, bsr: bool) -> Result<TRBCCode> {
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
-        if !(slot_state == SLOT_ENABLED || !bsr && slot_state == SLOT_DEFAULT) {
-            error!("Invalid slot state: {:?}", slot_ctx);
+        if !(slot_state == SLOT_DISABLED_ENABLED || !bsr && slot_state == SLOT_DEFAULT) {
+            error!("Invalid slot state: {:?}", slot_state);
             return Ok(TRBCCode::ContextStateError);
         }
         Ok(TRBCCode::Success)
@@ -877,7 +883,8 @@ impl XhciDevice {
     }
 
     fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
-        let slot_state = self.slots[(slot_id - 1) as usize].get_slot_state(&self.mem_space)?;
+        let slot_state =
+            self.slots[(slot_id - 1) as usize].get_slot_state_in_context(&self.mem_space)?;
         if trb.control & TRB_CR_DC == TRB_CR_DC {
             if slot_state != SLOT_CONFIGURED {
                 error!("Invalid slot state: {:?}", slot_state);
@@ -889,8 +896,7 @@ impl XhciDevice {
             error!("Invalid slot state: {:?}", slot_state);
             return Ok(TRBCCode::ContextStateError);
         }
-        self.config_slot_ep(slot_id, trb.parameter)?;
-        Ok(TRBCCode::Success)
+        self.config_slot_ep(slot_id, trb.parameter)
     }
 
     fn deconfigure_endpoint(&mut self, slot_id: u32) -> Result<TRBCCode> {
@@ -1356,6 +1362,7 @@ impl XhciDevice {
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if let Err(e) = self.check_ctrl_transfer(xfer) {
             error!("Failed to check control transfer {}", e);
+            xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }
         let trb_setup = xfer.td[0];
@@ -1364,6 +1371,7 @@ impl XhciDevice {
             bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
         if let Err(e) = self.setup_usb_packet(xfer) {
             error!("Failed to setup packet when transfer control {}", e);
+            xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }
         xfer.packet.parameter = trb_setup.parameter;
@@ -1411,6 +1419,7 @@ impl XhciDevice {
         }
         if let Err(e) = self.setup_usb_packet(xfer) {
             error!("Failed to setup packet when transfer data {}", e);
+            xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }
         self.device_handle_packet(xfer);

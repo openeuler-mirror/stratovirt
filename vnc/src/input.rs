@@ -252,7 +252,7 @@ impl ClientIoHandler {
 
         let locked_input = INPUT.lock().unwrap();
         if let Some(tablet) = &locked_input.tablet {
-            if let Err(e) = pointer_event(tablet, button_mask as u32, x as i32, y as i32) {
+            if let Err(e) = pointer_event(tablet, button_mask as u32, x as u32, y as u32) {
                 error!("Point event error: {}", e);
             }
         }
