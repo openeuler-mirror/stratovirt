@@ -742,7 +742,7 @@ impl VirtioPciDevice {
                     .unwrap_or(0);
             }
             let queue = Queue::new(*q_config, queue_type).unwrap();
-            if !queue.is_valid(&self.sys_mem) {
+            if q_config.ready && !queue.is_valid(&self.sys_mem) {
                 error!("Failed to activate device: Invalid queue");
                 return false;
             }
