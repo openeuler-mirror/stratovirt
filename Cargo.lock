@@ -533,9 +533,11 @@ dependencies = [
 name = "mod_test"
 version = "2.2.0"
 dependencies = [
+ "acpi",
  "byteorder",
  "devices",
  "hex",
+ "machine",
  "rand",
  "serde_json",
  "util",
