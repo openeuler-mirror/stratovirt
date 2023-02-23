@@ -234,6 +234,8 @@ impl Clone for RectInfo {
 
 /// The connection state of vnc client.
 pub struct ConnState {
+    /// Dirty number need to update.
+    dirty_num: i32,
     /// Connection status.
     pub dis_conn: bool,
     /// State flags whether the image needs to be updated for the client.
@@ -245,6 +247,7 @@ pub struct ConnState {
 impl Default for ConnState {
     fn default() -> Self {
         ConnState {
+            dirty_num: 0,
             dis_conn: false,
             update_state: UpdateState::No,
             version: VncVersion::default(),
@@ -258,16 +261,21 @@ impl ConnState {
     }
 
     /// Whether the client's image data needs to be updated.
-    pub fn is_need_update(&mut self, dirty_num: i32) -> bool {
+    pub fn is_need_update(&mut self) -> bool {
         if self.is_disconnect() {
             return false;
         }
 
         match self.update_state {
             UpdateState::No => false,
-            UpdateState::Incremental => dirty_num > 0,
+            UpdateState::Incremental => self.dirty_num > 0,
             UpdateState::Force => true,
         }
+    }
+
+    pub fn clear_update_state(&mut self) {
+        self.dirty_num = 0;
+        self.update_state = UpdateState::No;
     }
 }
 
@@ -1082,9 +1090,13 @@ impl EventNotifierHelper for ClientIoHandler {
 /// Generate the data that needs to be sent.
 /// Add to send queue
 pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
-    if !client.conn_state.lock().unwrap().is_need_update(dirty_num) {
+    let mut locked_state = client.conn_state.lock().unwrap();
+    let num = locked_state.dirty_num;
+    locked_state.dirty_num = num.checked_add(dirty_num).unwrap_or(0);
+    if !locked_state.is_need_update() {
         return;
     }
+    drop(locked_state);
 
     let mut x: u64;
     let mut y: u64 = 0;
@@ -1148,7 +1160,7 @@ pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
         .unwrap()
         .push(RectInfo::new(client, rects));
 
-    client.conn_state.lock().unwrap().update_state = UpdateState::No;
+    client.conn_state.lock().unwrap().clear_update_state();
 }
 
 fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> Result<()> {
