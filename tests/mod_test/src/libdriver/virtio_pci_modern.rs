@@ -344,7 +344,7 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     }
 
     fn enable_interrupt(&mut self) {
-        self.pci_dev.enable_msix();
+        self.pci_dev.enable_msix(None);
     }
 
     fn disable_interrupt(&mut self) {
@@ -659,7 +659,7 @@ impl VirtioDeviceOps for TestVirtioPciDev {
         self.set_features_ok();
         // FIXME: add handling the specific device features as needed.
 
-        self.pci_dev.enable_msix();
+        self.pci_dev.enable_msix(None);
         self.setup_msix_configuration_vector(alloc.clone(), 0);
         let vqs = self.init_virtqueue(test_state, alloc, num_queues);
 

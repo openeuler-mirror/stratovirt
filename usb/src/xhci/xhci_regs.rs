@@ -75,15 +75,15 @@ const CAP_EXT_USB_REVISION_2_0: u32 = 0x0200;
 /// USB 3.0.
 const CAP_EXT_USB_REVISION_3_0: u32 = 0x0300;
 /// Operational Registers.
-const XHCI_OPER_REG_USBCMD: u64 = 0x00;
-const XHCI_OPER_REG_USBSTS: u64 = 0x04;
-const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
+pub const XHCI_OPER_REG_USBCMD: u64 = 0x00;
+pub const XHCI_OPER_REG_USBSTS: u64 = 0x04;
+pub const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
 const XHCI_OPER_REG_DNCTRL: u64 = 0x14;
 const XHCI_OPER_REG_CMD_RING_CTRL_LO: u64 = 0x18;
 const XHCI_OPER_REG_CMD_RING_CTRL_HI: u64 = 0x1c;
 const XHCI_OPER_REG_DCBAAP_LO: u64 = 0x30;
 const XHCI_OPER_REG_DCBAAP_HI: u64 = 0x34;
-const XHCI_OPER_REG_CONFIG: u64 = 0x38;
+pub const XHCI_OPER_REG_CONFIG: u64 = 0x38;
 const XHCI_OPER_PAGESIZE: u32 = 1;
 /// Command Ring Control Register RCS/CS/CA mask.
 const XHCI_CRCR_CTRL_LO_MASK: u32 = 0xffffffc7;
