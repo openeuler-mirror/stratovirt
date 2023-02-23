@@ -39,7 +39,7 @@ pub enum UsbPacketStatus {
 
 /// USB request used to transfer to USB device.
 #[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub struct UsbDeviceRequest {
     pub request_type: u8,
     pub request: u8,
