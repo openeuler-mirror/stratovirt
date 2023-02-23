@@ -146,7 +146,6 @@ pub struct UsbDescIface {
 
 /// USB other descriptor.
 pub struct UsbDescOther {
-    pub length: u8,
     pub data: Vec<u8>,
 }
 
@@ -321,12 +320,17 @@ impl UsbDescriptorOps for UsbDevice {
                 bail!("Device Descriptor not found");
             };
             let num = desc.device_desc.bNumConfigurations;
+            let mut found = false;
             for i in 0..num as usize {
                 if desc.configs[i].config_desc.bConfigurationValue == v {
                     self.descriptor.interface_number =
                         desc.configs[i].config_desc.bNumInterfaces as u32;
                     self.descriptor.configuration_selected = Some(desc.configs[i].clone());
+                    found = true;
                 }
+            }
+            if !found {
+                bail!("Invalid bConfigurationValue {}", v);
             }
         }
         for i in 0..self.descriptor.interface_number {
@@ -345,7 +349,11 @@ impl UsbDescriptorOps for UsbDevice {
         let iface = if let Some(face) = self.descriptor.find_interface(index, v) {
             face
         } else {
-            bail!("Interface descriptor not found.");
+            bail!(
+                "Interface descriptor not found. index {} value {}",
+                index,
+                v
+            );
         };
         self.descriptor.altsetting[index as usize] = v;
         self.descriptor.interfaces[index as usize] = Some(iface);
