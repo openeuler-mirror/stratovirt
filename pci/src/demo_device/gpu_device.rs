@@ -86,12 +86,20 @@ impl DemoGpu {
 
 impl DemoGpu {
     ///  Create a new surface, and replace the surface.
-    pub fn hw_replace_surface(&mut self, width: u32, height: u32) -> Result<()> {
+    pub fn hw_replace_surface(&mut self, width: u32, height: u32, format: u32) -> Result<()> {
+        let pixman_format = match format {
+            1 => pixman_format_code_t::PIXMAN_x2r10g10b10,
+            2 => pixman_format_code_t::PIXMAN_r8g8b8,
+            3 => pixman_format_code_t::PIXMAN_a1,
+            4 => pixman_format_code_t::PIXMAN_yuy2,
+            _ => pixman_format_code_t::PIXMAN_a8b8g8r8,
+        };
+
         // Create Image.
         self.width = width;
         self.height = height;
         let image = create_pixman_image(
-            pixman_format_code_t::PIXMAN_a8b8g8r8,
+            pixman_format,
             self.width as i32,
             self.height as i32,
             ptr::null_mut(),
@@ -183,7 +191,7 @@ impl DeviceTypeOperation for DemoGpu {
             event_type, x, y, w, h, data_len
         );
         match event_type {
-            GpuEvent::ReplaceSurface => self.hw_replace_surface(w, h),
+            GpuEvent::ReplaceSurface => self.hw_replace_surface(w, h, data_len),
             GpuEvent::ReplaceCursor => self.hw_replace_cursor(w, h, x, y, data_len),
             GpuEvent::GraphicUpdateArea => self.update_image_area(x, y, w, h),
             GpuEvent::GraphicUpdateDirty => self.graphic_update(x, y, w, h),
