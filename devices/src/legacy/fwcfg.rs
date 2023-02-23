@@ -888,6 +888,7 @@ fn read_bytes(
                     offset - 0x10,
                     data.len()
                 );
+                return false;
             }
             match fwcfg_arch
                 .fwcfg
@@ -1047,6 +1048,7 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
                     offset - 0x10,
                     data.len()
                 );
+                return false;
             }
             match fwcfg_arch.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
                 Err(e) => {
