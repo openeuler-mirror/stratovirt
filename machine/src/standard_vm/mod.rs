@@ -22,6 +22,7 @@ pub use error::StandardVmError;
 pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
+use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 use util::aio::AioEngine;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
@@ -31,6 +32,7 @@ use vnc::vnc::qmp_query_vnc;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
+use std::fs::File;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
@@ -45,6 +47,9 @@ use acpi::AcpiGenericAddress;
 use acpi::{
     AcpiRsdp, AcpiTable, AmlBuilder, TableLoader, ACPI_RSDP_FILE, ACPI_TABLE_FILE,
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
+};
+use address_space::{
+    AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
 pub use anyhow::Result;
 use anyhow::{bail, Context};
@@ -1423,5 +1428,172 @@ impl DeviceInterface for StdMachine {
                 qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
             Response::create_error_response(err_resp, None)
         }
+    }
+
+    fn update_region(&mut self, args: UpdateRegionArgument) -> Response {
+        #[derive(Default)]
+        struct DummyDevice {
+            head: u64,
+        }
+
+        impl DummyDevice {
+            fn read(&mut self, data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
+                if data.len() != std::mem::size_of::<u64>() {
+                    return false;
+                }
+
+                for (i, data) in data.iter_mut().enumerate().take(std::mem::size_of::<u64>()) {
+                    *data = (self.head >> (8 * i)) as u8;
+                }
+                true
+            }
+
+            fn write(&mut self, data: &[u8], _addr: GuestAddress, _offset: u64) -> bool {
+                if data.len() != std::mem::size_of::<u64>() {
+                    return false;
+                }
+
+                let ptr: *const u8 = data.as_ptr();
+                let ptr: *const u64 = ptr as *const u64;
+                self.head = unsafe { *ptr } * 2;
+                true
+            }
+        }
+
+        let dummy_dev = Arc::new(Mutex::new(DummyDevice::default()));
+        let dummy_dev_clone = dummy_dev.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = dummy_dev_clone.lock().unwrap();
+            device_locked.read(data, addr, offset)
+        };
+        let dummy_dev_clone = dummy_dev;
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = dummy_dev_clone.lock().unwrap();
+            device_locked.write(data, addr, offset)
+        };
+
+        let dummy_dev_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+
+        let mut fd = None;
+        if args.region_type.eq("rom_device_region") || args.region_type.eq("ram_device_region") {
+            let file_name = if args.region_type.eq("rom_device_region") {
+                "rom_dev_file.fd"
+            } else {
+                "ram_dev_file.fd"
+            };
+
+            let file = File::create(file_name).unwrap();
+            file.set_len(args.size).unwrap();
+            drop(file);
+            fd = Some(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(file_name)
+                    .unwrap(),
+            );
+        }
+
+        let region;
+        match args.region_type.as_str() {
+            "io_region" => {
+                region = Region::init_io_region(args.size, dummy_dev_ops);
+                if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
+                    let ioeventfds = vec![RegionIoEventFd {
+                        fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+                        addr_range: AddressRange::from((
+                            0,
+                            args.ioeventfd_size.unwrap_or_default(),
+                        )),
+                        data_match: args.ioeventfd_data.is_some(),
+                        data: args.ioeventfd_data.unwrap_or_default(),
+                    }];
+                    region.set_ioeventfds(&ioeventfds);
+                }
+            }
+            "rom_device_region" => {
+                region = Region::init_rom_device_region(
+                    Arc::new(
+                        HostMemMapping::new(
+                            GuestAddress(args.offset),
+                            None,
+                            args.size,
+                            fd.map(FileBackend::new_common),
+                            false,
+                            true,
+                            true,
+                        )
+                        .unwrap(),
+                    ),
+                    dummy_dev_ops,
+                );
+            }
+            "ram_device_region" => {
+                region = Region::init_ram_device_region(Arc::new(
+                    HostMemMapping::new(
+                        GuestAddress(args.offset),
+                        None,
+                        args.size,
+                        fd.map(FileBackend::new_common),
+                        false,
+                        true,
+                        false,
+                    )
+                    .unwrap(),
+                ));
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError("invalid rergion_type".to_string()),
+                    None,
+                );
+            }
+        };
+
+        region.set_priority(args.priority as i32);
+        if let Some(read_only) = args.romd {
+            if region.set_rom_device_romd(read_only).is_err() {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "set_rom_device_romd failed".to_string(),
+                    ),
+                    None,
+                );
+            }
+        }
+
+        let sys_mem = self.get_sys_mem();
+        match args.update_type.as_str() {
+            "add" => {
+                if sys_mem.root().add_subregion(region, args.offset).is_err() {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError("add subregion failed".to_string()),
+                        None,
+                    );
+                }
+            }
+            "delete" => {
+                region.set_offset(GuestAddress(args.offset));
+                if sys_mem.root().delete_subregion(&region).is_err() {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "delete subregion failed".to_string(),
+                        ),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError("invalid update_type".to_string()),
+                    None,
+                )
+            }
+        };
+
+        Response::create_empty_response()
     }
 }
