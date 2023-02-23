@@ -24,7 +24,9 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
 use crate::vhost::VhostOps;
-use crate::VhostUser::client::{VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ};
+use crate::VhostUser::client::{
+    VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
+};
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
     virtio_has_feature, BlockState, VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE,
@@ -76,8 +78,13 @@ impl Block {
             .as_ref()
             .map(|path| path.to_string())
             .with_context(|| "vhost-user: socket path is not found")?;
-        let client = VhostUserClient::new(&self.mem_space, &socket_path, self.queue_num() as u64)
-            .with_context(|| {
+        let client = VhostUserClient::new(
+            &self.mem_space,
+            &socket_path,
+            self.queue_num() as u64,
+            VhostBackendType::TypeBlock,
+        )
+        .with_context(|| {
             "Failed to create the client which communicates with the server for vhost-user blk"
         })?;
         let client = Arc::new(Mutex::new(client));
