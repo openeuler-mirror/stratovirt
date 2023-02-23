@@ -104,10 +104,10 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
-    (0x4000_0000, 0x80_0000_0000), // Mem
-    (512 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
-    (513 << 30, 0x1000_0000),      // HighPcieEcam
-    (514 << 30, 512 << 30),        // HighPcieMmio
+    (0x4000_0000, 0x7F_4000_0000), // Mem
+    (510 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
+    (511 << 30, 0x1000_0000),      // HighPcieEcam
+    (512 << 30, 512 << 30),        // HighPcieMmio
 ];
 
 /// Standard machine structure.
