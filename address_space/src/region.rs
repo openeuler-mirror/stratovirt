@@ -927,17 +927,7 @@ impl Region {
                     )
                 })?;
             }
-            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
-                self.render_terminate_region(base, addr_range, &mut flat_view)
-                .with_context(|| {
-                    format!(
-                        "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
-                        base.raw_value(),
-                        addr_range.base.raw_value(),
-                        addr_range.size
-                    )
-                })?;
-            }
+            _ => bail!("Generate flat view failed: only the container supported"),
         }
         Ok(flat_view)
     }
