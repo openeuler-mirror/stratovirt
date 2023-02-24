@@ -44,7 +44,7 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
-    MachineLifecycle, MigrateInterface,
+    MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
@@ -900,6 +900,7 @@ impl MigrateInterface for StdMachine {
 
 impl MachineInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
+impl MachineTestInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {

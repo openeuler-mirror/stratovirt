@@ -70,6 +70,7 @@ use util::align::is_aligned;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
+    test_helper::is_test_enabled,
     trace::enable_trace_events,
     AsAny,
 };
@@ -135,7 +136,11 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.boot_source.initrd.is_none() && self.drives.is_empty() && self.chardev.is_empty() {
+        if self.boot_source.initrd.is_none()
+            && self.drives.is_empty()
+            && self.chardev.is_empty()
+            && !is_test_enabled()
+        {
             bail!("Before Vm start, set a initrd or drive_file or vhost-user blk as rootfs");
         }
 

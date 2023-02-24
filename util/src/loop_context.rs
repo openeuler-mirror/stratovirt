@@ -22,6 +22,7 @@ use log::warn;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::test_helper::{get_test_time, is_test_enabled};
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -147,6 +148,14 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
+fn get_current_time() -> Instant {
+    if is_test_enabled() {
+        get_test_time()
+    } else {
+        Instant::now()
+    }
+}
+
 /// EventLoop manager, advise continue running or stop running
 pub trait EventLoopManager: Send + Sync {
     fn loop_should_exit(&self) -> bool;
@@ -171,7 +180,7 @@ impl Timer {
     pub fn new(func: Box<dyn Fn()>, nsec: u64) -> Self {
         Timer {
             func,
-            expire_time: Instant::now() + Duration::new(0, nsec as u32),
+            expire_time: get_current_time() + Duration::new(0, nsec as u32),
         }
     }
 }
@@ -461,7 +470,7 @@ impl EventLoopContext {
             }
         }
 
-        self.epoll_wait_manager(self.timers_min_timeout())
+        self.epoll_wait_manager(self.timers_min_timeout_ms())
     }
 
     pub fn iothread_run(&mut self) -> Result<bool> {
@@ -472,7 +481,7 @@ impl EventLoopContext {
             }
         }
 
-        let timeout = self.timers_min_timeout();
+        let timeout = self.timers_min_timeout_ms();
         if timeout == -1 {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
                 for notifer in self.events.read().unwrap().values() {
@@ -514,31 +523,53 @@ impl EventLoopContext {
         self.kick();
     }
 
-    /// Get the expire_time of the soonest Timer, and then translate it to timeout.
-    fn timers_min_timeout(&self) -> i32 {
+    /// Get the expire_time of the soonest Timer, and then translate it to duration.
+    fn timers_min_duration(&self) -> Option<Duration> {
         // The kick event happens before re-evaluate can be ignored.
         self.kicked.store(false, Ordering::SeqCst);
         let timers = self.timers.lock().unwrap();
         if timers.is_empty() {
-            return -1;
+            return None;
         }
 
-        let now = Instant::now();
-        if timers[0].expire_time <= now {
-            return 0;
-        }
+        Some(
+            timers[0]
+                .expire_time
+                .saturating_duration_since(get_current_time()),
+        )
+    }
 
-        let timeout = (timers[0].expire_time - now).as_millis();
-        if timeout >= i32::MAX as u128 {
-            i32::MAX - 1
-        } else {
-            timeout as i32
+    fn timers_min_timeout_ms(&self) -> i32 {
+        match self.timers_min_duration() {
+            Some(d) => {
+                let timeout = d.as_millis();
+                if timeout >= i32::MAX as u128 {
+                    i32::MAX - 1
+                } else {
+                    timeout as i32
+                }
+            }
+            None => -1,
+        }
+    }
+
+    pub fn timers_min_timeout_ns(&self) -> i64 {
+        match self.timers_min_duration() {
+            Some(d) => {
+                let timeout = d.as_nanos();
+                if timeout >= i64::MAX as u128 {
+                    i64::MAX
+                } else {
+                    timeout as i64
+                }
+            }
+            None => -1,
         }
     }
 
     /// Call function of the timers which have already expired.
-    fn run_timers(&mut self) {
-        let now = Instant::now();
+    pub fn run_timers(&mut self) {
+        let now = get_current_time();
         let mut expired_nr = 0;
 
         let mut timers = self.timers.lock().unwrap();

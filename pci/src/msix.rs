@@ -22,7 +22,11 @@ use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::{byte_code::ByteCode, num_ops::round_up};
+use util::{
+    byte_code::ByteCode,
+    num_ops::round_up,
+    test_helper::{add_msix_msg, is_test_enabled},
+};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
@@ -597,6 +601,15 @@ fn send_msix(msg: Message, dev_id: u16) {
         devid: dev_id as u32,
         pad: [0; 12],
     };
+
+    if is_test_enabled() {
+        let data = msg.data;
+        let mut addr: u64 = msg.address_hi as u64;
+        addr = (addr << 32) + msg.address_lo as u64;
+        add_msix_msg(addr, data);
+        return;
+    }
+
     if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
         error!("Send msix error: {:?}", e);
     };

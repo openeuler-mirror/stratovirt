@@ -447,5 +447,8 @@ pub trait MachineInterface: MachineLifecycle + MachineAddressInterface {}
 /// Machine interface which is exposed to outer hypervisor.
 pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + MigrateInterface {}
 
+/// Machine interface which is exposed to test server.
+pub trait MachineTestInterface: MachineAddressInterface {}
+
 pub static PTY_PATH: Lazy<Mutex<Vec<PathInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static IOTHREADS: Lazy<Mutex<Vec<IothreadInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));

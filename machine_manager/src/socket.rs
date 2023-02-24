@@ -565,6 +565,20 @@ impl SocketHandler {
         }
     }
 
+    pub fn get_line(&mut self) -> Result<Option<String>> {
+        self.buffer.clear();
+        self.stream.clear();
+        self.stream.read_fd().unwrap();
+        self.stream.get_buf_string().map(|buffer| {
+            self.buffer = buffer;
+            if self.stream.pos == 0 {
+                None
+            } else {
+                Some(self.buffer.clone())
+            }
+        })
+    }
+
     /// Parse the bytes received by `SocketHandler`.
     ///
     /// # Notes
