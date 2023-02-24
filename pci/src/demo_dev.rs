@@ -30,7 +30,6 @@
 ///     "-device pcie-demo-dev,addr=0x5,bus=pcie.0,id=demo0,bar_num=3,bar_size=4096"
 ///
 use std::{
-    collections::HashMap,
     sync::Mutex,
     sync::{
         atomic::{AtomicU16, Ordering},
@@ -42,6 +41,9 @@ use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use log::error;
 use machine_manager::config::DemoDevConfig;
 
+use crate::demo_device::base_device::BaseDevice;
+#[cfg(not(target_env = "musl"))]
+use crate::demo_device::{gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse};
 use crate::{
     config::{
         PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
@@ -70,7 +72,11 @@ impl DemoDev {
         parent_bus: Weak<Mutex<PciBus>>,
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
-        let device = match cfg.device_type {
+        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
+            #[cfg(not(target_env = "musl"))]
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(sys_mem.clone()))),
+            #[cfg(not(target_env = "musl"))]
+            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(sys_mem.clone()))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };
         DemoDev {
@@ -224,42 +230,6 @@ impl PciDevOps for DemoDev {
     /// Get device devfn
     fn devfn(&self) -> Option<u8> {
         Some(self.devfn)
-    }
-}
-
-pub struct BaseDevice {
-    result: HashMap<u64, u8>,
-}
-
-impl BaseDevice {
-    fn new() -> Self {
-        Self {
-            result: HashMap::new(),
-        }
-    }
-}
-
-impl DeviceTypeOperation for BaseDevice {
-    // The base device can multiply the value with 2 when writing to mmio.
-    fn read(&mut self, data: &[u8], addr: GuestAddress, _offset: u64) -> Result<()> {
-        let value = data[0].checked_mul(2).unwrap_or(0);
-        self.result.insert(addr.raw_value(), value);
-        Ok(())
-    }
-
-    // Rm the data after reading, as we assume that the data becomes useless after the test
-    // process checked the addr.
-    fn write(&mut self, _data: &[u8], addr: GuestAddress, _offset: u64) -> Result<()> {
-        self.result.remove(&addr.raw_value());
-        Ok(())
-    }
-
-    fn realize(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
-        Ok(())
     }
 }
 

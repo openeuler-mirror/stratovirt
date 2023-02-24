@@ -64,7 +64,7 @@ use machine_manager::{
     machine::{KvmVmState, MachineInterface},
 };
 use migration::MigrationManager;
-use pci::{DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
