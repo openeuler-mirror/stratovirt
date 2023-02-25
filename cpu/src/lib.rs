@@ -74,6 +74,7 @@ use log::{error, info, warn};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
+#[cfg(not(test))]
 use util::test_helper::is_test_enabled;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 

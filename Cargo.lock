@@ -533,6 +533,7 @@ dependencies = [
 name = "mod_test"
 version = "2.2.0"
 dependencies = [
+ "byteorder",
  "devices",
  "hex",
  "rand",

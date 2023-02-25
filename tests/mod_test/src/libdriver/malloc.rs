@@ -123,7 +123,7 @@ impl GuestAllocator {
 
 #[cfg(test)]
 mod test {
-    use crate::malloc::GuestAllocator;
+    use super::GuestAllocator;
 
     const PAGE_SIZE_4K: u64 = 1 << 12;
     const ADDRESS_BASE: u64 = 0x4000_0000;
