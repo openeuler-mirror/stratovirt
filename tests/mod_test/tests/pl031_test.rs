@@ -41,10 +41,15 @@ fn pl031_write_reg(ts: &TestState, reg: u64, val: u32) {
     ts.writel(RTC_ADDR_BASE + reg, val);
 }
 
+fn set_up() -> TestState {
+    let extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    test_init(extra_args)
+}
+
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn check_time() {
-    let mut ts = test_init(Vec::new());
+    let mut ts = set_up();
 
     let time1 = pl031_read_time(&ts);
     let time2 = pl031_read_time(&ts);
@@ -66,7 +71,7 @@ fn check_time() {
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn set_time() {
-    let mut ts = test_init(Vec::new());
+    let mut ts = set_up();
     let time1 = pl031_read_time(&ts);
 
     // Time passes about 5 years.
@@ -84,7 +89,7 @@ fn set_time() {
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn rtc_enable() {
-    let mut ts = test_init(Vec::new());
+    let mut ts = set_up();
 
     assert_eq!(pl031_read_reg(&ts, RTC_CR), 1);
     ts.stop();
@@ -93,7 +98,7 @@ fn rtc_enable() {
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn set_mask() {
-    let mut ts = test_init(Vec::new());
+    let mut ts = set_up();
 
     pl031_write_reg(&ts, RTC_IMSC, 1);
 
@@ -104,7 +109,7 @@ fn set_mask() {
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn reg_fuzz() {
-    let mut ts = test_init(Vec::new());
+    let mut ts = set_up();
     let mut rng = thread_rng();
 
     for _ in 0..1000 {
