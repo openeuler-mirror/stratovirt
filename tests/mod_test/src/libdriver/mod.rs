@@ -19,3 +19,4 @@ pub mod virtio;
 pub mod virtio_console;
 pub mod virtio_net;
 pub mod virtio_pci_modern;
+pub mod virtio_rng;
