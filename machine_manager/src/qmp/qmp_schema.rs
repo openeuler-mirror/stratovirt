@@ -80,6 +80,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    system_reset {
+        #[serde(default)]
+        arguments: system_reset,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     device_add {
         arguments: Box<device_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -459,6 +465,28 @@ impl Command for stop {
 pub struct cont {}
 
 impl Command for cont {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// system_reset
+///
+/// Reset guest VCPU execution.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "system_reset" }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct system_reset {}
+
+impl Command for system_reset {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -1415,9 +1443,9 @@ impl Command for query_version {
 /// ```text
 /// -> { "execute": "query-commands" }
 /// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},
-/// {"name":"cont"},{"name":"device_add"},{"name":"device_del"},{"name":"netdev_add"},
-/// {"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},{"name":"query-cpus"},
-/// {"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
+/// {"name":"cont"},{"name":"system_reset"},{"name":"device_add"},{"name":"device_del"},
+/// {"name":"netdev_add"},{"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},
+/// {"name":"query-cpus"},{"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
 /// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query_vnc"},
 /// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
 /// {"name":"query_target"},{"name":"query_commands"}]}
@@ -2057,6 +2085,33 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let ret_msg = r#"invalid type: string "isdf", expected struct cont"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: system_reset.
+        let json_msg = r#"
+        {
+            "execute": "system_reset"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for system_reset.
+        let json_msg = r#"
+        {
+            "execute": "system_reset" ,
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct system_reset"#;
         assert!(err_msg == ret_msg);
 
         // qmp: query-hotpluggable-cpus.
