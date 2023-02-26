@@ -18,17 +18,15 @@ use crate::{
 };
 use anyhow::Result;
 use log::error;
-use usb::{keyboard::keyboard_event, tablet::pointer_event, INPUT};
+use once_cell::sync::Lazy;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use util::bitmap::Bitmap;
 
 // Logical window size for mouse.
 const ABS_MAX: u64 = 0x7fff;
-// Up flag.
-const SCANCODE_UP: u16 = 0x80;
-// Grey keys.
-const SCANCODE_GREY: u16 = 0x80;
-// Used to expand Grey keys.
-const SCANCODE_EMUL0: u16 = 0xe0;
 // Event type of Point.
 const INPUT_POINT_LEFT: u8 = 0x01;
 const INPUT_POINT_MIDDLE: u8 = 0x02;
@@ -214,11 +212,10 @@ impl ClientIoHandler {
                 .unwrap_or_else(|e| error!("{:?}", e));
         }
 
-        if let Err(e) = kbd_state.keyboard_state_update(keycode, down) {
-            error!("{:?}", e);
-            return;
-        }
-        do_key_event(keycode, down);
+        kbd_state
+            .keyboard_state_update(keycode, down)
+            .unwrap_or_else(|e| error!("Key State update error: {:?}", e));
+        key_event(keycode, down).unwrap_or_else(|e| error!("Key event error: {:?}", e));
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
@@ -250,12 +247,8 @@ impl ClientIoHandler {
             _ => buf[1],
         };
 
-        let locked_input = INPUT.lock().unwrap();
-        if let Some(tablet) = &locked_input.tablet {
-            if let Err(e) = pointer_event(tablet, button_mask as u32, x as u32, y as u32) {
-                error!("Point event error: {}", e);
-            }
-        }
+        point_event(button_mask as u32, x as u32, y as u32)
+            .unwrap_or_else(|e| error!("Point event error: {:?}", e));
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
@@ -280,29 +273,138 @@ impl ClientIoHandler {
     }
 }
 
-/// Do keyboard event.
-///
-/// # Arguments
-///
-/// * `down` - press keyboard down or up.
-/// * `keycode` - keycode.
-fn do_key_event(keycode: u16, down: bool) {
-    let mut scancode = Vec::new();
-    let mut keycode = keycode;
-    if keycode & SCANCODE_GREY != 0 {
-        scancode.push(SCANCODE_EMUL0 as u32);
-        keycode &= !SCANCODE_GREY;
+static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
+#[derive(Default)]
+struct Inputs {
+    active_kbd: Option<String>,
+    active_tablet: Option<String>,
+    kbd_lists: HashMap<String, Arc<Mutex<dyn KeyboardOpts>>>,
+    tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
+}
+
+impl Inputs {
+    fn register_kbd(&mut self, device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
+        if self.active_kbd.is_none() {
+            self.active_kbd = Some(device.to_string());
+        }
+
+        self.kbd_lists.insert(device.to_string(), kbd);
     }
 
-    if !down {
-        keycode |= SCANCODE_UP;
-    }
-    scancode.push(keycode as u32);
-    // Send key event.
-    let locked_input = INPUT.lock().unwrap();
-    if let Some(keyboard) = &locked_input.keyboard {
-        if let Err(e) = keyboard_event(keyboard, scancode.as_slice()) {
-            error!("Key event error: {}", e);
+    fn register_mouse(&mut self, device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
+        if self.active_tablet.is_none() {
+            self.active_tablet = Some(device.to_string());
         }
+
+        self.tablet_lists.insert(device.to_string(), tablet);
+    }
+
+    fn get_active_kbd(&mut self) -> Option<Arc<Mutex<dyn KeyboardOpts>>> {
+        match &self.active_kbd {
+            Some(active_kbd) => {
+                let kbd = self.kbd_lists.get(active_kbd)?.clone();
+                Some(kbd)
+            }
+            None => None,
+        }
+    }
+
+    fn get_active_mouse(&mut self) -> Option<Arc<Mutex<dyn PointerOpts>>> {
+        match &self.active_tablet {
+            Some(active_mouse) => {
+                let mouse = self.tablet_lists.get(active_mouse)?.clone();
+                Some(mouse)
+            }
+            None => None,
+        }
+    }
+}
+
+pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
+    INPUTS.lock().unwrap().register_kbd(device, kbd);
+}
+
+pub fn register_pointer(device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
+    INPUTS.lock().unwrap().register_mouse(device, tablet);
+}
+
+pub fn key_event(keycode: u16, down: bool) -> Result<()> {
+    let kbd = INPUTS.lock().unwrap().get_active_kbd();
+    if let Some(k) = kbd {
+        k.lock().unwrap().do_key_event(keycode, down)?;
+    }
+    Ok(())
+}
+
+pub fn point_event(button: u32, x: u32, y: u32) -> Result<()> {
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        m.lock().unwrap().do_point_event(button, x, y)?;
+    }
+    Ok(())
+}
+
+pub trait KeyboardOpts: Send {
+    fn do_key_event(&mut self, keycode: u16, down: bool) -> Result<()>;
+}
+
+pub trait PointerOpts: Send {
+    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[derive(Default)]
+    pub struct TestKbd {
+        keycode: u16,
+        down: bool,
+    }
+
+    impl KeyboardOpts for TestKbd {
+        fn do_key_event(&mut self, keycode: u16, down: bool) -> Result<()> {
+            self.keycode = keycode;
+            self.down = down;
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    pub struct TestTablet {
+        pub button: u32,
+        x: u32,
+        y: u32,
+    }
+    impl PointerOpts for TestTablet {
+        fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
+            self.button = button;
+            self.x = x;
+            self.y = y;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_input_basic() {
+        // Test keyboard event.
+        let test_kdb = Arc::new(Mutex::new(TestKbd {
+            keycode: 0,
+            down: false,
+        }));
+        register_keyboard("TestKeyboard", test_kdb.clone());
+        assert!(key_event(12, true).is_ok());
+        assert_eq!(test_kdb.lock().unwrap().keycode, 12);
+        assert_eq!(test_kdb.lock().unwrap().down, true);
+
+        // Test point event.
+        let test_mouse = Arc::new(Mutex::new(TestTablet::default()));
+        assert_eq!(test_mouse.lock().unwrap().button, 0);
+        assert_eq!(test_mouse.lock().unwrap().x, 0);
+        assert_eq!(test_mouse.lock().unwrap().y, 0);
+        register_pointer("TestPointer", test_mouse.clone());
+        assert!(point_event(1, 54, 12).is_ok());
+        assert_eq!(test_mouse.lock().unwrap().button, 1);
+        assert_eq!(test_mouse.lock().unwrap().x, 54);
+        assert_eq!(test_mouse.lock().unwrap().y, 12);
     }
 }

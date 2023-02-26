@@ -30,7 +30,6 @@
 ///     "-device pcie-demo-dev,addr=0x5,bus=pcie.0,id=demo0,bar_num=3,bar_size=4096"
 ///
 use std::{
-    collections::HashMap,
     sync::Mutex,
     sync::{
         atomic::{AtomicU16, Ordering},
@@ -39,9 +38,12 @@ use std::{
 };
 
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
+use log::error;
 use machine_manager::config::DemoDevConfig;
-use once_cell::sync::Lazy;
 
+use crate::demo_device::base_device::BaseDevice;
+#[cfg(not(target_env = "musl"))]
+use crate::demo_device::{gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse};
 use crate::{
     config::{
         PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
@@ -59,9 +61,8 @@ pub struct DemoDev {
     devfn: u8,
     parent_bus: Weak<Mutex<PciBus>>,
     dev_id: Arc<AtomicU16>,
+    device: Arc<Mutex<dyn DeviceTypeOperation>>,
 }
-
-static mut HASHMAP: Lazy<Mutex<HashMap<u64, u8>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 impl DemoDev {
     pub fn new(
@@ -70,6 +71,14 @@ impl DemoDev {
         sys_mem: Arc<AddressSpace>,
         parent_bus: Weak<Mutex<PciBus>>,
     ) -> Self {
+        // You can choose different device function based on the parameter of device_type.
+        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
+            #[cfg(not(target_env = "musl"))]
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(sys_mem.clone()))),
+            #[cfg(not(target_env = "musl"))]
+            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(sys_mem.clone()))),
+            _ => Arc::new(Mutex::new(BaseDevice::new())),
+        };
         DemoDev {
             name: cfg.id.clone(),
             cmd_cfg: cfg.clone(),
@@ -78,6 +87,7 @@ impl DemoDev {
             devfn,
             parent_bus,
             dev_id: Arc::new(AtomicU16::new(0)),
+            device,
         }
     }
 
@@ -107,28 +117,24 @@ impl DemoDev {
         Ok(())
     }
 
-    // do some mathmetic algrithm when writing to mmio.
-    // here we just multiply it with 2.
-    fn write_data_internal_func(innum: u8) -> u8 {
-        innum.checked_mul(2).unwrap_or(0)
-    }
-
     fn register_data_handling_bar(&mut self) -> Result<()> {
-        let write_ops = move |data: &[u8], addr: GuestAddress, _offset: u64| -> bool {
-            let d = Self::write_data_internal_func(data[0]);
-            unsafe {
-                // supports only saving data[0] now for simplification
-                HASHMAP.lock().unwrap().insert(addr.raw_value(), d);
-            }
+        let device = self.device.clone();
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            device
+                .lock()
+                .unwrap()
+                .write(data, addr, offset)
+                .unwrap_or_else(|e| error!("Some error occur in writing: {:?}", e));
             true
         };
 
-        let read_ops = move |data: &mut [u8], addr: GuestAddress, _offset: u64| -> bool {
-            unsafe {
-                data[0] = *HASHMAP.lock().unwrap().get(&addr.raw_value()).unwrap_or(&0);
-                // rm the data after reading, as we assume that the data becomes useless after the test process checked the addr.
-                HASHMAP.lock().unwrap().remove(&addr.raw_value());
-            }
+        let device = self.device.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            device
+                .lock()
+                .unwrap()
+                .read(data, addr, offset)
+                .unwrap_or_else(|e| error!("Some error occur in reading: {:?}", e));
             true
         };
 
@@ -184,6 +190,7 @@ impl PciDevOps for DemoDev {
         }
 
         self.register_data_handling_bar()?;
+        self.device.lock().unwrap().realize()?;
 
         self.attach_to_parent_bus()?;
         Ok(())
@@ -191,7 +198,7 @@ impl PciDevOps for DemoDev {
 
     /// Unrealize PCI/PCIe device.
     fn unrealize(&mut self) -> Result<()> {
-        bail!("Unrealize of the demo device is not implemented yet");
+        self.device.lock().unwrap().unrealize()
     }
 
     /// read the pci configuration space
@@ -224,4 +231,11 @@ impl PciDevOps for DemoDev {
     fn devfn(&self) -> Option<u8> {
         Some(self.devfn)
     }
+}
+
+pub trait DeviceTypeOperation: Send {
+    fn read(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
+    fn write(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
+    fn realize(&mut self) -> Result<()>;
+    fn unrealize(&mut self) -> Result<()>;
 }

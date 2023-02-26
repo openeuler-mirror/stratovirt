@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-pub use anyhow::Result;
 pub use error::VncError;
 
 pub mod auth;
