@@ -40,41 +40,41 @@ struct RamfbConfig {
     stride: u32,
 }
 
-fn write_ramfb_config(
-    allocator: &mut GuestAllocator,
-    test_state: &TestState,
-    file_name: &str,
-    framebuffer_base: u64,
-    fourcc: u32,
-    flags: u32,
-    width: u32,
-    height: u32,
-    ramfb_bpp: u32,
-) {
-    let mut ramfb_config = RamfbConfig::default();
-    ramfb_config.address = swap_u64(framebuffer_base);
-    ramfb_config.fourcc = swap_u32(fourcc);
-    ramfb_config.flags = swap_u32(flags);
-    ramfb_config.width = swap_u32(width);
-    ramfb_config.height = swap_u32(height);
-    ramfb_config.stride = swap_u32(width * ramfb_bpp);
+impl RamfbConfig {
+    fn new(base: u64) -> Self {
+        RamfbConfig {
+            address: base,
+            fourcc: RAMFB_FORMAT,
+            flags: 0,
+            width: HORIZONTAL_RESOLUTION,
+            height: VERTICAL_RESOLUTION,
+            stride: RAMFB_BPP * HORIZONTAL_RESOLUTION,
+        }
+    }
 
-    let ramfb_config_addr = allocator.alloc(mem::size_of::<RamfbConfig>() as u64);
-    test_state.writeq(ramfb_config_addr, ramfb_config.address);
-    test_state.writel(ramfb_config_addr + 8, ramfb_config.fourcc);
-    test_state.writel(ramfb_config_addr + 12, ramfb_config.flags);
-    test_state.writel(ramfb_config_addr + 16, ramfb_config.width);
-    test_state.writel(ramfb_config_addr + 20, ramfb_config.height);
-    test_state.writel(ramfb_config_addr + 24, ramfb_config.stride);
+    fn write_to_file(
+        &self,
+        allocator: &mut GuestAllocator,
+        test_state: &TestState,
+        file_name: &str,
+    ) {
+        let ramfb_config_addr = allocator.alloc(mem::size_of::<RamfbConfig>() as u64);
+        test_state.writeq(ramfb_config_addr, swap_u64(self.address));
+        test_state.writel(ramfb_config_addr + 8, swap_u32(self.fourcc));
+        test_state.writel(ramfb_config_addr + 12, swap_u32(self.flags));
+        test_state.writel(ramfb_config_addr + 16, swap_u32(self.width));
+        test_state.writel(ramfb_config_addr + 20, swap_u32(self.height));
+        test_state.writel(ramfb_config_addr + 24, swap_u32(self.stride));
 
-    let access = allocator.alloc(mem::size_of::<FwCfgDmaAccess>() as u64);
-    test_state.fw_cfg_write_file(
-        allocator,
-        file_name,
-        access,
-        ramfb_config_addr,
-        mem::size_of::<RamfbConfig>() as u32,
-    );
+        let access = allocator.alloc(mem::size_of::<FwCfgDmaAccess>() as u64);
+        test_state.fw_cfg_write_file(
+            allocator,
+            file_name,
+            access,
+            ramfb_config_addr,
+            mem::size_of::<RamfbConfig>() as u32,
+        );
+    }
 }
 
 #[test]
@@ -103,17 +103,8 @@ fn test_basic() {
         Err(e) => assert!(false, "{}", e),
     }
 
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        RAMFB_FORMAT,
-        0,
-        HORIZONTAL_RESOLUTION,
-        VERTICAL_RESOLUTION,
-        RAMFB_BPP,
-    );
+    let ramfb_config = RamfbConfig::new(framebuffer_base);
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
 
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
@@ -161,17 +152,9 @@ fn test_abnormal_param() {
     }
 
     // Set frambuffer address is abnormal.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        ABNORMAL_FB_BASE,
-        RAMFB_FORMAT,
-        0,
-        HORIZONTAL_RESOLUTION,
-        VERTICAL_RESOLUTION,
-        RAMFB_BPP,
-    );
+    let mut ramfb_config = RamfbConfig::new(ABNORMAL_FB_BASE);
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
@@ -184,17 +167,10 @@ fn test_abnormal_param() {
     );
 
     // Set drm format is unsupported.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        0,
-        0,
-        HORIZONTAL_RESOLUTION,
-        VERTICAL_RESOLUTION,
-        RAMFB_BPP,
-    );
+    ramfb_config.address = framebuffer_base;
+    ramfb_config.fourcc = 0;
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
@@ -207,17 +183,10 @@ fn test_abnormal_param() {
     );
 
     // Set width = 15, which is less than the minimum.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        RAMFB_FORMAT,
-        0,
-        15,
-        VERTICAL_RESOLUTION,
-        RAMFB_BPP,
-    );
+    ramfb_config.fourcc = RAMFB_FORMAT;
+    ramfb_config.width = 15;
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
@@ -232,17 +201,9 @@ fn test_abnormal_param() {
     );
 
     // Set width = 16001, which is exceeded the maximum.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        RAMFB_FORMAT,
-        0,
-        16001,
-        VERTICAL_RESOLUTION,
-        RAMFB_BPP,
-    );
+    ramfb_config.width = 16001;
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
@@ -257,17 +218,10 @@ fn test_abnormal_param() {
     );
 
     // Set height = 15, which is less than the minimum.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        RAMFB_FORMAT,
-        0,
-        HORIZONTAL_RESOLUTION,
-        15,
-        RAMFB_BPP,
-    );
+    ramfb_config.width = HORIZONTAL_RESOLUTION;
+    ramfb_config.height = 15;
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
@@ -281,18 +235,10 @@ fn test_abnormal_param() {
         "Failed to check min height!"
     );
 
-    // Set height = 16001, which is exceeded the maximum.
-    write_ramfb_config(
-        &mut allocator.borrow_mut(),
-        &test_state.borrow(),
-        file_name,
-        framebuffer_base,
-        RAMFB_FORMAT,
-        0,
-        HORIZONTAL_RESOLUTION,
-        12001,
-        RAMFB_BPP,
-    );
+    // Set height = 12001, which is exceeded the maximum.
+    ramfb_config.height = 12001;
+    ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
+
     match fs::read_to_string(log_path) {
         Ok(contents) => file_contents = contents,
         Err(e) => assert!(false, "{}", e),
