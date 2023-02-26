@@ -265,6 +265,18 @@ Resume all guest VCPUs execution.
 -> {"return":{}}
 ```
 
+### system_reset
+
+Reset all guest VCPUs execution.
+
+#### Example
+
+```json
+<- {"execute":"system_reset"}
+-> {"return":{}}
+-> {"event":"RESET","data":{"guest":true},"timestamp":{"seconds":1677381086,"microseconds":432033}}
+```
+
 ### quit
 
 This command will cause StratoVirt process to exit gracefully.

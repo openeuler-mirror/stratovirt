@@ -114,6 +114,8 @@ pub struct StdMachine {
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
     power_button: Arc<EventFd>,
+    /// Reset request, handle VM `Reset` event.
+    reset_req: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
@@ -172,6 +174,9 @@ impl StdMachine {
             power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
             })?),
+            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("reset request".to_string()))
+            })?),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -197,6 +202,11 @@ impl StdMachine {
         locked_vm
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order information to FwCfg device")?;
+
+        if QmpChannel::is_connected() {
+            let reset_msg = qmp_schema::Reset { guest: true };
+            event!(Reset; reset_msg);
+        }
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.reset()
@@ -248,8 +258,8 @@ impl StdMachine {
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone())?;
-        self.register_reset_event(ich.reset_req.clone(), vm)
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone(), self.reset_req.clone())?;
+        self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
@@ -815,6 +825,14 @@ impl MachineLifecycle for StdMachine {
 
         if self.power_button.write(1).is_err() {
             error!("X86 standard vm write power button failed");
+            return false;
+        }
+        true
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.reset_req.write(1).is_err() {
+            error!("X86 standard vm write reset request failed");
             return false;
         }
         true
