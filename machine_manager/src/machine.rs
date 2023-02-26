@@ -19,7 +19,7 @@ use strum::VariantNames;
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
     DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
-    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists,
+    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -418,6 +418,8 @@ pub trait DeviceInterface {
         }
         Response::create_response(serde_json::to_value(&vec_iothreads).unwrap(), None)
     }
+
+    fn update_region(&mut self, args: UpdateRegionArgument) -> Response;
 }
 
 /// Migrate external api
