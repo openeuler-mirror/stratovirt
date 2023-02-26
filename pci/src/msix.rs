@@ -464,10 +464,14 @@ impl Msix {
             return;
         }
 
-        let func_masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
+        let masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
         let enabled: bool = is_msix_enabled(self.msix_cap_offset as usize, config);
+        let mask_state_changed = !((self.func_masked == masked) && (self.enabled == enabled));
 
-        if enabled && self.func_masked && !func_masked {
+        self.func_masked = masked;
+        self.enabled = enabled;
+
+        if mask_state_changed && (self.enabled && !self.func_masked) {
             let max_vectors_nr: u16 = self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE;
             for v in 0..max_vectors_nr {
                 if !self.is_vector_masked(v) && self.is_vector_pending(v) {
@@ -476,8 +480,6 @@ impl Msix {
                 }
             }
         }
-        self.func_masked = func_masked;
-        self.enabled = enabled;
     }
 }
 
