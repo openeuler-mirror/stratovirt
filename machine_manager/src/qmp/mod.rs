@@ -423,6 +423,7 @@ fn qmp_command_exec(
         qmp_command.clone(); controller.lock().unwrap(); qmp_response;
         (stop, pause),
         (cont, resume),
+        (system_reset, reset),
         (query_status, query_status),
         (query_version, query_version),
         (query_commands, query_commands),

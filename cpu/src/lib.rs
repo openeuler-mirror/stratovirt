@@ -461,11 +461,6 @@ impl CPUInterface for CPU {
             return Err(anyhow!(CpuError::NoMachineInterface));
         }
 
-        if QmpChannel::is_connected() {
-            let reset_msg = schema::Reset { guest: true };
-            event!(Reset; reset_msg);
-        }
-
         Ok(())
     }
 

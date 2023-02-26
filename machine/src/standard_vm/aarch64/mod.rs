@@ -238,6 +238,11 @@ impl StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
+        if QmpChannel::is_connected() {
+            let reset_msg = qmp_schema::Reset { guest: true };
+            event!(Reset; reset_msg);
+        }
+
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;

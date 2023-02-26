@@ -346,7 +346,7 @@ pub struct VhostInflight {
     pub inner: VhostUserInflight,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum VhostBackendType {
     TypeNet,
     TypeBlock,
