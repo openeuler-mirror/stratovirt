@@ -14,3 +14,4 @@ devices = { path = "../../devices" }
 util = { path = "../../util" }
 acpi = { path = "../../acpi" }
 machine = { path = "../../machine" }
+virtio = { path = "../../virtio"}
