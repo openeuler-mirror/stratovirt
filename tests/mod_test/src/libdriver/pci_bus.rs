@@ -15,8 +15,12 @@ use crate::utils::{read_le_u16, read_le_u32};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+const PCIE_MMIO_BASE: u64 = 0x1000_0000;
+const PCIE_MMIO_SIZE: u64 = 0x2EFF_0000;
+const PCIE_ECAM_BASE: u64 = 511 << 30;
+
 pub trait PciBusOps {
-    fn memread(&self, addr: u32, buf: &mut Vec<u8>, len: usize);
+    fn memread(&self, addr: u32, len: usize) -> Vec<u8>;
     fn memwrite(&self, addr: u32, buf: &[u8], len: usize);
 
     fn config_readb(&self, devfn: u32, offset: u8) -> u8;
@@ -40,9 +44,9 @@ pub struct TestPciBus {
 impl TestPciBus {
     pub fn new(test_state: Rc<RefCell<TestState>>) -> Self {
         Self {
-            mmio_alloc_ptr: 0x10000000,
-            mmio_limit: 0x2eff0000,
-            ecam_alloc_ptr: 0x8040000000,
+            mmio_alloc_ptr: PCIE_MMIO_BASE,
+            mmio_limit: PCIE_MMIO_SIZE,
+            ecam_alloc_ptr: PCIE_ECAM_BASE,
             not_hotpluggable: false,
             test_state,
         }
@@ -54,18 +58,18 @@ impl TestPciBus {
 }
 
 impl PciBusOps for TestPciBus {
-    fn memread(&self, addr: u32, buf: &mut Vec<u8>, len: usize) {
-        *buf = self.test_state.borrow().memread(addr as u64, len as u64);
+    fn memread(&self, addr: u32, len: usize) -> Vec<u8> {
+        self.test_state.borrow().memread(addr as u64, len as u64)
     }
 
     fn memwrite(&self, addr: u32, buf: &[u8], len: usize) {
         self.test_state
             .borrow()
-            .memwrite(addr as u64, &*buf, len as u64);
+            .memwrite(addr as u64, buf, len as u64);
     }
 
     fn config_readb(&self, devfn: u32, offset: u8) -> u8 {
-        let addr = self.ecam_alloc_ptr + (devfn << 12 | offset as u32) as u64;
+        let addr = self.get_addr(devfn, offset);
         self.test_state.borrow().memread(addr, 1)[0]
     }
 
