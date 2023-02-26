@@ -118,6 +118,11 @@ impl TestState {
         serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap()
     }
 
+    pub fn qmp_read(&self) -> Value {
+        let timeout = Duration::from_secs(10);
+        serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap()
+    }
+
     fn send_test_cmd(&self, cmd: &str) -> String {
         let timeout = Duration::from_secs(10);
         self.test_sock.write_line(cmd);
