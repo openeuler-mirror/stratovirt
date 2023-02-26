@@ -502,11 +502,11 @@ impl Region {
         offset: u64,
         count: u64,
     ) -> Result<()> {
-        self.check_valid_offset(offset, count).with_context(|| {
-            anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
-        })?;
         match self.region_type {
             RegionType::Ram | RegionType::RamDevice => {
+                self.check_valid_offset(offset, count).with_context(|| {
+                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                })?;
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
@@ -515,6 +515,9 @@ impl Region {
                     .with_context(|| "Failed to write content of Ram to mutable buffer")?;
             }
             RegionType::RomDevice => {
+                self.check_valid_offset(offset, count).with_context(|| {
+                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                })?;
                 if self.rom_dev_romd.as_ref().load(Ordering::SeqCst) {
                     let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                     let read_ret = unsafe {
