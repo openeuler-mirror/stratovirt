@@ -757,7 +757,7 @@ impl Region {
                 .update_topology()
                 .with_context(|| "Failed to update topology for address_space")?;
         } else {
-            debug!("add subregion to container region, which has no belonged address-space");
+            debug!("delete subregion from container region, which has no belonged address-space");
         }
         child.del_belonged_address_space();
 
