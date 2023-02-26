@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 #[cfg(target_arch = "aarch64")]
-mod aarch64;
+pub mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
