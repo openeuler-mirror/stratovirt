@@ -75,6 +75,12 @@ const CTRL_MAC_TABLE_LEN: usize = 64;
 const CTRL_MAX_VLAN: u16 = 1 << 12;
 /// The max num of the mac address.
 const MAX_MAC_ADDR_NUM: usize = 0xff;
+/// The header length of virtio net packet.
+const NET_HDR_LENGTH: usize = mem::size_of::<VirtioNetHdr>();
+/// The legnth of vlan tag.
+const VLAN_TAG_LENGTH: usize = 4;
+/// The offset of vlan tpid for 802.1Q tag.
+const VLAN_TPID_LENGTH: usize = 2;
 
 type SenderConfig = Option<Tap>;
 
@@ -230,20 +236,23 @@ impl CtrlInfo {
 
             let mut entries: u32 = 0;
             *data_iovec = get_buf_and_discard(mem_space, data_iovec, entries.as_mut_bytes())
-                .with_context(|| "Failed to get unicast MAC entries".to_string())?;
+                .with_context(|| "Failed to get MAC entries".to_string())?;
             if entries == 0 {
                 mac_table.clear();
                 continue;
             }
 
             let size = entries as u64 * MAC_ADDR_LEN as u64;
-            if size > Element::iovec_size(data_iovec) {
+            let res_len = Element::iovec_size(data_iovec);
+            if size > res_len {
                 bail!("Invalid request for setting mac table.");
             }
             if entries as usize > CTRL_MAC_TABLE_LEN - mac_table_len {
-                *data_iovec = iov_discard_front(data_iovec, size)
-                    .with_context(|| "Failed to discard iovec from front side".to_string())?
-                    .to_vec();
+                if size < res_len {
+                    *data_iovec = iov_discard_front(data_iovec, size)
+                        .with_context(|| "Failed to discard iovec from front side".to_string())?
+                        .to_vec();
+                }
                 *overflow = true;
                 mac_table.clear();
                 continue;
@@ -251,7 +260,7 @@ impl CtrlInfo {
 
             let mut macs = vec![0_u8; size as usize];
             *data_iovec = get_buf_and_discard(mem_space, data_iovec, &mut macs)
-                .with_context(|| "Failed to get multicast MAC entries".to_string())?;
+                .with_context(|| "Failed to get MAC entries".to_string())?;
 
             mac_table.clear();
             for i in 0..entries {
@@ -351,6 +360,42 @@ impl CtrlInfo {
         ack
     }
 
+    fn handle_mq(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> u8 {
+        let mut ack = VIRTIO_NET_OK;
+        if cmd as u16 == VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+            let mut queue_pairs: u16 = 0;
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, queue_pairs.as_mut_bytes())
+                .unwrap_or_else(|e| {
+                    error!("Failed to get queue pairs {}", e);
+                    ack = VIRTIO_NET_ERR;
+                    Vec::new()
+                });
+            if ack == VIRTIO_NET_ERR {
+                return ack;
+            }
+
+            if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                .contains(&queue_pairs)
+            {
+                error!("Invalid queue pairs {}", queue_pairs);
+                ack = VIRTIO_NET_ERR;
+            }
+        } else {
+            error!(
+                "Control queue header command can't match {}",
+                VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
+            );
+            ack = VIRTIO_NET_ERR;
+        }
+
+        ack
+    }
+
     fn filter_packets(&mut self, buf: &[u8]) -> bool {
         // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
         let bcast = [0xff; MAC_ADDR_LEN];
@@ -361,8 +406,8 @@ impl CtrlInfo {
             return false;
         }
 
-        if buf[..vlan.len()] == vlan {
-            let vid = u16::from_be_bytes([buf[14], buf[15]]);
+        if buf[ETHERNET_HDR_LENGTH - VLAN_TPID_LENGTH..ETHERNET_HDR_LENGTH] == vlan {
+            let vid = u16::from_be_bytes([buf[ETHERNET_HDR_LENGTH], buf[ETHERNET_HDR_LENGTH + 1]]);
             let value = if let Some(value) = self.vlan_map.get(&(vid >> 5)) {
                 *value
             } else {
@@ -541,25 +586,11 @@ impl NetCtrlHandler {
                     );
                 }
                 VIRTIO_NET_CTRL_MQ => {
-                    if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
-                        error!(
-                            "Control queue header command can't match {}",
-                            VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
-                        );
-                        ack = VIRTIO_NET_ERR;
-                    }
-                    if let Some(mq_desc) = elem.out_iovec.get(1) {
-                        let queue_pairs = self
-                            .mem_space
-                            .read_object::<u16>(mq_desc.addr)
-                            .with_context(|| "Failed to read multi queue descriptor")?;
-                        if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
-                            .contains(&queue_pairs)
-                        {
-                            error!("Invalid queue pairs {}", queue_pairs);
-                            ack = VIRTIO_NET_ERR;
-                        }
-                    }
+                    ack = self.ctrl.ctrl_info.lock().unwrap().handle_mq(
+                        &self.mem_space,
+                        ctrl_hdr.cmd,
+                        &mut data_iovec,
+                    );
                 }
                 _ => {
                     error!(
@@ -677,7 +708,7 @@ struct NetIoHandler {
 }
 
 impl NetIoHandler {
-    fn read_from_tap(queue: &mut Queue, iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
+    fn read_from_tap(iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
         // SAFETY: the arguments of readv has been checked and is correct.
         let size = unsafe {
             libc::readv(
@@ -688,7 +719,6 @@ impl NetIoHandler {
         } as i32;
         if size < 0 {
             let e = std::io::Error::last_os_error();
-            queue.vring.push_back();
             if e.kind() == std::io::ErrorKind::WouldBlock {
                 return size;
             }
@@ -736,6 +766,9 @@ impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
+        if !queue.is_enabled() {
+            return Ok(());
+        }
         let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
             if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
@@ -744,7 +777,7 @@ impl NetIoHandler {
             }
 
             rx_packets += 1;
-            if rx_packets > self.queue_size {
+            if rx_packets >= self.queue_size {
                 self.rx
                     .queue_evt
                     .write(1)
@@ -777,13 +810,13 @@ impl NetIoHandler {
             }
 
             // Read the data from the tap device.
-            let size = NetIoHandler::read_from_tap(&mut queue, &iovecs, tap);
-            if size < 0 {
+            let size = NetIoHandler::read_from_tap(&iovecs, tap);
+            if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as i32 {
+                queue.vring.push_back();
                 break;
             }
 
-            let net_hdr_len = mem::size_of::<VirtioNetHdr>();
-            let mut buf = vec![0_u8; net_hdr_len + ETHERNET_HDR_LENGTH];
+            let mut buf = vec![0_u8; NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH];
             get_net_header(&iovecs, &mut buf).and_then(|size| {
                 if size != buf.len() {
                     bail!(
@@ -798,7 +831,7 @@ impl NetIoHandler {
                 .ctrl_info
                 .lock()
                 .unwrap()
-                .filter_packets(&buf[net_hdr_len..])
+                .filter_packets(&buf[NET_HDR_LENGTH..])
             {
                 queue.vring.push_back();
                 continue;
@@ -1301,8 +1334,7 @@ pub fn create_tap(
             })?
         };
 
-        let vnet_hdr_size = mem::size_of::<VirtioNetHdr>() as u32;
-        tap.set_hdr_size(vnet_hdr_size)
+        tap.set_hdr_size(NET_HDR_LENGTH as u32)
             .with_context(|| "Failed to set tap hdr size")?;
 
         taps.push(tap);
