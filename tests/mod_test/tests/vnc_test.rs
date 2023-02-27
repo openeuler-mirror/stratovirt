@@ -16,12 +16,12 @@ use mod_test::{
         create_new_client, set_up, tear_down, DemoGpuConfig, EncodingType, InputConfig,
         RfbPixelFormat, RfbServerMsg, TestAuthType, UpdateState, KEYEVENTLIST, PIXMAN_A1,
         PIXMAN_A8B8G8R8, PIXMAN_R8G8B8, PIXMAN_X2R10G10B10, PIXMAN_YUY2, POINTEVENTLIST,
-        REFRESH_TIME_INTERVAL, TEST_CLIENT_RAND_MSG,
+        TEST_CLIENT_RAND_MSG,
     },
     libtest::TestState,
 };
 use serde_json::Value;
-use std::{cell::RefCell, rc::Rc, thread::sleep, time::Duration};
+use std::{cell::RefCell, rc::Rc};
 use vmm_sys_util::epoll::EventSet;
 
 fn qmp_query_vnc(test_state: Rc<RefCell<TestState>>) -> Value {
@@ -64,7 +64,7 @@ fn test_set_area_dirty() {
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
     let demo_gpu = gpu_list[0].clone();
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
 
     // Encoding -> Raw.
@@ -80,8 +80,6 @@ fn test_set_area_dirty() {
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
 
-    sleep(Duration::from_millis(2000));
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL * 2);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res
@@ -95,7 +93,6 @@ fn test_set_area_dirty() {
     assert!(vnc_client
         .test_update_request(UpdateState::Incremental, 0, 0, 640 as u16, 480 as u16,)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
 
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
@@ -115,8 +112,6 @@ fn test_set_area_dirty() {
         .is_ok());
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
-    sleep(Duration::from_millis(2000));
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
 
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
@@ -165,7 +160,7 @@ fn test_send_cursor_image() {
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
     let demo_gpu = gpu_list[0].clone();
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client
         .test_setup_encodings(Some(1), Some(EncodingType::EncodingRichCursor))
@@ -204,7 +199,7 @@ fn test_send_cursor_image() {
     demo_gpu.borrow_mut().replace_cursor(64, 64, 16, 16, 0);
     assert!(vnc_client.disconnect().is_ok());
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client.disconnect().is_ok());
 
@@ -246,7 +241,7 @@ fn test_desktop_resize() {
     demo_gpu
         .borrow_mut()
         .replace_surface(640, 480, PIXMAN_A8B8G8R8);
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client
         .test_setup_encodings(None, Some(EncodingType::EncodingDesktopresize))
@@ -317,7 +312,7 @@ fn test_set_pixel_format() {
     };
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client
         .test_setup_encodings(None, Some(EncodingType::EncodingRaw))
@@ -330,7 +325,6 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res
@@ -343,8 +337,7 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    sleep(Duration::from_millis(500));
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL * 2);
+
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res
@@ -357,7 +350,7 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
+
     let res = vnc_client.test_recv_server_data(pf.clone());
     assert!(res.is_ok());
     let res = res.unwrap();
@@ -377,7 +370,7 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
+
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res.unwrap().contains(&(
@@ -395,7 +388,6 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res.unwrap().contains(&(
@@ -413,7 +405,7 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
+
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     let res = res.unwrap();
@@ -459,7 +451,7 @@ fn test_vnc_kbd_mouse() {
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
     let demo_gpu = gpu_list[0].clone();
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     // Key event.
     for &(name, keysym, keycode) in KEYEVENTLIST.iter() {
@@ -469,8 +461,7 @@ fn test_vnc_kbd_mouse() {
         assert_eq!(msg.keycode, keycode);
         assert_eq!(msg.down, 0);
         assert!(vnc_client.test_key_event(1, keysym as u32).is_ok());
-        sleep(Duration::from_millis(50));
-        test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
+
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);
         assert_eq!(msg.keycode, keycode);
@@ -535,7 +526,7 @@ fn test_switch_display_device() {
         .borrow_mut()
         .replace_surface(1920, 1080, PIXMAN_A8B8G8R8);
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client
         .test_setup_encodings(None, Some(EncodingType::EncodingDesktopresize))
@@ -608,7 +599,7 @@ fn test_update_image_abnormal() {
     demo_gpu
         .borrow_mut()
         .replace_surface(640, 480, PIXMAN_A8B8G8R8);
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let value = qmp_query_vnc(test_state.clone());
     let client_num = value["return"]["clients"].as_array().unwrap().len();
@@ -617,9 +608,9 @@ fn test_update_image_abnormal() {
     tear_down(gpu_list, input, test_state);
 }
 
-fn test_rfb_version_abnormal(port: u16) -> Result<()> {
+fn test_rfb_version_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
     let mut buf: Vec<u8> = Vec::new();
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state, port).unwrap();
     println!("Connect to server.");
     assert!(vnc_client.read_msg(&mut buf, 12).is_ok());
     assert_eq!(buf[..12].to_vec(), "RFB 003.008\n".as_bytes().to_vec());
@@ -641,9 +632,9 @@ fn test_rfb_version_abnormal(port: u16) -> Result<()> {
     Ok(())
 }
 
-fn test_unsupport_sec_type(port: u16) -> Result<()> {
+fn test_unsupport_sec_type(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
     let mut buf: Vec<u8> = Vec::new();
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state, port).unwrap();
     println!("Connect to server.");
     assert!(vnc_client.read_msg(&mut buf, 12).is_ok());
     assert_eq!(buf[..12].to_vec(), "RFB 003.008\n".as_bytes().to_vec());
@@ -675,8 +666,8 @@ fn test_unsupport_sec_type(port: u16) -> Result<()> {
     Ok(())
 }
 
-fn test_set_pixel_format_abnormal(port: u16) -> Result<()> {
-    let mut vnc_client = create_new_client(port).unwrap();
+fn test_set_pixel_format_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
+    let mut vnc_client = create_new_client(test_state, port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let pf = RfbPixelFormat::new(17, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
     assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
@@ -693,8 +684,8 @@ fn test_set_pixel_format_abnormal(port: u16) -> Result<()> {
     Ok(())
 }
 
-fn test_client_rand_bytes(port: u16) -> Result<()> {
-    let mut vnc_client = create_new_client(port).unwrap();
+fn test_client_rand_bytes(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
+    let mut vnc_client = create_new_client(test_state, port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let mut buf = TEST_CLIENT_RAND_MSG;
     vnc_client.write_msg(&mut buf)?;
@@ -736,12 +727,12 @@ fn test_rfb_abnormal() {
     };
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
 
-    assert!(test_rfb_version_abnormal(port).is_ok());
-    assert!(test_unsupport_sec_type(port).is_ok());
-    assert!(test_set_pixel_format_abnormal(port).is_ok());
-    assert!(test_client_rand_bytes(port).is_ok());
+    assert!(test_rfb_version_abnormal(test_state.clone(), port).is_ok());
+    assert!(test_unsupport_sec_type(test_state.clone(), port).is_ok());
+    assert!(test_set_pixel_format_abnormal(test_state.clone(), port).is_ok());
+    assert!(test_client_rand_bytes(test_state.clone(), port).is_ok());
 
-    let mut vnc_client = create_new_client(port).unwrap();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let value = qmp_query_vnc(test_state.clone());
     let client_num = value["return"]["clients"].as_array().unwrap().len();

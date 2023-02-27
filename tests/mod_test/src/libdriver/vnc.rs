@@ -23,6 +23,8 @@ use std::{
     net::{Shutdown, SocketAddr, TcpStream},
     os::unix::prelude::AsRawFd,
     rc::Rc,
+    thread::sleep,
+    time::Duration,
 };
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
@@ -639,17 +641,23 @@ impl IoOperations for IoChannel {
 pub struct VncClient {
     pub stream: TcpStream,
     pub io_channel: Rc<RefCell<dyn IoOperations>>,
+    test_state: Rc<RefCell<TestState>>,
     pub display_mod: DisplayMode,
     epoll: Epoll,
     pub ready_events: Vec<EpollEvent>,
 }
 
 impl VncClient {
-    pub fn new(stream: TcpStream, io_channel: Rc<RefCell<dyn IoOperations>>) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        io_channel: Rc<RefCell<dyn IoOperations>>,
+        test_state: Rc<RefCell<TestState>>,
+    ) -> Self {
         let epoll = Epoll::new().unwrap();
         Self {
             stream,
             io_channel,
+            test_state,
             display_mod: DisplayMode::default(),
             epoll,
             ready_events: vec![EpollEvent::default(); 1],
@@ -873,6 +881,10 @@ impl VncClient {
     ) -> Result<Vec<(RfbServerMsg, EncodingType)>> {
         let mut buf: Vec<u8> = Vec::new();
         let mut rfb_event: Vec<(RfbServerMsg, EncodingType)> = Vec::new();
+        sleep(Duration::from_millis(50));
+        self.test_state
+            .borrow_mut()
+            .clock_step_ns(REFRESH_TIME_INTERVAL);
         loop {
             // Wait event.
             match self.epoll_wait(EventSet::IN) {
@@ -1045,7 +1057,7 @@ impl VncClient {
 /// # Arguments
 ///
 /// * `port` - Local port listened by vnc server.
-pub fn create_new_client(port: u16) -> Result<VncClient> {
+pub fn create_new_client(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<VncClient> {
     let port = port + RFB_PORT_OFFSET;
     let addrs = [SocketAddr::from(([127, 0, 0, 1], port))];
     let stream = TcpStream::connect(&addrs[..]).unwrap();
@@ -1057,7 +1069,7 @@ pub fn create_new_client(port: u16) -> Result<VncClient> {
         .unwrap();
     let stream_clone = stream.try_clone().expect("clone failed...");
     let io_channel = Rc::new(RefCell::new(IoChannel::new(stream_clone)));
-    let mut vnc_client = VncClient::new(stream, io_channel);
+    let mut vnc_client = VncClient::new(stream, io_channel, test_state);
     // Register epoll event.
     let event = EpollEvent::new(
         EventSet::READ_HANG_UP | EventSet::IN,
@@ -1219,6 +1231,7 @@ impl TestDemoInputDevice {
 
     /// Read an input event from a memory.
     pub fn read_input_event(&mut self) -> InputMessage {
+        sleep(Duration::from_millis(50));
         let addr = self.mem_addr;
         let test_state = self.pci_dev.pci_bus.borrow_mut().test_state.clone();
 
