@@ -31,6 +31,7 @@ use mod_test::libtest::TestState;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use util::aio::{aio_probe, AioEngine};
 use util::num_ops::round_up;
 use util::offset_of;
 
@@ -563,9 +564,15 @@ fn blk_all_features() {
     let device_args = Rc::new(String::from(
         ",multifunction=on,serial=111111,num-queues=4,bootindex=1,iothread=iothread1",
     ));
-    let drive_args = Rc::new(String::from(
-        ",direct=on,aio=io_uring,readonly=off,throttling.iops-total=1024",
-    ));
+    let drive_args = if aio_probe(AioEngine::IoUring).is_ok() {
+        Rc::new(String::from(
+            ",direct=on,aio=io_uring,readonly=off,throttling.iops-total=1024",
+        ))
+    } else {
+        Rc::new(String::from(
+            ",direct=false,readonly=off,throttling.iops-total=1024",
+        ))
+    };
     let other_args = Rc::new(String::from("-object iothread,id=iothread1"));
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
@@ -837,7 +844,11 @@ fn blk_iops() {
 fn blk_aio_native() {
     let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE_1M, 1));
     let device_args = Rc::new(String::from(""));
-    let drive_args = Rc::new(String::from(",direct=on,aio=native"));
+    let drive_args = if aio_probe(AioEngine::Native).is_ok() {
+        Rc::new(String::from(",direct=on,aio=native"))
+    } else {
+        Rc::new(String::from(",direct=false"))
+    };
     let other_args = Rc::new(String::from(""));
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
@@ -886,7 +897,11 @@ fn blk_aio_native() {
 fn blk_aio_io_uring() {
     let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE_1M, 1));
     let device_args = Rc::new(String::from(""));
-    let drive_args = Rc::new(String::from(",direct=on,aio=io_uring"));
+    let drive_args = if aio_probe(AioEngine::IoUring).is_ok() {
+        Rc::new(String::from(",direct=on,aio=io_uring"))
+    } else {
+        Rc::new(String::from(",direct=false"))
+    };
     let other_args = Rc::new(String::from(""));
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
