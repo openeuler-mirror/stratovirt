@@ -170,7 +170,7 @@ impl DemoGpu {
 }
 
 impl DeviceTypeOperation for DemoGpu {
-    fn read(&mut self, _data: &[u8], _addr: GuestAddress, _offset: u64) -> Result<()> {
+    fn read(&mut self, _data: &mut [u8], _addr: GuestAddress, _offset: u64) -> Result<()> {
         bail!("read is not support");
     }
 

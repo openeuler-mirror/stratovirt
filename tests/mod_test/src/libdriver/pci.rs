@@ -18,33 +18,67 @@ use std::rc::Rc;
 const BAR_MAP: [u8; 6] = [0x10, 0x14, 0x18, 0x1c, 0x20, 0x24];
 pub const PCI_VENDOR_ID: u8 = 0x00;
 pub const PCI_DEVICE_ID: u8 = 0x02;
-const PCI_COMMAND: u8 = 0x04;
+pub const PCI_COMMAND: u8 = 0x04;
+
 const PCI_COMMAND_IO: u8 = 0x1;
-const PCI_COMMAND_MEMORY: u8 = 0x2;
+pub const PCI_COMMAND_MEMORY: u8 = 0x2;
 const PCI_COMMAND_MASTER: u8 = 0x4;
 
+pub const PCI_STATUS: u8 = 0x06;
+pub const PCI_STATUS_INTERRUPT: u16 = 0x08;
+pub const PCI_STATUS_CAP_LIST: u16 = 0x10;
+pub const PCI_REVISION_ID: u8 = 0x08;
+pub const PCI_SUB_CLASS_DEVICE: u8 = 0x0a;
+pub const PCI_HEADER_TYPE: u8 = 0x0e;
+pub const PCI_PRIMARY_BUS: u8 = 0x18;
+pub const PCI_SECONDARY_BUS: u8 = 0x19;
+pub const PCI_SUBORDINATE_BUS: u8 = 0x1a;
+pub const PCI_SUBSYSTEM_VENDOR_ID: u8 = 0x2c;
 pub const PCI_SUBSYSTEM_ID: u8 = 0x2e;
-const PCI_CAPABILITY_LIST: u8 = 0x34;
 
-const PCI_CAP_LIST_NEXT: u8 = 1;
+pub const PCI_CAPABILITY_LIST: u8 = 0x34;
+pub const PCI_BRIDGE_CONTROL: u8 = 0x3e;
+
+pub const PCI_CAP_LIST_NEXT: u8 = 1;
 pub const PCI_CAP_ID_VNDR: u8 = 0x09;
-const PCI_CAP_ID_MSIX: u8 = 0x11;
+pub const PCI_CAP_ID_EXP: u8 = 0x10;
+pub const PCI_CAP_ID_MSIX: u8 = 0x11;
 
-const PCI_MSIX_FLAGS: u8 = 2;
-const PCI_MSIX_FLAGS_QSIZE: u16 = 0x07FF;
-const PCI_MSIX_TABLE: u8 = 4;
-const PCI_MSIX_PBA: u8 = 8;
-const PCI_MSIX_FLAGS_MASKALL: u16 = 0x4000;
-const PCI_MSIX_FLAGS_ENABLE: u16 = 0x8000;
-const PCI_MSIX_TABLE_BIR: u32 = 0x00000007;
+pub const PCI_MSIX_MSG_CTL: u8 = 2;
+pub const PCI_MSIX_MSG_CTL_TSIZE: u16 = 0x07FF;
+pub const PCI_MSIX_MSG_CTL_MASKALL: u16 = 0x4000;
+pub const PCI_MSIX_MSG_CTL_ENABLE: u16 = 0x8000;
+pub const PCI_MSIX_TABLE: u8 = 4;
+pub const PCI_MSIX_TABLE_BIR: u32 = 0x00000007;
+pub const PCI_MSIX_PBA: u8 = 8;
+pub const PCI_MSIX_PBA_BIR: u32 = 0x00000007;
 
-const PCI_MSIX_ENTRY_SIZE: u16 = 16;
+pub const PCI_MSIX_ENTRY_SIZE: u16 = 16;
 pub const PCI_MSIX_ENTRY_LOWER_ADDR: u64 = 0x0;
 pub const PCI_MSIX_ENTRY_UPPER_ADDR: u64 = 0x4;
 pub const PCI_MSIX_ENTRY_DATA: u64 = 0x8;
 pub const PCI_MSIX_ENTRY_VECTOR_CTRL: u64 = 0xc;
 pub const PCI_MSIX_ENTRY_CTRL_MASKBIT: u32 = 0x00000001;
 
+pub const PCI_EXP_LNKSTA: u8 = 0x12;
+pub const PCI_EXP_LNKSTA_CLS: u16 = 0x000f;
+pub const PCI_EXP_LNKSTA_NLW: u16 = 0x03f0;
+pub const PCI_EXP_LNKSTA_DLLLA: u16 = 0x2000;
+
+pub const PCI_EXP_SLTSTA: u8 = 0x1a;
+pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
+pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
+pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
+
+pub const PCI_EXP_SLTCTL: u8 = 0x18;
+pub const PCI_EXP_SLTCTL_PIC: u16 = 0x0300;
+pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
+pub const PCI_EXP_SLTCTL_PWR_IND_BLINK: u16 = 0x0200;
+pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
+pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
+pub const PCI_EXP_SLTCTL_PWR_ON: u16 = 0x0000;
+pub const PCI_EXP_SLTCTL_PWR_OFF: u16 = 0x0400;
 pub type PCIBarAddr = u64;
 pub const INVALID_BAR_ADDR: u64 = u64::MAX;
 
@@ -52,9 +86,11 @@ pub trait PciMsixOps {
     fn set_msix_vector(&self, msix_entry: u16, msix_addr: u64, msix_data: u32);
 }
 
+#[derive(Clone)]
 pub struct TestPciDev {
     pub pci_bus: Rc<RefCell<TestPciBus>>,
-    pub devfn: u32,
+    pub bus_num: u8,
+    pub devfn: u8,
     pub msix_enabled: bool,
     pub msix_table_bar: PCIBarAddr,
     msix_pba_bar: PCIBarAddr,
@@ -67,6 +103,7 @@ impl TestPciDev {
     pub fn new(pci_bus: Rc<RefCell<TestPciBus>>) -> Self {
         Self {
             pci_bus,
+            bus_num: 0,
             devfn: 0,
             msix_enabled: false,
             msix_table_bar: 0,
@@ -75,6 +112,10 @@ impl TestPciDev {
             msix_pba_off: 0,
             msix_used_vectors: 0,
         }
+    }
+
+    pub fn set_bus_num(&mut self, bus_num: u8) {
+        self.bus_num = bus_num;
     }
 
     pub fn enable(&self) {
@@ -115,8 +156,8 @@ impl TestPciDev {
     pub fn enable_msix(&mut self, bar_addr: Option<u64>) {
         let addr = self.find_capability(PCI_CAP_ID_MSIX, 0);
         assert!(addr != 0);
-        let value = self.config_readw(addr + PCI_MSIX_FLAGS);
-        self.config_writew(addr + PCI_MSIX_FLAGS, value | PCI_MSIX_FLAGS_ENABLE);
+        let value = self.config_readw(addr + PCI_MSIX_MSG_CTL);
+        self.config_writew(addr + PCI_MSIX_MSG_CTL, value | PCI_MSIX_MSG_CTL_ENABLE);
 
         let table = self.config_readl(addr + PCI_MSIX_TABLE);
         let bar_table = table & PCI_MSIX_TABLE_BIR;
@@ -141,52 +182,28 @@ impl TestPciDev {
     pub fn disable_msix(&mut self) {
         let addr = self.find_capability(PCI_CAP_ID_MSIX, 0);
         assert!(addr != 0);
-        let value = self.config_readw(addr + PCI_MSIX_FLAGS);
-        self.config_writew(addr + PCI_MSIX_FLAGS, value & !PCI_MSIX_FLAGS_ENABLE);
+        let value = self.config_readw(addr + PCI_MSIX_MSG_CTL);
+        self.config_writew(addr + PCI_MSIX_MSG_CTL, value & !PCI_MSIX_MSG_CTL_ENABLE);
 
         self.msix_enabled = false;
         self.msix_table_off = 0;
         self.msix_pba_off = 0;
     }
 
-    pub fn msix_is_pending(&self, entry: u16) -> bool {
-        assert!(self.msix_enabled);
-        let bit = entry % 32;
-        let offset = (entry / 32) * 4;
-
-        let pba_entry = self.io_readl(self.msix_pba_bar, self.msix_pba_off + offset as u64);
-        self.io_writel(
-            self.msix_pba_bar,
-            self.msix_pba_off + offset as u64,
-            pba_entry & !(1 << bit),
-        );
-        (pba_entry & (1 << bit)) != 0
-    }
-
-    pub fn msix_is_masked(&self, entry: u16) -> bool {
-        assert!(self.msix_enabled);
-        let offset: u64 = self.msix_table_off + (entry * PCI_MSIX_ENTRY_SIZE) as u64;
-
-        let addr = self.find_capability(PCI_CAP_ID_MSIX, 0);
-        assert!(addr != 0);
-        let value = self.config_readw(addr + PCI_MSIX_FLAGS);
-
-        if (value & PCI_MSIX_FLAGS_MASKALL) != 0 {
-            true
-        } else {
-            self.io_readl(
-                self.msix_table_bar,
-                offset + PCI_MSIX_ENTRY_VECTOR_CTRL as u64,
-            ) != 0
-        }
+    pub fn has_msix(&self, msix_addr: u64, msix_data: u32) -> bool {
+        self.pci_bus
+            .borrow()
+            .test_state
+            .borrow()
+            .query_msix(msix_addr, msix_data)
     }
 
     pub fn get_msix_table_size(&self) -> u16 {
         let addr = self.find_capability(PCI_CAP_ID_MSIX, 0);
         assert!(addr != 0);
 
-        let value = self.config_readw(addr + PCI_MSIX_FLAGS);
-        (value & PCI_MSIX_FLAGS_QSIZE) + 1
+        let value = self.config_readw(addr + PCI_MSIX_MSG_CTL);
+        (value & PCI_MSIX_MSG_CTL_TSIZE) + 1
     }
 
     pub fn io_readb(&self, bar_addr: PCIBarAddr, offset: u64) -> u8 {
@@ -270,34 +287,52 @@ impl TestPciDev {
     }
 
     pub fn config_readb(&self, offset: u8) -> u8 {
-        self.pci_bus.borrow().config_readb(self.devfn, offset)
+        self.pci_bus
+            .borrow()
+            .config_readb(self.bus_num, self.devfn, offset)
     }
 
     pub fn config_readw(&self, offset: u8) -> u16 {
-        self.pci_bus.borrow().config_readw(self.devfn, offset)
+        self.pci_bus
+            .borrow()
+            .config_readw(self.bus_num, self.devfn, offset)
     }
 
     pub fn config_readl(&self, offset: u8) -> u32 {
-        self.pci_bus.borrow().config_readl(self.devfn, offset)
+        self.pci_bus
+            .borrow()
+            .config_readl(self.bus_num, self.devfn, offset)
+    }
+
+    pub fn config_readq(&self, offset: u8) -> u64 {
+        self.pci_bus
+            .borrow()
+            .config_readq(self.bus_num, self.devfn, offset)
     }
 
     #[allow(unused)]
     pub fn config_writeb(&self, offset: u8, value: u8) {
         self.pci_bus
             .borrow()
-            .config_writeb(self.devfn, offset, value);
+            .config_writeb(self.bus_num, self.devfn, offset, value);
     }
 
     pub fn config_writew(&self, offset: u8, value: u16) {
         self.pci_bus
             .borrow()
-            .config_writew(self.devfn, offset, value);
+            .config_writew(self.bus_num, self.devfn, offset, value);
     }
 
     pub fn config_writel(&self, offset: u8, value: u32) {
         self.pci_bus
             .borrow()
-            .config_writel(self.devfn, offset, value);
+            .config_writel(self.bus_num, self.devfn, offset, value);
+    }
+
+    pub fn config_writeq(&self, offset: u8, value: u64) {
+        self.pci_bus
+            .borrow()
+            .config_writeq(self.bus_num, self.devfn, offset, value);
     }
 }
 

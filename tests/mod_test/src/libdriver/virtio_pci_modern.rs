@@ -82,7 +82,7 @@ pub trait VirtioPCIMSIXOps {
 pub struct TestVirtioPciDev {
     pub pci_dev: TestPciDev,
     pub bar: PCIBarAddr,
-    bar_idx: u8,
+    pub bar_idx: u8,
     pub config_msix_entry: u16,
     pub config_msix_addr: u64,
     pub config_msix_data: u32,
@@ -113,7 +113,7 @@ impl TestVirtioPciDev {
     }
 
     pub fn init(&mut self, pci_slot: u8, pci_fn: u8) {
-        let devfn = (pci_slot << 3 | pci_fn) as u32;
+        let devfn = pci_slot << 3 | pci_fn;
         assert!(self.find_pci_device(devfn));
 
         let device_type = self.pci_device_type_probe().unwrap_or(0);
@@ -127,7 +127,7 @@ impl TestVirtioPciDev {
         self.bar = self.pci_dev.io_map(self.bar_idx);
     }
 
-    fn find_pci_device(&mut self, devfn: u32) -> bool {
+    fn find_pci_device(&mut self, devfn: u8) -> bool {
         self.pci_dev.devfn = devfn;
         self.pci_dev.config_readw(PCI_VENDOR_ID) != 0xFFFF
     }
@@ -266,17 +266,8 @@ impl TestVirtioPciDev {
         self.set_config_vector(self.config_msix_entry);
     }
 
-    fn has_msix(&self, msix_entry: u16, msix_addr: u64, msix_data: u32) -> bool {
-        assert!(msix_entry != 0xFFFF);
-        if self.pci_dev.msix_is_masked(msix_entry) {
-            return self.pci_dev.msix_is_pending(msix_entry);
-        }
-        self.pci_dev
-            .pci_bus
-            .borrow()
-            .test_state
-            .borrow()
-            .query_msix(msix_addr, msix_data)
+    fn has_msix(&self, msix_addr: u64, msix_data: u32) -> bool {
+        return self.pci_dev.has_msix(msix_addr, msix_data);
     }
 
     pub fn setup_virtqueue_intr(
@@ -534,11 +525,7 @@ impl VirtioDeviceOps for TestVirtioPciDev {
 
     fn queue_was_notified(&self, virtqueue: Rc<RefCell<TestVirtQueue>>) -> bool {
         assert!(self.pci_dev.msix_enabled);
-        return self.has_msix(
-            virtqueue.borrow().msix_entry,
-            virtqueue.borrow().msix_addr,
-            virtqueue.borrow().msix_data,
-        );
+        return self.has_msix(virtqueue.borrow().msix_addr, virtqueue.borrow().msix_data);
     }
 
     fn setup_virtqueue(

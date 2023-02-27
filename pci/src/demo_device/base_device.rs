@@ -32,7 +32,7 @@ impl BaseDevice {
 
 impl DeviceTypeOperation for BaseDevice {
     // The base device can multiply the value with 2 when writing to mmio.
-    fn read(&mut self, data: &[u8], addr: GuestAddress, _offset: u64) -> Result<()> {
+    fn write(&mut self, data: &[u8], addr: GuestAddress, _offset: u64) -> Result<()> {
         let value = data[0].checked_mul(2).unwrap_or(0);
         self.result.insert(addr.raw_value(), value);
         Ok(())
@@ -40,7 +40,8 @@ impl DeviceTypeOperation for BaseDevice {
 
     // Rm the data after reading, as we assume that the data becomes useless after the test
     // process checked the addr.
-    fn write(&mut self, _data: &[u8], addr: GuestAddress, _offset: u64) -> Result<()> {
+    fn read(&mut self, data: &mut [u8], addr: GuestAddress, _offset: u64) -> Result<()> {
+        data[0] = *self.result.get(&addr.raw_value()).unwrap_or(&0);
         self.result.remove(&addr.raw_value());
         Ok(())
     }
