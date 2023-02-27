@@ -521,6 +521,30 @@ impl TestEventOperation for TestSetPixelFormat {
     }
 }
 
+pub struct TestClientCut {
+    pub event_type: RfbClientMessage,
+    pub pad0: u8,
+    pub pad1: u16,
+    pub length: u32,
+    pub text: String,
+}
+
+impl TestEventOperation for TestClientCut {
+    fn to_be_bytes(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.append(
+            &mut (RfbClientMessage::RfbClientCutText as u8)
+                .to_be_bytes()
+                .to_vec(),
+        );
+        buf.append(&mut self.pad0.to_be_bytes().to_vec());
+        buf.append(&mut self.pad1.to_be_bytes().to_vec());
+        buf.append(&mut (self.text.len()).to_be_bytes().to_vec());
+        buf.append(&mut self.text.as_bytes().to_vec());
+        buf
+    }
+}
+
 /// Display mode information.
 #[derive(Default)]
 pub struct DisplayMode {
@@ -840,7 +864,7 @@ impl VncClient {
             }
             test_event.num_encodings = match enc_num {
                 Some(num) => num,
-                None => 17_u16,
+                None => EncodingType::ENCODINGTYPE.len() as u16,
             };
         }
         self.write_msg(&mut test_event.to_be_bytes())?;
@@ -867,6 +891,13 @@ impl VncClient {
         println!("Test set pixel format.");
         let test_event = TestSetPixelFormat::new(pf);
         self.write_msg(&mut test_event.to_be_bytes())?;
+        Ok(())
+    }
+
+    /// Send client cut event to VncServer.
+    pub fn test_send_client_cut(&mut self, client_cut: TestClientCut) -> Result<()> {
+        println!("Test send client cut evnet.");
+        self.write_msg(&mut client_cut.to_be_bytes())?;
         Ok(())
     }
 
@@ -1295,7 +1326,7 @@ pub fn set_up(
     let mut vm_args = vm_args.into_iter().map(|s| s.to_string()).collect();
     args.append(&mut vm_args);
     // Log.
-    let vm_args = String::from("-D /var/log/vnc_test.log");
+    let vm_args = String::from("-D /tmp/vnc_test.log");
     let vm_args: Vec<&str> = vm_args[..].split(' ').collect();
     let mut vm_args = vm_args.into_iter().map(|s| s.to_string()).collect();
     args.append(&mut vm_args);
