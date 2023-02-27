@@ -672,7 +672,7 @@ impl TestXhciPciDevice {
     }
 
     pub fn init_pci_device(&mut self, pci_slot: u8, pci_fn: u8) {
-        let devfn = (pci_slot << 3 | pci_fn) as u32;
+        let devfn = pci_slot << 3 | pci_fn;
         assert!(self.find_pci_device(devfn));
 
         self.pci_dev.enable();
@@ -1018,11 +1018,7 @@ impl TestXhciPciDevice {
     pub fn fetch_event(&mut self, intr_idx: usize) -> Option<TestXhciEvent> {
         const MSIX_LIMIT: u32 = 4;
         for _ in 0..MSIX_LIMIT {
-            if self.has_msix(
-                self.config_msix_entry,
-                self.config_msix_addr,
-                self.config_msix_data,
-            ) {
+            if self.has_msix(self.config_msix_addr, self.config_msix_data) {
                 for _ in 0..EVENT_RING_LEN {
                     let ptr = self.xhci.interrupter[intr_idx].er_pointer;
                     let trb = self.read_event(ptr);
@@ -1373,11 +1369,11 @@ impl TestXhciPciDevice {
         evt_seg
     }
 
-    fn set_devfn(&mut self, devfn: u32) {
+    fn set_devfn(&mut self, devfn: u8) {
         self.pci_dev.devfn = devfn;
     }
 
-    fn find_pci_device(&mut self, devfn: u32) -> bool {
+    fn find_pci_device(&mut self, devfn: u8) -> bool {
         self.set_devfn(devfn);
         if self.pci_dev.config_readw(PCI_VENDOR_ID) == 0xFFFF {
             return false;
@@ -1399,10 +1395,7 @@ impl TestXhciPciDevice {
         addr
     }
 
-    fn has_msix(&mut self, msix_entry: u16, msix_addr: u64, msix_data: u32) -> bool {
-        if self.pci_dev.msix_is_masked(msix_entry) {
-            return self.pci_dev.msix_is_pending(msix_entry);
-        }
+    fn has_msix(&mut self, msix_addr: u64, msix_data: u32) -> bool {
         self.pci_dev
             .pci_bus
             .borrow()

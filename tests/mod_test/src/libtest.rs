@@ -112,6 +112,14 @@ impl TestState {
         assert!(resp.get("QMP").is_some());
     }
 
+    pub fn wait_qmp_event(&self) -> Value {
+        let timeout = Duration::from_secs(10);
+        let resp: Value =
+            serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap();
+        assert!(resp.get("event").is_some());
+        return resp;
+    }
+
     pub fn qmp(&self, cmd: &str) -> Value {
         let timeout = Duration::from_secs(10);
         self.qmp_sock.write_line(cmd);
