@@ -21,7 +21,7 @@ use mod_test::{
     libtest::TestState,
 };
 use serde_json::Value;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, thread::sleep, time::Duration};
 use vmm_sys_util::epoll::EventSet;
 
 fn qmp_query_vnc(test_state: Rc<RefCell<TestState>>) -> Value {
@@ -80,6 +80,8 @@ fn test_set_area_dirty() {
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
 
+    sleep(Duration::from_millis(2000));
+    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL * 2);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res
@@ -113,6 +115,8 @@ fn test_set_area_dirty() {
         .is_ok());
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
+    sleep(Duration::from_millis(2000));
+    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
 
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
@@ -339,7 +343,8 @@ fn test_set_pixel_format() {
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
-    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
+    sleep(Duration::from_millis(500));
+    test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL * 2);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     assert!(res
@@ -464,6 +469,8 @@ fn test_vnc_kbd_mouse() {
         assert_eq!(msg.keycode, keycode);
         assert_eq!(msg.down, 0);
         assert!(vnc_client.test_key_event(1, keysym as u32).is_ok());
+        sleep(Duration::from_millis(50));
+        test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);
         assert_eq!(msg.keycode, keycode);
