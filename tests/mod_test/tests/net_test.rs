@@ -140,7 +140,7 @@ const MAC_ADDR_LEN: usize = 6;
 const ARP_SOURCE_MAC: [u8; MAC_ADDR_LEN] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 const CMD_LINE_MAC: [u8; MAC_ADDR_LEN] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x57];
 const MAX_MAC_TABLE_LEN: usize = 64;
-const TEST_MAC_ADDR_NUMS: u8 = 3;
+const TEST_MAC_ADDR_NUMS: u8 = 2;
 
 static USED_ELEM_SIZE: u64 = size_of::<VringUsedElem>() as u64;
 
@@ -368,13 +368,12 @@ fn create_tap(id: u8, mq: bool) {
     execute_cmd("ip link set ".to_string() + &br_name + &" up".to_string());
     execute_cmd("ip link set ".to_string() + &tap_name + &" up".to_string());
     execute_cmd(
-        "ip address add 2.1.1.".to_string() + &id.to_string() + &"/24 dev ".to_string() + &br_name,
-    );
-    execute_cmd(
-        "arp -s 2.1.1.".to_string()
-            + &(id + 2).to_string()
-            + &" ee:a6:10:07:ec:".to_string()
-            + &id.to_string(),
+        "ip address add ".to_string()
+            + &id.to_string()
+            + &".1.1.".to_string()
+            + &id.to_string()
+            + &"/24 dev ".to_string()
+            + &br_name,
     );
 }
 
@@ -605,9 +604,9 @@ fn get_arp_request(id: u8) -> ArpRequestPacket {
             p_len: 0x04,
             op: [0x00, 0x01],
             src_mac: ARP_SOURCE_MAC,
-            src_ip: [0x02, 0x01, 0x01, id + 1],
+            src_ip: [id, 0x01, 0x01, id + 1],
             dst_mac: [0x00; MAC_ADDR_LEN],
-            dst_ip: [0x02, 0x01, 0x01, id],
+            dst_ip: [id, 0x01, 0x01, id],
         },
     }
 }
@@ -629,9 +628,9 @@ fn get_arp_request_vlan(id: u8) -> ArpRequestPacketVlan {
             p_len: 0x04,
             op: [0x00, 0x01],
             src_mac: ARP_SOURCE_MAC,
-            src_ip: [0x02, 0x01, 0x01, id + 1],
+            src_ip: [id, 0x01, 0x01, id + 1],
             dst_mac: [0x00; MAC_ADDR_LEN],
-            dst_ip: [0x02, 0x01, 0x01, id],
+            dst_ip: [id, 0x01, 0x01, id],
         },
     }
 }
@@ -1764,7 +1763,7 @@ fn virtio_net_abnormal_rx_tx_test() {
 ///   1/2/3: success.
 #[test]
 fn virtio_net_abnormal_rx_tx_test_2() {
-    let id = 19 * TEST_MAC_ADDR_NUMS;
+    let id = 10 * TEST_MAC_ADDR_NUMS;
     let queue_pairs: u16 = 1;
     let queues: usize = 2 * queue_pairs as usize + 1;
 
@@ -1833,7 +1832,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
 ///   1/2/3: success.
 #[test]
 fn virtio_net_set_abnormal_feature() {
-    let id = 10 * TEST_MAC_ADDR_NUMS;
+    let id = 11 * TEST_MAC_ADDR_NUMS;
     let (net, test_state, alloc) = set_up(id, false, 0, false);
 
     // Three virtqueues: tx/rx/ctrl.
@@ -1879,7 +1878,7 @@ fn virtio_net_set_abnormal_feature() {
 ///   1/3/4: success.
 #[test]
 fn virtio_net_send_abnormal_packet() {
-    let id = 11 * TEST_MAC_ADDR_NUMS;
+    let id = 12 * TEST_MAC_ADDR_NUMS;
     let (net, test_state, alloc) = set_up(id, false, 0, false);
 
     // Three virtqueues: tx/rx/ctrl.
