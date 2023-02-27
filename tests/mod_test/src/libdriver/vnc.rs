@@ -1170,11 +1170,11 @@ impl TestDemoGpuDevice {
         println!("cmd : {:?}", cmd);
     }
 
-    pub fn set_devfn(&mut self, devfn: u32) {
+    pub fn set_devfn(&mut self, devfn: u8) {
         self.pci_dev.devfn = devfn;
     }
 
-    pub fn find_pci_device(&mut self, devfn: u32) -> bool {
+    pub fn find_pci_device(&mut self, devfn: u8) -> bool {
         self.set_devfn(devfn);
         if self.pci_dev.config_readw(PCI_VENDOR_ID) == 0xFFFF {
             return false;
@@ -1183,7 +1183,7 @@ impl TestDemoGpuDevice {
     }
 
     pub fn init(&mut self, pci_slot: u8) {
-        let devfn = (pci_slot << 3) as u32;
+        let devfn = pci_slot << 3;
         assert!(self.find_pci_device(devfn));
 
         self.pci_dev.enable();
@@ -1233,11 +1233,11 @@ impl TestDemoInputDevice {
         msg
     }
 
-    pub fn set_devfn(&mut self, devfn: u32) {
+    pub fn set_devfn(&mut self, devfn: u8) {
         self.pci_dev.devfn = devfn;
     }
 
-    pub fn find_pci_device(&mut self, devfn: u32) -> bool {
+    pub fn find_pci_device(&mut self, devfn: u8) -> bool {
         self.set_devfn(devfn);
         if self.pci_dev.config_readw(PCI_VENDOR_ID) == 0xFFFF {
             return false;
@@ -1246,7 +1246,7 @@ impl TestDemoInputDevice {
     }
 
     pub fn init(&mut self, pci_slot: u8) {
-        let devfn = (pci_slot << 3) as u32;
+        let devfn = pci_slot << 3;
         assert!(self.find_pci_device(devfn));
 
         self.pci_dev.enable();
