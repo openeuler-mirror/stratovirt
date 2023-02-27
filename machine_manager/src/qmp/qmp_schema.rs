@@ -623,6 +623,8 @@ pub struct update_region {
     pub ioeventfd_data: Option<u64>,
     #[serde(rename = "ioeventfd_size")]
     pub ioeventfd_size: Option<u64>,
+    #[serde(rename = "device_fd_path")]
+    pub device_fd_path: Option<String>,
 }
 
 pub type UpdateRegionArgument = update_region;
