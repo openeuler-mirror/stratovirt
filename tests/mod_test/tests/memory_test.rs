@@ -382,9 +382,12 @@ fn ram_device_region_readwrite() {
 ///   1. Add an io region with ioeventfd(data: 1, size 8).
 ///   2. Write 1 to the ioeventfd.
 ///   3. Read data from the address and check it.
+///   4. Write 2 to the ioeventfd.
+///   5. Read data from the address and check it.
 /// Expect:
-///   1/2: success.
+///   1/2/4: success.
 ///   3: Got value 0.
+///   5: Got value 4.
 #[test]
 fn io_region_ioeventfd() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
@@ -394,12 +397,21 @@ fn io_region_ioeventfd() {
         .state
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"io_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99, \"ioeventfd\": true, \"ioeventfd_data\": 1, \"ioeventfd_size\": 8 }}");
-    memory_test.state.borrow_mut().writew(addr, 1);
+    memory_test.state.borrow_mut().writeq(addr, 1);
     let ret = memory_test
         .state
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     let cmp = [0x0u8; 8];
+    assert_eq!(ret, cmp);
+
+    memory_test.state.borrow_mut().writeq(addr, 2);
+    let ret = memory_test
+        .state
+        .borrow_mut()
+        .memread(addr, std::mem::size_of::<u64>() as u64);
+    let mut cmp = [0x0u8; 8];
+    cmp[0] = 4;
     assert_eq!(ret, cmp);
 
     memory_test.state.borrow_mut().stop();
