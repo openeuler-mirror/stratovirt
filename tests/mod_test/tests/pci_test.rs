@@ -34,6 +34,61 @@ const MAX_DEVICE_NUM_IN_MULTIFUNC: u8 = 248;
 const MAX_DEVICE_NUM: u8 = 32;
 const TIMEOUT_S: u64 = 5;
 
+#[derive(Clone, Copy)]
+struct DemoDev {
+    bar_num: u8,
+    bar_size: u64,
+    bus_num: u8,
+    dev_num: u8,
+}
+
+fn fmt_demo_deves(cfg: DemoDev, num: u8) -> String {
+    // let mut dev_str = format!("-device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.{}", cfg.bus_num);
+    let mut dev_str: String = String::new();
+
+    for i in 1..num + 1 {
+        let tmp = format!(
+            "-device pcie-demo-dev,addr=0x{:x},bus=pcie.{},id=demo{},bar_num={},bar_size={}",
+            cfg.dev_num + i - 1,
+            cfg.bus_num,
+            i,
+            cfg.bar_num,
+            cfg.bar_size
+        );
+        let sep = match i {
+            1 => "",
+            _ => " ",
+        };
+        dev_str = format!("{}{}{}", dev_str, sep, tmp);
+    }
+
+    dev_str
+}
+
+fn init_demo_dev(cfg: DemoDev, dev_num: u8) -> (Rc<RefCell<TestPciDev>>, Rc<RefCell<TestState>>) {
+    let mut demo_dev_args: Vec<&str> = Vec::new();
+
+    let mut args: Vec<&str> = "-machine virt -D /tmp/oscar.log".split(' ').collect();
+    demo_dev_args.append(&mut args);
+
+    let demo_str = fmt_demo_deves(cfg.clone(), dev_num);
+    args = demo_str[..].split(' ').collect();
+    demo_dev_args.append(&mut args);
+
+    let test_state = Rc::new(RefCell::new(test_init(demo_dev_args)));
+    let machine = Rc::new(RefCell::new(TestStdMachine::new(test_state.clone())));
+    let _allocator = machine.borrow().allocator.clone();
+
+    let mut pci_dev = TestPciDev::new(machine.clone().borrow().pci_bus.clone());
+    let devfn = cfg.dev_num << 3;
+    pci_dev.devfn = devfn;
+
+    pci_dev.set_bus_num(cfg.bus_num);
+    pci_dev.enable();
+
+    (Rc::new(RefCell::new(pci_dev)), test_state)
+}
+
 #[derive(Default, Clone)]
 pub struct MsixVector {
     pub msix_entry: u16,
@@ -67,6 +122,7 @@ impl RootPort {
         root_port.set_bus_num(bus_num);
         root_port.devfn = devfn;
         assert_eq!(root_port.config_readw(PCI_SUB_CLASS_DEVICE), 0x0604);
+
         root_port.enable();
         root_port.enable_msix(None);
         let root_port_msix = MsixVector::new(0, alloc.clone());
@@ -75,6 +131,7 @@ impl RootPort {
             root_port_msix.msix_addr,
             root_port_msix.msix_data,
         );
+
         Self {
             rp_dev: root_port,
             rp_misx_vector: root_port_msix,
@@ -90,6 +147,7 @@ fn build_root_port_args(root_port_nums: u8) -> Vec<String> {
     if root_port_nums > 32 {
         multifunc = true;
     }
+
     let mut root_port_args: Vec<String> = Vec::with_capacity(root_port_nums.try_into().unwrap());
     let mut addr = 1;
     let mut func = 0;
@@ -114,6 +172,7 @@ fn build_root_port_args(root_port_nums: u8) -> Vec<String> {
 
         root_port_args.push(arg);
     }
+
     root_port_args
 }
 
@@ -191,12 +250,14 @@ fn build_hotplug_blk_cmd(
         \"read-only\": false}}}}",
         hotplug_blk_id, hotplug_image_path
     );
+
     let add_device_command = format!(
         "{{\"execute\":\"device_add\", \
         \"arguments\": {{\"id\":\"blk-{}\", \"driver\":\"virtio-blk-pci\", \
         \"drive\": \"drive-{}\", \"addr\":\"{:#x}.{:#x}\", \"bus\": \"pcie.{}\"}}}}",
         hotplug_blk_id, hotplug_blk_id, slot, func, bus_num
     );
+
     (add_blk_command, add_device_command)
 }
 
@@ -206,6 +267,7 @@ fn build_hotunplug_blk_cmd(unplug_blk_id: u8) -> (String, String) {
         \"arguments\": {{\"id\":\"blk-{}\"}}}}",
         unplug_blk_id
     );
+
     let delete_blk_command = format!(
         "{{\"execute\": \"blockdev-del\",\
         \"arguments\": {{\"node-name\":\"drive-{}\"}}}}",
@@ -235,6 +297,7 @@ fn build_all_device_args(
             pci_device_param.get(i).unwrap().3,
             pci_device_param.get(i).unwrap().4,
         );
+
         if pci_device_param.get(i).unwrap().5 {
             let multi_func_arg = String::from(",multifunction=on");
             device_arg_str.push_str(&multi_func_arg);
@@ -301,6 +364,7 @@ fn create_machine(
         .borrow()
         .pci_auto_bus_scan(root_port_nums as u8);
     let allocator = machine.borrow().allocator.clone();
+
     (test_state, machine, allocator)
 }
 
@@ -376,10 +440,12 @@ fn validate_config_perm_1byte(
             .borrow()
             .config_readb(pci_dev.bus_num, pci_dev.devfn, offset);
     assert_eq!(config_value & mask, expected_value);
+
     pci_dev
         .pci_bus
         .borrow()
         .config_writeb(pci_dev.bus_num, pci_dev.devfn, offset, writed_value);
+
     let config_value =
         pci_dev
             .pci_bus
@@ -407,7 +473,6 @@ fn validate_config_perm_2byte(
     assert_eq!(config_value & mask, expected_value);
 }
 
-#[allow(unused)]
 fn validate_config_perm_4byte(
     pci_dev: TestPciDev,
     offset: u8,
@@ -421,10 +486,12 @@ fn validate_config_perm_4byte(
             .borrow()
             .config_readl(pci_dev.bus_num, pci_dev.devfn, offset);
     assert_eq!(config_value & mask, expected_value);
+
     pci_dev
         .pci_bus
         .borrow()
         .config_writel(pci_dev.bus_num, pci_dev.devfn, offset, writed_value);
+
     let config_value =
         pci_dev
             .pci_bus
@@ -520,6 +587,7 @@ fn simple_blk_io_req(
         false,
     );
     blk.borrow().virtqueue_notify(virtqueue.clone());
+
     free_head
 }
 
@@ -710,6 +778,7 @@ fn hotplug_blk(
         build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), bus, slot, func);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
+
     let ret = test_state.borrow().qmp(&add_device_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
@@ -749,6 +818,7 @@ fn hotunplug_blk(
 
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     test_state.borrow().wait_qmp_event();
+
     let ret = test_state.borrow().qmp(&delete_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
@@ -957,7 +1027,7 @@ fn test_pci_device_discovery_004() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
-// Check the permission and initial value of type0 pci device's configuration space.
+/// Check the permission and initial value of type0 pci device's configuration space.
 #[test]
 fn test_pci_type0_config() {
     let blk_nums = 1;
@@ -1101,7 +1171,7 @@ fn test_pci_type0_config() {
     tear_down(Some(blk), test_state, alloc, None, Some(image_paths));
 }
 
-// Check the permission and initial value of type1 pci device's configuration space.
+/// Check the permission and initial value of type1 pci device's configuration space.
 #[test]
 fn test_pci_type1_config() {
     let blk_nums = 0;
@@ -1216,9 +1286,9 @@ fn test_pci_type0_msix_config() {
     tear_down(Some(blk), test_state, alloc, None, Some(image_paths));
 }
 
-// Test whether the Function Mask bit in the control register for MSI-X works well,
-// which means that when it's set, msix pends notification, and starts to notify as
-// soon as the mask bit is cleared by the OS.
+/// Test whether the Function Mask bit in the control register for MSI-X works well,
+/// which means that when it's set, msix pends notification, and starts to notify as
+/// soon as the mask bit is cleared by the OS.
 #[test]
 fn test_pci_msix_global_ctl() {
     let blk_nums = 1;
@@ -1282,9 +1352,9 @@ fn test_pci_msix_global_ctl() {
     tear_down(Some(blk), test_state, alloc, Some(vqs), Some(image_paths));
 }
 
-// Test whether the Mask bit in the vector register in msix table works well,
-// which means that when it's set, msix pends notification of the related vecotr,
-// and starts to notify as soon as the mask bit is cleared by the OS.
+/// Test whether the Mask bit in the vector register in msix table works well,
+/// which means that when it's set, msix pends notification of the related vecotr,
+/// and starts to notify as soon as the mask bit is cleared by the OS.
 #[test]
 fn test_pci_msix_local_ctl() {
     let blk_nums = 1;
@@ -1504,7 +1574,7 @@ fn test_pci_hotplug_006() {
         build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, 2, 0, 0);
 
     let ret = test_state.borrow().qmp(&add_blk_command);
-    println!("ret is {}", ret);
+
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
     assert!(!(*ret.get("error").unwrap()).is_null());
@@ -2273,4 +2343,150 @@ fn test_pci_root_port_exp_cap() {
     );
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
+/// r/w demo dev's mmio
+#[test]
+fn test_pci_combine_000() {
+    let cfg = DemoDev {
+        bar_num: 3,
+        bar_size: 0x100_0000, //16MB
+        bus_num: 0,
+        dev_num: 5,
+    };
+
+    let (pci_dev, test_state) = init_demo_dev(cfg, 1);
+
+    let bar_addr = pci_dev.borrow().io_map(0);
+
+    let start = bar_addr;
+
+    test_state.borrow().writeb(start, 5);
+    let out = test_state.borrow().readb(start);
+
+    assert!(out == 10); // just multiply it with 2.
+    test_state.borrow().writeb(start + 2, 7);
+    let out = test_state.borrow().readb(start + 2);
+    assert!(out == 14); // just multiply it with 2.
+
+    test_state.borrow_mut().stop();
+}
+
+/// change memory enabled during r/w demo dev's mmio
+#[test]
+fn test_pci_combine_001() {
+    let cfg = DemoDev {
+        bar_num: 3,
+        bar_size: 0x100_0000, //16MB
+        bus_num: 0,
+        dev_num: 5,
+    };
+
+    let (pci_dev, test_state) = init_demo_dev(cfg, 1);
+    let dev_locked = pci_dev.borrow();
+
+    let bar_addr = dev_locked.io_map(1);
+
+    // set memory enabled = 0
+    let mut val = dev_locked.config_readw(PCI_COMMAND);
+    val &= !(PCI_COMMAND_MEMORY as u16);
+    dev_locked.config_writew(PCI_COMMAND, val);
+
+    // mmio r/w stops working.
+    test_state.borrow().writeb(bar_addr, 5);
+    let out = test_state.borrow().readb(bar_addr);
+    assert_ne!(out, 10);
+
+    // set memory enabled = 1
+    val |= PCI_COMMAND_MEMORY as u16;
+    dev_locked.config_writew(PCI_COMMAND, val);
+
+    // mmio r/w gets back to work.
+    test_state.borrow().writeb(bar_addr, 5);
+    let out = test_state.borrow().readb(bar_addr);
+    assert_eq!(out, 0);
+
+    drop(dev_locked);
+
+    test_state.borrow_mut().stop();
+}
+
+/// r/w mmio during hotunplug
+#[test]
+fn test_pci_combine_002() {
+    let blk_nums = 1;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a root port whose bdf is 0:1:0.
+    let root_port = Rc::new(RefCell::new(RootPort::new(
+        machine.clone(),
+        alloc.clone(),
+        0,
+        1 << 3 | 0,
+    )));
+    let blk = Rc::new(RefCell::new(TestVirtioPciDev::new(
+        machine.borrow().pci_bus.clone(),
+    )));
+    blk.borrow_mut().pci_dev.bus_num = 1;
+    blk.borrow_mut().init(0, 0);
+    let bar_addr = blk.borrow().bar;
+
+    let (delete_device_command, delete_blk_command) = build_hotunplug_blk_cmd(0);
+    let ret = test_state.borrow().qmp(&delete_device_command);
+
+    // r/w mmio during hotunplug
+    test_state.borrow().writeb(bar_addr, 5);
+    assert!(test_state.borrow().readb(bar_addr) == 5);
+
+    assert!(
+        wait_root_port_intr(root_port.clone()),
+        "Wait for interrupt of root port timeout"
+    );
+    power_off_device(root_port.clone());
+
+    // r/w mmio during hotunplug
+    test_state.borrow().writeb(bar_addr, 5);
+    assert!(test_state.borrow().readb(bar_addr) != 5);
+
+    assert_eq!(*ret.get("return").unwrap(), json!({}));
+    test_state.borrow().qmp_read();
+    let ret = test_state.borrow().qmp(&delete_blk_command);
+    assert_eq!(*ret.get("return").unwrap(), json!({}));
+
+    validate_config_value_2byte(
+        machine.borrow().pci_bus.clone(),
+        root_port_nums,
+        0,
+        PCI_VENDOR_ID,
+        0xFFFF,
+        0xFFFF,
+    );
+    // r/w mmio during hotunplug
+    test_state.borrow().writeb(bar_addr, 5);
+    assert!(test_state.borrow().readb(bar_addr) != 5);
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
+/// too large bar space
+#[test]
+fn test_pci_combine_003() {
+    let mut cfg = DemoDev {
+        bar_num: 3,
+        bar_size: 0x100_0000, //16MB
+        bus_num: 0,
+        dev_num: 5,
+    };
+
+    let (pci_dev, _) = init_demo_dev(cfg, 1);
+    let bar_addr = pci_dev.borrow().io_map(0);
+    // the mmio space is 78MB, bar1 got over bounded
+    assert!(bar_addr != INVALID_BAR_ADDR);
+
+    cfg.bar_size = 0x1000_0000; //2GB
+    let (pci_dev, _) = init_demo_dev(cfg, 1);
+    let bar_addr = pci_dev.borrow().io_map(0);
+
+    assert!(bar_addr == INVALID_BAR_ADDR);
 }

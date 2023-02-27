@@ -21,7 +21,7 @@ pub const PCI_DEVICE_ID: u8 = 0x02;
 pub const PCI_COMMAND: u8 = 0x04;
 
 const PCI_COMMAND_IO: u8 = 0x1;
-const PCI_COMMAND_MEMORY: u8 = 0x2;
+pub const PCI_COMMAND_MEMORY: u8 = 0x2;
 const PCI_COMMAND_MASTER: u8 = 0x4;
 
 pub const PCI_STATUS: u8 = 0x06;
