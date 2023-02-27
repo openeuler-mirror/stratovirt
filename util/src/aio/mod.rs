@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
-use crate::align::{align_down, align_up, is_aligned};
+use crate::num_ops::{round_down, round_up};
 use crate::unix::host_page_size;
 use anyhow::{anyhow, bail, Context, Result};
 use libaio::LibaioContext;
@@ -161,7 +161,8 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
         if self.request_misaligned(&cb) {
-            let max_len = align_down(cb.nbytes + cb.req_align as u64 * 2, cb.req_align);
+            let max_len = round_down(cb.nbytes + cb.req_align as u64 * 2, cb.req_align as u64)
+                .ok_or_else(|| anyhow!("Failed to round down request length."))?;
             // Set upper limit of buffer length to avoid OOM.
             let buff_len = cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
             // SAFETY: we allocate aligned memory and free it later. Alignment is set to
@@ -317,14 +318,14 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn request_misaligned(&self, cb: &AioCb<T>) -> bool {
         if cb.direct && (cb.opcode == OpCode::Preadv || cb.opcode == OpCode::Pwritev) {
-            if !is_aligned(cb.offset as u64, cb.req_align) {
+            if (cb.offset as u64) & (cb.req_align as u64 - 1) != 0 {
                 return true;
             }
             for iov in cb.iovec.iter() {
-                if !is_aligned(iov.iov_base, cb.buf_align) {
+                if iov.iov_base & (cb.buf_align as u64 - 1) != 0 {
                     return true;
                 }
-                if !is_aligned(iov.iov_len, cb.req_align) {
+                if iov.iov_len & (cb.req_align as u64 - 1) != 0 {
                     return true;
                 }
             }
@@ -338,9 +339,11 @@ impl<T: Clone + 'static> Aio<T> {
         bounce_buffer: *mut c_void,
         buffer_len: u64,
     ) -> Result<()> {
-        let offset_align = align_down(cb.offset as u64, cb.req_align);
+        let offset_align = round_down(cb.offset as u64, cb.req_align as u64)
+            .ok_or_else(|| anyhow!("Failed to round down request offset."))?;
         let high = cb.offset as u64 + cb.nbytes;
-        let high_align = align_up(high, cb.req_align);
+        let high_align = round_up(high, cb.req_align as u64)
+            .ok_or_else(|| anyhow!("Failed to round up request high edge."))?;
 
         match cb.opcode {
             OpCode::Preadv => {
