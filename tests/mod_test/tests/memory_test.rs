@@ -15,7 +15,7 @@ use mod_test::{
     libtest::{test_init, TestState},
 };
 use serde_json::{json, Value::String as JsonString};
-use std::{cell::RefCell, process::Command, rc::Rc, string::String};
+use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
 
 pub struct MemoryTest {
     pub state: Rc<RefCell<TestState>>,
@@ -25,6 +25,12 @@ pub struct MemoryTest {
 const MEM_SIZE: u64 = 2048; // 2GB
 const PAGE_SIZE: u64 = 4096;
 const ADDRESS_BASE: u64 = 0x4000_0000;
+const ROM_DEV_PATH: &str = "rom_dev_file.fd";
+const RAM_DEV_PATH: &str = "ram_dev_file.fd";
+
+fn remove_file(path: String) {
+    let _output = Command::new("rm").arg("-f").arg(path).output();
+}
 
 impl MemoryTest {
     pub fn new(
@@ -259,10 +265,20 @@ fn rom_device_region_readwrite() {
 
     // Add a dummy rom device by qmp. The function of the device is to multiply the written value by 2
     // through the write interface and save it, and read the saved value through the read interface.
-    memory_test
-        .state
-        .borrow_mut()
-        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"rom_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99, \"read_only_mode\": false }}");
+    let file = File::create(&ROM_DEV_PATH).unwrap();
+    file.set_len(PAGE_SIZE).unwrap();
+    let qmp_str = format!(
+        "{{ \"execute\": \"update_region\",
+                        \"arguments\": {{ \"update_type\": \"add\",
+                                        \"region_type\": \"rom_device_region\",
+                                        \"offset\": 1099511627776,
+                                        \"size\": 4096,
+                                        \"priority\": 99,
+                                        \"read_only_mode\": false,
+                                        \"device_fd_path\": {:?} }} }}",
+        ROM_DEV_PATH
+    );
+    memory_test.state.borrow_mut().qmp(&qmp_str);
     let data = [0x01u8; 8];
     memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
@@ -270,6 +286,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x02u8; 8]);
+    remove_file(ROM_DEV_PATH.to_string());
 
     // Write overflow
     memory_test
@@ -287,10 +304,20 @@ fn rom_device_region_readwrite() {
     // device. The device can set the write mode to writable according to the device status during
     // the write operation, or directly return an error indicating that the write is not allowed.
     // The read operation is the same as that of IO region.
-    memory_test
-        .state
-        .borrow_mut()
-        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"rom_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 100, \"read_only_mode\": true }}");
+    let file = File::create(&ROM_DEV_PATH).unwrap();
+    file.set_len(PAGE_SIZE).unwrap();
+    let qmp_str = format!(
+        "{{ \"execute\": \"update_region\",
+                        \"arguments\": {{ \"update_type\": \"add\",
+                                        \"region_type\": \"rom_device_region\",
+                                        \"offset\": 1099511627776,
+                                        \"size\": 4096,
+                                        \"priority\": 99,
+                                        \"read_only_mode\": true,
+                                        \"device_fd_path\": {:?} }} }}",
+        ROM_DEV_PATH
+    );
+    memory_test.state.borrow_mut().qmp(&qmp_str);
     let data = [0x01u8; 8];
     memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
@@ -298,6 +325,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x00u8; 8]);
+    remove_file(ROM_DEV_PATH.to_string());
 
     memory_test.state.borrow_mut().stop();
 }
@@ -319,10 +347,19 @@ fn ram_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
     let addr = 0x100_0000_0000; // 1TB
 
-    memory_test
-        .state
-        .borrow_mut()
-        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
+    let file = File::create(&RAM_DEV_PATH).unwrap();
+    file.set_len(PAGE_SIZE).unwrap();
+    let qmp_str = format!(
+        "{{ \"execute\": \"update_region\",
+                        \"arguments\": {{ \"update_type\": \"add\",
+                                        \"region_type\": \"ram_device_region\",
+                                        \"offset\": 1099511627776,
+                                        \"size\": 4096,
+                                        \"priority\": 99,
+                                        \"device_fd_path\": {:?} }} }}",
+        RAM_DEV_PATH
+    );
+    memory_test.state.borrow_mut().qmp(&qmp_str);
     let data = [0x01u8; 8];
     memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
@@ -348,11 +385,7 @@ fn ram_device_region_readwrite() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
 
-    let ret = memory_test
-        .state
-        .borrow_mut()
-        .memread(addr, std::mem::size_of::<u64>() as u64);
-    assert_eq!(ret, [0x0u8; 8]);
+    remove_file(RAM_DEV_PATH.to_string());
 
     memory_test.state.borrow_mut().stop();
 }

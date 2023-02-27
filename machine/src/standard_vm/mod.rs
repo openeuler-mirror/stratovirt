@@ -35,7 +35,6 @@ use vnc::{
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
-use std::fs::File;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
@@ -1482,22 +1481,13 @@ impl DeviceInterface for StdMachine {
 
         let mut fd = None;
         if args.region_type.eq("rom_device_region") || args.region_type.eq("ram_device_region") {
-            let file_name = if args.region_type.eq("rom_device_region") {
-                "rom_dev_file.fd"
-            } else {
-                "ram_dev_file.fd"
-            };
-
-            let file = File::create(file_name).unwrap();
-            file.set_len(args.size).unwrap();
-            drop(file);
-            fd = Some(
-                std::fs::OpenOptions::new()
+            if let Some(file_name) = args.device_fd_path {
+                fd = Some(std::fs::OpenOptions::new()
                     .read(true)
                     .write(true)
-                    .open(file_name)
-                    .unwrap(),
-            );
+                    .open(&file_name)
+                    .unwrap());
+            }
         }
 
         let region;
