@@ -44,7 +44,9 @@ pub const PCI_MSIX_ENTRY_UPPER_ADDR: u64 = 0x4;
 pub const PCI_MSIX_ENTRY_DATA: u64 = 0x8;
 pub const PCI_MSIX_ENTRY_VECTOR_CTRL: u64 = 0xc;
 pub const PCI_MSIX_ENTRY_CTRL_MASKBIT: u32 = 0x00000001;
+
 pub type PCIBarAddr = u64;
+pub const INVALID_BAR_ADDR: u64 = u64::MAX;
 
 pub trait PciMsixOps {
     fn set_msix_vector(&self, msix_entry: u16, msix_addr: u64, msix_data: u32);
@@ -244,11 +246,15 @@ impl TestPciDev {
         addr = self.config_readl(bar_offset) & !(0x0F_u32);
         assert!(addr != 0);
 
+        let mut pci_bus = self.pci_bus.borrow_mut();
         size = 1 << addr.trailing_zeros();
-        location = (self.pci_bus.borrow().mmio_alloc_ptr + size - 1) / size * size;
-        assert!(location >= self.pci_bus.borrow().mmio_alloc_ptr);
-        assert!(location + size <= self.pci_bus.borrow().mmio_limit);
-        self.pci_bus.borrow_mut().mmio_alloc_ptr = location + size;
+        location = (pci_bus.mmio_alloc_ptr + size - 1) / size * size;
+        if location < pci_bus.mmio_alloc_ptr || location + size > pci_bus.mmio_limit {
+            return INVALID_BAR_ADDR;
+        }
+
+        pci_bus.mmio_alloc_ptr = location + size;
+        drop(pci_bus);
         self.config_writel(bar_offset, location as u32);
         bar_addr = location;
         bar_addr
