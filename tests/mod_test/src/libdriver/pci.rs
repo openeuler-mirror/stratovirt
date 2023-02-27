@@ -211,26 +211,26 @@ impl TestPciDev {
     pub fn io_writeb(&self, bar_addr: PCIBarAddr, offset: u64, value: u8) {
         let value_buf = value.to_le_bytes().to_vec();
         let pci_bus = self.pci_bus.borrow_mut();
-        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf, value_buf.len());
+        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf);
     }
 
     pub fn io_writew(&self, bar_addr: PCIBarAddr, offset: u64, value: u16) {
         let value_buf = value.to_le_bytes().to_vec();
         let pci_bus = self.pci_bus.borrow_mut();
-        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf, value_buf.len());
+        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf);
     }
 
     pub fn io_writel(&self, bar_addr: PCIBarAddr, offset: u64, value: u32) {
         let value_buf = value.to_le_bytes().to_vec();
         let pci_bus = self.pci_bus.borrow_mut();
-        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf, value_buf.len());
+        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf);
     }
 
     #[allow(unused)]
     pub fn io_writeq(&self, bar_addr: PCIBarAddr, offset: u64, value: u64) {
         let value_buf = value.to_le_bytes().to_vec();
         let pci_bus = self.pci_bus.borrow_mut();
-        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf, value_buf.len());
+        pci_bus.memwrite((bar_addr + offset) as u32, &value_buf);
     }
 
     pub fn io_map(&self, barnum: u8) -> u64 {

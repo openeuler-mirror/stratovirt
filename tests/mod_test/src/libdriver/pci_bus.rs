@@ -22,7 +22,7 @@ const PCIE_ECAM_BASE: u64 = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0
 
 pub trait PciBusOps {
     fn memread(&self, addr: u32, len: usize) -> Vec<u8>;
-    fn memwrite(&self, addr: u32, buf: &[u8], len: usize);
+    fn memwrite(&self, addr: u32, buf: &[u8]);
 
     fn config_readb(&self, devfn: u32, offset: u8) -> u8;
     fn config_readw(&self, devfn: u32, offset: u8) -> u16;
@@ -63,10 +63,8 @@ impl PciBusOps for TestPciBus {
         self.test_state.borrow().memread(addr as u64, len as u64)
     }
 
-    fn memwrite(&self, addr: u32, buf: &[u8], len: usize) {
-        self.test_state
-            .borrow()
-            .memwrite(addr as u64, buf, len as u64);
+    fn memwrite(&self, addr: u32, buf: &[u8]) {
+        self.test_state.borrow().memwrite(addr as u64, buf);
     }
 
     fn config_readb(&self, devfn: u32, offset: u8) -> u8 {
@@ -89,18 +87,18 @@ impl PciBusOps for TestPciBus {
     fn config_writeb(&self, devfn: u32, offset: u8, value: u8) {
         let addr = self.get_addr(devfn, offset);
         let buf = value.to_le_bytes();
-        self.test_state.borrow().memwrite(addr, &buf, 1);
+        self.test_state.borrow().memwrite(addr, &buf);
     }
 
     fn config_writew(&self, devfn: u32, offset: u8, value: u16) {
         let addr = self.get_addr(devfn, offset);
         let buf = value.to_le_bytes();
-        self.test_state.borrow().memwrite(addr, &buf, 2);
+        self.test_state.borrow().memwrite(addr, &buf);
     }
 
     fn config_writel(&self, devfn: u32, offset: u8, value: u32) {
         let addr = self.get_addr(devfn, offset);
         let buf = value.to_le_bytes();
-        self.test_state.borrow().memwrite(addr, &buf, 4);
+        self.test_state.borrow().memwrite(addr, &buf);
     }
 }

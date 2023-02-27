@@ -84,7 +84,7 @@ fn ram_read_write(memory_test: &MemoryTest) {
     memory_test
         .state
         .borrow_mut()
-        .memwrite(addr, str.as_bytes(), str.len() as u64);
+        .memwrite(addr, str.as_bytes());
     let ret = memory_test
         .state
         .borrow_mut()
@@ -133,10 +133,7 @@ fn io_region_read_write() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"io_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
     let data = [0x01u8; 8];
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -164,10 +161,7 @@ fn region_priority() {
     let data = [0x01u8; 8];
 
     // Ram write and read.
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -177,10 +171,7 @@ fn region_priority() {
     // Add an overlapping region to write and read again.
     let qmp_cmd = format!("{{ \"execute\": \"update_region\", \"arguments\": {{ \"update_type\": \"add\", \"region_type\": \"io_region\", \"offset\": {}, \"size\": 4096, \"priority\": 99 }} }}", addr);
     memory_test.state.borrow_mut().qmp(&qmp_cmd);
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -273,10 +264,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"rom_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99, \"read_only_mode\": false }}");
     let data = [0x01u8; 8];
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -284,11 +272,10 @@ fn rom_device_region_readwrite() {
     assert_eq!(ret, [0x02u8; 8]);
 
     // Write overflow
-    memory_test.state.borrow_mut().memwrite(
-        addr + PAGE_SIZE - 1,
-        &data,
-        std::mem::size_of::<u64>() as u64,
-    );
+    memory_test
+        .state
+        .borrow_mut()
+        .memwrite(addr + PAGE_SIZE - 1, &data);
     // Read overflow
     let ret = memory_test
         .state
@@ -305,10 +292,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"rom_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 100, \"read_only_mode\": true }}");
     let data = [0x01u8; 8];
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -340,10 +324,7 @@ fn ram_device_region_readwrite() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"add\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
     let data = [0x01u8; 8];
-    memory_test
-        .state
-        .borrow_mut()
-        .memwrite(addr, &data, std::mem::size_of::<u64>() as u64);
+    memory_test.state.borrow_mut().memwrite(addr, &data);
     let ret = memory_test
         .state
         .borrow_mut()
@@ -351,11 +332,10 @@ fn ram_device_region_readwrite() {
     assert_eq!(ret, [0x01u8; 8]);
 
     // Write overflow
-    memory_test.state.borrow_mut().memwrite(
-        addr + PAGE_SIZE - 1,
-        &data,
-        std::mem::size_of::<u64>() as u64,
-    );
+    memory_test
+        .state
+        .borrow_mut()
+        .memwrite(addr + PAGE_SIZE - 1, &data);
     // Read overflow
     let ret = memory_test
         .state
@@ -552,7 +532,7 @@ fn ram_readwrite_exception() {
     memory_test
         .state
         .borrow_mut()
-        .memwrite(addr, str.as_bytes(), SIZE);
+        .memwrite(addr, str.as_bytes());
     let ret = memory_test.state.borrow_mut().memread(addr, SIZE);
     assert_eq!(ret, [0u8; SIZE as usize]);
 
@@ -560,7 +540,6 @@ fn ram_readwrite_exception() {
     memory_test.state.borrow_mut().memwrite(
         MEM_SIZE * 1024 * 1024 - SIZE + ADDRESS_BASE,
         str_overflow.as_bytes(),
-        SIZE_OVERFLOW,
     );
     let ret = memory_test.state.borrow_mut().memread(addr, SIZE_OVERFLOW);
     assert_eq!(ret, [0u8; SIZE_OVERFLOW as usize]);
@@ -615,9 +594,7 @@ fn ram_readwrite_numa() {
 
     let str = "test memory read write";
     let start_base = ADDRESS_BASE + MEM_SIZE * 1024 * 1024 / 2 - 4;
-    test_state
-        .borrow_mut()
-        .memwrite(start_base, str.as_bytes(), str.len() as u64);
+    test_state.borrow_mut().memwrite(start_base, str.as_bytes());
     let ret = test_state
         .borrow_mut()
         .memread(start_base, str.len() as u64);
