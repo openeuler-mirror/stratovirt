@@ -17,6 +17,8 @@ use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCf
 use mod_test::libtest::{test_init, TestState};
 use serde_json::json;
 use std::cell::RefCell;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 use std::process::Command;
 use std::rc::Rc;
 use std::{thread, time};
@@ -28,6 +30,31 @@ const BALLOON_F_VERSION1_TEST: u64 = 32;
 const PAGE_SIZE_UNIT: u64 = 4096;
 const TIMEOUT_US: u64 = 15 * 1000 * 1000;
 const MBSIZE: u64 = 1024 * 1024;
+
+fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
+    let file = File::open(filename).unwrap();
+    return io::BufReader::new(file).lines();
+}
+
+fn get_hugesize() -> u64 {
+    let mut free_page = 0_u64;
+    let lines = read_lines("/proc/meminfo".to_string());
+    for line in lines {
+        if let Ok(info) = line {
+            if info.starts_with("HugePages_Free:") {
+                let free: Vec<&str> = info.split(":").collect();
+                free_page = free[1].trim().parse::<u64>().unwrap();
+            }
+            if info.starts_with("Hugepagesize:") {
+                let huges: Vec<&str> = info.split(":").collect();
+                let sizes: Vec<&str> = huges[1].trim().split(" ").collect();
+                let size = sizes[0].trim().parse::<u64>().unwrap();
+                return free_page * size;
+            }
+        }
+    }
+    0_u64
+}
 
 pub struct VirtioBalloonTest {
     pub device: Rc<RefCell<TestVirtioPciDev>>,
@@ -392,6 +419,11 @@ fn balloon_fun_002() {
 #[test]
 fn balloon_huge_fun_001() {
     create_huge_mem_path();
+    let size_kb = get_hugesize();
+    if size_kb < 1024 * 1024 {
+        clean_huge_mem_path();
+        return;
+    }
     balloon_fun(false, true);
     balloon_fun(true, true);
     clean_huge_mem_path();
@@ -691,6 +723,10 @@ fn balloon_config_001() {
 ///     1/2/3.Success
 #[test]
 fn balloon_config_002() {
+    let size_kb = get_hugesize();
+    if size_kb < 1024 * 1024 {
+        return;
+    }
     let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, true);
 
     balloon
