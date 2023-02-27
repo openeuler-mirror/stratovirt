@@ -142,7 +142,7 @@ pub struct PointerMessage {
 }
 
 impl DeviceTypeOperation for DemoKbdMouse {
-    fn read(&mut self, _data: &[u8], _addr: GuestAddress, _offset: u64) -> Result<()> {
+    fn read(&mut self, _data: &mut [u8], _addr: GuestAddress, _offset: u64) -> Result<()> {
         Ok(())
     }
 

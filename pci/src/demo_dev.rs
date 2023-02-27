@@ -57,7 +57,7 @@ pub struct DemoDev {
     name: String,
     cmd_cfg: DemoDevConfig,
     config: PciConfig,
-    sys_mem: Arc<AddressSpace>,
+    mem_region: Region,
     devfn: u8,
     parent_bus: Weak<Mutex<PciBus>>,
     dev_id: Arc<AtomicU16>,
@@ -68,22 +68,22 @@ impl DemoDev {
     pub fn new(
         cfg: DemoDevConfig,
         devfn: u8,
-        sys_mem: Arc<AddressSpace>,
+        _sys_mem: Arc<AddressSpace>,
         parent_bus: Weak<Mutex<PciBus>>,
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
         let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
             #[cfg(not(target_env = "musl"))]
-            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(sys_mem.clone()))),
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem))),
             #[cfg(not(target_env = "musl"))]
-            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(sys_mem.clone()))),
+            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };
         DemoDev {
             name: cfg.id.clone(),
             cmd_cfg: cfg.clone(),
             config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
-            sys_mem,
+            mem_region: Region::init_container_region(u32::MAX as u64),
             devfn,
             parent_bus,
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -145,12 +145,13 @@ impl DemoDev {
 
         let region = Region::init_io_region(self.cmd_cfg.bar_size, region_ops);
 
+        self.mem_region.add_subregion(region, 0)?;
         self.config.register_bar(
             0,
-            region,
+            self.mem_region.clone(),
             crate::config::RegionType::Mem64Bit,
             false,
-            self.cmd_cfg.bar_size,
+            (self.cmd_cfg.bar_size * self.cmd_cfg.bar_num as u64).next_power_of_two(),
         )?;
 
         Ok(())
@@ -208,13 +209,16 @@ impl PciDevOps for DemoDev {
 
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let parent_bus_locked = parent_bus.lock().unwrap();
+
         self.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
             None,
-            Some(self.sys_mem.root()),
+            Some(&parent_bus_locked.mem_region),
         );
     }
 
@@ -234,7 +238,7 @@ impl PciDevOps for DemoDev {
 }
 
 pub trait DeviceTypeOperation: Send {
-    fn read(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
+    fn read(&mut self, data: &mut [u8], addr: GuestAddress, offset: u64) -> Result<()>;
     fn write(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
     fn realize(&mut self) -> Result<()>;
     fn unrealize(&mut self) -> Result<()>;
