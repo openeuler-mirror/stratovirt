@@ -286,16 +286,11 @@ fn rng_limited_rate() {
     ));
 
     loop {
-        let mut got_desc_idx = Some(0);
-
         test_state.borrow().clock_step();
-
         if rng.borrow().queue_was_notified(virtqueues[0].clone())
-            && virtqueues[0]
-                .borrow_mut()
-                .get_buf(test_state.clone(), &mut got_desc_idx, &mut None)
+            && virtqueues[0].borrow_mut().get_buf(test_state.clone())
         {
-            assert!(got_desc_idx.unwrap() == free_head);
+            assert!(virtqueues[0].borrow().desc_len.contains_key(&free_head));
             break;
         }
     }
