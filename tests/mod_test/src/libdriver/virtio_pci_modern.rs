@@ -518,17 +518,16 @@ impl VirtioDeviceOps for TestVirtioPciDev {
         let timeout_us = Duration::from_micros(timeout_us);
 
         loop {
-            let mut got_desc_idx = Some(0);
-
             if (!wait_notified || self.queue_was_notified(virtqueue.clone()))
-                && virtqueue
-                    .borrow_mut()
-                    .get_buf(test_state.clone(), &mut got_desc_idx, len)
+                && virtqueue.borrow_mut().get_buf(test_state.clone())
             {
-                assert!(got_desc_idx.unwrap() == desc_idx);
-                return;
+                if let Some(got_len) = virtqueue.borrow().desc_len.get(&desc_idx) {
+                    if let Some(len) = len {
+                        *len = *got_len;
+                    }
+                    break;
+                }
             }
-
             assert!(Instant::now() - start_time < timeout_us);
         }
     }
