@@ -65,7 +65,6 @@ use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
-use util::align::is_aligned;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::{
@@ -283,7 +282,7 @@ impl VmConfig {
             );
         }
         let file_size = file.seek(SeekFrom::End(0))?;
-        if !is_aligned(file_size, req_align) {
+        if file_size & (req_align as u64 - 1) != 0 {
             bail!("The size of file {} is not aligned to {}.", path, req_align);
         }
         let drive_file = DriveFile {
