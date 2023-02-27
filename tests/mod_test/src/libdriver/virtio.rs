@@ -151,7 +151,7 @@ pub trait VirtioDeviceOps {
 pub struct VringDesc {
     addr: u64,
     len: u32,
-    flags: u16,
+    pub flags: u16,
     next: u16,
 }
 
@@ -169,14 +169,14 @@ pub struct VringAvail {
 #[repr(C, packed(4))]
 pub struct VringUsedElem {
     id: u32,
-    len: u32,
+    pub len: u32,
 }
 
 #[repr(C, packed(4))]
 pub struct VringUsed {
     flags: u16,
-    idx: u16,
-    ring: Vec<VringUsedElem>,
+    pub idx: u16,
+    pub ring: Vec<VringUsedElem>,
 }
 
 #[allow(unused)]
@@ -468,7 +468,7 @@ impl TestVirtQueue {
         );
     }
 
-    fn update_avail(&self, test_state: Rc<RefCell<TestState>>, desc_idx: u32) {
+    pub fn update_avail(&self, test_state: Rc<RefCell<TestState>>, desc_idx: u32) {
         let idx: u16 = test_state
             .borrow()
             .readw(self.avail + offset_of!(VringAvail, idx) as u64);
@@ -541,6 +541,7 @@ impl TestVirtQueue {
         &mut self,
         test_state: Rc<RefCell<TestState>>,
         indirect: TestVringIndirectDesc,
+        mixed: bool,
     ) -> u32 {
         assert!(indirect.index >= indirect.elem);
 
@@ -552,7 +553,9 @@ impl TestVirtQueue {
             next: 0,
         };
         self.add_elem_to_desc(test_state.clone(), desc_elem);
-        self.update_avail(test_state.clone(), free_head);
+        if !mixed {
+            self.update_avail(test_state.clone(), free_head);
+        }
         free_head
     }
 
