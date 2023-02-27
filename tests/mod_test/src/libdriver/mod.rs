@@ -20,3 +20,4 @@ pub mod virtio_block;
 pub mod virtio_console;
 pub mod virtio_pci_modern;
 pub mod virtio_rng;
+pub mod vnc;
