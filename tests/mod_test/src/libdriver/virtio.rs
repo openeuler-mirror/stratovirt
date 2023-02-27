@@ -565,7 +565,7 @@ impl TestVirtQueue {
         let desc_elem_addr = self.desc + VRING_DESC_SIZE * self.free_head as u64;
         test_state
             .borrow()
-            .memwrite(desc_elem_addr, elem.as_bytes(), VRING_DESC_SIZE);
+            .memwrite(desc_elem_addr, elem.as_bytes());
         self.free_head += 1;
     }
 }

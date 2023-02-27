@@ -212,8 +212,13 @@ impl TestState {
         self.send_write_cmd(&cmd);
     }
 
-    pub fn memwrite(&self, addr: u64, data: &[u8], size: u64) {
-        let cmd = format!("write 0x{:x} 0x{:x} 0x{}", addr, size, hex::encode(data));
+    pub fn memwrite(&self, addr: u64, data: &[u8]) {
+        let cmd = format!(
+            "write 0x{:x} 0x{:x} 0x{}",
+            addr,
+            data.len(),
+            hex::encode(data)
+        );
         let buf = self.send_test_cmd(&cmd);
         let resp: Vec<&str> = buf.split(' ').collect();
         match resp[0] {

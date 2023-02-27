@@ -156,11 +156,7 @@ fn test_pty_basic() {
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
-    test_state.borrow().memwrite(
-        addr,
-        test_data.as_bytes(),
-        test_data.len().try_into().unwrap(),
-    );
+    test_state.borrow().memwrite(addr, test_data.as_bytes());
     let free_head = output_queue.borrow_mut().add(
         test_state.clone(),
         addr,
@@ -259,11 +255,7 @@ fn test_socket_basic() {
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
-    test_state.borrow().memwrite(
-        addr,
-        test_data.as_bytes(),
-        test_data.len().try_into().unwrap(),
-    );
+    test_state.borrow().memwrite(addr, test_data.as_bytes());
     let free_head = output_queue.borrow_mut().add(
         test_state.clone(),
         addr,
@@ -354,11 +346,7 @@ fn test_console_reset() {
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
-    test_state.borrow().memwrite(
-        addr,
-        test_data.as_bytes(),
-        test_data.len().try_into().unwrap(),
-    );
+    test_state.borrow().memwrite(addr, test_data.as_bytes());
     let free_head = output_queue.borrow_mut().add(
         test_state.clone(),
         addr,
@@ -427,11 +415,7 @@ fn test_console_reset() {
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
-    test_state.borrow().memwrite(
-        addr,
-        test_data.as_bytes(),
-        test_data.len().try_into().unwrap(),
-    );
+    test_state.borrow().memwrite(addr, test_data.as_bytes());
     let free_head = output_queue.borrow_mut().add(
         test_state.clone(),
         addr,
