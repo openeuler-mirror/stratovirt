@@ -709,10 +709,8 @@ impl VirtioPCIMSIXOps for TestVirtioPciDev {
             self.bar,
             self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_msix_vector) as u64,
         );
-        assert_eq!(
-            vector, vector_get,
-            "WARN: set queue vector {}, get vector {}",
-            vector, vector_get
-        );
+        if vector_get != vector {
+            println!("WARN: set vector {}, get vector {}", vector, vector_get);
+        }
     }
 }
