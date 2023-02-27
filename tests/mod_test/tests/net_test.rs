@@ -655,7 +655,6 @@ fn send_request(
         test_state.borrow().memwrite(
             addr + offset,
             &request[offset as usize..(offset + k_bytes) as usize],
-            k_bytes,
         );
     }
     let res = length % k_bytes;
@@ -663,7 +662,7 @@ fn send_request(
         offset = num_k * k_bytes;
         test_state
             .borrow()
-            .memwrite(addr + offset, &request[offset as usize..], res);
+            .memwrite(addr + offset, &request[offset as usize..]);
     }
     let free_head = vqs[1]
         .borrow_mut()
@@ -841,9 +840,7 @@ fn virtio_net_ctrl_mq_test() {
             class: VIRTIO_NET_CTRL_MQ,
             cmd,
         };
-        test_state
-            .borrow()
-            .memwrite(addr, &ctrl_hdr.as_bytes(), size_of::<CtrlHdr>() as u64);
+        test_state.borrow().memwrite(addr, &ctrl_hdr.as_bytes());
         test_state
             .borrow()
             .writew(addr + size_of::<CtrlHdr>() as u64, vq_pairs);
@@ -1043,9 +1040,7 @@ fn send_ctrl_vq_request(
         .alloc(ctrl_data.len() as u64)
         .try_into()
         .unwrap();
-    test_state
-        .borrow()
-        .memwrite(addr, &ctrl_data, ctrl_data.len() as u64);
+    test_state.borrow().memwrite(addr, &ctrl_data);
     let data_entries: Vec<TestVringDescEntry> = vec![
         TestVringDescEntry {
             data: addr,
@@ -1636,9 +1631,7 @@ fn virtio_net_ctrl_abnormal_test() {
         .alloc(ctrl_data.len() as u64)
         .try_into()
         .unwrap();
-    test_state
-        .borrow()
-        .memwrite(addr, &ctrl_data, ctrl_data.len() as u64);
+    test_state.borrow().memwrite(addr, &ctrl_data);
 
     let data_entries: Vec<TestVringDescEntry> = vec![
         TestVringDescEntry {
@@ -1716,9 +1709,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     assert_eq!(size, QUEUE_SIZE_NET);
     for _ in 0..size {
         let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
-        test_state
-            .borrow()
-            .memwrite(addr, &request.as_bytes(), length);
+        test_state.borrow().memwrite(addr, &request.as_bytes());
         vqs[1]
             .borrow_mut()
             .add(test_state.clone(), addr, length as u32, false);
@@ -1798,9 +1789,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
         let request = get_arp_request(id);
         let length = request.as_bytes().len() as u64;
         let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
-        test_state
-            .borrow()
-            .memwrite(addr, &request.as_bytes(), length);
+        test_state.borrow().memwrite(addr, &request.as_bytes());
         vqs[1]
             .borrow_mut()
             .add(test_state.clone(), addr, length as u32, false);

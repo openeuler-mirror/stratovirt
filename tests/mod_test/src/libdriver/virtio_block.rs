@@ -190,19 +190,15 @@ pub fn virtio_blk_request(
     };
 
     let req_bytes = req.as_bytes();
-    test_state.borrow().memwrite(addr, req_bytes.as_slice(), 16);
+    test_state.borrow().memwrite(addr, req_bytes.as_slice());
     let mut data_bytes = req.data.as_bytes().to_vec();
     data_bytes.resize(data_size, 0);
-    test_state.borrow().memwrite(
-        data_addr,
-        data_bytes.as_slice(),
-        data_size.try_into().unwrap(),
-    );
-    test_state.borrow().memwrite(
-        data_addr + data_size as u64,
-        &status.to_le_bytes(),
-        size_of::<u8>().try_into().unwrap(),
-    );
+    test_state
+        .borrow()
+        .memwrite(data_addr, data_bytes.as_slice());
+    test_state
+        .borrow()
+        .memwrite(data_addr + data_size as u64, &status.to_le_bytes());
 
     addr
 }
