@@ -32,13 +32,13 @@ pub enum ChardevType {
 
 pub fn create_console(
     chardev_type: ChardevType,
+    pci_slot: u8,
+    pci_fn: u8,
 ) -> (
     Rc<RefCell<TestVirtioPciDev>>,
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
 ) {
-    let pci_slot: u8 = 0x4;
-    let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
     let mut args: Vec<&str> = "-machine virt".split(' ').collect();
