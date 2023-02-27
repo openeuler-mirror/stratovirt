@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod aio;
-pub mod align;
 pub mod arg_parser;
 pub mod bitmap;
 pub mod byte_code;
