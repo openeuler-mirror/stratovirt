@@ -18,6 +18,5 @@ pub mod pci_bus;
 pub mod virtio;
 pub mod virtio_block;
 pub mod virtio_console;
-pub mod virtio_net;
 pub mod virtio_pci_modern;
 pub mod virtio_rng;
