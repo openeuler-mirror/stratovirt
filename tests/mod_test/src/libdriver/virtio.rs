@@ -13,6 +13,7 @@
 use super::malloc::GuestAllocator;
 use crate::libtest::TestState;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::time;
@@ -308,6 +309,7 @@ pub struct TestVirtQueue {
     pub msix_addr: u64,
     pub msix_data: u32,
     pub queue_notify_off: u64,
+    pub desc_len: HashMap<u32, u32>,
 }
 
 impl TestVirtQueue {
@@ -395,12 +397,8 @@ impl TestVirtQueue {
         .unwrap();
     }
 
-    pub fn get_buf(
-        &mut self,
-        test_state: Rc<RefCell<TestState>>,
-        desc_idx: &mut Option<u32>,
-        len: &mut Option<u32>,
-    ) -> bool {
+    /// Get used elements from used ring and save to self.desc_len
+    pub fn get_buf(&mut self, test_state: Rc<RefCell<TestState>>) -> bool {
         let mut ret = false;
         loop {
             let index = test_state
@@ -415,15 +413,11 @@ impl TestVirtQueue {
                 + (self.last_used_idx as u32 % self.size) as u64
                     * size_of::<VringUsedElem>() as u64;
 
-            if let Some(id) = desc_idx.as_mut() {
-                let addr = elem_addr + offset_of!(VringUsedElem, id) as u64;
-                *id = test_state.borrow().readl(addr);
-            }
-
-            if let Some(len) = len.as_mut() {
-                let addr = elem_addr + offset_of!(VringUsedElem, len) as u64;
-                *len = test_state.borrow().readl(addr);
-            }
+            let id_addr = elem_addr + offset_of!(VringUsedElem, id) as u64;
+            let id_val = test_state.borrow().readl(id_addr);
+            let len_addr = elem_addr + offset_of!(VringUsedElem, len) as u64;
+            let len_val = test_state.borrow().readl(len_addr);
+            self.desc_len.insert(id_val, len_val);
 
             self.last_used_idx += 1;
             ret = true;
