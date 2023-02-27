@@ -26,7 +26,7 @@
 //! - `aarch64`
 
 mod balloon;
-mod block;
+pub mod block;
 mod console;
 pub mod error;
 #[cfg(not(target_env = "musl"))]

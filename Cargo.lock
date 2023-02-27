@@ -541,6 +541,7 @@ dependencies = [
  "rand",
  "serde_json",
  "util",
+ "virtio",
 ]
 
 [[package]]

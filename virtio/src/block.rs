@@ -874,7 +874,7 @@ pub struct VirtioBlkConfig {
     /// The maximum segment size.
     size_max: u32,
     /// Tne maximum number of segments.
-    seg_max: u32,
+    pub seg_max: u32,
     /// Geometry of the block device.
     geometry: VirtioBlkGeometry,
     /// Block size of device.
