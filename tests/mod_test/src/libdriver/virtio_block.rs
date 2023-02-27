@@ -10,6 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::mem::size_of;
+use std::rc::Rc;
+use util::num_ops::round_up;
+
 use super::machine::TestStdMachine;
 use super::malloc::GuestAllocator;
 use super::virtio::TestVirtQueue;
@@ -19,15 +24,7 @@ use crate::libdriver::virtio::{
     TestVringDescEntry, VIRTIO_F_BAD_FEATURE, VIRTIO_RING_F_EVENT_IDX, VIRTIO_RING_F_INDIRECT_DESC,
 };
 use crate::libtest::{test_init, TestState};
-use crate::utils::get_rand_str;
-
-use std::cell::RefCell;
-use std::fs;
-use std::mem::size_of;
-use std::path::Path;
-use std::process::Command;
-use std::rc::Rc;
-use util::num_ops::round_up;
+use crate::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
 
 pub const VIRTIO_BLK_F_BARRIER: u64 = 0;
 pub const VIRTIO_BLK_F_SIZE_MAX: u64 = 1;
@@ -59,7 +56,6 @@ pub const VIRTIO_BLK_S_IOERR: u8 = 1;
 /// Unsupport request.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 
-pub const TEST_IMAGE_SIZE: u64 = 64 * 1024 * 1024;
 pub const TIMEOUT_US: u64 = 15 * 1000 * 1000;
 pub const DEFAULT_IO_REQS: u64 = 5;
 pub const REQ_ADDR_LEN: u32 = 16;
@@ -201,42 +197,6 @@ pub fn virtio_blk_request(
         .memwrite(data_addr + data_size as u64, &status.to_le_bytes());
 
     addr
-}
-
-/// Create image file.
-pub fn create_blk_img(size: u64, flag: u8) -> String {
-    let rng_name: String = get_rand_str(8);
-
-    assert!(cfg!(target_os = "linux"));
-
-    let mut image_path = format!("/tmp/stratovirt-{}.img", rng_name);
-    if flag == 1 {
-        image_path = format!("/var/log/stratovirt-{}.img", rng_name);
-    }
-
-    let image_path_of = format!("of={}", &image_path);
-    let image_size_of = format!("bs={}", size);
-    let output = Command::new("dd")
-        .arg("if=/dev/zero")
-        .arg(&image_path_of)
-        .arg(&image_size_of)
-        .arg("count=1")
-        .output()
-        .expect("failed to create image");
-    assert!(output.status.success());
-    image_path
-}
-
-/// Delete image file.
-pub fn cleanup_blk_img(image_path: String) {
-    let img_path = Path::new(&image_path);
-    assert!(img_path.exists());
-
-    let metadata = fs::metadata(img_path).expect("can not get file metadata");
-    let file_type = metadata.file_type();
-    assert!(file_type.is_file());
-
-    fs::remove_file(img_path).expect("lack permissions to remove the file");
 }
 
 pub fn add_blk_request(
@@ -397,7 +357,7 @@ pub fn set_up() -> (
     Rc<RefCell<GuestAllocator>>,
     Rc<String>,
 ) {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false"));
     let other_args = Rc::new(String::from(""));
@@ -417,6 +377,6 @@ pub fn tear_down(
     blk.borrow_mut().destroy_device(alloc.clone(), vqs);
     test_state.borrow_mut().stop();
     if !image_path.is_empty() {
-        cleanup_blk_img(image_path.to_string());
+        cleanup_img(image_path.to_string());
     }
 }
