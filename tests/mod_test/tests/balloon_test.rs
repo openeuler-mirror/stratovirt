@@ -110,8 +110,8 @@ impl VirtioBalloonTest {
 }
 
 fn inflate_fun(shared: bool) {
-    let page_num = 255_u32;
-    let mut idx = 0_u32;
+    let page_num = 255_i32;
+    let mut idx = 0_i32;
     let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, false, false);
 
     let free_page = balloon
@@ -147,21 +147,21 @@ fn inflate_fun(shared: bool) {
     );
 
     // begin balloon addresses
-    let mut loop_num = 0_u32;
+    let mut loop_num = page_num - 1;
     let mut msg = Vec::new();
 
-    while loop_num < page_num {
+    while loop_num >= 0 {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * loop_num as u64, pfn + loop_num);
+            .writel(pfn_addr + 4 * loop_num as u64, pfn + loop_num as u32);
         let entry = TestVringDescEntry {
             data: pfn_addr + (loop_num as u64 * 4),
             len: 4,
             write: false,
         };
         msg.push(entry);
-        loop_num += 1;
+        loop_num -= 1;
     }
     let free_head = balloon
         .inf_queue
