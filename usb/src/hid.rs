@@ -34,12 +34,12 @@ const HID_KEYBOARD_RIGHT_ALT: u8 = 0xe6;
 const HID_KEYBOARD_RIGHT_GUI: u8 = 0xe7;
 
 /// See the spec section 7.2 Class-Specific Requests
-const HID_GET_REPORT: u8 = 0x01;
-const HID_GET_IDLE: u8 = 0x02;
-const HID_GET_PROTOCOL: u8 = 0x03;
-const HID_SET_REPORT: u8 = 0x09;
-const HID_SET_IDLE: u8 = 0x0a;
-const HID_SET_PROTOCOL: u8 = 0x0b;
+pub const HID_GET_REPORT: u8 = 0x01;
+pub const HID_GET_IDLE: u8 = 0x02;
+pub const HID_GET_PROTOCOL: u8 = 0x03;
+pub const HID_SET_REPORT: u8 = 0x09;
+pub const HID_SET_IDLE: u8 = 0x0a;
+pub const HID_SET_PROTOCOL: u8 = 0x0b;
 
 /// See the spec section 7.2.5 Get Protocol Request
 #[allow(unused)]

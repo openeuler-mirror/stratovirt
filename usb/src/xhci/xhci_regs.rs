@@ -10,19 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::xhci::xhci_controller::dma_write_bytes;
-use crate::xhci::xhci_ring::XhciTRB;
 use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
+use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
+
+use crate::xhci::xhci_controller::dma_write_bytes;
 use crate::xhci::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
-use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
+use crate::xhci::xhci_ring::XhciTRB;
 use crate::{config::*, UsbError};
-use anyhow::Result;
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
@@ -73,15 +75,15 @@ const CAP_EXT_USB_REVISION_2_0: u32 = 0x0200;
 /// USB 3.0.
 const CAP_EXT_USB_REVISION_3_0: u32 = 0x0300;
 /// Operational Registers.
-const XHCI_OPER_REG_USBCMD: u64 = 0x00;
-const XHCI_OPER_REG_USBSTS: u64 = 0x04;
-const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
+pub const XHCI_OPER_REG_USBCMD: u64 = 0x00;
+pub const XHCI_OPER_REG_USBSTS: u64 = 0x04;
+pub const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
 const XHCI_OPER_REG_DNCTRL: u64 = 0x14;
 const XHCI_OPER_REG_CMD_RING_CTRL_LO: u64 = 0x18;
 const XHCI_OPER_REG_CMD_RING_CTRL_HI: u64 = 0x1c;
 const XHCI_OPER_REG_DCBAAP_LO: u64 = 0x30;
 const XHCI_OPER_REG_DCBAAP_HI: u64 = 0x34;
-const XHCI_OPER_REG_CONFIG: u64 = 0x38;
+pub const XHCI_OPER_REG_CONFIG: u64 = 0x38;
 const XHCI_OPER_PAGESIZE: u32 = 1;
 /// Command Ring Control Register RCS/CS/CA mask.
 const XHCI_CRCR_CTRL_LO_MASK: u32 = 0xffffffc7;
@@ -90,14 +92,14 @@ const XHCI_CRCR_CRP_MASK: u64 = !0x3f;
 /// Notification Enable.
 const XHCI_OPER_NE_MASK: u32 = 0xffff;
 /// Interrupter Registers.
-const XHCI_INTR_REG_IMAN: u64 = 0x00;
-const XHCI_INTR_REG_IMOD: u64 = 0x04;
-const XHCI_INTR_REG_ERSTSZ: u64 = 0x08;
-const XHCI_INTR_REG_ERSTBA_LO: u64 = 0x10;
-const XHCI_INTR_REG_ERSTBA_HI: u64 = 0x14;
-const XHCI_INTR_REG_ERDP_LO: u64 = 0x18;
-const XHCI_INTR_REG_ERDP_HI: u64 = 0x1c;
-const XHCI_INTR_REG_SIZE: u64 = 0x20;
+pub const XHCI_INTR_REG_IMAN: u64 = 0x00;
+pub const XHCI_INTR_REG_IMOD: u64 = 0x04;
+pub const XHCI_INTR_REG_ERSTSZ: u64 = 0x08;
+pub const XHCI_INTR_REG_ERSTBA_LO: u64 = 0x10;
+pub const XHCI_INTR_REG_ERSTBA_HI: u64 = 0x14;
+pub const XHCI_INTR_REG_ERDP_LO: u64 = 0x18;
+pub const XHCI_INTR_REG_ERDP_HI: u64 = 0x1c;
+pub const XHCI_INTR_REG_SIZE: u64 = 0x20;
 const XHCI_INTR_REG_SHIFT: u64 = 5;
 /// Doorbell Register Bit Field.
 /// DB Target.

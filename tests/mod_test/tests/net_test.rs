@@ -519,7 +519,7 @@ fn init_net_device(
     net.borrow_mut().set_driver();
     net.borrow_mut().negotiate_features(features);
     net.borrow_mut().set_features_ok();
-    net.borrow_mut().pci_dev.enable_msix();
+    net.borrow_mut().pci_dev.enable_msix(None);
     net.borrow_mut()
         .setup_msix_configuration_vector(alloc.clone(), 0);
     let vqs = net
@@ -1688,7 +1688,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     net.borrow_mut().set_driver();
     net.borrow_mut().negotiate_features(DEFAULT_NET_FEATURES);
     net.borrow_mut().set_features_ok();
-    net.borrow_mut().pci_dev.enable_msix();
+    net.borrow_mut().pci_dev.enable_msix(None);
     net.borrow_mut()
         .setup_msix_configuration_vector(alloc.clone(), 0);
     let vqs = net
@@ -1766,7 +1766,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
         net.borrow_mut().set_driver();
         net.borrow_mut().negotiate_features(DEFAULT_NET_FEATURES);
         net.borrow_mut().set_features_ok();
-        net.borrow_mut().pci_dev.enable_msix();
+        net.borrow_mut().pci_dev.enable_msix(None);
         net.borrow_mut()
             .setup_msix_configuration_vector(alloc.clone(), 0);
         let vqs = net

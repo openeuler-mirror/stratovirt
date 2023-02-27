@@ -431,7 +431,7 @@ fn balloon_feature_001() {
     let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
-    dev.borrow_mut().pci_dev.enable_msix();
+    dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
         .setup_msix_configuration_vector(allocator.clone(), 0);
 
@@ -478,7 +478,7 @@ fn balloon_feature_002() {
     let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
-    dev.borrow_mut().pci_dev.enable_msix();
+    dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
         .setup_msix_configuration_vector(allocator.clone(), 0);
 

@@ -201,7 +201,7 @@ fn blk_features_negotiate() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    blk.borrow_mut().pci_dev.enable_msix();
+    blk.borrow_mut().pci_dev.enable_msix(None);
     blk.borrow_mut()
         .setup_msix_configuration_vector(alloc.clone(), 0);
 

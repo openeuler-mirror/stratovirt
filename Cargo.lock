@@ -541,6 +541,7 @@ dependencies = [
  "machine",
  "rand",
  "serde_json",
+ "usb",
  "util",
  "virtio",
  "vmm-sys-util",
