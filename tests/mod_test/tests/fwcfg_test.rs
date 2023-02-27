@@ -14,8 +14,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use devices::legacy::FwCfgEntryType;
 use mod_test::libdriver::fwcfg::{bios_args, FW_CFG_BASE};
 use mod_test::libdriver::machine::TestStdMachine;
+use mod_test::libdriver::virtio_block::{cleanup_blk_img, create_blk_img, TEST_IMAGE_SIZE};
 use mod_test::libtest::test_init;
-use mod_test::utils::{get_rand_str, swap_u16, swap_u32};
+use mod_test::utils::{swap_u16, swap_u32};
 
 use std::cell::RefCell;
 use std::process::Command;
@@ -185,19 +186,8 @@ fn test_filedir_by_dma() {
 fn test_boot_index() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
-    let rng_name: String = get_rand_str(8);
 
-    assert!(cfg!(target_os = "linux"));
-    let image_path = format!("/tmp/stratovirt-{}.img", rng_name);
-    let image_of = format!("of={}", image_path);
-    let output = Command::new("dd")
-        .arg("if=/dev/zero")
-        .arg(&image_of)
-        .arg("bs=1M")
-        .arg("count=10")
-        .output()
-        .expect("Failed to create tmp image");
-    assert!(output.status.success());
+    let image_path = create_blk_img(TEST_IMAGE_SIZE, 0);
 
     let dev_path = "/pci@ffffffffffffffff/scsi@1/disk@0,0\n\0".to_string();
 
@@ -232,6 +222,9 @@ fn test_boot_index() {
     assert_eq!(&read_data, dev_path.as_bytes());
 
     test_state.borrow_mut().stop();
+    if !image_path.is_empty() {
+        cleanup_blk_img(image_path)
+    }
 }
 
 #[test]
