@@ -94,7 +94,6 @@ pub enum OpCode {
 }
 
 pub struct AioCb<T: Clone> {
-    pub last_aio: bool,
     pub direct: bool,
     pub req_align: u32,
     pub buf_align: u32,
@@ -206,6 +205,14 @@ impl<T: Clone + 'static> Aio<T> {
         }
     }
 
+    pub fn flush_request(&mut self) -> Result<()> {
+        if self.ctx.is_some() {
+            self.process_list()
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn handle_complete(&mut self) -> Result<bool> {
         let mut done = false;
         if self.ctx.is_none() {
@@ -289,12 +296,11 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     fn rw_async(&mut self, cb: AioCb<T>) -> Result<()> {
-        let last_aio = cb.last_aio;
         let mut node = Box::new(Node::new(cb));
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
 
         self.aio_in_queue.add_head(node);
-        if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
+        if self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
             self.process_list()?;
         }
 
