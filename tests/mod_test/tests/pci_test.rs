@@ -33,6 +33,7 @@ const BLK_DEVICE_ID: u16 = 0x1042;
 const MAX_DEVICE_NUM_IN_MULTIFUNC: u8 = 248;
 const MAX_DEVICE_NUM: u8 = 32;
 const TIMEOUT_S: u64 = 5;
+const MAX_TABLE_SIZE_MAX: u32 = 0x1000;
 
 #[derive(Clone, Copy)]
 struct DemoDev {
@@ -1188,6 +1189,81 @@ fn test_pci_type1_config() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
+/// Verify that out-of-bounds access to the configuration space
+#[test]
+fn test_out_boundry_config_access() {
+    let blk_nums = 0;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    let devfn = 1 << 3 | 1;
+    let addr = machine.borrow().pci_bus.borrow().ecam_alloc_ptr
+        + ((0 as u32) << 20 | (devfn as u32) << 12 | 0 as u32) as u64
+        - 4;
+
+    let write_value = u8::max_value();
+    let buf = write_value.to_le_bytes();
+    test_state.borrow().memwrite(addr, &buf);
+
+    let mut buf: &[u8] = &test_state.borrow().memread(addr, 1)[0];
+    let read_value = read_le_u8(&mut buf);
+    assert_ne!(write_value, read_value);
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
+/// Verify that out-of-size access to the configuration space
+#[test]
+fn test_out_size_config_access() {
+    let blk_nums = 0;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a root port whose bdf is 0:1:0.
+    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+
+    let vendor_device_id = root_port.rp_dev.config_readl(PCI_VENDOR_ID);
+    let command_status = root_port.rp_dev.config_readl(PCI_COMMAND);
+    let value = root_port.rp_dev.config_readq(0);
+    assert_ne!(value, vendor_device_id << 32 | command_status);
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
+/// Verify that out-of-bounds access to the msix bar space.
+#[test]
+fn test_out_boundry_msix_access() {
+    let blk_nums = 0;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a root port whose bdf is 0:1:0.
+    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+
+    let write_value = u32::max_value();
+    root_port.rp_dev.io_writel(
+        root_port.rp_dev.msix_table_bar,
+        PCI_MSIX_ENTRY_VECTOR_CTRL - 2,
+        write_value,
+    );
+    let read_value = root_port.rp_dev.io_readl(
+        root_port.rp_dev.msix_table_bar,
+        PCI_MSIX_ENTRY_VECTOR_CTRL - 2,
+    );
+    assert_ne!(write_value, read_value);
+
+    let write_value = u64::max_value();
+    root_port
+        .rp_dev
+        .io_writeq(root_port.rp_dev.msix_pba_bar, 4, write_value);
+    let read_value = root_port
+        .rp_dev
+        .io_readq(root_port.rp_dev.msix_table_bar, 4);
+    assert_ne!(write_value, read_value);
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
 #[test]
 fn test_repeat_io_map_bar() {
     let blk_nums = 1;
@@ -1391,6 +1467,38 @@ fn test_pci_msix_local_ctl() {
         &mut None,
         false,
     );
+
+    tear_down(Some(blk), test_state, alloc, Some(vqs), Some(image_paths));
+}
+
+#[test]
+fn test_alloc_abnormal_vector() {
+    let blk_nums = 1;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a block device whose bdf is 1:0:0.
+    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let vqs = blk.borrow_mut().init_device(
+        test_state.clone(),
+        alloc.clone(),
+        1 << VIRTIO_F_VERSION_1,
+        1,
+    );
+
+    let queue_num = blk.borrow().get_queue_nums();
+
+    blk.borrow()
+        .setup_virtqueue_intr((queue_num + 2) as u16, alloc.clone(), virtqueue.clone());
+
+    let free_head = simple_blk_io_req(
+        blk.clone(),
+        test_state.clone(),
+        vqs[0].clone(),
+        alloc.clone(),
+    );
+    // Verify that the os can not receive msix interrupt when the vectors of virtqueue is .
+    assert!(wait_msix_timeout(blk.clone(), vqs[0].clone(), TIMEOUT_S));
 
     tear_down(Some(blk), test_state, alloc, Some(vqs), Some(image_paths));
 }

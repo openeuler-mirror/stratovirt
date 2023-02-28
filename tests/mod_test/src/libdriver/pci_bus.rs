@@ -40,7 +40,7 @@ pub trait PciBusOps {
 pub struct TestPciBus {
     pub mmio_alloc_ptr: u64,
     pub mmio_limit: u64,
-    ecam_alloc_ptr: u64,
+    pub ecam_alloc_ptr: u64,
     not_hotpluggable: bool,
     pub test_state: Rc<RefCell<TestState>>,
 }
