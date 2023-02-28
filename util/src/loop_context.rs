@@ -149,7 +149,7 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
-fn get_current_time() -> Instant {
+pub fn get_current_time() -> Instant {
     if is_test_enabled() {
         get_test_time()
     } else {
