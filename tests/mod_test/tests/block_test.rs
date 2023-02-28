@@ -31,6 +31,7 @@ use mod_test::utils::{create_img, TEST_IMAGE_SIZE};
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use util::aio::{aio_probe, AioEngine};
 use util::num_ops::round_up;
 use util::offset_of;
@@ -823,6 +824,24 @@ fn blk_iops() {
     let status_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
     let status = test_state.borrow().readb(status_addr);
     assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    let time_out = Instant::now() + Duration::from_micros(TIMEOUT_US);
+    loop {
+        test_state.borrow().clock_step();
+
+        if blk.borrow().queue_was_notified(virtqueues[0].clone())
+            && virtqueues[0].borrow_mut().get_buf(test_state.clone())
+        {
+            if virtqueues[0].borrow().desc_len.contains_key(&free_head) {
+                break;
+            }
+        }
+        assert!(Instant::now() <= time_out);
+    }
+
+    let status_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+    let status = test_state.borrow().readb(status_addr);
+    assert_eq!(status, VIRTIO_BLK_S_OK);
 
     tear_down(
         blk.clone(),
