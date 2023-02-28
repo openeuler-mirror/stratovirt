@@ -411,11 +411,7 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
-    fn merge_req_queue(
-        &self,
-        mut req_queue: Vec<Request>,
-        last_aio_index: &mut usize,
-    ) -> Vec<Request> {
+    fn merge_req_queue(&self, mut req_queue: Vec<Request>) -> Vec<Request> {
         req_queue.sort_by(|a, b| a.out_header.sector.cmp(&b.out_header.sector));
 
         let mut merge_req_queue = Vec::<Request>::new();
@@ -424,7 +420,6 @@ impl BlockIoHandler {
         let mut merged_iovs = 0;
         let mut merged_bytes = 0;
 
-        *last_aio_index = 0;
         for req in req_queue {
             let req_iovs = req.iovec.len();
             let req_bytes = req.data_len;
@@ -451,9 +446,6 @@ impl BlockIoHandler {
                 merged_iovs += req_iovs;
                 merged_bytes += req_bytes;
             } else {
-                if io || req.out_header.request_type == VIRTIO_BLK_T_FLUSH {
-                    *last_aio_index = merge_req_queue.len();
-                }
                 merge_req_queue.push(req);
                 last_req = merge_req_queue.last_mut();
                 merged_reqs = 1;
@@ -467,7 +459,6 @@ impl BlockIoHandler {
 
     fn process_queue_internal(&mut self) -> Result<bool> {
         let mut req_queue = Vec::new();
-        let mut last_aio_req_index = 0;
         let mut done = false;
 
         loop {
@@ -522,8 +513,8 @@ impl BlockIoHandler {
             return Ok(done);
         }
 
-        let merge_req_queue = self.merge_req_queue(req_queue, &mut last_aio_req_index);
-        for (req_index, req) in merge_req_queue.into_iter().enumerate() {
+        let merge_req_queue = self.merge_req_queue(req_queue);
+        for req in merge_req_queue.into_iter() {
             let req_rc = Rc::new(req);
             let aiocompletecb = AioCompleteCb::new(
                 self.queue.clone(),
@@ -534,7 +525,6 @@ impl BlockIoHandler {
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
                 let aiocb = AioCb {
-                    last_aio: req_index == last_aio_req_index,
                     direct: self.direct,
                     req_align: self.req_align,
                     buf_align: self.buf_align,
@@ -552,6 +542,7 @@ impl BlockIoHandler {
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
             }
         }
+        self.aio.flush_request()?;
 
         Ok(done)
     }
