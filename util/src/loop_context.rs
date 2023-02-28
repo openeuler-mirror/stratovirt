@@ -23,6 +23,7 @@ use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::test_helper::{get_test_time, is_test_enabled};
+use crate::time::NANOSECONDS_PER_SECOND;
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -178,10 +179,11 @@ impl Timer {
     /// * `func` - the function will be called later.
     /// * `nsec` - delay time in nanosecond.
     pub fn new(func: Box<dyn Fn()>, nsec: u64) -> Self {
-        Timer {
-            func,
-            expire_time: get_current_time() + Duration::new(0, nsec as u32),
-        }
+        let secs = nsec / NANOSECONDS_PER_SECOND;
+        let nsecs = (nsec % NANOSECONDS_PER_SECOND) as u32;
+        let expire_time = get_current_time() + Duration::new(secs, nsecs);
+
+        Timer { func, expire_time }
     }
 }
 
