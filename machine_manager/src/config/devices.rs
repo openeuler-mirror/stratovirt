@@ -12,6 +12,7 @@
 
 use super::{CmdParser, VmConfig};
 use anyhow::Result;
+use regex::Regex;
 
 impl VmConfig {
     pub fn add_device(&mut self, device_config: &str) -> Result<()> {
@@ -24,6 +25,18 @@ impl VmConfig {
         }
 
         Ok(())
+    }
+
+    pub fn del_device_by_id(&mut self, dev_id: String) {
+        let rex = format!("id={}(,|$)", dev_id);
+        let re = Regex::new(rex.as_str()).unwrap();
+
+        for (index, (_, dev_info)) in self.devices.iter().enumerate() {
+            if re.is_match(dev_info.as_str()) {
+                self.devices.remove(index);
+                return;
+            }
+        }
     }
 }
 

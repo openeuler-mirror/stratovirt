@@ -21,7 +21,7 @@ pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
 pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
 #[derive(Clone, Debug)]
-pub struct GpuConfig {
+pub struct GpuDevConfig {
     pub id: String,
     pub max_outputs: u32,
     pub edid: bool,
@@ -30,9 +30,9 @@ pub struct GpuConfig {
     pub max_hostmem: u64,
 }
 
-impl Default for GpuConfig {
+impl Default for GpuDevConfig {
     fn default() -> Self {
-        GpuConfig {
+        GpuDevConfig {
             id: "".to_string(),
             max_outputs: 1,
             edid: true,
@@ -43,7 +43,7 @@ impl Default for GpuConfig {
     }
 }
 
-impl ConfigCheck for GpuConfig {
+impl ConfigCheck for GpuDevConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
@@ -52,13 +52,22 @@ impl ConfigCheck for GpuConfig {
             )));
         }
 
-        if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
+        if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 || self.max_outputs == 0 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "max_outputs".to_string(),
                 0,
                 false,
                 VIRTIO_GPU_MAX_SCANOUTS as u64,
+                true
+            )));
+        }
+
+        if self.max_hostmem == 0 {
+            return Err(anyhow!(ConfigError::IllegalValueUnilateral(
+                "max_hostmem".to_string(),
                 true,
+                false,
+                0
             )));
         }
 
@@ -74,7 +83,7 @@ impl ConfigCheck for GpuConfig {
     }
 }
 
-pub fn parse_gpu(gpu_config: &str) -> Result<GpuConfig> {
+pub fn parse_gpu(gpu_config: &str) -> Result<GpuDevConfig> {
     let mut cmd_parser = CmdParser::new("virtio-gpu-pci");
     cmd_parser
         .push("")
@@ -88,7 +97,7 @@ pub fn parse_gpu(gpu_config: &str) -> Result<GpuConfig> {
         .push("addr");
     cmd_parser.parse(gpu_config)?;
 
-    let mut gpu_cfg: GpuConfig = GpuConfig::default();
+    let mut gpu_cfg: GpuDevConfig = GpuDevConfig::default();
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         gpu_cfg.id = id;
     }
@@ -117,7 +126,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_gpu_max_hostmem_greater_than_limit() {
+    fn test_parse_pci_gpu_config_cmdline_parser() {
         let max_hostmem = VIRTIO_GPU_MAX_HOSTMEM + 1;
         let gpu_cfg_cmdline = format!(
             "{}{}",
@@ -125,30 +134,39 @@ mod tests {
             max_outputs=1,edid=true,xres=1024,yres=768,max_hostmem=",
             max_hostmem.to_string()
         );
-
         let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
-
         assert!(gpu_cfg_.is_ok());
-
         let gpu_cfg = gpu_cfg_.unwrap();
+        assert_eq!(gpu_cfg.id, "gpu_1");
+        assert_eq!(gpu_cfg.max_outputs, 1);
+        assert_eq!(gpu_cfg.edid, true);
+        assert_eq!(gpu_cfg.xres, 1024);
+        assert_eq!(gpu_cfg.yres, 768);
         assert_eq!(gpu_cfg.max_hostmem, max_hostmem);
-    }
 
-    #[test]
-    fn test_parse_gpu_max_hostmem_less_than_limit() {
-        let max_hostmem = VIRTIO_GPU_MAX_HOSTMEM - 1;
+        // max_outputs is illegal
         let gpu_cfg_cmdline = format!(
             "{}{}",
             "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,\
-            max_outputs=1,edid=true,xres=1024,yres=768,max_hostmem=",
+            max_outputs=17,edid=true,xres=1024,yres=768,max_hostmem=",
             max_hostmem.to_string()
         );
-
         let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
+        assert!(gpu_cfg_.is_err());
 
-        assert!(gpu_cfg_.is_ok());
+        let gpu_cfg_cmdline = format!(
+            "{}{}",
+            "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,\
+            max_outputs=0,edid=true,xres=1024,yres=768,max_hostmem=",
+            max_hostmem.to_string()
+        );
+        let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
+        assert!(gpu_cfg_.is_err());
 
-        let gpu_cfg = gpu_cfg_.unwrap();
-        assert_eq!(gpu_cfg.max_hostmem, max_hostmem);
+        // max_hostmem is illegal
+        let gpu_cfg_cmdline = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,\
+            max_outputs=1,edid=true,xres=1024,yres=768,max_hostmem=0";
+        let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
+        assert!(gpu_cfg_.is_err());
     }
 }

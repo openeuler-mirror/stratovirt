@@ -10,7 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{auth::SubAuthState, client::ClientIoHandler, VncError};
+use crate::{
+    auth::SubAuthState,
+    client::{vnc_flush, vnc_write, ClientIoHandler},
+    VncError,
+};
 use anyhow::{anyhow, Result};
 use log::{error, info};
 use rustls::{
@@ -67,13 +71,15 @@ impl ClientIoHandler {
     /// Exchange auth version with client
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let client = self.client.clone();
+        let subauth = self.server.security_type.borrow().subauth;
         // VeNCrypt version 0.2.
         if buf[0] != 0 || buf[1] != 2 {
             let mut buf = Vec::new();
             // Reject version.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            vnc_flush(&client);
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         } else {
             let mut buf = Vec::new();
@@ -83,9 +89,10 @@ impl ClientIoHandler {
             buf.append(&mut (1_u8).to_be_bytes().to_vec());
             // The supported auth.
             buf.append(&mut (subauth as u32).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
         }
 
+        vnc_flush(&client);
         self.update_event_handler(4, ClientIoHandler::client_vencrypt_auth);
         Ok(())
     }
@@ -95,13 +102,15 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let auth = u32::from_be_bytes(buf);
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let client = self.client.clone();
+        let subauth = self.server.security_type.borrow().subauth;
 
         if auth != subauth as u32 {
             let mut buf = Vec::new();
             // Reject auth.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            vnc_flush(&client);
             error!("Authentication failed");
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "Authentication failed"
@@ -111,9 +120,10 @@ impl ClientIoHandler {
         let mut buf = Vec::new();
         // Accept auth.
         buf.append(&mut (1_u8).to_be_bytes().to_vec());
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        vnc_flush(&client);
 
-        if let Some(tls_config) = self.server.security_type.lock().unwrap().tls_config.clone() {
+        if let Some(tls_config) = self.server.security_type.borrow().tls_config.clone() {
             match rustls::ServerConnection::new(tls_config) {
                 Ok(tls_conn) => {
                     self.tls_conn = Some(tls_conn);
@@ -136,7 +146,7 @@ impl ClientIoHandler {
             .in_buffer
             .lock()
             .unwrap()
-            .remov_front(self.expect);
+            .remove_front(self.expect);
         self.expect = 0;
         self.msg_handler = ClientIoHandler::tls_handshake;
         Ok(())
@@ -179,9 +189,7 @@ impl ClientIoHandler {
             } else {
                 info!("Finished tls handshaking");
                 // Tls handshake finished.
-                if let Err(e) = self.handle_vencrypt_subauth() {
-                    return Err(e);
-                }
+                self.handle_vencrypt_subauth()?;
             }
         } else {
             return Err(anyhow!(VncError::AuthFailed(String::from(
@@ -192,18 +200,18 @@ impl ClientIoHandler {
     }
 
     fn handle_vencrypt_subauth(&mut self) -> Result<()> {
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
+        let client = self.client.clone();
         match subauth {
             SubAuthState::VncAuthVencryptX509Sasl => {
                 self.expect = 4;
                 self.msg_handler = ClientIoHandler::get_mechname_length;
-                if let Err(e) = self.start_sasl_auth() {
-                    return Err(e);
-                }
+                self.start_sasl_auth()?;
             }
             SubAuthState::VncAuthVencryptX509None => {
                 let buf = [0u8; 4];
-                self.write_msg(&buf);
+                vnc_write(&client, buf.to_vec());
+                vnc_flush(&client);
                 self.expect = 1;
                 self.msg_handler = ClientIoHandler::handle_client_init;
             }
@@ -215,7 +223,8 @@ impl ClientIoHandler {
                     let err_msg: String = "Unsupported subauth type".to_string();
                     buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
                     buf.append(&mut err_msg.as_bytes().to_vec());
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf);
+                    vnc_flush(&client);
                 }
                 error!("Unsupported subauth type");
                 return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
@@ -239,14 +248,13 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
 
     // Load cacert.pem and provide verification for certificate chain
     let client_auth = if args.verifypeer {
-        let roots;
-        match load_certs(server_cacert.as_str()) {
-            Ok(r) => roots = r,
+        let roots = match load_certs(server_cacert.as_str()) {
+            Ok(r) => r,
             Err(e) => return Err(e),
-        }
+        };
         let mut client_auth_roots = RootCertStore::empty();
         for root in roots {
-            client_auth_roots.add(&root).unwrap();
+            client_auth_roots.add(&root)?;
         }
         if CLIENT_REQUIRE_AUTH {
             AllowAnyAuthenticatedClient::new(client_auth_roots)
@@ -261,18 +269,16 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
     let suites = TLS_CIPHER_SUITES.to_vec();
     // Tls protocol version supported by server.
     let versions = TLS_VERSIONS.to_vec();
-    let certs: Vec<rustls::Certificate>;
-    let privkey: rustls::PrivateKey;
     // Server certificate.
-    match load_certs(server_cert.as_str()) {
-        Ok(c) => certs = c,
+    let certs: Vec<rustls::Certificate> = match load_certs(server_cert.as_str()) {
+        Ok(c) => c,
         Err(e) => return Err(e),
     };
     // Server private key.
-    match load_private_key(server_key.as_str()) {
-        Ok(key) => privkey = key,
+    let privkey: rustls::PrivateKey = match load_private_key(server_key.as_str()) {
+        Ok(key) => key,
         Err(e) => return Err(e),
-    }
+    };
 
     let mut config = rustls::ServerConfig::builder()
         .with_cipher_suites(&suites)
@@ -288,7 +294,7 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
     // Limit data size in one time.
     config.session_storage = rustls::server::ServerSessionMemoryCache::new(MAXIMUM_SESSION_STORAGE);
     // Tickets.
-    config.ticketer = rustls::Ticketer::new().unwrap();
+    config.ticketer = rustls::Ticketer::new()?;
     config.alpn_protocols = Vec::new();
 
     Ok(Arc::new(config))
@@ -300,23 +306,22 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
 ///
 /// * `filepath` - the path private key.
 fn load_private_key(filepath: &str) -> Result<rustls::PrivateKey> {
-    let keyfile;
-    match File::open(filepath) {
-        Ok(file) => keyfile = file,
+    let file = match File::open(filepath) {
+        Ok(file) => file,
         Err(e) => {
-            error!("Private key file is no exit!: {}", e);
+            error!("Can not open file of the private key!: {}", e);
             return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
-                "Private key file is no exit!",
+                "File of the private key is no exit!",
             ))));
         }
-    }
+    };
 
-    let mut reader = BufReader::new(keyfile);
+    let mut reader = BufReader::new(file);
     loop {
-        match rustls_pemfile::read_one(&mut reader).expect("Cannot parse private key .pem file") {
-            Some(rustls_pemfile::Item::RSAKey(key)) => return Ok(rustls::PrivateKey(key)),
-            Some(rustls_pemfile::Item::PKCS8Key(key)) => return Ok(rustls::PrivateKey(key)),
-            Some(rustls_pemfile::Item::ECKey(key)) => return Ok(rustls::PrivateKey(key)),
+        match rustls_pemfile::read_one(&mut reader).expect("Cannot parse .pem file") {
+            Some(rustls_pemfile::Item::RSAKey(ras)) => return Ok(rustls::PrivateKey(ras)),
+            Some(rustls_pemfile::Item::PKCS8Key(pkcs8)) => return Ok(rustls::PrivateKey(pkcs8)),
+            Some(rustls_pemfile::Item::ECKey(ec)) => return Ok(rustls::PrivateKey(ec)),
             None => break,
             _ => {}
         }
@@ -334,19 +339,17 @@ fn load_private_key(filepath: &str) -> Result<rustls::PrivateKey> {
 ///
 /// * `filepath` - the file path of certificate.
 fn load_certs(filepath: &str) -> Result<Vec<rustls::Certificate>> {
-    let certfile;
-    match File::open(filepath) {
-        Ok(file) => certfile = file,
+    let certfile = match File::open(filepath) {
+        Ok(file) => file,
         Err(e) => {
             error!("Cannot open certificate file: {}", e);
             return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
                 "Cannot open certificate file",
             ))));
         }
-    }
+    };
     let mut reader = BufReader::new(certfile);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .unwrap()
+    let certs = rustls_pemfile::certs(&mut reader)?
         .iter()
         .map(|v| rustls::Certificate(v.clone()))
         .collect();

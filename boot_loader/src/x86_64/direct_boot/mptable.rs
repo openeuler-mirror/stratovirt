@@ -299,7 +299,7 @@ pub fn setup_isa_mptable(
     let mut sum = 0u8;
     for cpu_id in 0..num_cpus {
         write_entry!(
-            ProcessEntry::new(cpu_id as u8, true, cpu_id == 0),
+            ProcessEntry::new(cpu_id, true, cpu_id == 0),
             ProcessEntry,
             sys_mem,
             offset,

@@ -33,23 +33,23 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("source dir")
                 .long("source")
-                .value_name("source directory in host")
-                .help("set source directory in host")
+                .value_name("shared_path")
+                .help("set source shared directory in host")
                 .takes_value(true)
                 .required(true),
         )
         .arg(
             Arg::with_name("socket path")
                 .long("socket-path")
-                .value_name("sock path which communicates with StratoVirt")
-                .help("sock path which communicates with StratoVirt")
+                .value_name("socket_path")
+                .help("vhost-user socket path which communicates with StratoVirt")
                 .takes_value(true)
                 .required(true),
         )
         .arg(
             Arg::with_name("rlimit nofile")
                 .long("rlimit-nofile")
-                .value_name("file resource limits for the process")
+                .value_name("num")
                 .help("set file resource limits for the process")
                 .takes_value(true),
         )
@@ -64,30 +64,30 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("seccomp")
                 .long("seccomp")
-                .value_name("limit syscall(allow, kill, log, trap)")
-                .help("-seccomp kill")
+                .value_name("[allow | kill | log | trap]")
+                .help("limit syscall(allow, kill, log, trap) eg: -seccomp kill")
                 .takes_value(true)
                 .possible_values(vec!["allow", "kill", "log", "trap"]),
         )
         .arg(
             Arg::with_name("sandbox")
                 .long("sandbox")
-                .value_name("isolate the daemon process(chroot, namespace)")
-                .help("-sandbox namespace")
+                .value_name("[chroot | namespace]")
+                .help("isolate the daemon process(chroot, namespace). eg: -sandbox namespace")
                 .takes_value(true)
                 .possible_values(vec!["namespace", "chroot"]),
         )
         .arg(
             Arg::with_name("modcaps")
                 .opt_long("modcaps")
-                .value_name("add or delete modcaps")
-                .help("--modcaps=-LEASE,+KILL")
+                .value_name("capabilities_list")
+                .help("modify the list of capabilities. eg: --modcaps=-LEASE,+KILL")
                 .takes_value(true),
         )
 }
 
 /// Filesystem configuration parsed from command line for the process.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FsConfig {
     /// Source directory in host which can be accessed by guest.
     pub source_dir: String,
@@ -99,18 +99,6 @@ pub struct FsConfig {
     pub root_dir: String,
     /// File object for /proc/self/fd.
     pub proc_dir_opt: Option<File>,
-}
-
-impl Default for FsConfig {
-    fn default() -> Self {
-        FsConfig {
-            source_dir: String::from(""),
-            sock_path: String::from(""),
-            rlimit_nofile: None,
-            root_dir: String::from(""),
-            proc_dir_opt: None,
-        }
-    }
 }
 
 impl FsConfig {
@@ -138,11 +126,6 @@ impl FsConfig {
                 "The source directory {} is not a directory",
                 self.source_dir
             );
-        }
-
-        let sock_path = PathBuf::from(&self.sock_path);
-        if !sock_path.is_file() {
-            bail!("The socket path {} is not a file", self.sock_path);
         }
 
         Ok(())

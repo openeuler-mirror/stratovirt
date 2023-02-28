@@ -30,13 +30,15 @@
 
 pub mod error;
 pub use error::MicroVmError;
-use util::aio::AIO_NATIVE;
+use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use util::aio::AioEngine;
 
 mod mem_layout;
 mod syscall;
 
 use super::Result as MachineResult;
 use log::error;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -59,19 +61,21 @@ use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
+#[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, Incoming, MigrateMode,
-};
-use machine_manager::event;
-use machine_manager::machine::{
-    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle, MigrateInterface,
-};
 use machine_manager::{
-    config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
+    config::{
+        parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
+        Incoming, MigrateMode, NetworkInterfaceConfig, SerialConfig, VmConfig,
+        DEFAULT_VIRTQUEUE_SIZE,
+    },
+    event,
+    machine::{
+        DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
+        MachineInterface, MachineLifecycle, MigrateInterface,
+    },
     qmp::{qmp_schema, QmpChannel, Response},
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
@@ -82,7 +86,9 @@ use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::{loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode};
+use util::{
+    loop_context::EventLoopManager, num_ops::str_to_usize, seccomp::BpfRule, set_termi_canon_mode,
+};
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
@@ -177,9 +183,11 @@ pub struct LightMachine {
     // Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     // VM power button, handle VM `Shutdown` event.
-    power_button: EventFd,
+    power_button: Arc<EventFd>,
     // All configuration information of virtual machine.
-    vm_config: Mutex<VmConfig>,
+    vm_config: Arc<Mutex<VmConfig>>,
+    // Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl LightMachine {
@@ -209,8 +217,10 @@ impl LightMachine {
 
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-        let power_button = EventFd::new(libc::EFD_NONBLOCK)
-            .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
+        let power_button =
+            Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
+            })?);
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(
@@ -235,7 +245,8 @@ impl LightMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button,
-            vm_config: Mutex::new(vm_config.clone()),
+            vm_config: Arc::new(Mutex::new(vm_config.clone())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -261,7 +272,10 @@ impl LightMachine {
     fn create_replaceable_devices(&mut self) -> Result<()> {
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
-            let block = Arc::new(Mutex::new(Block::default()));
+            let block = Arc::new(Mutex::new(Block::new(
+                BlkDevConfig::default(),
+                self.get_drive_files(),
+            )));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block.clone());
             rpl_devs.push(virtio_mmio);
 
@@ -296,7 +310,7 @@ impl LightMachine {
                     used: false,
                 });
 
-            MigrationManager::register_device_instance(
+            MigrationManager::register_transport_instance(
                 VirtioMmioState::descriptor(),
                 VirtioMmioDevice::realize(
                     dev,
@@ -365,26 +379,6 @@ impl LightMachine {
     }
 
     fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
-        let index = if driver.contains("net") {
-            if slot >= MMIO_REPLACEABLE_NET_NR {
-                return Err(anyhow!(MicroVmError::RplDevLmtErr(
-                    "net".to_string(),
-                    MMIO_REPLACEABLE_NET_NR
-                )));
-            }
-            slot + MMIO_REPLACEABLE_BLK_NR
-        } else if driver.contains("blk") {
-            if slot >= MMIO_REPLACEABLE_BLK_NR {
-                return Err(anyhow!(MicroVmError::RplDevLmtErr(
-                    "block".to_string(),
-                    MMIO_REPLACEABLE_BLK_NR
-                )));
-            }
-            slot
-        } else {
-            bail!("Unsupported replaceable device type.");
-        };
-
         // Find the configuration by id.
         let configs_lock = self.replaceable_info.configs.lock().unwrap();
         let mut dev_config = None;
@@ -396,6 +390,34 @@ impl LightMachine {
         if dev_config.is_none() {
             bail!("Failed to find device configuration.");
         }
+
+        // Sanity check for config, driver and slot.
+        let cfg_any = dev_config.as_ref().unwrap().as_any();
+        let index = if driver.contains("net") {
+            if slot >= MMIO_REPLACEABLE_NET_NR {
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "net".to_string(),
+                    MMIO_REPLACEABLE_NET_NR
+                )));
+            }
+            if cfg_any.downcast_ref::<NetworkInterfaceConfig>().is_none() {
+                return Err(anyhow!(MicroVmError::DevTypeErr("net".to_string())));
+            }
+            slot + MMIO_REPLACEABLE_BLK_NR
+        } else if driver.contains("blk") {
+            if slot >= MMIO_REPLACEABLE_BLK_NR {
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "block".to_string(),
+                    MMIO_REPLACEABLE_BLK_NR
+                )));
+            }
+            if cfg_any.downcast_ref::<BlkDevConfig>().is_none() {
+                return Err(anyhow!(MicroVmError::DevTypeErr("blk".to_string())));
+            }
+            slot
+        } else {
+            bail!("Unsupported replaceable device type.");
+        };
 
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
@@ -422,6 +444,9 @@ impl LightMachine {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         for (index, config) in configs_lock.iter().enumerate() {
             if config.id == id {
+                if let Some(blkconf) = config.dev_config.as_any().downcast_ref::<BlkDevConfig>() {
+                    self.unregister_drive_file(&blkconf.path_on_host)?;
+                }
                 configs_lock.remove(index);
                 is_exist = true;
                 break;
@@ -447,6 +472,18 @@ impl LightMachine {
             bail!("Device {} not found", id);
         }
         Ok(id.to_string())
+    }
+
+    /// Must be called after the CPUs have been realized and GIC has been created.
+    #[cfg(target_arch = "aarch64")]
+    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
+        let features = vcpu_cfg.unwrap_or_default();
+        if features.pmu {
+            for cpu in self.cpus.iter() {
+                cpu.init_pmu()?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -607,8 +644,12 @@ impl MachineOps for LightMachine {
         &self.sys_mem
     }
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig> {
-        &self.vm_config
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
+        self.vm_config.clone()
+    }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
     }
 
     fn get_migrate_info(&self) -> Incoming {
@@ -709,12 +750,23 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
+    }
+
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         let mut locked_vm = vm.lock().unwrap();
 
         //trace for lightmachine
         trace_sysbus(&locked_vm.sysbus);
         trace_vm_state(&locked_vm.vm_state);
+
+        let topology = CPUTopology::new().set_topology((
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+        ));
+        trace_cpu_topo(&topology);
 
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -724,83 +776,87 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cpus,
         )?;
 
+        let migrate_info = locked_vm.get_migrate_info();
+
         #[cfg(target_arch = "x86_64")]
         {
             locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
             LightMachine::arch_init()?;
-        }
-        let mut vcpu_fds = vec![];
-        for vcpu_id in 0..vm_config.machine_config.nr_cpus {
-            vcpu_fds.push(Arc::new(
-                KVM_FDS
-                    .load()
-                    .vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .create_vcpu(vcpu_id as u64)?,
-            ));
-        }
-        #[cfg(target_arch = "aarch64")]
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
-        // Add mmio devices
-        locked_vm
-            .create_replaceable_devices()
-            .with_context(|| "Failed to create replaceable devices.")?;
-        locked_vm.add_devices(vm_config)?;
-        trace_replaceable_info(&locked_vm.replaceable_info);
-
-        let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(None)?)
-        } else {
-            None
-        };
-        let topology = CPUTopology::new().set_topology((
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.nr_cores,
-            vm_config.machine_config.nr_dies,
-        ));
-        trace_cpu_topo(&topology);
-
-        #[cfg(target_arch = "aarch64")]
-        let cpu_config = if migrate_info.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_cpu_features(vm_config)?)
-        } else {
-            None
-        };
-
-        // vCPUs init,and apply CPU features (for aarch64)
-        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
-            vm.clone(),
-            vm_config.machine_config.nr_cpus,
-            &topology,
-            &vcpu_fds,
-            &boot_config,
-            #[cfg(target_arch = "aarch64")]
-            &cpu_config,
-        )?);
-
-        #[cfg(target_arch = "aarch64")]
-        if let Some(boot_cfg) = boot_config {
-            let mut fdt_helper = FdtBuilder::new();
+            // Add mmio devices
             locked_vm
-                .generate_fdt_node(&mut fdt_helper)
-                .with_context(|| anyhow!(MachineError::GenFdtErr))?;
-            let fdt_vec = fdt_helper.finish()?;
-            locked_vm
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr as u64),
-                    fdt_vec.len() as u64,
+                .create_replaceable_devices()
+                .with_context(|| "Failed to create replaceable devices.")?;
+            locked_vm.add_devices(vm_config)?;
+            trace_replaceable_info(&locked_vm.replaceable_info);
+
+            let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+                Some(locked_vm.load_boot_source(None)?)
+            } else {
+                None
+            };
+
+            // vCPUs init
+            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+                vm.clone(),
+                vm_config.machine_config.nr_cpus,
+                &topology,
+                &boot_config,
+            )?);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let (boot_config, cpu_config) = if migrate_info.0 == MigrateMode::Unknown {
+                (
+                    Some(locked_vm.load_boot_source(None)?),
+                    Some(locked_vm.load_cpu_features(vm_config)?),
                 )
-                .with_context(|| {
-                    anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
-                })?;
+            } else {
+                (None, None)
+            };
+
+            // vCPUs init,and apply CPU features (for aarch64)
+            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+                vm.clone(),
+                vm_config.machine_config.nr_cpus,
+                &topology,
+                &boot_config,
+                &cpu_config,
+            )?);
+
+            locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+
+            locked_vm.cpu_post_init(&cpu_config)?;
+
+            // Add mmio devices
+            locked_vm
+                .create_replaceable_devices()
+                .with_context(|| "Failed to create replaceable devices.")?;
+            locked_vm.add_devices(vm_config)?;
+            trace_replaceable_info(&locked_vm.replaceable_info);
+
+            if let Some(boot_cfg) = boot_config {
+                let mut fdt_helper = FdtBuilder::new();
+                locked_vm
+                    .generate_fdt_node(&mut fdt_helper)
+                    .with_context(|| anyhow!(MachineError::GenFdtErr))?;
+                let fdt_vec = fdt_helper.finish()?;
+                locked_vm
+                    .sys_mem
+                    .write(
+                        &mut fdt_vec.as_slice(),
+                        GuestAddress(boot_cfg.fdt_addr as u64),
+                        fdt_vec.len() as u64,
+                    )
+                    .with_context(|| {
+                        anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
+                    })?;
+            }
         }
+
         locked_vm
-            .register_power_event(&locked_vm.power_button)
+            .register_power_event(locked_vm.power_button.clone())
             .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
 
         MigrationManager::register_vm_instance(vm.clone());
@@ -817,7 +873,7 @@ impl MachineOps for LightMachine {
     }
 
     fn run(&self, paused: bool) -> MachineResult<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -850,7 +906,10 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        self.power_button.write(1).unwrap();
+        if self.power_button.write(1).is_err() {
+            error!("Micro vm write power button failed");
+            return false;
+        }
         true
     }
 
@@ -865,7 +924,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
+        self.vm_state_transfer(
             &self.cpus,
             #[cfg(target_arch = "aarch64")]
             &self.irq_chip,
@@ -918,7 +977,7 @@ impl MachineAddressInterface for LightMachine {
 
 impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
             KvmVmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
@@ -1031,14 +1090,30 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    /// VNC is not supported by light machine currently.
+    fn query_vnc(&self) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "The service of VNC is not supported".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;
         if let Some(addr) = args.addr {
-            let slot_str = addr.as_str().trim_start_matches("0x");
-
-            if let Ok(n) = usize::from_str_radix(slot_str, 16) {
-                slot = n;
+            if let Ok(num) = str_to_usize(addr) {
+                slot = num;
+            } else {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Invalid addr for device {}",
+                        args.id
+                    )),
+                    None,
+                );
             }
         } else if let Some(lun) = args.lun {
             slot = lun + 1;
@@ -1091,7 +1166,7 @@ impl DeviceInterface for LightMachine {
 
         let config = BlkDevConfig {
             id: args.node_name.clone(),
-            path_on_host: args.file.filename,
+            path_on_host: args.file.filename.clone(),
             read_only,
             direct,
             serial_num: None,
@@ -1103,12 +1178,21 @@ impl DeviceInterface for LightMachine {
             socket_path: None,
             // TODO Add aio option by qmp, now we set it based on "direct".
             aio: if direct {
-                Some(String::from(AIO_NATIVE))
+                AioEngine::Native
             } else {
-                None
+                AioEngine::Off
             },
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         if let Err(e) = config.check() {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        // Register drive backend file for hotplugged drive.
+        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1119,6 +1203,8 @@ impl DeviceInterface for LightMachine {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
+                // It's safe to unwrap as the path has been registered.
+                self.unregister_drive_file(&args.file.filename).unwrap();
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1146,6 +1232,7 @@ impl DeviceInterface for LightMachine {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
 
         if let Some(fds) = args.fds {
@@ -1235,6 +1322,13 @@ impl DeviceInterface for LightMachine {
                 qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
             Response::create_error_response(err_resp, None)
         }
+    }
+
+    fn update_region(&mut self, _args: UpdateRegionArgument) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("The micro vm is not supported".to_string()),
+            None,
+        )
     }
 }
 
@@ -1558,6 +1652,7 @@ impl device_tree::CompileFDT for LightMachine {
         self.generate_memory_node(fdt)?;
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
+        // SAFETY: ARM architecture must have interrupt controllers in user mode.
         self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
 
         fdt.end_node(node_dep)?;

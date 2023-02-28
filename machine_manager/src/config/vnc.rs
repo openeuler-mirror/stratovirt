@@ -49,9 +49,7 @@ impl VmConfig {
         let mut vnc_config = VncConfig::default();
         // Parse Ip:Port.
         if let Some(addr) = cmd_parser.get_value::<String>("")? {
-            if let Err(e) = parse_port(&mut vnc_config, addr) {
-                return Err(e);
-            }
+            parse_port(&mut vnc_config, addr)?;
         } else {
             return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
         }

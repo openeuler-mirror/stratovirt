@@ -10,13 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use std::{
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
-use machine_manager::event_loop::EventLoop;
+use machine_manager::{event_loop::EventLoop, temp_cleaner::TempCleaner};
 use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -34,6 +39,8 @@ use anyhow::{Context, Result};
 pub struct VhostUserFs {
     /// Used to communicate with StratoVirt.
     server_handler: VhostUserServerHandler,
+    /// Used to determine whether the process should be terminated.
+    should_exit: Arc<AtomicBool>,
 }
 
 trait CreateEventNotifier {
@@ -48,44 +55,35 @@ impl CreateEventNotifier for VhostUserServerHandler {
         &mut self,
         server_handler: Arc<Mutex<Self>>,
     ) -> Option<Vec<EventNotifier>> {
-        let mut notifiers = Vec::new();
-        if self.sock.domain.is_accepted() {
-            if let Err(e) = self.sock.domain.server_connection_refuse() {
-                error!("Failed to refuse socket for vhost user server, {:?}", e);
-            }
-            return None;
-        } else if let Err(e) = self.sock.domain.accept() {
+        if let Err(e) = self.sock.domain.accept() {
             error!("Failed to accept the socket for vhost user server, {:?}", e);
             return None;
         }
 
-        let mut handlers = Vec::new();
-        let handler: Box<NotifierCallback> = Box::new(move |event, _| {
+        let mut notifiers = Vec::new();
+
+        let should_exit = self.should_exit.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
             if event == EventSet::IN {
                 let mut lock_server_handler = server_handler.lock().unwrap();
                 if let Err(e) = lock_server_handler.handle_request() {
                     error!("Failed to handle request for vhost user server, {:?}", e);
                 }
             }
-
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                panic!("Receive the event of HANG_UP from stratovirt");
-            } else {
-                None
+                should_exit.store(true, Ordering::Release);
             }
+            None
         });
-
-        handlers.push(Arc::new(Mutex::new(handler)));
-
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             self.sock.domain.get_stream_raw_fd(),
             None,
             EventSet::IN | EventSet::HANG_UP,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
+
         Some(notifiers)
     }
 }
@@ -93,18 +91,14 @@ impl CreateEventNotifier for VhostUserServerHandler {
 impl EventNotifierHelper for VhostUserServerHandler {
     fn internal_notifiers(server_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        let mut handlers = Vec::new();
+
         let server_handler_clone = server_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| {
-                server_handler_clone
-                    .lock()
-                    .unwrap()
-                    .create_event_notifier(server_handler_clone.clone())
-            });
-
-        handlers.push(Arc::new(Mutex::new(handler)));
-
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            server_handler_clone
+                .lock()
+                .unwrap()
+                .create_event_notifier(server_handler_clone.clone())
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             server_handler
@@ -115,9 +109,8 @@ impl EventNotifierHelper for VhostUserServerHandler {
                 .get_listener_raw_fd(),
             None,
             EventSet::IN,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
 
         notifiers
@@ -131,6 +124,8 @@ impl VhostUserFs {
     ///
     /// * `fs_config` - Configuration of the vhost-user filesystem device.
     pub fn new(fs_config: FsConfig) -> Result<Self> {
+        let should_exit = Arc::new(AtomicBool::new(false));
+
         if let Some(limit) = fs_config.rlimit_nofile {
             set_rlimit_nofile(limit)
                 .with_context(|| format!("Failed to set rlimit nofile {}", limit))?;
@@ -141,9 +136,14 @@ impl VhostUserFs {
             VirtioFs::new(fs_config).with_context(|| "Failed to create virtio fs")?,
         ));
 
-        let server_handler = VhostUserServerHandler::new(sock_path.as_str(), virtio_fs)
-            .with_context(|| "Failed to create vhost user server")?;
-        Ok(VhostUserFs { server_handler })
+        let server_handler =
+            VhostUserServerHandler::new(sock_path.as_str(), virtio_fs, should_exit.clone())
+                .with_context(|| "Failed to create vhost user server")?;
+
+        Ok(VhostUserFs {
+            server_handler,
+            should_exit,
+        })
     }
 
     /// Add events to epoll handler for the vhost-user filesystem device.
@@ -161,10 +161,11 @@ impl VhostUserFs {
 
 impl EventLoopManager for VhostUserFs {
     fn loop_should_exit(&self) -> bool {
-        false
+        self.should_exit.load(Ordering::Acquire)
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {
+        TempCleaner::clean();
         Ok(())
     }
 }

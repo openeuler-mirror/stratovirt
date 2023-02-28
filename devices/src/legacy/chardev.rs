@@ -15,6 +15,7 @@ use std::io::{Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -25,7 +26,9 @@ use machine_manager::{
     config::{ChardevConfig, ChardevType},
     temp_cleaner::TempCleaner,
 };
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
+use util::loop_context::{
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::set_termi_raw_mode;
 use util::unix::limit_permission;
 use vmm_sys_util::epoll::EventSet;
@@ -36,6 +39,8 @@ pub trait InputReceiver: Send {
 
     fn get_remain_space_size(&mut self) -> usize;
 }
+
+type ReceFn = Option<Arc<dyn Fn(&[u8]) + Send + Sync>>;
 
 /// Character device structure.
 pub struct Chardev {
@@ -51,8 +56,10 @@ pub struct Chardev {
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
     /// Fd of socket stream.
     pub stream_fd: Option<i32>,
+    /// Device is deactivated or not.
+    pub deactivated: bool,
     /// Handle the input data and trigger interrupt if necessary.
-    receive: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
+    receive: ReceFn,
     /// Return the remain space size of receiver buffer.
     get_remain_space_size: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
 }
@@ -66,6 +73,7 @@ impl Chardev {
             input: None,
             output: None,
             stream_fd: None,
+            deactivated: false,
             receive: None,
             get_remain_space_size: None,
         }
@@ -193,15 +201,21 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
 fn get_notifier_handler(
     chardev: Arc<Mutex<Chardev>>,
     backend: ChardevType,
-) -> Box<NotifierCallback> {
+) -> Rc<NotifierCallback> {
     match backend {
-        ChardevType::Stdio | ChardevType::Pty => Box::new(move |_, _| {
+        ChardevType::Stdio | ChardevType::Pty => Rc::new(move |_, _| {
             let locked_chardev = chardev.lock().unwrap();
+            if locked_chardev.deactivated {
+                return None;
+            }
             let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
             let mut buffer = vec![0_u8; buff_size];
-            if let Some(input) = locked_chardev.input.clone() {
+            let input_h = locked_chardev.input.clone();
+            let receive = locked_chardev.receive.clone();
+            drop(locked_chardev);
+            if let Some(input) = input_h {
                 if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                    locked_chardev.receive.as_ref().unwrap()(&mut buffer[..index]);
+                    receive.as_ref().unwrap()(&mut buffer[..index]);
                 } else {
                     error!("Failed to read input data");
                 }
@@ -210,8 +224,11 @@ fn get_notifier_handler(
             }
             None
         }),
-        ChardevType::Socket { .. } => Box::new(move |_, _| {
+        ChardevType::Socket { .. } => Rc::new(move |_, _| {
             let mut locked_chardev = chardev.lock().unwrap();
+            if locked_chardev.deactivated {
+                return None;
+            }
             let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
             let stream_fd = stream.as_raw_fd();
@@ -221,9 +238,12 @@ fn get_notifier_handler(
             locked_chardev.output = Some(stream_arc);
 
             let cloned_chardev = chardev.clone();
-            let inner_handler = Box::new(move |event, _| {
+            let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+                let mut locked_chardev = cloned_chardev.lock().unwrap();
                 if event == EventSet::IN {
-                    let locked_chardev = cloned_chardev.lock().unwrap();
+                    if locked_chardev.deactivated {
+                        return None;
+                    }
                     let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
                     let mut buffer = vec![0_u8; buff_size];
                     if let Some(input) = locked_chardev.input.clone() {
@@ -235,18 +255,13 @@ fn get_notifier_handler(
                     } else {
                         error!("Failed to get chardev input fd");
                     }
-                }
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    cloned_chardev.lock().unwrap().input = None;
-                    cloned_chardev.lock().unwrap().output = None;
-                    cloned_chardev.lock().unwrap().stream_fd = None;
-                    Some(vec![EventNotifier::new(
-                        NotifierOperation::Delete,
-                        stream_fd,
-                        Some(listener_fd),
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    )])
+                    None
+                } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                    // Always allow disconnect even if has deactivated.
+                    locked_chardev.input = None;
+                    locked_chardev.output = None;
+                    locked_chardev.stream_fd = None;
+                    Some(gen_delete_notifiers(&[stream_fd]))
                 } else {
                     None
                 }
@@ -256,10 +271,10 @@ fn get_notifier_handler(
                 stream_fd,
                 Some(listener_fd),
                 EventSet::IN | EventSet::HANG_UP,
-                vec![Arc::new(Mutex::new(inner_handler))],
+                vec![inner_handler],
             )])
         }),
-        ChardevType::File(_) => Box::new(move |_, _| None),
+        ChardevType::File(_) => Rc::new(move |_, _| None),
     }
 }
 
@@ -276,10 +291,7 @@ impl EventNotifierHelper for Chardev {
                         input.lock().unwrap().as_raw_fd(),
                         None,
                         EventSet::IN,
-                        vec![Arc::new(Mutex::new(get_notifier_handler(
-                            cloned_chardev,
-                            backend,
-                        )))],
+                        vec![get_notifier_handler(cloned_chardev, backend)],
                     ));
                 }
             }
@@ -298,10 +310,7 @@ impl EventNotifierHelper for Chardev {
                         listener.as_raw_fd(),
                         None,
                         EventSet::IN,
-                        vec![Arc::new(Mutex::new(get_notifier_handler(
-                            cloned_chardev,
-                            backend,
-                        )))],
+                        vec![get_notifier_handler(cloned_chardev, backend)],
                     ));
                 }
             }

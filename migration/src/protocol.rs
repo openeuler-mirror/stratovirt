@@ -33,7 +33,7 @@ use util::byte_code::ByteCode;
 /// Failed ---------> Setup: reset migration resource.
 /// Any ------------> Failed: something wrong in migration.
 /// Any ------------> Canceled: cancel migration.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MigrationStatus {
     /// Migration resource is not prepared all
     None,
@@ -111,7 +111,7 @@ impl MigrationStatus {
 
 /// Structure defines the transmission protocol between the source with destination VM.
 #[repr(u16)]
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum TransStatus {
     /// Active migration.
     Active,
@@ -297,7 +297,7 @@ pub const HEADER_LENGTH: usize = 4096;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FileFormat {
     Device,
     MemoryFull,
@@ -349,18 +349,12 @@ fn cpu_model() -> [u8; 16] {
 pub struct MigrationHeader {
     /// Magic number for migration file/stream.
     magic_num: [u8; 16],
-    /// Current version of migration.
-    #[allow(dead_code)]
-    current_version: u32,
     /// Compatible version of migration.
     compat_version: u32,
     /// Arch identifier.
     arch: [u8; 8],
     /// Endianness of byte order.
     byte_order: EndianType,
-    /// The type of hypervisor.
-    #[allow(dead_code)]
-    hypervisor_type: [u8; 8],
     /// The version of hypervisor.
     hypervisor_version: u32,
     /// The type of CPU model.
@@ -380,11 +374,9 @@ impl Default for MigrationHeader {
     fn default() -> Self {
         MigrationHeader {
             magic_num: MAGIC_NUMBER,
-            current_version: CURRENT_VERSION,
             compat_version: COMPAT_VERSION,
             format: FileFormat::Device,
             byte_order: EndianType::Little,
-            hypervisor_type: [b'k', b'v', b'm', b'0', b'0', b'0', b'0', b'0'],
             hypervisor_version: Kvm::new().unwrap().get_api_version() as u32,
             #[cfg(target_arch = "x86_64")]
             cpu_model: cpu_model(),
@@ -458,7 +450,7 @@ impl MigrationHeader {
 }
 
 /// Version check result enum.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum VersionCheck {
     /// Version is completely same.
     Same,
@@ -518,7 +510,7 @@ pub struct DeviceStateDesc {
 }
 
 /// The structure to describe struct field in `DeviceState` structure.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FieldDesc {
     /// Field var name.
     pub var_name: String,

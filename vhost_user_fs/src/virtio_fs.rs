@@ -26,6 +26,7 @@ const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 use crate::cmdline::FsConfig;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -33,7 +34,10 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use machine_manager::event_loop::EventLoop;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
+};
 
 use super::fs::FileSystem;
 use super::fuse_req::FuseReq;
@@ -48,8 +52,8 @@ use virtio::{
 
 struct FsIoHandler {
     queue: Queue,
-    kick_evt: EventFd,
-    call_evt: EventFd,
+    kick_evt: Arc<EventFd>,
+    call_evt: Arc<EventFd>,
     mem_space: Arc<AddressSpace>,
     driver_features: u64,
     fs: Arc<Mutex<FileSystem>>,
@@ -58,8 +62,8 @@ struct FsIoHandler {
 impl FsIoHandler {
     fn new(
         queue_config: QueueConfig,
-        kick_evt: &EventFd,
-        call_evt: &EventFd,
+        kick_evt: Arc<EventFd>,
+        call_evt: Arc<EventFd>,
         mem_space: &Arc<AddressSpace>,
         driver_features: u64,
         fs: Arc<Mutex<FileSystem>>,
@@ -72,8 +76,8 @@ impl FsIoHandler {
 
         Ok(FsIoHandler {
             queue,
-            kick_evt: kick_evt.try_clone().unwrap(),
-            call_evt: call_evt.try_clone().unwrap(),
+            kick_evt,
+            call_evt,
             mem_space: mem_space.clone(),
             driver_features,
             fs,
@@ -111,13 +115,7 @@ impl FsIoHandler {
     }
 
     fn delete_notifiers(&self) -> Vec<EventNotifier> {
-        vec![EventNotifier::new(
-            NotifierOperation::Delete,
-            self.kick_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        )]
+        gen_delete_notifiers(&[self.kick_evt.as_raw_fd()])
     }
 }
 
@@ -126,22 +124,19 @@ impl EventNotifierHelper for FsIoHandler {
         let mut notifiers = Vec::new();
 
         let fs_handler_clone = fs_handler.clone();
-        let handler = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             if let Err(e) = fs_handler_clone.lock().unwrap().process_queue() {
                 error!("Failed to process fuse msg, {:?}", e);
             }
-
             None
         });
-
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             fs_handler.lock().unwrap().kick_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
@@ -150,8 +145,8 @@ impl EventNotifierHelper for FsIoHandler {
 
 struct QueueInfo {
     config: QueueConfig,
-    kick_evt: Option<EventFd>,
-    call_evt: Option<EventFd>,
+    kick_evt: Option<Arc<EventFd>>,
+    call_evt: Option<Arc<EventFd>>,
 }
 
 impl QueueInfo {
@@ -345,34 +340,34 @@ impl VhostUserReqHandler for VirtioFs {
         let used_addr = self.get_guest_address(used_ring)?;
         let avail_addr = self.get_guest_address(avail_ring)?;
 
-        if let Err(_ret) =
-            self.config
-                .get_mut_queue_config(queue_index as usize)
-                .map(|queue_info| {
-                    queue_info.config.desc_table = GuestAddress(desc_addr);
-                    queue_info.config.addr_cache.desc_table_host = cloned_mem_space
-                        .get_host_address(GuestAddress(desc_addr))
-                        .unwrap_or(0);
+        if let Err(_ret) = self
+            .config
+            .get_mut_queue_config(queue_index)
+            .map(|queue_info| {
+                queue_info.config.desc_table = GuestAddress(desc_addr);
+                queue_info.config.addr_cache.desc_table_host = cloned_mem_space
+                    .get_host_address(GuestAddress(desc_addr))
+                    .unwrap_or(0);
 
-                    queue_info.config.avail_ring = GuestAddress(avail_addr);
-                    queue_info.config.addr_cache.avail_ring_host = cloned_mem_space
-                        .get_host_address(GuestAddress(avail_addr))
-                        .unwrap_or(0);
+                queue_info.config.avail_ring = GuestAddress(avail_addr);
+                queue_info.config.addr_cache.avail_ring_host = cloned_mem_space
+                    .get_host_address(GuestAddress(avail_addr))
+                    .unwrap_or(0);
 
-                    queue_info.config.used_ring = GuestAddress(used_addr);
-                    queue_info.config.addr_cache.used_ring_host = cloned_mem_space
-                        .get_host_address(GuestAddress(used_addr))
-                        .unwrap_or(0);
+                queue_info.config.used_ring = GuestAddress(used_addr);
+                queue_info.config.addr_cache.used_ring_host = cloned_mem_space
+                    .get_host_address(GuestAddress(used_addr))
+                    .unwrap_or(0);
 
-                    if queue_info.config.addr_cache.desc_table_host == 0
-                        || queue_info.config.addr_cache.avail_ring_host == 0
-                        || queue_info.config.addr_cache.used_ring_host == 0
-                    {
-                        return Err(());
-                    }
+                if queue_info.config.addr_cache.desc_table_host == 0
+                    || queue_info.config.addr_cache.avail_ring_host == 0
+                    || queue_info.config.addr_cache.used_ring_host == 0
+                {
+                    return Err(());
+                }
 
-                    Ok(())
-                })
+                Ok(())
+            })
         {
             bail!(
                 "Failed to set vring addr, got host address failed. Index: {}, desc: 0x{:X}, avail: 0x{:X}, used: 0x{:X}",
@@ -399,7 +394,7 @@ impl VhostUserReqHandler for VirtioFs {
             .get_mut_queue_config(index)
             .map(|queue_info| {
                 let call_evt = unsafe { EventFd::from_raw_fd(fd) };
-                queue_info.call_evt = Some(call_evt);
+                queue_info.call_evt = Some(Arc::new(call_evt));
             })
             .with_context(|| format!("Failed to set vring call, index: {}", index))?;
         Ok(())
@@ -414,7 +409,7 @@ impl VhostUserReqHandler for VirtioFs {
             .get_mut_queue_config(index)
             .map(|queue_info| {
                 let kick_evt = unsafe { EventFd::from_raw_fd(fd) };
-                queue_info.kick_evt = Some(kick_evt);
+                queue_info.kick_evt = Some(Arc::new(kick_evt));
             })
             .with_context(|| format!("Failed to set vring kick, index: {}", index))?;
         Ok(())
@@ -425,6 +420,12 @@ impl VhostUserReqHandler for VirtioFs {
 
         let mut queue_info = self.config.get_mut_queue_config(queue_index)?;
         queue_info.config.ready = status == 1;
+
+        // Before setting up new notifiers, we should remove old ones.
+        if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
+            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
+                .with_context(|| "Failed to update event for queue status which is not ready")?;
+        };
 
         if status == 1 {
             if queue_info.kick_evt.is_none() || queue_info.call_evt.is_none() {
@@ -438,8 +439,8 @@ impl VhostUserReqHandler for VirtioFs {
             let fs_handler = Arc::new(Mutex::new(
                 FsIoHandler::new(
                     queue_info.config,
-                    queue_info.kick_evt.as_ref().unwrap(),
-                    queue_info.call_evt.as_ref().unwrap(),
+                    queue_info.kick_evt.as_ref().unwrap().clone(),
+                    queue_info.call_evt.as_ref().unwrap().clone(),
                     &self.sys_mem,
                     driver_features,
                     self.fs.clone(),
@@ -450,10 +451,8 @@ impl VhostUserReqHandler for VirtioFs {
             self.fs_handlers[queue_index] = Some(fs_handler.clone());
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(fs_handler), None)
                 .with_context(|| "Failed to update event for queue status which is ready")?;
-        } else if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
-            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
-                .with_context(|| "Failed to update event for queue status which is not ready")?;
         }
+
         Ok(())
     }
 }

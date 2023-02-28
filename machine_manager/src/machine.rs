@@ -19,7 +19,7 @@ use strum::VariantNames;
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
     DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
-    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists,
+    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -30,7 +30,7 @@ pub struct PathInfo {
 }
 
 /// State for KVM VM.
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum KvmVmState {
     Created = 1,
     Running = 2,
@@ -47,9 +47,6 @@ pub enum VmEvent {
     ShutdownCauseFailEntry,
     ShutdownCauseInternalError,
 }
-
-unsafe impl Sync for VmEvent {}
-unsafe impl Send for VmEvent {}
 
 /// Trait to handle virtual machine lifecycle.
 ///
@@ -178,13 +175,16 @@ pub trait DeviceInterface {
     /// Query balloon's size.
     fn query_balloon(&self) -> Response;
 
+    /// Query the info of vnc server.
+    fn query_vnc(&self) -> Response;
+
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
 
     /// Query the version of StratoVirt.
     fn query_version(&self) -> Response {
         let version = Version::new(1, 0, 5);
-        Response::create_response(serde_json::to_value(&version).unwrap(), None)
+        Response::create_response(serde_json::to_value(version).unwrap(), None)
     }
 
     /// Query all commands of StratoVirt.
@@ -296,6 +296,7 @@ pub trait DeviceInterface {
             ("nec-usb-xhci", "base-xhci"),
             ("usb-tablet", "usb-hid"),
             ("usb-kbd", "usb-hid"),
+            ("virtio-gpu-pci", "virtio-gpu"),
         ];
 
         for list in list_types {
@@ -331,22 +332,22 @@ pub trait DeviceInterface {
 
     fn query_tpm_models(&self) -> Response {
         let tpm_models = Vec::<String>::new();
-        Response::create_response(serde_json::to_value(&tpm_models).unwrap(), None)
+        Response::create_response(serde_json::to_value(tpm_models).unwrap(), None)
     }
 
     fn query_tpm_types(&self) -> Response {
         let tpm_types = Vec::<String>::new();
-        Response::create_response(serde_json::to_value(&tpm_types).unwrap(), None)
+        Response::create_response(serde_json::to_value(tpm_types).unwrap(), None)
     }
 
     fn query_command_line_options(&self) -> Response {
         let cmd_lines = Vec::<CmdLine>::new();
-        Response::create_response(serde_json::to_value(&cmd_lines).unwrap(), None)
+        Response::create_response(serde_json::to_value(cmd_lines).unwrap(), None)
     }
 
     fn query_migrate_capabilities(&self) -> Response {
         let caps = Vec::<MigrateCapabilities>::new();
-        Response::create_response(serde_json::to_value(&caps).unwrap(), None)
+        Response::create_response(serde_json::to_value(caps).unwrap(), None)
     }
 
     fn query_qmp_schema(&self) -> Response {
@@ -375,38 +376,38 @@ pub trait DeviceInterface {
 
     fn qom_list(&self) -> Response {
         let vec_cmd: Vec<PropList> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn qom_get(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_block(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_named_block_nodes(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_blockstats(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_block_jobs(&self) -> Response {
         // Fix me: qmp command call, return none temporarily.
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_gic_capabilities(&self) -> Response {
         let vec_gic: Vec<GicCap> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_gic).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_gic).unwrap(), None)
     }
 
     fn query_iothreads(&self) -> Response {
@@ -416,6 +417,13 @@ pub trait DeviceInterface {
             vec_iothreads.push(thread.clone());
         }
         Response::create_response(serde_json::to_value(&vec_iothreads).unwrap(), None)
+    }
+
+    fn update_region(&mut self, args: UpdateRegionArgument) -> Response;
+
+    // Send event to input device for testing only.
+    fn input_event(&self, _k: String, _v: String) -> Response {
+        Response::create_empty_response()
     }
 }
 
@@ -445,6 +453,9 @@ pub trait MachineInterface: MachineLifecycle + MachineAddressInterface {}
 
 /// Machine interface which is exposed to outer hypervisor.
 pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + MigrateInterface {}
+
+/// Machine interface which is exposed to test server.
+pub trait MachineTestInterface: MachineAddressInterface {}
 
 pub static PTY_PATH: Lazy<Mutex<Vec<PathInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static IOTHREADS: Lazy<Mutex<Vec<IothreadInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));

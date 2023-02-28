@@ -12,23 +12,16 @@
 
 use std::mem::size_of;
 
-use hypervisor::kvm::{KVM_GET_ONE_REG, KVM_SET_ONE_REG};
 use kvm_bindings::{
-    kvm_one_reg, kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64,
-    KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_SHIFT, KVM_REG_SIZE_U128, KVM_REG_SIZE_U32,
-    KVM_REG_SIZE_U64,
+    kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64, KVM_REG_ARM_CORE,
+    KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::VcpuFd;
-use util::byte_code::ByteCode;
 use util::offset_of;
-use vmm_sys_util::{
-    errno,
-    ioctl::{ioctl_with_mut_ref, ioctl_with_ref},
-};
+use vmm_sys_util::errno;
 
 pub type Result<T> = std::result::Result<T, errno::Error>;
 
-const KVM_REG_MAX_SIZE: u64 = 256;
 const KVM_NR_REGS: u64 = 31;
 const KVM_NR_FP_REGS: u64 = 32;
 
@@ -132,71 +125,6 @@ impl From<Arm64CoreRegs> for u64 {
     }
 }
 
-/// Returns the 128 bits value of the specified vCPU register.
-///
-/// The id of the register is encoded as specified in the kernel documentation
-/// for `KVM_GET_ONE_REG`.
-///
-/// Max register size is 256 Bytes.
-///
-/// # Arguments
-///
-/// * `vcpu_fd` - The file descriptor of kvm_based vcpu.
-/// * `reg_id` - ID of register.
-pub fn get_one_reg_vec(vcpu_fd: &VcpuFd, reg_id: u64) -> Result<Vec<u8>> {
-    let reg_size = 1_u64 << ((reg_id & KVM_REG_SIZE_MASK) >> KVM_REG_SIZE_SHIFT);
-    if reg_size > KVM_REG_MAX_SIZE {
-        return Err(errno::Error::new(libc::EINVAL));
-    }
-    let mut reg_value: Vec<u8> = vec![0; reg_size as usize];
-    reg_value.resize(reg_size as usize, 0);
-    let mut onereg = kvm_one_reg {
-        id: reg_id,
-        addr: reg_value.as_mut_ptr() as *mut u8 as u64,
-    };
-
-    // This is safe because we allocated the struct and we know the kernel will read
-    // exactly the size of the struct.
-    let ret = unsafe { ioctl_with_mut_ref(vcpu_fd, KVM_GET_ONE_REG(), &mut onereg) };
-    if ret < 0 {
-        return Err(errno::Error::last());
-    }
-
-    Ok(reg_value)
-}
-
-/// Sets the value of one register for this vCPU.
-///
-/// The id of the register is encoded as specified in the kernel documentation
-/// for `KVM_SET_ONE_REG`.
-///
-/// Max register size is 256 Bytes.
-///
-/// # Arguments
-///
-/// * `reg_id` - ID of the register for which we are setting the value.
-/// * `data` - value for the specified register.
-pub fn set_one_reg_vec(vcpu_fd: &VcpuFd, reg_id: u64, data: &[u8]) -> Result<()> {
-    let reg_size = 1u64 << ((reg_id & KVM_REG_SIZE_MASK) >> KVM_REG_SIZE_SHIFT);
-    if reg_size > KVM_REG_MAX_SIZE || reg_size as usize > data.len() {
-        return Err(errno::Error::new(libc::EINVAL));
-    };
-    let data_ref = data.as_ptr() as *const u8;
-    let onereg = kvm_one_reg {
-        id: reg_id,
-        addr: data_ref as u64,
-    };
-
-    // This is safe because we allocated the struct and we know the kernel will read
-    // exactly the size of the struct.
-    let ret = unsafe { ioctl_with_ref(vcpu_fd, KVM_SET_ONE_REG(), &onereg) };
-    if ret < 0 {
-        return Err(errno::Error::last());
-    }
-
-    Ok(())
-}
-
 /// Returns the vcpu's current `core_register`.
 ///
 /// The register state is gotten from `KVM_GET_ONE_REG` api in KVM.
@@ -207,31 +135,28 @@ pub fn set_one_reg_vec(vcpu_fd: &VcpuFd, reg_id: u64, data: &[u8]) -> Result<()>
 pub fn get_core_regs(vcpu_fd: &VcpuFd) -> Result<kvm_regs> {
     let mut core_regs = kvm_regs::default();
 
-    core_regs.regs.sp = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())?;
-    core_regs.sp_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())?;
-    core_regs.regs.pstate = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())?;
-    core_regs.regs.pc = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())?;
-    core_regs.elr_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())?;
+    core_regs.regs.sp = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
+    core_regs.sp_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
+    core_regs.regs.pstate = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
+    core_regs.regs.pc = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
+    core_regs.elr_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
 
     for i in 0..KVM_NR_REGS as usize {
-        core_regs.regs.regs[i] = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())?;
+        core_regs.regs.regs[i] =
+            vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
     }
 
     for i in 0..KVM_NR_SPSR as usize {
-        core_regs.spsr[i] = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())?;
+        core_regs.spsr[i] = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
     }
 
     for i in 0..KVM_NR_FP_REGS as usize {
-        let register_value_vec =
-            get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
-        core_regs.fp_regs.vregs[i] = *u128::from_bytes(&register_value_vec).unwrap();
+        core_regs.fp_regs.vregs[i] =
+            vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
     }
 
-    let register_value_vec = get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpsr.into())?;
-    core_regs.fp_regs.fpsr = *u32::from_bytes(&register_value_vec[0..4]).unwrap();
-
-    let register_value_vec = get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpcr.into())?;
-    core_regs.fp_regs.fpcr = *u32::from_bytes(&register_value_vec[0..4]).unwrap();
+    core_regs.fp_regs.fpsr = vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
+    core_regs.fp_regs.fpcr = vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
 
     Ok(core_regs)
 }
@@ -245,44 +170,40 @@ pub fn get_core_regs(vcpu_fd: &VcpuFd) -> Result<kvm_regs> {
 /// * `vcpu_fd` - the VcpuFd in KVM mod.
 /// * `core_regs` - kvm_regs state to be written.
 pub fn set_core_regs(vcpu_fd: &VcpuFd, core_regs: kvm_regs) -> Result<()> {
-    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegPState.into(), core_regs.regs.pstate)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1)?;
+    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
+    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
+    vcpu_fd.set_one_reg(
+        Arm64CoreRegs::UserPTRegPState.into(),
+        core_regs.regs.pstate as u128,
+    )?;
+    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
+    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
 
     for i in 0..KVM_NR_REGS as usize {
         vcpu_fd.set_one_reg(
             Arm64CoreRegs::UserPTRegRegs(i).into(),
-            core_regs.regs.regs[i] as u64,
+            core_regs.regs.regs[i] as u128,
         )?;
     }
 
     for i in 0..KVM_NR_SPSR as usize {
-        vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i])?;
+        vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
     }
 
     for i in 0..KVM_NR_FP_REGS as usize {
-        let mut data: Vec<u8> = Vec::new();
-        data.append(&mut core_regs.fp_regs.vregs[i].as_bytes().to_vec());
-
-        set_one_reg_vec(
-            vcpu_fd,
+        vcpu_fd.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
-            &data,
+            core_regs.fp_regs.vregs[i],
         )?;
     }
 
-    set_one_reg_vec(
-        vcpu_fd,
+    vcpu_fd.set_one_reg(
         Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
-        core_regs.fp_regs.fpsr.as_bytes(),
+        core_regs.fp_regs.fpsr as u128,
     )?;
-
-    set_one_reg_vec(
-        vcpu_fd,
+    vcpu_fd.set_one_reg(
         Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
-        core_regs.fp_regs.fpcr.as_bytes(),
+        core_regs.fp_regs.fpcr as u128,
     )?;
 
     Ok(())

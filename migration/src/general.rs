@@ -123,7 +123,7 @@ impl MigrationManager {
         fd.read_exact(unsafe {
             std::slice::from_raw_parts_mut(
                 &mut instance as *mut Instance as *mut u8,
-                size_of::<Instance>() as usize,
+                size_of::<Instance>(),
             )
         })
         .with_context(|| "Failed to read instance of object")?;
@@ -217,8 +217,13 @@ pub trait Lifecycle {
         Ok(())
     }
 
-    /// Resume devices during migration.
+    /// Resume VM during migration.
     fn resume() -> Result<()> {
+        let locked_transports = &MIGRATION_MANAGER.vmm.read().unwrap().transports;
+        for (_, transport) in locked_transports.iter() {
+            transport.lock().unwrap().resume()?;
+        }
+
         let locked_devices = &MIGRATION_MANAGER.vmm.read().unwrap().devices;
         for (_, device) in locked_devices.iter() {
             device.lock().unwrap().resume()?;

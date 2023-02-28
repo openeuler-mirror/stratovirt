@@ -13,18 +13,20 @@
 use crate::{
     auth::SaslAuth,
     auth::{AuthState, SaslConfig, SubAuthState},
-    client::{get_rects, ClientIoHandler, ClientState},
-    data::keycode::KEYSYM2KEYCODE,
+    client::vnc_write,
+    client::{vnc_flush, ClientIoHandler, ClientState},
+    console::{DisplayChangeListener, DisplayMouse},
+    input::KeyBoardState,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
-        get_image_width, unref_pixman_image,
+        get_image_width, pixman_image_linebuf_create, pixman_image_linebuf_fill,
+        unref_pixman_image,
     },
     round_up_div,
     vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
     vnc::{
-        update_server_surface, DisplayMouse, DIRTY_PIXELS_NUM, DISPLAY_UPDATE_INTERVAL_DEFAULT,
-        DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX, MAX_WINDOW_HEIGHT,
-        MAX_WINDOW_WIDTH, VNC_BITMAP_WIDTH, VNC_SERVERS,
+        update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+        VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
     VncError,
 };
@@ -35,60 +37,70 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use std::{
+    cell::RefCell,
     cmp,
     collections::HashMap,
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
     ptr,
-    sync::{Arc, Mutex},
+    rc::Rc,
+    sync::{Arc, Mutex, Weak},
 };
 use util::{
     bitmap::Bitmap,
-    loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation},
-    pixman::{
-        pixman_format_bpp, pixman_format_code_t, pixman_image_composite, pixman_image_create_bits,
-        pixman_image_t, pixman_op_t,
+    loop_context::{
+        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
+    pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_t},
 };
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use vmm_sys_util::epoll::EventSet;
 
 const CONNECTION_LIMIT: usize = 1;
 
 /// Information of VncServer.
 pub struct VncServer {
-    /// Event fd for vnc refresh.
-    pub refresh_fd: Arc<Mutex<EventFd>>,
     /// Client io handler.
-    pub client_handlers: Arc<Mutex<HashMap<String, Arc<Mutex<ClientIoHandler>>>>>,
+    pub client_handlers: Arc<Mutex<HashMap<String, Arc<ClientState>>>>,
     /// Security Type for connection.
-    pub security_type: Arc<Mutex<SecurityType>>,
+    pub security_type: Rc<RefCell<SecurityType>>,
+    /// keyboard status.
+    pub keyboard_state: Rc<RefCell<KeyBoardState>>,
     /// Mapping ASCII to keycode.
-    pub keysym2keycode: Arc<Mutex<HashMap<u16, u16>>>,
+    pub keysym2keycode: HashMap<u16, u16>,
     /// Image data of surface.
     pub vnc_surface: Arc<Mutex<VncSurface>>,
     /// Data for cursor image.
     pub vnc_cursor: Arc<Mutex<VncCursor>>,
+    /// Display Change Listener.
+    pub display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
     /// Connection limit.
-    conn_limits: usize,
-    /// Updating interval of display devices.
-    pub update_interval: Arc<Mutex<u32>>,
+    pub conn_limits: usize,
 }
 
+// SAFETY:
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
+// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in single thread.
+// So implement Send and Sync is safe.
 unsafe impl Send for VncServer {}
 unsafe impl Sync for VncServer {}
 
 impl VncServer {
     /// Create a new VncServer.
-    pub fn new(refresh_fd: Arc<Mutex<EventFd>>, guest_image: *mut pixman_image_t) -> Self {
+    pub fn new(
+        guest_image: *mut pixman_image_t,
+        keyboard_state: Rc<RefCell<KeyBoardState>>,
+        keysym2keycode: HashMap<u16, u16>,
+        display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
+    ) -> Self {
         VncServer {
-            refresh_fd,
             client_handlers: Arc::new(Mutex::new(HashMap::new())),
-            security_type: Arc::new(Mutex::new(SecurityType::default())),
-            keysym2keycode: Arc::new(Mutex::new(HashMap::new())),
+            security_type: Rc::new(RefCell::new(SecurityType::default())),
+            keyboard_state,
+            keysym2keycode,
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
+            display_listener,
             conn_limits: CONNECTION_LIMIT,
-            update_interval: Arc::new(Mutex::new(0_u32)),
         }
     }
 }
@@ -112,49 +124,27 @@ impl EventNotifierHelper for VncConnHandler {
         let vnc_io_clone = vnc_io.clone();
         let server = vnc_io.lock().unwrap().server.clone();
         // Register event notifier for connection.
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd: RawFd| {
-                read_fd(fd);
-                match vnc_io_clone.clone().lock().unwrap().listener.accept() {
-                    Ok((stream, addr)) => {
-                        if let Err(e) = handle_connection(&server, stream, addr) {
-                            error!("{:?}", e);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Connect failed: {:?}", e);
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            match vnc_io_clone.clone().lock().unwrap().listener.accept() {
+                Ok((stream, addr)) => {
+                    if let Err(e) = handle_connection(&server, stream, addr) {
+                        error!("{:?}", e);
                     }
                 }
-
-                None as Option<Vec<EventNotifier>>
-            });
-        let mut notifiers = vec![
-            (EventNotifier::new(
-                NotifierOperation::AddShared,
-                vnc_io.lock().unwrap().listener.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![Arc::new(Mutex::new(handler))],
-            )),
-        ];
-
-        // Register event notifier to refresh
-        // the image from guest_imag to server image.
-        let server = vnc_io.lock().unwrap().server.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd: RawFd| {
-                read_fd(fd);
-                vnc_refresh();
-                None as Option<Vec<EventNotifier>>
-            });
-        notifiers.push(EventNotifier::new(
+                Err(e) => {
+                    error!("Connect failed: {:?}", e);
+                }
+            }
+            None
+        });
+        vec![EventNotifier::new(
             NotifierOperation::AddShared,
-            server.refresh_fd.lock().unwrap().as_raw_fd(),
+            vnc_io.lock().unwrap().listener.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
-        ));
-        notifiers
+            vec![handler],
+        )]
     }
 }
 
@@ -257,26 +247,36 @@ impl SecurityType {
 
     /// Encryption configuration.
     fn set_auth(&mut self) -> Result<()> {
+        let is_x509: bool;
+        let is_anon: bool;
+        let is_sasl: bool = self.saslauth.is_some();
+
         if let Some(tlscred) = self.tlscreds.clone() {
+            is_x509 = tlscred.cred_type == *X509_CERT;
+            is_anon = tlscred.cred_type == *ANON_CERT;
             self.auth = AuthState::Vencrypt;
-            if tlscred.cred_type != *X509_CERT && tlscred.cred_type != *ANON_CERT {
-                error!("Unsupported tls cred type");
-                return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
-                    "Unsupported tls cred type",
-                ))));
-            }
-            if self.saslauth.is_some() {
-                if tlscred.cred_type == *"x509" {
-                    self.subauth = SubAuthState::VncAuthVencryptX509Sasl;
-                } else {
-                    self.subauth = SubAuthState::VncAuthVencryptTlssasl;
-                }
-            } else {
-                self.subauth = SubAuthState::VncAuthVencryptX509None;
-            }
         } else {
             self.auth = AuthState::No;
             self.subauth = SubAuthState::VncAuthVencryptPlain;
+            return Ok(());
+        }
+
+        if !is_x509 && !is_anon {
+            error!("Unsupported tls cred type");
+            return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
+                "Unsupported tls cred type",
+            ))));
+        }
+        if is_sasl {
+            if is_x509 {
+                self.subauth = SubAuthState::VncAuthVencryptX509Sasl;
+            } else {
+                self.subauth = SubAuthState::VncAuthVencryptTlssasl;
+            }
+        } else if is_x509 {
+            self.subauth = SubAuthState::VncAuthVencryptX509None;
+        } else {
+            self.subauth = SubAuthState::VncAuthVencryptTlNone;
         }
         Ok(())
     }
@@ -339,11 +339,15 @@ impl VncSurface {
     /// Return the number of dirty area.
     pub fn update_server_image(&mut self) -> i32 {
         let mut dirty_num = 0;
-        let height = self.get_min_height();
+        let height = self.get_min_height() as usize;
         let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
+        let total_dirty_bits = height.checked_mul(g_bpl).unwrap_or(0);
+        let mut offset = self
+            .guest_dirty_bitmap
+            .find_next_bit(0)
+            .unwrap_or(total_dirty_bits);
 
-        let mut offset = self.guest_dirty_bitmap.find_next_bit(0).unwrap();
-        if offset >= (height as usize) * g_bpl {
+        if offset >= total_dirty_bits {
             return dirty_num;
         }
 
@@ -357,7 +361,16 @@ impl VncSurface {
             s_info.stride as usize,
         );
 
-        let line_buf = self.get_one_line_buf(&mut s_info, &mut g_info);
+        let mut line_buf = ptr::null_mut();
+        if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
+            line_buf = pixman_image_linebuf_create(
+                pixman_format_code_t::PIXMAN_x8r8g8b8,
+                get_image_width(self.server_image),
+            );
+            g_info.stride = s_info.stride;
+            g_info.length = g_info.stride;
+        }
+
         loop {
             let mut y = offset / g_bpl;
             let x = offset % g_bpl;
@@ -365,22 +378,13 @@ impl VncSurface {
                 (s_info.data as usize + y * s_info.stride as usize + x * cmp_bytes) as *mut u8;
 
             if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
-                unsafe {
-                    pixman_image_composite(
-                        pixman_op_t::PIXMAN_OP_SRC,
-                        self.guest_image,
-                        ptr::null_mut(),
-                        line_buf,
-                        0,
-                        y as i16,
-                        0,
-                        0,
-                        0,
-                        0,
-                        self.get_min_width() as u16,
-                        1,
-                    );
-                };
+                pixman_image_linebuf_fill(
+                    line_buf,
+                    self.guest_image,
+                    self.get_min_width(),
+                    0_i32,
+                    y as i32,
+                );
                 g_info.ptr = get_image_data(line_buf) as *mut u8;
             } else {
                 g_info.ptr = (g_info.data as usize + y * g_info.stride as usize) as *mut u8;
@@ -388,8 +392,11 @@ impl VncSurface {
             g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
             dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
             y += 1;
-            offset = self.guest_dirty_bitmap.find_next_bit(y * g_bpl).unwrap();
-            if offset >= (height as usize) * g_bpl {
+            offset = self
+                .guest_dirty_bitmap
+                .find_next_bit(y * g_bpl)
+                .unwrap_or(total_dirty_bits);
+            if offset >= total_dirty_bits {
                 break;
             }
         }
@@ -421,7 +428,7 @@ impl VncSurface {
             if !self
                 .guest_dirty_bitmap
                 .contain(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap()
+                .unwrap_or(false)
             {
                 x += 1;
                 g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
@@ -430,12 +437,13 @@ impl VncSurface {
             }
             self.guest_dirty_bitmap
                 .clear(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap();
+                .unwrap_or_else(|e| error!("Error occurrs during clearing the bitmap: {:?}", e));
             let mut _cmp_bytes = cmp_bytes;
             if (x + 1) * cmp_bytes > line_bytes as usize {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
             }
 
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             unsafe {
                 if libc::memcmp(
                     s_info.ptr as *mut libc::c_void,
@@ -462,35 +470,6 @@ impl VncSurface {
 
         count
     }
-
-    /// Transfer dirty data to buff in one line
-    ///
-    /// # Arguments
-    ///
-    /// * `s_info` - Info of Server image.
-    /// * `g_info` - Info of Guest image.
-    fn get_one_line_buf(
-        &self,
-        s_info: &mut ImageInfo,
-        g_info: &mut ImageInfo,
-    ) -> *mut pixman_image_t {
-        let mut line_buf = ptr::null_mut();
-        if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
-            line_buf = unsafe {
-                pixman_image_create_bits(
-                    pixman_format_code_t::PIXMAN_x8r8g8b8,
-                    get_image_width(self.server_image),
-                    1,
-                    ptr::null_mut(),
-                    0,
-                )
-            };
-            g_info.stride = s_info.stride;
-            g_info.length = g_info.stride;
-        }
-
-        line_buf
-    }
 }
 
 /// Set diry for each client.
@@ -501,14 +480,13 @@ impl VncSurface {
 fn set_dirty_for_each_clients(x: usize, y: usize) {
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let mut locked_handlers = server.client_handlers.lock().unwrap();
-    for client_io in locked_handlers.values_mut() {
-        let client = client_io.lock().unwrap().client.clone();
+    for client in locked_handlers.values_mut() {
         client
             .dirty_bitmap
             .lock()
             .unwrap()
             .set(x + y * VNC_BITMAP_WIDTH as usize)
-            .unwrap();
+            .unwrap_or_else(|e| error!("{:?}", e));
     }
 }
 
@@ -523,78 +501,30 @@ pub fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<()> {
-    if server.client_handlers.lock().unwrap().len() >= server.conn_limits {
-        stream.shutdown(Shutdown::Both).unwrap();
-        return Err(anyhow!(VncError::MakeConnectionFailed(String::from(
-            "Total connection is exceeding to limit."
-        ))));
-    }
+    info!("New Connection: {:?}", stream);
     stream
         .set_nonblocking(true)
         .expect("set nonblocking failed");
-    info!("New Connection: {:?}", stream);
 
     // Register event notifier for vnc client.
-    let client = Arc::new(ClientState::default());
+    let client = Arc::new(ClientState::new(addr.to_string()));
     let client_io = Arc::new(Mutex::new(ClientIoHandler::new(
         stream,
-        client,
+        client.clone(),
         server.clone(),
-        addr.to_string(),
     )));
-    client_io
-        .lock()
-        .unwrap()
-        .write_msg("RFB 003.008\n".to_string().as_bytes());
-
+    vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
+    vnc_flush(&client);
     server
         .client_handlers
         .lock()
         .unwrap()
-        .insert(addr.to_string(), client_io.clone());
+        .insert(addr.to_string(), client);
 
     EventLoop::update_event(EventNotifierHelper::internal_notifiers(client_io), None)?;
 
     update_server_surface(server);
-    vnc_refresh_notify(server);
     Ok(())
-}
-
-/// Refresh server_image to guest_image.
-fn vnc_refresh() {
-    if VNC_SERVERS.lock().unwrap().is_empty() {
-        return;
-    }
-    let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    if server.client_handlers.lock().unwrap().is_empty() {
-        return;
-    }
-
-    let dirty_num = server.vnc_surface.lock().unwrap().update_server_image();
-    let mut locked_update_interval = server.update_interval.lock().unwrap();
-    if dirty_num != 0 {
-        *locked_update_interval /= 2;
-        if *locked_update_interval < DISPLAY_UPDATE_INTERVAL_DEFAULT {
-            *locked_update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT
-        }
-    } else {
-        *locked_update_interval += DISPLAY_UPDATE_INTERVAL_INC;
-        if *locked_update_interval > DISPLAY_UPDATE_INTERVAL_MAX {
-            *locked_update_interval = DISPLAY_UPDATE_INTERVAL_MAX;
-        }
-    }
-
-    let mut _rects: i32 = 0;
-    let mut locked_handlers = server.client_handlers.lock().unwrap();
-    for client_io in locked_handlers.values_mut() {
-        let client = client_io.lock().unwrap().client.clone();
-        _rects += get_rects(&client, &server, dirty_num);
-    }
-}
-
-/// Refresh event.
-pub fn vnc_refresh_notify(server: &Arc<VncServer>) {
-    server.refresh_fd.lock().unwrap().write(1).unwrap();
 }
 
 /// make configuration for VncServer
@@ -609,24 +539,12 @@ pub fn make_server_config(
     object: &ObjectConfig,
 ) -> Result<()> {
     // Set security config.
-    if let Err(e) = server
+    server
         .security_type
-        .lock()
-        .unwrap()
-        .set_security_config(vnc_cfg, object)
-    {
-        return Err(e);
-    }
+        .borrow_mut()
+        .set_security_config(vnc_cfg, object)?;
     // Set auth type.
-    if let Err(e) = server.security_type.lock().unwrap().set_auth() {
-        return Err(e);
-    }
-    let mut locked_keysym2keycode = server.keysym2keycode.lock().unwrap();
-    // Mapping ASCII to keycode.
-    for &(k, v) in KEYSYM2KEYCODE.iter() {
-        locked_keysym2keycode.insert(k, v);
-    }
-    drop(locked_keysym2keycode);
+    server.security_type.borrow_mut().set_auth()?;
 
     Ok(())
 }

@@ -73,7 +73,7 @@ struct VfioBar {
 }
 
 struct GsiMsiRoute {
-    irq_fd: Option<EventFd>,
+    irq_fd: Option<Arc<EventFd>>,
     gsi: i32,
     nr: u32,
 }
@@ -263,7 +263,7 @@ impl VfioPciDevice {
                 table_offset: (table & MSIX_TABLE_OFFSET) as u64,
                 table_size: (enteries * MSIX_TABLE_ENTRY_SIZE) as u64,
             },
-            enteries: enteries as u16,
+            enteries,
             vfio_irq,
         })
     }
@@ -389,7 +389,7 @@ impl VfioPciDevice {
             let bar_region = if i == table_bar {
                 region
                     .add_subregion(
-                        Region::init_io_region(table_size as u64, table_ops.clone()),
+                        Region::init_io_region(table_size, table_ops.clone()),
                         table_offset,
                     )
                     .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
@@ -456,7 +456,7 @@ impl VfioPciDevice {
             table_size,
             table_size / 128,
             cap_offset as u16,
-            self.dev_id.load(Ordering::Acquire),
+            self.dev_id.clone(),
         )));
         self.pci_config.msix = Some(msix.clone());
 
@@ -505,7 +505,7 @@ impl VfioPciDevice {
             let mut gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
             if gsi_route.irq_fd.is_none() {
                 let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-                gsi_route.irq_fd = Some(irq_fd);
+                gsi_route.irq_fd = Some(Arc::new(irq_fd));
             }
             if gsi_route.gsi == -1 {
                 gsi_route.gsi = match KVM_FDS
@@ -716,7 +716,7 @@ impl VfioPciDevice {
         if gsi_routes.len() == 0 {
             let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
             let gsi_route = GsiMsiRoute {
-                irq_fd: Some(irq_fd),
+                irq_fd: Some(Arc::new(irq_fd)),
                 gsi: -1,
                 nr: 0,
             };
@@ -755,8 +755,10 @@ impl VfioPciDevice {
     fn vfio_unregister_all_irqfd(&mut self) -> Result<()> {
         let routes = self.gsi_msi_routes.lock().unwrap();
         for route in routes.iter() {
-            if let Some(fd) = &route.irq_fd.as_ref() {
-                KVM_FDS.load().unregister_irqfd(fd, route.gsi as u32)?;
+            if let Some(fd) = route.irq_fd.as_ref() {
+                KVM_FDS
+                    .load()
+                    .unregister_irqfd(fd.as_ref(), route.gsi as u32)?;
 
                 // No need to release gsi.
                 if route.gsi == -1 {

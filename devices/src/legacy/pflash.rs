@@ -24,8 +24,6 @@ use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 pub struct PFlash {
     /// Has backend file or not.
     has_backend: bool,
-    /// Number of blocks.
-    blk_num: u32,
     /// Length of block.
     block_len: u32,
     /// The width of PFlash array for vm.
@@ -180,7 +178,6 @@ impl PFlash {
             bank_width,
             // device id for Intel PFlash.
             ident: [0x89, 0x18, 0x00, 0x00],
-            blk_num: blocks_per_device,
             device_width,
             max_device_width: device_width,
             write_cycle: 0,
@@ -298,7 +295,7 @@ impl PFlash {
             }
             // Repeat data for PFlash device which supports x16-mode but works in x8-mode.
             for i in 1..self.max_device_width {
-                resp = deposit_u32(resp, 8 * i as u32, 8, self.cfi_table[index as usize] as u32)
+                resp = deposit_u32(resp, 8 * i, 8, self.cfi_table[index as usize] as u32)
                     .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
             }
         }
@@ -321,9 +318,9 @@ impl PFlash {
         }
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + size as u64 > mr.size() as u64 {
+        if offset + size as u64 > mr.size() {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
-                mr.size() as u64,
+                mr.size(),
                 offset,
                 size as u64
             )));
@@ -350,7 +347,7 @@ impl PFlash {
     fn read_data(&mut self, data: &mut [u8], offset: u64) -> Result<()> {
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() as u64 {
+        if offset + data.len() as u64 > mr.size() {
             return Err(anyhow!(LegacyError::PFlashReadOverflow(
                 mr.size(),
                 offset,
@@ -359,9 +356,8 @@ impl PFlash {
         }
         let host_addr = mr.get_host_address().unwrap();
         // Safe because host_addr of the region is local allocated and sanity has been checked.
-        let src = unsafe {
-            std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
-        };
+        let src =
+            unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         data.as_mut()
             .write_all(src)
             .with_context(|| "Failed to read data from PFlash Rom")?;
@@ -372,7 +368,7 @@ impl PFlash {
     fn write_data(&mut self, data: &[u8], offset: u64) -> Result<()> {
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() as u64 {
+        if offset + data.len() as u64 > mr.size() {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
@@ -381,9 +377,8 @@ impl PFlash {
         }
         let host_addr = mr.get_host_address().unwrap();
         // Safe because host_addr of the region is local allocated and sanity has been checked.
-        let mut dst = unsafe {
-            std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
-        };
+        let mut dst =
+            unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         dst.write_all(data)
             .with_context(|| "Failed to write data to PFlash Rom")?;
 

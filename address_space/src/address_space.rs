@@ -10,18 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+
+use migration::{migration::Migratable, MigrationManager};
 use util::byte_code::ByteCode;
+use util::test_helper::is_test_enabled;
 
 use crate::{
     AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
     RegionIoEventFd, RegionType,
 };
-use anyhow::{anyhow, Context, Result};
 
 /// Contains an array of `FlatRange`.
 #[derive(Default, Clone, Debug)]
@@ -43,17 +46,6 @@ pub struct RegionCache {
     pub host_base: u64,
     pub start: u64,
     pub end: u64,
-}
-
-impl Default for RegionCache {
-    fn default() -> Self {
-        RegionCache {
-            reg_type: RegionType::Ram,
-            host_base: 0,
-            start: 0,
-            end: 0,
-        }
-    }
 }
 
 type ListenerObj = Arc<Mutex<dyn Listener>>;
@@ -233,7 +225,7 @@ impl AddressSpace {
                         }
                         old_idx += 1;
                         continue;
-                    } else if old_r.addr_range == new_r.addr_range && old_r == new_r {
+                    } else if old_r == new_r {
                         old_idx += 1;
                         new_idx += 1;
                         continue;
@@ -284,7 +276,14 @@ impl AddressSpace {
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
             let new_fd = new_evtfds.get(new_idx);
-            if old_fd.is_some() && (new_fd.is_none() || old_fd.unwrap().before(new_fd.unwrap())) {
+
+            if old_fd == new_fd {
+                old_idx += 1;
+                new_idx += 1;
+                continue;
+            }
+            // Delete old_fd, but do not delete it if it's after new_fd, as it may match later.
+            if old_fd.is_some() && (new_fd.is_none() || !old_fd.unwrap().after(new_fd.unwrap())) {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -294,9 +293,9 @@ impl AddressSpace {
                         ))
                     })?;
                 old_idx += 1;
-            } else if new_fd.is_some()
-                && (old_fd.is_none() || new_fd.unwrap().before(old_fd.unwrap()))
-            {
+            }
+            // Add new_fd, but do not add it if it's after old_fd, as it may match later.
+            if new_fd.is_some() && (old_fd.is_none() || !new_fd.unwrap().after(old_fd.unwrap())) {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -305,9 +304,6 @@ impl AddressSpace {
                             RegionType::IO,
                         ))
                     })?;
-                new_idx += 1;
-            } else {
-                old_idx += 1;
                 new_idx += 1;
             }
         }
@@ -324,7 +320,7 @@ impl AddressSpace {
         for fr in self.flat_view.load().0.iter() {
             let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region).0;
             for evtfd in fr.owner.ioeventfds().iter() {
-                let mut evtfd_clone = evtfd.try_clone()?;
+                let mut evtfd_clone = evtfd.clone();
                 evtfd_clone.addr_range.base =
                     evtfd_clone.addr_range.base.unchecked_add(region_base);
                 if fr
@@ -358,6 +354,28 @@ impl AddressSpace {
                 .get_host_address()
                 .map(|host| host + range.offset_in_region + offset)
         })
+    }
+
+    /// Return the host address according to the given `GuestAddress` from cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// * `cache` - The related region cache.
+    pub fn get_host_address_from_cache(
+        &self,
+        addr: GuestAddress,
+        cache: &Option<RegionCache>,
+    ) -> Option<u64> {
+        if cache.is_none() {
+            return self.get_host_address(addr);
+        }
+        let region_cache = cache.unwrap();
+        if addr.0 >= region_cache.start && addr.0 < region_cache.end {
+            Some(region_cache.host_base + addr.0 - region_cache.start)
+        } else {
+            self.get_host_address(addr)
+        }
     }
 
     /// Check if the GuestAddress is in one of Ram region.
@@ -456,6 +474,40 @@ impl AddressSpace {
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;
+
+        if is_test_enabled() {
+            for evtfd in self.ioeventfds.lock().unwrap().iter() {
+                if addr != evtfd.addr_range.base || count != evtfd.addr_range.size {
+                    continue;
+                }
+                if !evtfd.data_match {
+                    evtfd.fd.write(1).unwrap();
+                    return Ok(());
+                }
+
+                let mut buf = Vec::new();
+                src.read_to_end(&mut buf).unwrap();
+
+                if buf.len() <= 8 {
+                    let data = u64::from_bytes(buf.as_slice()).unwrap();
+                    if *data == evtfd.data {
+                        evtfd.fd.write(1).unwrap();
+                        return Ok(());
+                    }
+                }
+
+                return fr.owner
+                    .write(&mut buf.as_slice(), region_base, offset_in_region, count)
+                    .with_context(||
+                        format!(
+                            "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
+                            region_base.raw_value(),
+                            offset_in_region,
+                            count
+                        ));
+            }
+        }
+
         fr.owner
             .write(src, region_base, offset_in_region, count)
             .with_context(||
@@ -491,6 +543,9 @@ impl AddressSpace {
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
+        // Mark vmm dirty page manually if live migration is active.
+        MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
+
         let mut dst = unsafe {
             std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
@@ -850,7 +905,7 @@ mod test {
     #[test]
     fn test_update_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, std::mem::size_of::<u32>() as u64)),
             data_match: true,
             data: 64_u64,
@@ -912,7 +967,7 @@ mod test {
     #[test]
     fn test_subregion_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, 4)),
             data_match: true,
             data: 0_64,

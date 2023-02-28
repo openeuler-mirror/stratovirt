@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 use super::{error::ConfigError, pci_args_check};
 use crate::config::get_chardev_socket_path;
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH,
+    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
+
+/// Max virtqueue size of each virtqueue.
+pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetDevcfg {
@@ -98,12 +102,8 @@ pub struct NetworkInterfaceConfig {
     pub queues: u16,
     pub mq: bool,
     pub socket_path: Option<String>,
-}
-
-impl NetworkInterfaceConfig {
-    pub fn set_mac(&mut self, mac_addr: String) {
-        self.mac = Some(mac_addr);
-    }
+    /// All queues of a net device have the same queue size now.
+    pub queue_size: u16,
 }
 
 impl Default for NetworkInterfaceConfig {
@@ -119,6 +119,7 @@ impl Default for NetworkInterfaceConfig {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -156,6 +157,20 @@ impl ConfigCheck for NetworkInterfaceConfig {
                 "socket path".to_string(),
                 MAX_PATH_LENGTH
             )));
+        }
+
+        if self.queue_size < DEFAULT_VIRTQUEUE_SIZE || self.queue_size > MAX_QUEUE_SIZE_NET {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "queue size of net device".to_string(),
+                DEFAULT_VIRTQUEUE_SIZE as u64,
+                true,
+                MAX_QUEUE_SIZE_NET as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("queue size of net device should be power of 2!");
         }
 
         Ok(())
@@ -197,9 +212,8 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.ifname = ifname;
     }
     if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
-        let queues = queue_pairs * 2;
-
-        if !is_netdev_queues_valid(queues) {
+        let queues = queue_pairs.checked_mul(2);
+        if queues.is_none() || !is_netdev_queues_valid(queues.unwrap()) {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "number queues of net device".to_string(),
                 1,
@@ -209,7 +223,7 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
             )));
         }
 
-        net.queues = queues;
+        net.queues = queues.unwrap();
     }
 
     if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
@@ -218,7 +232,10 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.tap_fds = Some(tap_fds);
     }
     if let Some(fds) = &net.tap_fds {
-        let fds_num = (fds.len() * 2) as u16;
+        let fds_num =
+            fds.len()
+                .checked_mul(2)
+                .ok_or_else(|| anyhow!("Invalid fds number {}", fds.len()))? as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
         }
@@ -240,7 +257,11 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.vhost_fds = Some(vhost_fds);
     }
     if let Some(fds) = &net.vhost_fds {
-        let fds_num = (fds.len() * 2) as u16;
+        let fds_num = fds
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| anyhow!("Invalid vhostfds number {}", fds.len()))?
+            as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
         }
@@ -270,7 +291,8 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         .push("addr")
         .push("multifunction")
         .push("mac")
-        .push("iothread");
+        .push("iothread")
+        .push("queue-size");
 
     cmd_parser.parse(net_config)?;
     pci_args_check(&cmd_parser)?;
@@ -292,6 +314,9 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     }
     netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
     netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
+    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
+        netdevinterfacecfg.queue_size = queue_size;
+    }
 
     if let Some(netcfg) = &vm_config.netdevs.remove(&netdev) {
         netdevinterfacecfg.id = netid;
@@ -312,13 +337,18 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
 }
 
 pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<NetDevcfg> {
+    let queues = args
+        .queues
+        .unwrap_or(1)
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("Invalid 'queues' value"))?;
     let mut config = NetDevcfg {
         id: args.id,
         tap_fds: None,
         vhost_type: None,
         vhost_fds: None,
         ifname: String::new(),
-        queues: args.queues.unwrap_or(1) * 2,
+        queues,
         chardev: args.chardev,
     };
 
@@ -425,6 +455,46 @@ impl VmConfig {
             bail!("Netdev {} not found", id);
         }
         Ok(())
+    }
+    /// Add 'net devices' to `VmConfig devices`.
+    pub fn add_net_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
+        let mut device_info = args.driver.clone();
+
+        device_info = format!("{},id={}", device_info, args.id);
+
+        if let Some(netdev) = &args.netdev {
+            device_info = format!("{},netdev={}", device_info, netdev);
+        }
+
+        if let Some(mac) = &args.mac {
+            device_info = format!("{},mac={}", device_info, mac);
+        }
+
+        if let Some(addr) = &args.addr {
+            device_info = format!("{},addr={}", device_info, addr);
+        }
+
+        if let Some(bus) = &args.bus {
+            device_info = format!("{},bus={}", device_info, bus);
+        }
+
+        if args.multifunction.is_some() {
+            if args.multifunction.unwrap() {
+                device_info = format!("{},multifunction=on", device_info);
+            } else {
+                device_info = format!("{},multifunction=off", device_info);
+            }
+        }
+
+        if let Some(iothread) = &args.iothread {
+            device_info = format!("{},iothread={}", device_info, iothread);
+        }
+
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+
+        self.devices.push((args.driver.clone(), device_info));
     }
 }
 

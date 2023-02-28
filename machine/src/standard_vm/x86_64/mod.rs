@@ -17,12 +17,11 @@ mod syscall;
 use crate::error::MachineError;
 use log::error;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr};
+use vmm_sys_util::eventfd::EventFd;
 
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
@@ -39,13 +38,13 @@ use devices::legacy::{
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
-    MachineLifecycle, MigrateInterface,
+    MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
@@ -53,7 +52,6 @@ use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
-use usb::bus::BusDeviceMap;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
@@ -115,19 +113,21 @@ pub struct StdMachine {
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
-    power_button: EventFd,
+    power_button: Arc<EventFd>,
+    /// Reset request, handle VM `Reset` event.
+    reset_req: Arc<EventFd>,
     /// All configuration information of virtual machine.
-    vm_config: Mutex<VmConfig>,
+    vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
     numa_nodes: Option<NumaNodes>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
-    /// Bus device used to attach other devices. Only USB controller used now.
-    bus_device: BusDeviceMap,
     /// Scsi Controller List.
     scsi_cntlr_list: ScsiCntlrMap,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl StdMachine {
@@ -171,15 +171,18 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+            power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?,
-            vm_config: Mutex::new(vm_config.clone()),
+            })?),
+            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("reset request".to_string()))
+            })?),
+            vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
-            bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -187,20 +190,29 @@ impl StdMachine {
         let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            Result::with_context(cpu.kick(), || format!("Failed to kick vcpu{}", cpu_index))?;
+            cpu.pause()
+                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
             cpu.set_to_boot_state();
         }
 
-        Result::with_context(locked_vm.reset_all_devices(), || {
-            "Fail to reset all devices"
-        })?;
-        Result::with_context(locked_vm.reset_fwcfg_boot_order(), || {
-            "Fail to update boot order information to FwCfg device"
-        })?;
+        locked_vm
+            .reset_all_devices()
+            .with_context(|| "Fail to reset all devices")?;
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .with_context(|| "Fail to update boot order information to FwCfg device")?;
+
+        if QmpChannel::is_connected() {
+            let reset_msg = qmp_schema::Reset { guest: true };
+            event!(Reset; reset_msg);
+        }
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            Result::with_context(cpu.reset(), || format!("Failed to reset vcpu{}", cpu_index))?;
+            cpu.reset()
+                .with_context(|| format!("Failed to reset vcpu{}", cpu_index))?;
+            cpu.resume()
+                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
 
         Ok(())
@@ -224,16 +236,10 @@ impl StdMachine {
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
 
-        ioctl_iow_nr!(
-            KVM_SET_IDENTITY_MAP_ADDR,
-            kvm_bindings::KVMIO,
-            0x48,
-            std::os::raw::c_ulong
-        );
-        // Safe because the following ioctl only sets identity map address to KVM.
-        unsafe {
-            vmm_sys_util::ioctl::ioctl_with_ref(vm_fd, KVM_SET_IDENTITY_MAP_ADDR(), &identity_addr);
-        }
+        vm_fd
+            .set_identity_map_address(identity_addr)
+            .with_context(|| anyhow!(MachineError::SetIdentityMapAddr))?;
+
         // Page table takes 1 page, TSS takes the following 3 pages.
         vm_fd
             .set_tss_address((identity_addr + 0x1000) as usize)
@@ -252,12 +258,12 @@ impl StdMachine {
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
-        self.register_reset_event(&ich.reset_req, vm)
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone(), self.reset_req.clone())?;
+        self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
-        self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
+        self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
-        PciDevOps::realize(ich)?;
+        ich.realize()?;
         Ok(())
     }
 }
@@ -292,7 +298,7 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
-        PciDevOps::realize(mch)?;
+        mch.realize()?;
         Ok(())
     }
 
@@ -312,10 +318,6 @@ impl StdMachineOps for StdMachine {
         self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
-    }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.vm_state
     }
 
     fn get_cpu_topo(&self) -> &CpuTopology {
@@ -418,6 +420,10 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
+    }
+
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
@@ -432,12 +438,7 @@ impl MachineOps for StdMachine {
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        let mut vcpu_fds = vec![];
-        for cpu_id in 0..nr_cpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
-        }
+        StdMachine::arch_init()?;
 
         locked_vm
             .init_pci_host()
@@ -466,7 +467,6 @@ impl MachineOps for StdMachine {
             vm.clone(),
             nr_cpus,
             &topology,
-            &vcpu_fds,
             &boot_config,
         )?);
 
@@ -476,14 +476,13 @@ impl MachineOps for StdMachine {
                 .with_context(|| "Failed to create ACPI tables")?;
         }
 
-        StdMachine::arch_init()?;
-        locked_vm.register_power_event(&locked_vm.power_button)?;
+        locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
         locked_vm
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        MigrationManager::register_vm_config(vm_config);
+        MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
         MigrationManager::register_kvm_instance(
             vm_state::KvmDeviceState::descriptor(),
@@ -503,13 +502,7 @@ impl MachineOps for StdMachine {
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         for config in configs_vec {
-            let mut fd = OpenOptions::new()
-                .read(true)
-                .write(!config.read_only)
-                .open(&config.path_on_host)
-                .with_context(|| {
-                    anyhow!(StandardVmError::OpenFileErr(config.path_on_host.clone()))
-                })?;
+            let mut fd = self.fetch_drive_file(&config.path_on_host)?;
             let pfl_size = fd.metadata().unwrap().len();
 
             if config.unit == 0 {
@@ -563,15 +556,19 @@ impl MachineOps for StdMachine {
     }
 
     fn run(&self, paused: bool) -> Result<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
         &self.sys_mem
     }
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig> {
-        &self.vm_config
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
+        self.vm_config.clone()
+    }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
     }
 
     fn get_migrate_info(&self) -> Incoming {
@@ -599,10 +596,6 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
-    }
-
-    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
-        Some(&self.bus_device)
     }
 
     fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
@@ -646,7 +639,7 @@ impl AcpiBuilder for StdMachine {
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSTD table to loader")?;
-        Ok(dsdt_begin as u64)
+        Ok(dsdt_begin)
     }
 
     fn build_madt_table(
@@ -683,7 +676,7 @@ impl AcpiBuilder for StdMachine {
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .with_context(|| "Fail to add DSTD table to loader")?;
-        Ok(madt_begin as u64)
+        Ok(madt_begin)
     }
 
     fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
@@ -798,7 +791,7 @@ impl AcpiBuilder for StdMachine {
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
-        Ok(srat_begin as u64)
+        Ok(srat_begin)
     }
 }
 
@@ -830,18 +823,24 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
-        self.power_button.write(1).unwrap();
+        if self.power_button.write(1).is_err() {
+            error!("X86 standard vm write power button failed");
+            return false;
+        }
+        true
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.reset_req.write(1).is_err() {
+            error!("X86 standard vm write reset request failed");
+            return false;
+        }
         true
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
-            &self.cpus,
-            &mut self.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        )
-        .is_ok()
+        self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
+            .is_ok()
     }
 }
 
@@ -919,6 +918,7 @@ impl MigrateInterface for StdMachine {
 
 impl MachineInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
+impl MachineTestInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {

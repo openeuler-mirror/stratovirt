@@ -151,10 +151,10 @@ fn write_cgroup_value(path: &Path, file: &str, value: &str) -> Result<()> {
     }
 
     let mut path_to_write = path.to_path_buf();
-    path_to_write.push(&file);
+    path_to_write.push(file);
     fs::write(&path_to_write, format!("{}\n", value)).with_context(|| {
         OzoneError::WriteError(
-            (&path_to_write.to_string_lossy()).to_string(),
+            path_to_write.to_string_lossy().to_string(),
             value.to_string(),
         )
     })?;
@@ -191,7 +191,7 @@ fn inherit_config(path: &Path, file: &str) -> Result<()> {
             }
             fs::write(upper_file.clone(), format!("{}\n", upper_value)).with_context(|| {
                 OzoneError::WriteError(
-                    (&upper_file.to_string_lossy()).to_string(),
+                    upper_file.to_string_lossy().to_string(),
                     upper_value.to_string(),
                 )
             })?;

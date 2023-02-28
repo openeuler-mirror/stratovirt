@@ -10,9 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
-mod aarch64;
+pub mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
@@ -23,10 +22,16 @@ pub use error::StandardVmError;
 pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
-use util::aio::AIO_NATIVE;
-use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use util::aio::AioEngine;
+use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
+#[cfg(not(target_env = "musl"))]
+use vnc::{
+    input::{key_event, point_event},
+    vnc::qmp_query_vnc,
+};
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -34,7 +39,8 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
-use std::sync::{Arc, Condvar, Mutex};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
 use crate::MachineOps;
@@ -44,6 +50,9 @@ use acpi::{
     AcpiRsdp, AcpiTable, AmlBuilder, TableLoader, ACPI_RSDP_FILE, ACPI_TABLE_FILE,
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
 };
+use address_space::{
+    AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
+};
 pub use anyhow::Result;
 use anyhow::{bail, Context};
 use cpu::{CpuTopology, CPU};
@@ -51,7 +60,7 @@ use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    MAX_VIRTIO_QUEUE,
+    DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -174,8 +183,6 @@ trait StdMachineOps: AcpiBuilder {
         bail!("Not implemented");
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
-
     fn get_cpu_topo(&self) -> &CpuTopology;
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
@@ -190,20 +197,18 @@ trait StdMachineOps: AcpiBuilder {
     /// * `clone_vm` - Reference of the StdMachine.
     fn register_reset_event(
         &self,
-        reset_req: &EventFd,
+        reset_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
-        let reset_req = reset_req.try_clone().unwrap();
         let reset_req_fd = reset_req.as_raw_fd();
-        let reset_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = reset_req.read().unwrap();
-                if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
-                    error!("Fail to reboot standard VM, {:?}", e);
-                }
+        let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            read_fd(reset_req_fd);
+            if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
+                error!("Fail to reboot standard VM, {:?}", e);
+            }
 
-                None
-            })));
+            None
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             reset_req_fd,
@@ -219,24 +224,17 @@ trait StdMachineOps: AcpiBuilder {
     #[cfg(target_arch = "x86_64")]
     fn register_acpi_shutdown_event(
         &self,
-        shutdown_req: &EventFd,
+        shutdown_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
-        let shutdown_req = shutdown_req.try_clone().unwrap();
+        use util::loop_context::gen_delete_notifiers;
+
         let shutdown_req_fd = shutdown_req.as_raw_fd();
-        let shutdown_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = shutdown_req.read().unwrap();
-                StdMachine::handle_shutdown_request(&clone_vm);
-                let notifiers = vec![EventNotifier::new(
-                    NotifierOperation::Delete,
-                    shutdown_req_fd,
-                    None,
-                    EventSet::IN,
-                    Vec::new(),
-                )];
-                Some(notifiers)
-            })));
+        let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = shutdown_req.read().unwrap();
+            StdMachine::handle_shutdown_request(&clone_vm);
+            Some(gen_delete_notifiers(&[shutdown_req_fd]))
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             shutdown_req_fd,
@@ -637,7 +635,7 @@ trait AcpiBuilder {
 
         let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
             .with_context(|| "Fail to add SLIT table to loader")?;
-        Ok(slit_begin as u64)
+        Ok(slit_begin)
     }
 
     /// Build ACPI XSDT table, returns the offset of ACPI XSDT table in `acpi_data`.
@@ -749,9 +747,11 @@ impl StdMachine {
         } else {
             bail!("Drive not set");
         };
-
-        let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
-        let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
+        let blk = if let Some(conf) = locked_vmconfig.drives.get(drive) {
             let dev = BlkDevConfig {
                 id: args.id.clone(),
                 path_on_host: conf.path_on_host.clone(),
@@ -766,13 +766,16 @@ impl StdMachine {
                 boot_index: args.boot_index,
                 chardev: None,
                 socket_path: None,
-                aio: conf.aio.clone(),
+                aio: conf.aio,
+                queue_size,
             };
             dev.check()?;
             dev
         } else {
             bail!("Drive not found");
         };
+        locked_vmconfig.add_blk_device_config(args);
+        drop(locked_vmconfig);
 
         if let Some(bootindex) = args.boot_index {
             self.check_bootindex(bootindex)
@@ -780,7 +783,7 @@ impl StdMachine {
         }
 
         let blk_id = blk.id.clone();
-        let blk = Arc::new(Mutex::new(Block::new(blk)));
+        let blk = Arc::new(Mutex::new(Block::new(blk, self.get_drive_files())));
         let pci_dev = self
             .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .with_context(|| "Failed to add virtio pci block device")?;
@@ -802,12 +805,15 @@ impl StdMachine {
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
         let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let dev_cfg = ScsiCntlrConfig {
             id: args.id.clone(),
             iothread: args.iothread.clone(),
             queues: args.queues.unwrap_or_else(|| {
                 VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
             }) as u32,
+            boot_prefix: None,
+            queue_size,
         };
         dev_cfg.check()?;
 
@@ -822,15 +828,61 @@ impl StdMachine {
             bail!("No scsi controller list found");
         }
 
-        let result = self.add_virtio_pci_device(&args.id, pci_bdf, device, multifunction, false);
-        if let Err(ref e) = result {
+        let result =
+            self.add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false);
+        let pci_dev = if let Err(ref e) = result {
+            // SAFETY: unwrap is safe because Standard machine always make sure it not return null.
             self.get_scsi_cntlr_list()
                 .unwrap()
                 .lock()
                 .unwrap()
                 .remove(&bus_name);
             bail!("Failed to add virtio scsi controller, error is {:?}", e);
-        }
+        } else {
+            result.unwrap()
+        };
+
+        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
+
+        Ok(())
+    }
+
+    fn plug_vhost_user_blk_pci(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let vm_config = self.get_vm_config();
+        let locked_vmconfig = vm_config.lock().unwrap();
+        let chardev = if let Some(dev) = &args.chardev {
+            dev
+        } else {
+            bail!("Chardev not set");
+        };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
+        let socket_path = self
+            .get_socket_path(&locked_vmconfig, chardev.to_string())
+            .with_context(|| "Failed to get socket path")?;
+        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
+        let dev = BlkDevConfig {
+            id: args.id.clone(),
+            queues: args.queues.unwrap_or_else(|| {
+                VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
+            }),
+            boot_index: args.boot_index,
+            chardev: Some(chardev.to_string()),
+            socket_path,
+            queue_size,
+            ..BlkDevConfig::default()
+        };
+
+        dev.check()?;
+        drop(locked_vmconfig);
+
+        let blk = Arc::new(Mutex::new(VhostUser::Block::new(&dev, self.get_sys_mem())));
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction, true)
+            .with_context(|| "Failed to add vhost user blk pci device")?;
 
         Ok(())
     }
@@ -875,13 +927,14 @@ impl StdMachine {
         } else {
             bail!("Netdev not set");
         };
-
-        let vm_config = self.get_vm_config().lock().unwrap();
-        let dev = if let Some(conf) = vm_config.netdevs.get(netdev) {
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let dev = if let Some(conf) = locked_vmconfig.netdevs.get(netdev) {
             let mut socket_path: Option<String> = None;
             if let Some(chardev) = &conf.chardev {
                 socket_path = self
-                    .get_socket_path(&vm_config, (&chardev).to_string())
+                    .get_socket_path(&locked_vmconfig, (&chardev).to_string())
                     .with_context(|| "Failed to get socket path")?;
             }
             let dev = NetworkInterfaceConfig {
@@ -895,13 +948,15 @@ impl StdMachine {
                 queues: conf.queues,
                 mq: conf.queues > 2,
                 socket_path,
+                queue_size,
             };
             dev.check()?;
             dev
         } else {
             bail!("Netdev not found");
         };
-        drop(vm_config);
+        locked_vmconfig.add_net_device_config(args);
+        drop(locked_vmconfig);
 
         if dev.vhost_type.is_some() {
             let mut need_irqfd = false;
@@ -930,20 +985,17 @@ impl StdMachine {
         bdf: &PciBdf,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
-        let host;
-        let sysfsdev;
-
-        if args.host.is_none() {
-            host = "";
+        let host = if args.host.is_none() {
+            ""
         } else {
-            host = args.host.as_ref().unwrap();
-        }
+            args.host.as_ref().unwrap()
+        };
 
-        if args.sysfsdev.is_none() {
-            sysfsdev = "";
+        let sysfsdev = if args.sysfsdev.is_none() {
+            ""
         } else {
-            sysfsdev = args.sysfsdev.as_ref().unwrap();
-        }
+            args.sysfsdev.as_ref().unwrap()
+        };
 
         if args.host.is_none() && args.sysfsdev.is_none() {
             bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");
@@ -1056,6 +1108,19 @@ impl DeviceInterface for StdMachine {
         )
     }
 
+    fn query_vnc(&self) -> Response {
+        #[cfg(not(target_env = "musl"))]
+        if let Some(vnc_info) = qmp_query_vnc() {
+            return Response::create_response(serde_json::to_value(&vnc_info).unwrap(), None);
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "The service of VNC is not supported".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         if let Err(e) = self.check_device_id_existed(&args.id) {
             return Response::create_error_response(
@@ -1097,7 +1162,16 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-
+            "vhost-user-blk-pci" => {
+                if let Err(e) = self.plug_vhost_user_blk_pci(&pci_bdf, args.as_ref()) {
+                    error!("{:?}", e);
+                    let err_str = format!("Failed to add vhost user blk pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
             "virtio-net-pci" => {
                 if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
                     error!("{:?}", e);
@@ -1171,6 +1245,10 @@ impl DeviceInterface for StdMachine {
                     let dev_id = locked_dev.name();
                     drop(locked_pci_host);
                     self.del_bootindex_devices(&dev_id);
+                    let vm_config = self.get_vm_config();
+                    let mut locked_config = vm_config.lock().unwrap();
+                    locked_config.del_device_by_id(device_id);
+                    drop(locked_config);
                     Response::create_empty_response()
                 }
                 Err(e) => Response::create_error_response(
@@ -1193,19 +1271,20 @@ impl DeviceInterface for StdMachine {
         };
         let config = DriveConfig {
             id: args.node_name,
-            path_on_host: args.file.filename,
+            path_on_host: args.file.filename.clone(),
             read_only,
             direct,
             iops: args.iops,
             // TODO Add aio option by qmp, now we set it based on "direct".
             aio: if direct {
-                Some(String::from(AIO_NATIVE))
+                AioEngine::Native
             } else {
-                None
+                AioEngine::Off
             },
         };
 
         if let Err(e) = config.check() {
+            error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1213,6 +1292,15 @@ impl DeviceInterface for StdMachine {
         }
         // Check whether path is valid after configuration check
         if let Err(e) = config.check_path() {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        // Register drive backend file for hotplug drive.
+        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+            error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1225,10 +1313,15 @@ impl DeviceInterface for StdMachine {
             .add_drive_with_config(config)
         {
             Ok(()) => Response::create_empty_response(),
-            Err(e) => Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            ),
+            Err(e) => {
+                error!("{:?}", e);
+                // It's safe to unwrap as the path has been registered.
+                self.unregister_drive_file(&args.file.filename).unwrap();
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
     }
 
@@ -1239,7 +1332,11 @@ impl DeviceInterface for StdMachine {
             .unwrap()
             .del_drive_by_id(&node_name)
         {
-            Ok(()) => Response::create_empty_response(),
+            Ok(path) => {
+                // It's safe to unwrap as the path has been registered.
+                self.unregister_drive_file(&path).unwrap();
+                Response::create_empty_response()
+            }
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1334,4 +1431,204 @@ impl DeviceInterface for StdMachine {
             Response::create_error_response(err_resp, None)
         }
     }
+
+    fn update_region(&mut self, args: UpdateRegionArgument) -> Response {
+        #[derive(Default)]
+        struct DummyDevice {
+            head: u64,
+        }
+
+        impl DummyDevice {
+            fn read(&mut self, data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
+                if data.len() != std::mem::size_of::<u64>() {
+                    return false;
+                }
+
+                for (i, data) in data.iter_mut().enumerate().take(std::mem::size_of::<u64>()) {
+                    *data = (self.head >> (8 * i)) as u8;
+                }
+                true
+            }
+
+            fn write(&mut self, data: &[u8], _addr: GuestAddress, _offset: u64) -> bool {
+                if data.len() != std::mem::size_of::<u64>() {
+                    return false;
+                }
+
+                let ptr: *const u8 = data.as_ptr();
+                let ptr: *const u64 = ptr as *const u64;
+                self.head = unsafe { *ptr } * 2;
+                true
+            }
+        }
+
+        let dummy_dev = Arc::new(Mutex::new(DummyDevice::default()));
+        let dummy_dev_clone = dummy_dev.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = dummy_dev_clone.lock().unwrap();
+            device_locked.read(data, addr, offset)
+        };
+        let dummy_dev_clone = dummy_dev;
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = dummy_dev_clone.lock().unwrap();
+            device_locked.write(data, addr, offset)
+        };
+
+        let dummy_dev_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+
+        let mut fd = None;
+        if args.region_type.eq("rom_device_region") || args.region_type.eq("ram_device_region") {
+            if let Some(file_name) = args.device_fd_path {
+                fd = Some(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&file_name)
+                        .unwrap(),
+                );
+            }
+        }
+
+        let region;
+        match args.region_type.as_str() {
+            "io_region" => {
+                region = Region::init_io_region(args.size, dummy_dev_ops);
+                if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
+                    let ioeventfds = vec![RegionIoEventFd {
+                        fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+                        addr_range: AddressRange::from((
+                            0,
+                            args.ioeventfd_size.unwrap_or_default(),
+                        )),
+                        data_match: args.ioeventfd_data.is_some(),
+                        data: args.ioeventfd_data.unwrap_or_default(),
+                    }];
+                    region.set_ioeventfds(&ioeventfds);
+                }
+            }
+            "rom_device_region" => {
+                region = Region::init_rom_device_region(
+                    Arc::new(
+                        HostMemMapping::new(
+                            GuestAddress(args.offset),
+                            None,
+                            args.size,
+                            fd.map(FileBackend::new_common),
+                            false,
+                            true,
+                            true,
+                        )
+                        .unwrap(),
+                    ),
+                    dummy_dev_ops,
+                );
+            }
+            "ram_device_region" => {
+                region = Region::init_ram_device_region(Arc::new(
+                    HostMemMapping::new(
+                        GuestAddress(args.offset),
+                        None,
+                        args.size,
+                        fd.map(FileBackend::new_common),
+                        false,
+                        true,
+                        false,
+                    )
+                    .unwrap(),
+                ));
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError("invalid rergion_type".to_string()),
+                    None,
+                );
+            }
+        };
+
+        region.set_priority(args.priority as i32);
+        if let Some(read_only) = args.romd {
+            if region.set_rom_device_romd(read_only).is_err() {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "set_rom_device_romd failed".to_string(),
+                    ),
+                    None,
+                );
+            }
+        }
+
+        let sys_mem = self.get_sys_mem();
+        match args.update_type.as_str() {
+            "add" => {
+                if sys_mem.root().add_subregion(region, args.offset).is_err() {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError("add subregion failed".to_string()),
+                        None,
+                    );
+                }
+            }
+            "delete" => {
+                region.set_offset(GuestAddress(args.offset));
+                if sys_mem.root().delete_subregion(&region).is_err() {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "delete subregion failed".to_string(),
+                        ),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError("invalid update_type".to_string()),
+                    None,
+                )
+            }
+        };
+
+        Response::create_empty_response()
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    fn input_event(&self, key: String, value: String) -> Response {
+        match send_input_event(key, value) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+}
+
+#[cfg(not(target_env = "musl"))]
+fn send_input_event(key: String, value: String) -> Result<()> {
+    match key.as_str() {
+        "keyboard" => {
+            let vec: Vec<&str> = value.split(',').collect();
+            if vec.len() != 2 {
+                bail!("Invalid keyboard format: {}", value);
+            }
+            let keycode = vec[0].parse::<u16>()?;
+            let down = vec[1].parse::<u8>()? == 1;
+            key_event(keycode, down)?;
+        }
+        "pointer" => {
+            let vec: Vec<&str> = value.split(',').collect();
+            if vec.len() != 3 {
+                bail!("Invalid pointer format: {}", value);
+            }
+            let x = vec[0].parse::<u32>()?;
+            let y = vec[1].parse::<u32>()?;
+            let btn = vec[2].parse::<u32>()?;
+            point_event(btn, x, y)?;
+        }
+        _ => {
+            bail!("Invalid input type: {}", key);
+        }
+    };
+    Ok(())
 }

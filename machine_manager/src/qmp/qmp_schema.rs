@@ -80,6 +80,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    system_reset {
+        #[serde(default)]
+        arguments: system_reset,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     device_add {
         arguments: Box<device_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,6 +169,14 @@ pub enum QmpCommand {
     query_balloon {
         #[serde(default)]
         arguments: query_balloon,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-vnc")]
+    #[strum(serialize = "query-vnc")]
+    query_vnc {
+        #[serde(default)]
+        arguments: query_vnc,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
@@ -365,6 +379,20 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "update_region")]
+    #[strum(serialize = "update_region")]
+    update_region {
+        #[serde(default)]
+        arguments: update_region,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    input_event {
+        #[serde(default)]
+        arguments: input_event,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -458,6 +486,28 @@ impl Command for cont {
     }
 }
 
+/// system_reset
+///
+/// Reset guest VCPU execution.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "system_reset" }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct system_reset {}
+
+impl Command for system_reset {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
 /// device_add
 ///
 /// # Arguments
@@ -498,6 +548,8 @@ pub struct device_add {
     pub mac: Option<String>,
     #[serde(rename = "netdev")]
     pub netdev: Option<String>,
+    #[serde(rename = "chardev")]
+    pub chardev: Option<String>,
     #[serde(rename = "disable-modern")]
     pub disable_modern: Option<String>,
     #[serde(rename = "mq")]
@@ -513,11 +565,71 @@ pub struct device_add {
     pub queues: Option<u16>,
     pub boot_index: Option<u8>,
     pub sysfsdev: Option<String>,
+    #[serde(rename = "queue-size")]
+    pub queue_size: Option<u16>,
 }
 
 pub type DeviceAddArgument = device_add;
 
 impl Command for device_add {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// update_region
+///
+/// # Arguments
+///
+/// * `update_type` - update type: add or delete.
+/// * `region_type` - the type of the region: io, ram_device, rom_device.
+/// * `offset` - the offset of the father region.
+/// * `size` - the size of the region.
+/// * `priority` - the priority of the region.
+/// * `romd` - read only mode.
+/// * `ioeventfd` - is there an ioeventfd.
+/// * `ioeventfd_data` - the matching data for ioeventfd.
+/// * `ioeventfd_size` - the size of matching data.
+///
+/// Additional arguments depend on the type.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "update_region",
+///      "arguments": { "update_type": "add", "region_type": "io_region", "offset": 0, "size": 4096, "priority": 99 }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct update_region {
+    #[serde(rename = "update_type")]
+    pub update_type: String,
+    #[serde(rename = "region_type")]
+    pub region_type: String,
+    #[serde(rename = "offset")]
+    pub offset: u64,
+    #[serde(rename = "size")]
+    pub size: u64,
+    #[serde(rename = "priority")]
+    pub priority: u64,
+    #[serde(rename = "read_only_mode")]
+    pub romd: Option<bool>,
+    #[serde(rename = "ioeventfd")]
+    pub ioeventfd: Option<bool>,
+    #[serde(rename = "ioeventfd_data")]
+    pub ioeventfd_data: Option<u64>,
+    #[serde(rename = "ioeventfd_size")]
+    pub ioeventfd_size: Option<u64>,
+    #[serde(rename = "device_fd_path")]
+    pub device_fd_path: Option<String>,
+}
+
+pub type UpdateRegionArgument = update_region;
+
+impl Command for update_region {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -1284,6 +1396,63 @@ pub struct BalloonInfo {
     pub actual: u64,
 }
 
+/// query-vnc:
+/// Information about current VNC server.
+///
+/// # Examples
+///
+/// For pc machine type started with -vnc ip:port(for example: 0.0.0.0:0):
+/// ```text
+/// -> { "execute": "query-vnc" }
+/// <- {"return": {
+///         "enabled": true,
+///         "host": "0.0.0.0",
+///         "service": "50401",
+///         "auth": "None",
+///         "family": "ipv4",
+///         "clients": [
+///             "host": "127.0.0.1",
+///             "service": "50401",
+///             "family": "ipv4",
+///         ]
+///         }
+///     }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_vnc {}
+impl Command for query_vnc {
+    type Res = VncInfo;
+    fn back(self) -> VncInfo {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VncInfo {
+    #[serde(rename = "enabled")]
+    pub enabled: bool,
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "service")]
+    pub service: String,
+    #[serde(rename = "auth")]
+    pub auth: String,
+    #[serde(rename = "family")]
+    pub family: String,
+    #[serde(rename = "clients")]
+    pub clients: Vec<VncClientInfo>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VncClientInfo {
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "service")]
+    pub service: String,
+    #[serde(rename = "family")]
+    pub family: String,
+}
+
 /// balloon:
 ///
 /// Advice VM to change memory size with the argument `value`.
@@ -1346,10 +1515,10 @@ impl Command for query_version {
 /// ```text
 /// -> { "execute": "query-commands" }
 /// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},
-/// {"name":"cont"},{"name":"device_add"},{"name":"device_del"},{"name":"netdev_add"},
-/// {"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},{"name":"query-cpus"},
-/// {"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
-/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},
+/// {"name":"cont"},{"name":"system_reset"},{"name":"device_add"},{"name":"device_del"},
+/// {"name":"netdev_add"},{"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},
+/// {"name":"query-cpus"},{"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
+/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query_vnc"},
 /// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
 /// {"name":"query_target"},{"name":"query_commands"}]}
 /// ```
@@ -1902,6 +2071,33 @@ impl Command for query_iothreads {
         Default::default()
     }
 }
+/// input_event
+///
+/// # Arguments
+///
+/// * `key` - the input type such as 'keyboard' or 'pointer'.
+/// * `value` - the input value.
+
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "input_event",
+///      "arguments": { "key": "pointer", "value": "100,200,1" }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct input_event {
+    pub key: String,
+    pub value: String,
+}
+
+impl Command for input_event {
+    type Res = Vec<input_event>;
+
+    fn back(self) -> Vec<input_event> {
+        Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1988,6 +2184,33 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let ret_msg = r#"invalid type: string "isdf", expected struct cont"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: system_reset.
+        let json_msg = r#"
+        {
+            "execute": "system_reset"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for system_reset.
+        let json_msg = r#"
+        {
+            "execute": "system_reset" ,
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct system_reset"#;
         assert!(err_msg == ret_msg);
 
         // qmp: query-hotpluggable-cpus.
@@ -2330,6 +2553,42 @@ mod tests {
         let json_msg = r#"
         {
             "execute": "query-commands"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_input_event() {
+        // key event
+        let json_msg = r#"
+        {
+            "execute": "input_event" ,
+            "arguments": {
+                "key": "keyboard",
+                "value": "2,1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+        // pointer event
+        let json_msg = r#"
+        {
+            "execute": "input_event" ,
+            "arguments": {
+                "key": "pointer",
+                "value": "4,5,1"
+            }
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {

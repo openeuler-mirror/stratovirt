@@ -22,7 +22,6 @@ use anyhow::Result;
 
 /// Type of requests sending from vhost user device to the userspace process.
 #[repr(u32)]
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VhostUserMsgReq {
     None = 0,
@@ -127,7 +126,6 @@ pub struct VhostUserMsgHdr {
     pub size: u32,
 }
 
-#[allow(dead_code)]
 impl VhostUserMsgHdr {
     /// Create a new instance of `VhostUserMsgHeader`.
     pub fn new(request: u32, flags: u32, size: u32) -> Self {
@@ -202,7 +200,7 @@ impl<T: Default + Sized> VhostUserConfig<T> {
 
 /// Memory region information for the message of memory table.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RegionMemInfo {
     /// Guest physical address of the memory region.
     pub guest_phys_addr: u64,
@@ -256,6 +254,7 @@ impl Default for VhostUserMemContext {
 
 /// The configuration for the state of virtual ring.
 #[repr(C)]
+#[derive(Default)]
 pub struct VhostUserVringState {
     /// Index for virtual ring.
     pub index: u32,

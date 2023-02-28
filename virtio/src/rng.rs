@@ -14,10 +14,15 @@ use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::{config::RngConfig, event_loop::EventLoop};
+use machine_manager::{
+    config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE},
+    event_loop::EventLoop,
+    event_loop::{register_event_helper, unregister_event_helper},
+};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::raw_read;
 use util::byte_code::ByteCode;
@@ -40,7 +45,6 @@ use crate::error::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
-const QUEUE_SIZE_RNG: u16 = 256;
 
 fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
     let mut size = 0_u32;
@@ -56,8 +60,7 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
-    queue_evt: EventFd,
-    deactivate_evt: RawFd,
+    queue_evt: Arc<EventFd>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
@@ -109,13 +112,15 @@ impl RngHandler {
             }
 
             let mut buffer = vec![0_u8; size as usize];
-            raw_read(
+            let ret = raw_read(
                 self.random_file.as_raw_fd(),
                 buffer.as_mut_ptr() as u64,
                 size as usize,
                 0,
-            )
-            .with_context(|| format!("Failed to read random file, size: {}", size))?;
+            );
+            if ret < 0 || ret as u32 != size {
+                bail!("Failed to read random file, size: {}", size);
+            }
 
             self.write_req_data(&elem.in_iovec, &mut buffer)?;
 
@@ -145,36 +150,6 @@ impl RngHandler {
 
         Ok(())
     }
-
-    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
-        let mut notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        if let Some(lb) = self.leak_bucket.as_ref() {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::Delete,
-                lb.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ));
-        }
-
-        notifiers
-    }
 }
 
 impl EventNotifierHelper for RngHandler {
@@ -183,13 +158,11 @@ impl EventNotifierHelper for RngHandler {
 
         // Register event notifier for queue_evt
         let rng_handler_clone = rng_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
                 error!("Failed to process queue for virtio rng, err: {:?}", e,);
             }
-
             None
         });
         notifiers.push(EventNotifier::new(
@@ -197,46 +170,28 @@ impl EventNotifierHelper for RngHandler {
             rng_handler.lock().unwrap().queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
-        ));
-
-        // Register event notifier for deactivate_evt
-        let rng_handler_clone = rng_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(rng_handler_clone.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            rng_handler.lock().unwrap().deactivate_evt,
-            None,
-            EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register timer event notifier for the limit of request bytes per second
         if let Some(lb) = rng_handler.lock().unwrap().leak_bucket.as_ref() {
             let rng_handler_clone = rng_handler.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
                 if let Some(leak_bucket) = rng_handler_clone.lock().unwrap().leak_bucket.as_mut() {
                     leak_bucket.clear_timer();
                 }
-
                 if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
                     error!("Failed to process queue for virtio rng, err: {:?}", e,);
                 }
-
                 None
             });
-
             notifiers.push(EventNotifier::new(
                 NotifierOperation::AddShared,
                 lb.as_raw_fd(),
                 None,
                 EventSet::IN,
-                vec![Arc::new(Mutex::new(handler))],
+                vec![handler],
             ));
         }
 
@@ -264,7 +219,7 @@ pub struct Rng {
     /// The state of Rng device.
     state: RngState,
     /// Eventfd for device deactivate
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
 }
 
 impl Rng {
@@ -276,7 +231,7 @@ impl Rng {
                 device_features: 0,
                 driver_features: 0,
             },
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
         }
     }
 
@@ -325,7 +280,7 @@ impl VirtioDevice for Rng {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_RNG
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get device features from host.
@@ -366,12 +321,11 @@ impl VirtioDevice for Rng {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let handler = RngHandler {
             queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             mem_space,
@@ -381,21 +335,20 @@ impl VirtioDevice for Rng {
                 .unwrap()
                 .try_clone()
                 .with_context(|| "Failed to clone random file for virtio rng")?,
-            leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
+            leak_bucket: match self.rng_cfg.bytes_per_sec {
+                Some(bps) => Some(LeakBucket::new(bps)?),
+                None => None,
+            },
         };
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-            None,
-        )?;
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 }
 
@@ -435,7 +388,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::RngConfig;
+    use machine_manager::config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE};
     use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
@@ -485,7 +438,7 @@ mod tests {
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
-        assert_eq!(rng.queue_size(), QUEUE_SIZE_RNG);
+        assert_eq!(rng.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
         assert_eq!(rng.device_type(), VIRTIO_TYPE_RNG);
     }
 
@@ -587,8 +540,8 @@ mod tests {
     #[test]
     fn test_rng_process_queue_01() {
         let mem_space = address_space_init();
-        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let cloned_interrupt_evt = interrupt_evt.clone();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
@@ -603,25 +556,23 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
-        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
-            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: reset_event.as_raw_fd(),
+            queue_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
@@ -672,8 +623,8 @@ mod tests {
     #[test]
     fn test_rng_process_queue_02() {
         let mem_space = address_space_init();
-        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let cloned_interrupt_evt = interrupt_evt.clone();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
@@ -688,25 +639,23 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
-        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
-            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: reset_event.as_raw_fd(),
+            queue_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),

@@ -10,18 +10,22 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, warn};
+use std::fmt;
+use std::fmt::Debug;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
+
+use migration::{migration::Migratable, MigrationManager};
 
 use crate::address_space::FlatView;
 use crate::{
     AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
     RegionOps,
 };
-use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, warn};
-use std::fmt;
-use std::fmt::Debug;
+
 /// Types of Region.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -85,9 +89,10 @@ impl fmt::Debug for Region {
 /// Used to trigger events.
 /// If `data_match` is enabled, the `EventFd` is triggered iff `data` is written
 /// to the specified address.
+#[derive(Clone)]
 pub struct RegionIoEventFd {
     /// EventFd to be triggered when guest writes to the address.
-    pub fd: vmm_sys_util::eventfd::EventFd,
+    pub fd: Arc<vmm_sys_util::eventfd::EventFd>,
     /// Addr_range contains two params as follows:
     /// base: in addr_range is the address of EventFd.
     /// size: can be 2, 4, 8 bytes.
@@ -108,41 +113,23 @@ impl fmt::Debug for RegionIoEventFd {
     }
 }
 
+impl PartialEq for RegionIoEventFd {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr_range == other.addr_range
+            && self.data_match == other.data_match
+            && self.data == other.data
+            && self.fd.as_raw_fd() == other.fd.as_raw_fd()
+    }
+}
+
 impl RegionIoEventFd {
-    /// Calculate if this `RegionIoEventFd` is located before the given one.
+    /// Calculate if this `RegionIoEventFd` is located after the given one.
     ///
     /// # Arguments
     ///
     /// * `other` - Other `RegionIoEventFd`.
-    pub(crate) fn before(&self, other: &RegionIoEventFd) -> bool {
-        if self.addr_range.base != other.addr_range.base {
-            return self.addr_range.base < other.addr_range.base;
-        }
-        if self.addr_range.size != other.addr_range.size {
-            return self.addr_range.size < other.addr_range.size;
-        }
-        if self.data_match != other.data_match {
-            return self.data_match && (!other.data_match);
-        }
-        if self.data != other.data {
-            return self.data < other.data;
-        }
-        false
-    }
-
-    /// Return the cloned Region IoEventFd,
-    /// return error if failed to clone EventFd.
-    pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
-        let fd = self
-            .fd
-            .try_clone()
-            .map_err(|_| anyhow!(AddressSpaceError::IoEventFd))?;
-        Ok(RegionIoEventFd {
-            fd,
-            addr_range: self.addr_range,
-            data_match: self.data_match,
-            data: self.data,
-        })
+    pub fn after(&self, other: &RegionIoEventFd) -> bool {
+        self.addr_range.base.0 >= (other.addr_range.base.0 + other.addr_range.size)
     }
 }
 
@@ -163,7 +150,7 @@ impl Eq for FlatRange {}
 
 impl PartialEq for FlatRange {
     fn eq(&self, other: &Self) -> bool {
-        self.addr_range.base == other.addr_range.base
+        self.addr_range == other.addr_range
             && self.owner.region_type == other.owner.region_type
             && self.rom_dev_romd.unwrap_or(false) == other.rom_dev_romd.unwrap_or(false)
             && self.owner == other.owner
@@ -555,9 +542,6 @@ impl Region {
                 }
             }
             RegionType::IO => {
-                if count >= std::usize::MAX as u64 {
-                    return Err(anyhow!(AddressSpaceError::Overflow(count)));
-                }
                 let mut slice = vec![0_u8; count as usize];
                 let read_ops = self.ops.as_ref().unwrap().read.as_ref();
                 if matches!(self.max_access_size, Some(access_size) if count > access_size) {
@@ -620,6 +604,9 @@ impl Region {
         match self.region_type {
             RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
+                // Mark vmm dirty page manually if live migration is active.
+                MigrationManager::mark_dirty_log(host_addr + offset, count);
+
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
                 };
@@ -662,18 +649,13 @@ impl Region {
     /// Set the ioeventfds within this Region,
     /// Return the IoEvent of a `Region`.
     pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
-        *self.io_evtfds.lock().unwrap() = new_fds.iter().map(|e| e.try_clone().unwrap()).collect();
+        *self.io_evtfds.lock().unwrap() = new_fds.to_vec();
     }
 
     /// Get the ioeventfds within this Region,
     /// these fds will be register to `KVM` and used for guest notifier.
     pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        self.io_evtfds
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|e| e.try_clone().unwrap())
-            .collect()
+        self.io_evtfds.lock().unwrap().to_vec()
     }
 
     /// Add sub-region to this region.
@@ -775,7 +757,7 @@ impl Region {
                 .update_topology()
                 .with_context(|| "Failed to update topology for address_space")?;
         } else {
-            debug!("add subregion to container region, which has no belonged address-space");
+            debug!("delete subregion from container region, which has no belonged address-space");
         }
         child.del_belonged_address_space();
 
@@ -948,17 +930,7 @@ impl Region {
                     )
                 })?;
             }
-            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
-                self.render_terminate_region(base, addr_range, &mut flat_view)
-                .with_context(|| {
-                    format!(
-                        "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
-                        base.raw_value(),
-                        addr_range.base.raw_value(),
-                        addr_range.size
-                    )
-                })?;
-            }
+            _ => bail!("Generate flat view failed: only the container supported"),
         }
         Ok(flat_view)
     }
@@ -1115,30 +1087,49 @@ mod test {
     #[test]
     fn test_region_ioeventfd() {
         let mut fd1 = RegionIoEventFd {
-            fd: EventFd::new(EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((1000, 4u64)),
             data_match: false,
             data: 0,
         };
+        // comapre unchanged
+        let mut fd2 = fd1.clone();
+        assert!(fd2 == fd1);
+
+        // comapre fd
+        fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
+        assert!(fd2 != fd1);
+
         // compare length
-        let mut fd2 = fd1.try_clone().unwrap();
+        fd2.fd = fd1.fd.clone();
+        assert!(fd2 == fd1);
         fd2.addr_range.size = 8;
-        assert!(fd1.before(&fd2));
+        assert!(fd1 != fd2);
 
         // compare address
-        fd2.addr_range.base.0 = 1024;
         fd2.addr_range.size = 4;
-        assert!(fd1.before(&fd2));
+        assert!(fd2 == fd1);
+        fd2.addr_range.base.0 = 1024;
+        assert!(fd1 != fd2);
 
         // compare datamatch
         fd2.addr_range = fd1.addr_range;
+        assert!(fd2 == fd1);
         fd2.data_match = true;
-        assert_eq!(fd1.before(&fd2), false);
+        assert!(fd1 != fd2);
 
         // if datamatch, compare data
         fd1.data_match = true;
+        assert!(fd2 == fd1);
         fd2.data = 10u64;
-        assert!(fd1.before(&fd2));
+        assert!(fd1 != fd2);
+
+        // test after
+        fd2.data = 0;
+        assert!(fd2 == fd1);
+        assert!(!fd2.after(&fd1));
+        fd2.addr_range.base.0 = 1004;
+        assert!(fd2.after(&fd1));
     }
 
     // test add/del sub-region to container-region, and check priority

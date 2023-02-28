@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{convert::TryInto, mem::size_of};
-
 use kvm_bindings::{
     KVM_REG_ARM_COPROC_MASK, KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_U32,
     KVM_REG_SIZE_U64,
@@ -19,7 +17,7 @@ use kvm_bindings::{
 use kvm_ioctls::{Cap, Kvm, VcpuFd};
 use machine_manager::config::{CpuConfig, PmuConfig};
 
-use super::core_regs::{get_one_reg_vec, set_one_reg_vec, Result};
+use super::core_regs::Result;
 
 // Capabilities for ARM cpu.
 #[derive(Debug, Clone)]
@@ -67,13 +65,13 @@ impl From<&CpuConfig> for ArmCPUFeatures {
 /// Entry to cpreg list.
 #[derive(Default, Clone, Copy)]
 pub struct CpregListEntry {
-    pub index: u64,
-    pub value: u64,
+    pub reg_id: u64,
+    pub value: u128,
 }
 
 impl CpregListEntry {
     fn cpreg_tuples_entry(&self) -> bool {
-        self.index & KVM_REG_ARM_COPROC_MASK as u64 == KVM_REG_ARM_CORE as u64
+        (self.reg_id & KVM_REG_ARM_COPROC_MASK as u64) == (KVM_REG_ARM_CORE as u64)
     }
 
     fn normal_cpreg_entry(&self) -> bool {
@@ -81,8 +79,8 @@ impl CpregListEntry {
             return false;
         }
 
-        ((self.index & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32)
-            || ((self.index & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64)
+        ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32)
+            || ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64)
     }
 
     /// Validate cpreg_list's tuples entry and normal entry.
@@ -101,24 +99,7 @@ impl CpregListEntry {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn get_cpreg(&mut self, vcpu_fd: &VcpuFd) -> Result<()> {
         if self.normal_cpreg_entry() {
-            let val = get_one_reg_vec(vcpu_fd, self.index)?;
-            if (self.index & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32 {
-                self.value = u32::from_be_bytes(
-                    val.as_slice()
-                        .split_at(size_of::<u32>())
-                        .0
-                        .try_into()
-                        .unwrap(),
-                ) as u64;
-            } else if (self.index & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64 {
-                self.value = u64::from_be_bytes(
-                    val.as_slice()
-                        .split_at(size_of::<u64>())
-                        .0
-                        .try_into()
-                        .unwrap(),
-                )
-            }
+            self.value = vcpu_fd.get_one_reg(self.reg_id)?;
         }
 
         Ok(())
@@ -131,14 +112,7 @@ impl CpregListEntry {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn set_cpreg(&self, vcpu_fd: &VcpuFd) -> Result<()> {
         if self.normal_cpreg_entry() {
-            let mut value: Vec<u8> = self.value.to_be_bytes().to_vec();
-            let data = if (self.index & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32 {
-                value.split_off(size_of::<u32>() / size_of::<u8>())
-            } else {
-                value
-            };
-
-            set_one_reg_vec(vcpu_fd, self.index, &data)?;
+            vcpu_fd.set_one_reg(self.reg_id, self.value)?;
         }
 
         Ok(())

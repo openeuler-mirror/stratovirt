@@ -33,6 +33,7 @@ pub mod reader;
 pub mod seccomp;
 pub mod syscall;
 pub mod tap;
+pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;
@@ -41,7 +42,7 @@ pub use error::UtilError;
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use log::debug;
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use std::{any::Any, sync::Mutex};
 use vmm_sys_util::terminal::Terminal;
 
 pub static TERMINAL_MODE: Lazy<Mutex<Option<termios>>> = Lazy::new(|| Mutex::new(None));
@@ -84,4 +85,15 @@ pub fn set_termi_canon_mode() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+/// This trait is to cast trait object to struct.
+pub trait AsAny {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Any> AsAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }

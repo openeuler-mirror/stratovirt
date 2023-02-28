@@ -18,7 +18,7 @@ NB: machine type "none" is used to get the capabilities of stratovirt.
 
 ```shell
 # cmdline
--machine [type=]name[,dump-guest-core=on|off,mem-share=on|off]
+-machine [type=]name[,dump-guest-core={on|off}][,mem-share={on|off}]
 ```
 
 ### 1.2 CPU Config
@@ -46,7 +46,7 @@ If it is configured, sockets * dies * clusters * cores * threads must be equal t
 
 ```shell
 # cmdline
--smp [cpus=]n[,maxcpus=,sockets=,dies=,clusters=,cores=,threads=]
+-smp [cpus=]n[,maxcpus=<maxcpus>][,sockets=<sockets>][,dies=<dies>][,clusters=<clusters>][,cores=<cores>][,threads=<threads>]
 ```
 
 #### 1.2.2 CPU Features
@@ -60,7 +60,7 @@ Currently, these options are supported.
 
 ```shell
 # cmdline
--cpu host[,pmu=on|off]
+-cpu host[,pmu={on|off}]
 ```
 
 ### 1.3 Memory
@@ -76,7 +76,8 @@ Default VM memory size is 256M. The supported VM memory size is among [128M, 512
 
 ```shell
 # cmdline
--m [size=]megs
+-m [size=]<megs>[m|M|g|G]
+
 -m 256m
 -m 256
 -m 1G
@@ -103,8 +104,7 @@ The path has to be absolute path.
 
 ```shell
 # cmdline
--mem-path /path/to/file
--mem-path /path/to/dir
+-mem-path <filebackend_path>
 ```
 
 ### 1.4.1 hugepages
@@ -123,7 +123,7 @@ $ sysctl vm.nr_hugepages=1024
 $ cat /proc/meminfo
 
 # run StratoVirt with backend-file
-... -mem-path /path/to/hugepages ...
+... -mem-path <filebackend_path>
 ```
 
 ### 1.5 NUMA node
@@ -162,6 +162,13 @@ The following command shows how to set NUMA node:
 [-numa dist,src=1,dst=1,val=10]
 ```
 
+Detailed configuration instructions:
+```
+-object memory-backend-ram,size=<num[M|m|G|g]>,id=<memid>,policy={bind|default|preferred|interleave},host-nodes=<id>
+-numa node[,nodeid=<node>][,cpus=<firstcpu>[-<lastcpus>][:<secondcpus>[-<lastcpus>]]][,memdev=<memid>]
+-numa dist,src=<source>,dst=<destination>,val=<distance>
+```
+
 ### 1.6 Kernel and Kernel Parameters
 
 StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
@@ -173,7 +180,10 @@ And the given kernel parameters will be actually analyzed by boot loader.
 
 ``` shell
 # cmdline
--kernel /path/to/kernel \
+-kernel <kernel_path> \
+-append <kernel cmdline parameters>
+
+for example:
 -append "console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1"
 ```
 
@@ -187,7 +197,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 
 ```shell
 # cmdline
--initrd /path/to/initrd
+-initrd <initrd_path>
 ```
 
 ### 1.8 Global config
@@ -199,7 +209,7 @@ One property can be set:
 * pcie-root-port.fast-unplug: the fast unplug feature switch, only Kata is supported.
 
 ```shell
--global pcie-root-port.fast-unplug=1
+-global pcie-root-port.fast-unplug={0|1}
 ```
 
 ### 1.9 Logging
@@ -212,7 +222,7 @@ You can enable StratoVirt's logging by:
 # Output log to stderr
 -D
 # Output log to log file
--D /path/to/log/file
+-D <logfile_path>
 ```
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
@@ -233,7 +243,7 @@ And you can also restore StratoVirt's **pid number** to a file by:
 
 ```shell
 # cmdline
--pidfile /path/to/pidfile
+-pidfile <pidfile_path>
 ```
 
 ## 2. Device Configuration
@@ -247,8 +257,9 @@ root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
 ### 2.1 iothread
 
-Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration,
-and these threads can be used by devices exclusively improving performance.
+Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration, and these threads can be used by devices exclusively improving performance.
+
+Note: iothread is strongly recommanded if a specific device supports it, otherwise the main thread has the risk of getting stuck.
 
 There is only one argument for iothread:
 
@@ -256,14 +267,14 @@ There is only one argument for iothread:
 
 ```shell
 # cmdline
--object iothread,id=iothread1 -object iothread,id=iothread2
+-object iothread,id=<iothread>
 ```
 
 ### 2.2 Virtio-blk
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-10 properties are supported for virtio block device.
+twelve properties are supported for virtio block device.
 
 * id: unique device-id in StratoVirt.
 * file: the path of backend file on host.
@@ -280,34 +291,36 @@ The number ranges from 0 to 255, the smaller the number, the higher the priority
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
-For virtio-blk-pci, three more properties are required.
+For virtio-blk-pci, four more properties are required.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
 * multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
 # virtio mmio block device.
--drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-device virtio-blk-device,drive=<drive_id>,id=<blkid>[,iothread=<iothread1>][,serial=<serial_num>]
 # virtio pci block device.
--drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N,bootindex=1]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
+
 ```
 
 StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it. 
 
 You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
 
-* chardev: id for char device, that means you need to add a chardev first, and use its id to index char device.
+* chardev: id for char device, that means you need to add a chardev first, and use its id to find the character device.
 
 ```shell
 # vhost user blk pci device
--chardev socket,id=chardevid,path=socket_path
--device vhost-user-blk-pci,id=blk1,chardev=chardevid,bus=pcie.0,addr=0x3[,num-queues=N,bootindex=1]
+-chardev socket,id=<chardevid>,path=<socket_path>
+-device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 ```
 
 Note: More features to be supported.
@@ -331,18 +344,17 @@ $ make
 $ ./test/unit/unittest.sh
 
 # Setup spdk
-$ sudo HUGEMEM=2048 ./scripts/setup.sh
+$ HUGEMEM=2048 ./scripts/setup.sh
 # Mount huge pages, you need to add -mem-path=/dev/hugepages in stratovirt config
-$ sudo mount -t hugetlbfs hugetlbfs /dev/hugepages
-$ sudo sysctl vm.nr_hugepages=1024
+$ mount -t hugetlbfs hugetlbfs /dev/hugepages
+# Assign the number of the hugepage
+$ sysctl vm.nr_hugepages=1024
 # Start vhost, alloc 1024MB memory, default socket path is /var/tmp/spdk.sock, 0x3 means we use cpu cores 0 and 1 (cpumask 0x3)
-$ sudo build/bin/vhost --logflag vhost_blk -S /var/tmp -s 1024 -m 0x3 &
-# Attach nvme controller, you can find you nvme id by lspci command
-$ sudo ./scripts/rpc.py bdev_nvme_attach_controller -b Nvme0 -t pcie -a you-nvme-id
-# Create a bdev which size is 128MB, block size is 512B
-$ sudo ./scripts/rpc.py bdev_malloc_create 128 512 -b Malloc0
+$ build/bin/vhost --logflag vhost_blk -S /var/tmp -s 1024 -m 0x3 &
+# Create a malloc bdev which size is 128MB, block size is 512B
+$ ./scripts/rpc.py bdev_malloc_create 128 512 -b Malloc0
 # Create a vhost-blk device exposing Malloc0 bdev, the I/O polling will be pinned to the CPU 0 (cpumask 0x1).
-$ sudo ./scripts/rpc.py vhost_create_blk_controller --cpumask 0x1 spdk.sock Malloc0
+$ ./scripts/rpc.py vhost_create_blk_controller --cpumask 0x1 spdk.sock Malloc0
 ```
 A config template to start stratovirt with vhost-user-blk-pci as below:
 
@@ -387,22 +399,24 @@ It has no effect when vhost is set.
 * vhost: whether to run as a vhost-net device.
 * vhostfd: the file descriptor of opened tap device.
 * vhostfds: file descriptors of opened tap device.
-* mac: set mac address in VM (optional).
+* mac: set mac address in VM (optional). A default mac address will be created when it is not assigned by user. So, it may
+  cause the same mac address between two virtio-net devices when one device has mac and the other hasn't.
 * mq: the optional mq attribute enable device multiple queue feature.
 
-Two more properties are supported for virtio pci net device.
+Three more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it. For virtio pci net device, it
 is a single function device, the function number should be set to zero.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is [256, 4096] and queue size must be power of 2. Default queue size is 256.
 
 ```shell
 # virtio mmio net device
--netdev tap,id=netdevid,ifname=host_dev_name
--device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>
+-device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name[,queues=N]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
@@ -413,11 +427,11 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 
 ```shell
 # virtio mmio net device
--netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
--device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>[,vhost=on[,vhostfd=<N>]]
+-device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2,queues=N]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>[,vhost=on[,vhostfd=<N>,queues=<N>]]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}]
 ```
 
 StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
@@ -427,8 +441,8 @@ hugepages('-mem-path ...' ) when using vhost-user net.
 ```shell
 # virtio pci net device
 -chardev socket,id=chardevid,path=socket_path
--netdev vhost-user,id=netdevid,chardev=chardevid[,queues=N]
--device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0[,mq=on]
+-netdev vhost-user,id=<netdevid>,chardev=<chardevid>[,queues=<N>]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}]
 ```
 
 *How to set a tap device?*
@@ -506,14 +520,14 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio device
--device virtio-serial-device[,id=virtio-serial0]
--chardev socket,path=socket_path,id=virtioconsole1,server,nowait
--device virtconsole,chardev=virtioconsole1,id=console_id
+-device virtio-serial-device[,id=<virtio-serial0>]
+-chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
+-device virtconsole,id=<console_id>,chardev=<virtioconsole1>
 
 # virtio pci device
--device virtio-serial-pci,bus=pcie.0,addr=0x1.0x0,id=virtio-serial0[,multifunction=on]
--chardev socket,path=socket_path,id=virtioconsole1,server,nowait
--device virtconsole,chardev=virtioconsole1,id=console_id
+-device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}]
+-chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
+-device virtconsole,id=<console_id>,chardev=<virtioconsole1>
 ```
 NB:
 Currently, only one virtio console device is supported in standard machine.
@@ -542,10 +556,10 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio device.
--device vhost-vsock-device,id=vsock_id,guest-cid=3
+-device vhost-vsock-device,id=<vsock_id>,guest-cid=<N>
 
 # virtio pci device.
--device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
+-device vhost-vsock-pci,id=<vsock_id>,guest-cid=<N>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}]
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -572,7 +586,7 @@ NB: We can only set *one* serial.
 To use the first method, chardev for redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
 ```shell
 # add a chardev and redirect the serial port to chardev
--chardev backend,id=chardev_id[,path=path,server,nowait]
+-chardev backend,id=<chardev_id>[,path=<path>,server,nowait]
 -serial chardev:chardev_id
 ```
 
@@ -581,8 +595,8 @@ Or you can simply use `-serial dev` to bind serial with character device.
 # simplifed redirect methods
 -serial stdio
 -serial pty
--serial socket,path=socket_path,server,nowait
--serial file,path=file_path
+-serial socket,path=<socket_path>,server,nowait
+-serial file,path=<file_path>
 ```
 
 ### 2.7 Virtio-balloon
@@ -599,9 +613,9 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio balloon device
--device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]
+-device virtio-balloon-device[,deflate-on-oom={true|false}][,free-page-reporting={true|false}]
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,id=balloon-0[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]
+-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom={true|false}][,free-page-reporting={true|false}][,multifunction={on|off}]
 ```
 
 Note: avoid using balloon devices and vfio devices together, balloon device is invalid when memory is hugepages.
@@ -633,11 +647,11 @@ single function device, the function number should be set to zero.
 
 ```shell
 # virtio mmio rng device
--object rng-random,id=objrng0,filename=/path/to/random_file
--device virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000
+-object rng-random,id=<objrng0>,filename=<random_file_path>
+-device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>
 # virtio pci rng device
--object rng-random,id=objrng0,filename=/path/to/random_file
--device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1.0x0,id=rng-id[,multifunction=on]
+-object rng-random,id=<objrng0>,filename=<random_file_path>
+-device virtio-rng-pci,id=<rng_id>,rng=<objrng0>[,max-bytes=<1234>][,period=<1000>],bus=<pcie.0>,addr=<0x1>[,multifunction={on|off}]
 ```
 
 ### 2.9 PCIe root port
@@ -654,7 +668,7 @@ Four parameters are supported for pcie root port.
 If not set, default value is false.
 
 ```shell
--device pcie-root-port,port=0x1,addr=0x1,bus=pcie.0,id=pcie.1[,multifunction=on]
+-device pcie-root-port,id=<pcie.1>,port=<0x1>,bus=<pcie.0>,addr=<0x1>[,multifunction={on|off}]
 ```
 
 **The slot number of the device attached to the root port must be 0**
@@ -673,8 +687,7 @@ Four properties can be set for PFlash device.
 
 ```shell
 # cmdline
--drive file=/path/to/code_storage_file,if=pflash,unit=0[,readonly=true]
--drive file=/path/to/data_storage_file,if=pflash,unit=1,
+-drive file=<pflash_path>,if=pflash,unit={0|1}[,readonly={true|false}]
 ```
 
 ### 2.11 VFIO
@@ -689,7 +702,7 @@ Four properties are supported for VFIO device
 * addr: including slot number and function number.
 
 ```shell
--device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03.0x0[,multifunction=on]
+-device vfio-pci,id=<vfio_id>,host=<0000:1a:00.3>,bus=<pcie.0>,addr=<0x03>[,multifunction={on|off}]
 ```
 
 Note: the kernel must contain physical device drivers, otherwise it cannot be loaded normally.
@@ -709,10 +722,10 @@ Five properties can be set for chardev.
 
 ```shell
 # redirect methods
--chardev stdio,id=chardev_id
--chardev pty,id=chardev_id
--chardev socket,id=chardev_id,path=socket_path[,server,nowait]
--chardev file,id=chardev_id,path=file_path
+-chardev stdio,id=<chardev_id>
+-chardev pty,id=<chardev_id>
+-chardev socket,id=<chardev_id>,path=<socket_path>[,server,nowait]
+-chardev file,id=<chardev_id>,path=<file_path>
 ```
 
 ### 2.13 USB controller
@@ -725,7 +738,7 @@ Three properties can be set for USB controller.
 * addr: including slot number and function number.
 
 ```shell
--device nec-usb-xhci,id=xhci,bus=pcie.0,addr=0xa.0x0
+-device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>
 ```
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
@@ -738,7 +751,7 @@ One property can be set for USB Keyboard.
 * id: unique device id.
 
 ```shell
--device usb-kbd,id=kbd
+-device usb-kbd,id=<kbd>
 ```
 
 Note: Only one keyboard can be configured.
@@ -751,7 +764,7 @@ One property can be set for USB Tablet.
 * id: unique device id.
 
 ```shell
--device usb-tablet,id=tablet
+-device usb-tablet,id=<tablet>
 ```
 
 Note: Only one tablet can be configured.
@@ -759,22 +772,23 @@ Note: Only one tablet can be configured.
 ### 2.16 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
-Five properties can be set for Virtio-Scsi controller.
+Six properties can be set for Virtio-Scsi controller.
 
 * id: unique device id.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
 * num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default block queue number is 1. The max queues number supported is no more than 32. (optional)
+* queue-size: the optional virtqueue size for all the queues. Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 ```shell
--device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1,num-queues=4]
+-device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
 ```
 ### 2.17 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
 
 Note: Only support using raw image file as backend now.
 
-Seven properties can be set for virtio-scsi hd.
+Ten properties can be set for virtio-scsi hd.
 
 * file: the path of backend image file.
 * id: unique device id.
@@ -785,13 +799,15 @@ Seven properties can be set for virtio-scsi hd.
 * readonly: whether scsi device is read-only or not. Default option is false. (optional)
 * direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
+* bootindex: the boot order of the scsi device. (optional) If not set, the priority is lowest.
+The number ranges from 0 to 255, the smaller the number, the higher the priority.
+It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 ```shell
 -device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1,num-queues=4]
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
--device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
+-device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-Note: Only support scsi-id=0 and lun number should start from 0 Now.
 ### 2.18 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
@@ -799,6 +815,7 @@ In order to use VNC, the ip and port value must be configured. The IP address ca
 
 ```shell
 -vnc 0.0.0.0:0
+-vnc <IP:port>
 ```
 
 Tls encryption is an optional configuration.Three properties can be set for encrypted transmission:
@@ -808,7 +825,7 @@ Tls encryption is an optional configuration.Three properties can be set for encr
 * dir: certificate directory. You should place a legal institutional certificate, a server certificate, and a private key for certificate encryption in this directory.
 
 ```shell
--object tls-creds-x509,id=vnc-tls-creds0,dir=/etc/pki/vnc
+-object tls-creds-x509,id=<vnc-tls-creds0>,dir=</etc/pki/vnc>
 ```
 
 Authentication is an optional configuration, it depends on the saslauth service . To use this function, you must ensure that the saslauthd service is running normally, and configure the supported authentication mechanism in `/etc/sasl2/stratovirt. conf`
@@ -841,21 +858,21 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
-### 2.18 Virtio-fs
+### 2.19 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
-### 2.18.1 virtio fs device
+#### 2.19.1 virtio fs device
 Three properties can be set for virtio fs device.
 * chardevid: id for char device
 * device_id: the unique id for device
 * mount_tag: the mount tag of the shared directory which can be mounted in the guest
 
 ```shell
--chardev socket,id=chardevid,path=socket_path
--device vhost-user-fs-pci,id=device_id,chardev=chardevid,tag=mount_tag
+-chardev socket,id=<chardevid>,path=<socket_path>
+-device vhost-user-fs-pci,id=<device id>,chardev=<chardevid>,tag=<mount tag>
 ```
 
-### 2.18.2 vhost_user_fs
+#### 2.19.2 vhost_user_fs
 The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
 Seven properties are supported for vhost_user_fs.
@@ -893,6 +910,25 @@ host# stratovirt \
         
 guest# mount -t virtiofs myfs /mnt
 ```
+
+### 2.20 virtio-gpu
+virtio-gpu is an virtualized graphics card that lets virtual machines can display with it. 
+Usually used in conjunction with VNC, the final images is rendered to the VNC client.
+
+Sample Configuration：
+```shell
+-device virtio-gpu-pci,id=<your id>,bus=pcie.0,addr=0x2.0x0[,max_outputs=<your max_outputs>][,edid=true|false][,xres=<your expected width>][,yres= <your expected height>][,max_hostmem=<max host memory can use>]
+```
+
+In addition to the required slot information, five optional properties are supported for virtio-gpu.
+* max_outputs: Number of screens supported by the current graphics card. The maximun value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
+* edid: Edid feature, the virtual machine's kernel may checks this feature for HiDPi. You are advised to set to true.
+* xres/yres: The size of the login windows.
+* max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resoltuion is affected.
+
+Note:
+1. Only virtio-gpu 2D supported.
+2. Live migration is not supported.
 
 ## 3. Trace
 

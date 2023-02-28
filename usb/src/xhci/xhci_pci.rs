@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, Region};
-use log::{debug, error};
+use log::debug;
 use machine_manager::config::XhciConfig;
 use pci::config::{
     PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
@@ -24,9 +24,8 @@ use pci::config::{
 use pci::msix::update_dev_id;
 use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
-use crate::bus::{BusDeviceMap, BusDeviceOps};
 use crate::usb::UsbDeviceOps;
-use crate::xhci::xhci_controller::{XhciDevice, XhciOps, MAX_INTRS, MAX_SLOTS};
+use crate::xhci::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use crate::xhci::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
@@ -51,7 +50,7 @@ const XHCI_PCI_OPER_LENGTH: u32 = 0x400;
 const XHCI_PCI_RUNTIME_OFFSET: u32 = XHCI_OFF_RUNTIME;
 const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS as u32 + 1) * 0x20;
 const XHCI_PCI_DOORBELL_OFFSET: u32 = XHCI_OFF_DOORBELL;
-const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS as u32 + 1) * 0x20;
+const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS + 1) * 0x20;
 const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
 const XHCI_PCI_PORT_LENGTH: u32 = 0x10;
 const XHCI_MSIX_TABLE_OFFSET: u32 = 0x3000;
@@ -70,7 +69,6 @@ pub struct XhciPciDevice {
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
     mem_region: Region,
-    bus_device: BusDeviceMap,
 }
 
 impl XhciPciDevice {
@@ -79,7 +77,6 @@ impl XhciPciDevice {
         devfn: u8,
         parent_bus: Weak<Mutex<PciBus>>,
         mem_space: &Arc<AddressSpace>,
-        bus_device: BusDeviceMap,
     ) -> Self {
         Self {
             pci_config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
@@ -89,7 +86,6 @@ impl XhciPciDevice {
             name: config.id.to_string(),
             parent_bus,
             mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
-            bus_device,
         }
     }
 
@@ -111,9 +107,9 @@ impl XhciPciDevice {
             || "Failed to register oper region.",
         )?;
 
-        let port_num = self.xhci.lock().unwrap().ports.len();
+        let port_num = self.xhci.lock().unwrap().usb_ports.len();
         for i in 0..port_num {
-            let port = &self.xhci.lock().unwrap().ports[i];
+            let port = &self.xhci.lock().unwrap().usb_ports[i];
             let port_region =
                 Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
             let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
@@ -144,6 +140,25 @@ impl XhciPciDevice {
         )?;
         Ok(())
     }
+
+    pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
+        let mut locked_xhci = self.xhci.lock().unwrap();
+        let usb_port = if let Some(usb_port) = locked_xhci.assign_usb_port(dev) {
+            usb_port
+        } else {
+            bail!("No available USB port.");
+        };
+        locked_xhci.port_update(&usb_port)?;
+        let mut locked_dev = dev.lock().unwrap();
+        debug!(
+            "Attach usb device: xhci port id {} device id {}",
+            usb_port.lock().unwrap().port_id,
+            locked_dev.device_id()
+        );
+        locked_dev.handle_attach()?;
+        locked_dev.set_controller(Arc::downgrade(&self.xhci));
+        Ok(())
+    }
 }
 
 impl PciDevOps for XhciPciDevice {
@@ -168,7 +183,7 @@ impl PciDevOps for XhciPciDevice {
             DEVICE_ID as usize,
             PCI_DEVICE_ID_REDHAT_XHCI,
         )?;
-        le_write_u16(&mut self.pci_config.config, REVISION_ID as usize, 0x3_u16)?;
+        le_write_u16(&mut self.pci_config.config, REVISION_ID, 0x3_u16)?;
         le_write_u16(
             &mut self.pci_config.config,
             SUB_CLASS_CODE as usize,
@@ -206,17 +221,23 @@ impl PciDevOps for XhciPciDevice {
         )?;
 
         let devfn = self.devfn;
+        // It is safe to unwrap, because it is initialized in init_msix.
+        let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
+        let cloned_dev_id = self.dev_id.clone();
+        // Registers the msix to the xhci device for interrupt notification.
+        self.xhci.lock().unwrap().send_interrupt_ops = Some(Box::new(move |n: u32| {
+            cloned_msix
+                .lock()
+                .unwrap()
+                .notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
+        }));
         let dev = Arc::new(Mutex::new(self));
-        let cloned_dev = dev.clone();
-        // Register xhci-pci to xhci-device for notify.
-        dev.lock().unwrap().xhci.lock().unwrap().ctrl_ops =
-            Some(Arc::downgrade(&dev) as Weak<Mutex<dyn XhciOps>>);
         // Attach to the PCI bus.
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev.clone());
+            locked_pci_bus.devices.insert(devfn, dev);
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -224,10 +245,6 @@ impl PciDevOps for XhciPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
-        // Register xhci to bus device.
-        let locked_dev = dev.lock().unwrap();
-        let mut locked_device = locked_dev.bus_device.lock().unwrap();
-        locked_device.insert(String::from("usb.0"), cloned_dev);
         Ok(())
     }
 
@@ -264,51 +281,9 @@ impl PciDevOps for XhciPciDevice {
 
     fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
         self.xhci.lock().unwrap().reset();
+
+        self.pci_config.reset()?;
+
         Ok(())
-    }
-}
-
-impl XhciOps for XhciPciDevice {
-    fn trigger_intr(&mut self, n: u32, trigger: bool) -> bool {
-        if let Some(msix) = self.pci_config.msix.as_mut() {
-            if trigger {
-                msix.lock()
-                    .unwrap()
-                    .notify(n as u16, self.dev_id.load(Ordering::Acquire));
-                return true;
-            }
-        } else {
-            error!("Failed to send interrupt: msix does not exist");
-        }
-        false
-    }
-
-    fn update_intr(&mut self, _n: u32, _enable: bool) {}
-}
-
-impl BusDeviceOps for XhciPciDevice {
-    fn attach_device(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
-        let mut locked_xhci = self.xhci.lock().unwrap();
-        let usb_port = locked_xhci.bus.lock().unwrap().assign_usb_port(dev)?;
-        let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
-            xhci_port
-        } else {
-            bail!("No xhci port found");
-        };
-
-        locked_xhci.port_update(&xhci_port)?;
-        let mut locked_dev = dev.lock().unwrap();
-        debug!(
-            "Attach usb device: xhci port name {} device id {}",
-            xhci_port.lock().unwrap().name,
-            locked_dev.device_id()
-        );
-        locked_dev.handle_attach()?;
-        locked_dev.set_controller(Arc::downgrade(&self.xhci));
-        Ok(())
-    }
-
-    fn detach_device(&mut self, _dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
-        bail!("Detach usb device not implemented");
     }
 }

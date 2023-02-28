@@ -14,6 +14,7 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::signal_handler;
+use machine_manager::temp_cleaner::TempCleaner;
 use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -66,7 +67,7 @@ fn main() {
     ::std::process::exit(match run() {
         Ok(ret) => ExitCode::code(ret),
         Err(ref e) => {
-            write!(&mut ::std::io::stderr(), "{}", format!("{:?}\r\n", e))
+            write!(&mut ::std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
                 .expect("Error writing to stderr");
 
             1
@@ -132,6 +133,8 @@ fn run() -> Result<()> {
 }
 
 fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
+    TempCleaner::object_init();
+
     let mut fsconfig: FsConfig = create_fs_config(cmd_args)?;
     info!("FsConfig is {:?}", fsconfig);
 
@@ -211,6 +214,7 @@ fn init_log(logfile_path: String) -> Result<()> {
 
 fn set_panic_hook() {
     std::panic::set_hook(Box::new(|panic_msg| {
+        TempCleaner::clean();
         let panic_file = panic_msg.location().map_or("", |loc| loc.file());
         let panic_line = panic_msg.location().map_or(0, |loc| loc.line());
         if let Some(msg) = panic_msg.payload().downcast_ref::<&str>() {

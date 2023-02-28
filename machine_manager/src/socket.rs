@@ -14,19 +14,20 @@ use serde::Deserialize;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{bail, Result};
 use log::{error, info};
 use util::leak_bucket::LeakBucket;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
+};
 use vmm_sys_util::epoll::EventSet;
 
 use crate::machine::MachineExternalInterface;
-use crate::{
-    qmp::qmp_schema::QmpEvent,
-    qmp::{QmpChannel, QmpGreeting, Response},
-};
+use crate::qmp::{QmpChannel, QmpGreeting, Response};
 
 const MAX_SOCKET_MSG_LENGTH: usize = 8192;
 pub(crate) const LEAK_BUCKET_LIMIT: u64 = 100;
@@ -97,9 +98,6 @@ impl Socket {
                 self.bind_unix_stream(stream);
             }
         }
-
-        QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
-        self.send_response(true);
     }
 
     /// Accept a new incoming connection unix stream from unix listener.
@@ -147,26 +145,12 @@ impl Socket {
         SocketHandler::new(self.get_stream_fd())
     }
 
-    /// In qmp feature, send event to client.
-    ///
-    /// # Arguments
-    ///
-    /// * `event` - The `QmpEvent` will be sent to client.
-    pub fn send_event(&self, event: &QmpEvent) {
-        if self.is_connected() {
-            let mut handler = self.get_socket_handler();
-            let event_str = serde_json::to_string(&event).unwrap();
-            handler.send_str(&event_str).unwrap();
-            info!("EVENT: --> {:?}", event);
-        }
-    }
-
     /// In qmp feature, send empty or greeting response to client.
     ///
     /// # Arguments
     ///
     /// * `is_greeting` - Whether sending greeting response or not.
-    pub fn send_response(&self, is_greeting: bool) {
+    pub fn send_response(&self, is_greeting: bool) -> std::io::Result<()> {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
@@ -174,71 +158,62 @@ impl Socket {
             } else {
                 serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
             };
-            handler.send_str(&resp).unwrap();
+            handler.send_str(&resp)?;
             info!("QMP: --> {:?}", resp);
         }
+        Ok(())
     }
 
     /// Create socket's accepted stream to `event_notifier`.
     fn create_event_notifier(&mut self, shared_socket: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        self.accept();
 
-        let leak_bucket = Arc::new(Mutex::new(LeakBucket::new(LEAK_BUCKET_LIMIT)));
+        let leak_bucket = LeakBucket::new(LEAK_BUCKET_LIMIT);
+        if let Err(e) = leak_bucket {
+            error!("Failed to create leak bucket, {:?}", e);
+            return notifiers;
+        }
+        let leak_bucket = Arc::new(Mutex::new(leak_bucket.unwrap()));
         let shared_leak_bucket = leak_bucket.clone();
         let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
 
-        let mut handlers = Vec::new();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
-                if event == EventSet::IN {
-                    let socket_mutexed = shared_socket.lock().unwrap();
-                    let stream_fd = socket_mutexed.get_stream_fd();
+        self.accept();
+        QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
+        if let Err(e) = self.send_response(true) {
+            error!("{:?}", e);
+            QmpChannel::unbind();
+            return notifiers;
+        }
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+            if event == EventSet::IN {
+                let socket_mutexed = shared_socket.lock().unwrap();
+                let stream_fd = socket_mutexed.get_stream_fd();
 
-                    let performer = &socket_mutexed.performer.as_ref().unwrap();
-                    if let Err(e) = crate::qmp::handle_qmp(
-                        stream_fd,
-                        performer,
-                        &mut shared_leak_bucket.lock().unwrap(),
-                    ) {
-                        error!("{:?}", e);
-                    }
+                let performer = &socket_mutexed.performer.as_ref().unwrap();
+                if let Err(e) = crate::qmp::handle_qmp(
+                    stream_fd,
+                    performer,
+                    &mut shared_leak_bucket.lock().unwrap(),
+                ) {
+                    error!("{:?}", e);
                 }
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    let socket_mutexed = shared_socket.lock().unwrap();
-                    let stream_fd = socket_mutexed.get_stream_fd();
-                    let listener_fd = socket_mutexed.get_listener_fd();
+            }
+            if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let socket_mutexed = shared_socket.lock().unwrap();
+                let stream_fd = socket_mutexed.get_stream_fd();
 
-                    QmpChannel::unbind();
-
-                    Some(vec![
-                        EventNotifier::new(
-                            NotifierOperation::Delete,
-                            stream_fd,
-                            Some(listener_fd),
-                            EventSet::IN | EventSet::HANG_UP,
-                            Vec::new(),
-                        ),
-                        EventNotifier::new(
-                            NotifierOperation::Delete,
-                            leak_bucket_fd,
-                            None,
-                            EventSet::IN,
-                            Vec::new(),
-                        ),
-                    ])
-                } else {
-                    None
-                }
-            });
-        handlers.push(Arc::new(Mutex::new(handler)));
-
+                QmpChannel::unbind();
+                Some(gen_delete_notifiers(&[stream_fd, leak_bucket_fd]))
+            } else {
+                None
+            }
+        });
         let qmp_notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             self.get_stream_fd(),
             Some(self.get_listener_fd()),
             EventSet::IN | EventSet::HANG_UP,
-            handlers,
+            vec![handler],
         );
         notifiers.push(qmp_notifier);
 
@@ -247,11 +222,11 @@ impl Socket {
             leak_bucket_fd,
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(Box::new(move |_, fd| {
+            vec![Rc::new(move |_, fd| {
                 read_fd(fd);
                 leak_bucket.lock().unwrap().clear_timer();
                 None
-            })))],
+            })],
         );
         notifiers.push(leak_bucket_notifier);
 
@@ -264,22 +239,15 @@ impl EventNotifierHelper for Socket {
         let mut notifiers = Vec::new();
 
         let socket = shared_socket.clone();
-        let mut handlers = Vec::new();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| {
-                Some(socket.lock().unwrap().create_event_notifier(socket.clone()))
-            });
-
-        handlers.push(Arc::new(Mutex::new(handler)));
-
+        let handler: Rc<NotifierCallback> =
+            Rc::new(move |_, _| Some(socket.lock().unwrap().create_event_notifier(socket.clone())));
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             shared_socket.lock().unwrap().get_listener_fd(),
             None,
             EventSet::IN,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
 
         notifiers
@@ -287,7 +255,7 @@ impl EventNotifierHelper for Socket {
 }
 
 /// Type for api socket.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SocketType {
     Unix = 1,
 }
@@ -454,7 +422,7 @@ impl SocketRWHandler {
                     let scm_cmsg_header = unsafe {
                         std::slice::from_raw_parts(
                             CMSG_DATA(scm),
-                            std::mem::size_of::<[RawFd; 2]>() as usize,
+                            std::mem::size_of::<[RawFd; 2]>(),
                         )
                     };
                     for fd in scm_cmsg_header.iter() {
@@ -489,7 +457,7 @@ impl SocketRWHandler {
     /// # Errors
     /// The socket file descriptor is broken.
     fn write_fd(&mut self, length: usize) -> std::io::Result<()> {
-        use libc::{c_void, iovec, msghdr, sendmsg};
+        use libc::{c_void, iovec, msghdr, sendmsg, MSG_NOSIGNAL};
 
         let mut iov = iovec {
             iov_base: self.buf.as_slice()[(self.pos - length)..(self.pos - 1)].as_ptr()
@@ -508,7 +476,7 @@ impl SocketRWHandler {
         mhdr.msg_controllen = 0;
         mhdr.msg_flags = 0;
 
-        if unsafe { sendmsg(self.socket_fd, &mhdr, 0) } == -1 {
+        if unsafe { sendmsg(self.socket_fd, &mhdr, MSG_NOSIGNAL) } == -1 {
             Err(Error::new(
                 ErrorKind::BrokenPipe,
                 "The socket pipe is broken!",
@@ -595,6 +563,20 @@ impl SocketHandler {
             stream: SocketRWHandler::new(r),
             buffer: String::new(),
         }
+    }
+
+    pub fn get_line(&mut self) -> Result<Option<String>> {
+        self.buffer.clear();
+        self.stream.clear();
+        self.stream.read_fd().unwrap();
+        self.stream.get_buf_string().map(|buffer| {
+            self.buffer = buffer;
+            if self.stream.pos == 0 {
+                None
+            } else {
+                Some(self.buffer.clone())
+            }
+        })
     }
 
     /// Parse the bytes received by `SocketHandler`.

@@ -13,161 +13,21 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::Arc;
 
+use anyhow::{bail, Result};
+
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use log::debug;
 
+use super::{TRBType, TRB_C, TRB_LK_TC, TRB_SIZE, TRB_TR_CH, TRB_TYPE_MASK, TRB_TYPE_SHIFT};
 use crate::xhci::xhci_controller::dma_read_bytes;
-use anyhow::{bail, Result};
-
-/// Transfer Request Block
-pub const TRB_SIZE: u32 = 16;
-pub const TRB_TYPE_SHIFT: u32 = 10;
-pub const TRB_TYPE_MASK: u32 = 0x3f;
-/// Cycle bit
-pub const TRB_C: u32 = 1;
-/// Event Data
-pub const TRB_EV_ED: u32 = 1 << 2;
-/// Toggle Cycle
-pub const TRB_LK_TC: u32 = 1 << 1;
-/// Interrupt-on Short Packet
-pub const TRB_TR_ISP: u32 = 1 << 2;
-/// Chain bit
-pub const TRB_TR_CH: u32 = 1 << 4;
-/// Interrupt On Completion
-pub const TRB_TR_IOC: u32 = 1 << 5;
-/// Immediate Data.
-pub const TRB_TR_IDT: u32 = 1 << 6;
-/// Direction of the data transfer.
-pub const TRB_TR_DIR: u32 = 1 << 16;
-/// TRB Transfer Length Mask
-pub const TRB_TR_LEN_MASK: u32 = 0x1ffff;
-/// Setup Stage TRB Length always 8
-pub const SETUP_TRB_TR_LEN: u32 = 8;
+use crate::UsbError;
 
 const TRB_LINK_LIMIT: u32 = 32;
 /// The max size of a ring segment in bytes is 64k.
 const RING_SEGMENT_LIMIT: u32 = 0x1_0000;
 /// The max size of ring.
 const RING_LEN_LIMIT: u32 = TRB_LINK_LIMIT * RING_SEGMENT_LIMIT / TRB_SIZE;
-
-/// TRB Type Definitions. See the spec 6.4.6 TRB types.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum TRBType {
-    TrbReserved = 0,
-    TrNormal,
-    TrSetup,
-    TrData,
-    TrStatus,
-    TrIsoch,
-    TrLink,
-    TrEvdata,
-    TrNoop,
-    CrEnableSlot,
-    CrDisableSlot,
-    CrAddressDevice,
-    CrConfigureEndpoint,
-    CrEvaluateContext,
-    CrResetEndpoint,
-    CrStopEndpoint,
-    CrSetTrDequeue,
-    CrResetDevice,
-    CrForceEvent,
-    CrNegotiateBw,
-    CrSetLatencyTolerance,
-    CrGetPortBandwidth,
-    CrForceHeader,
-    CrNoop,
-    ErTransfer = 32,
-    ErCommandComplete,
-    ErPortStatusChange,
-    ErBandwidthRequest,
-    ErDoorbell,
-    ErHostController,
-    ErDeviceNotification,
-    ErMfindexWrap,
-    Unknown,
-}
-
-impl From<u32> for TRBType {
-    fn from(t: u32) -> TRBType {
-        match t {
-            0 => TRBType::TrbReserved,
-            1 => TRBType::TrNormal,
-            2 => TRBType::TrSetup,
-            3 => TRBType::TrData,
-            4 => TRBType::TrStatus,
-            5 => TRBType::TrIsoch,
-            6 => TRBType::TrLink,
-            7 => TRBType::TrEvdata,
-            8 => TRBType::TrNoop,
-            9 => TRBType::CrEnableSlot,
-            10 => TRBType::CrDisableSlot,
-            11 => TRBType::CrAddressDevice,
-            12 => TRBType::CrConfigureEndpoint,
-            13 => TRBType::CrEvaluateContext,
-            14 => TRBType::CrResetEndpoint,
-            15 => TRBType::CrStopEndpoint,
-            16 => TRBType::CrSetTrDequeue,
-            17 => TRBType::CrResetDevice,
-            18 => TRBType::CrForceEvent,
-            19 => TRBType::CrNegotiateBw,
-            20 => TRBType::CrSetLatencyTolerance,
-            21 => TRBType::CrGetPortBandwidth,
-            22 => TRBType::CrForceHeader,
-            23 => TRBType::CrNoop,
-            32 => TRBType::ErTransfer,
-            33 => TRBType::ErCommandComplete,
-            34 => TRBType::ErPortStatusChange,
-            35 => TRBType::ErBandwidthRequest,
-            36 => TRBType::ErDoorbell,
-            37 => TRBType::ErHostController,
-            38 => TRBType::ErDeviceNotification,
-            39 => TRBType::ErMfindexWrap,
-            _ => TRBType::Unknown,
-        }
-    }
-}
-
-/// TRB Completion Code. See the spec 6.4.5 TRB Completion Codes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum TRBCCode {
-    Invalid = 0,
-    Success,
-    DataBufferError,
-    BabbleDetected,
-    UsbTransactionError,
-    TrbError,
-    StallError,
-    ResourceError,
-    BandwidthError,
-    NoSlotsError,
-    InvalidStreamTypeError,
-    SlotNotEnabledError,
-    EpNotEnabledError,
-    ShortPacket,
-    RingUnderrun,
-    RingOverrun,
-    VfErFull,
-    ParameterError,
-    BandwidthOverrun,
-    ContextStateError,
-    NoPingResponseError,
-    EventRingFullError,
-    IncompatibleDeviceError,
-    MissedServiceError,
-    CommandRingStopped,
-    CommandAborted,
-    Stopped,
-    StoppedLengthInvalid,
-    MaxExitLatencyTooLargeError = 29,
-    IsochBufferOverrun = 31,
-    EventLostError,
-    UndefinedError,
-    InvalidStreamIdError,
-    SecondaryBandwidthError,
-    SplitTransactionError,
-}
 
 type DmaAddr = u64;
 
@@ -253,7 +113,9 @@ impl XhciRing {
                     self.ccs = !self.ccs;
                 }
             } else {
-                self.dequeue += TRB_SIZE as u64;
+                self.dequeue = self.dequeue.checked_add(TRB_SIZE as u64).ok_or(
+                    UsbError::MemoryAccessOverflow(self.dequeue, TRB_SIZE as u64),
+                )?;
                 return Ok(Some(trb));
             }
         }
@@ -303,7 +165,9 @@ impl XhciRing {
                 }
             } else {
                 td.push(trb);
-                dequeue += TRB_SIZE as u64;
+                dequeue = dequeue
+                    .checked_add(TRB_SIZE as u64)
+                    .ok_or(UsbError::MemoryAccessOverflow(dequeue, TRB_SIZE as u64))?;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
                 } else if trb_type == TRBType::TrStatus {

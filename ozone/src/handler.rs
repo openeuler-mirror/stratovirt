@@ -79,7 +79,7 @@ impl OzoneHandler {
             handler.name = name;
         }
         if let Some(uid) = args.value_of("uid") {
-            let user_id = (&uid)
+            let user_id = (uid)
                 .parse::<u32>()
                 .map_err(|_| anyhow!(OzoneError::DigitalParseError("uid", uid)))?;
             if user_id > MAX_ID_NUMBER {
@@ -88,7 +88,7 @@ impl OzoneHandler {
             handler.uid = user_id;
         }
         if let Some(gid) = args.value_of("gid") {
-            let group_id = (&gid)
+            let group_id = (gid)
                 .parse::<u32>()
                 .map_err(|_| anyhow!(OzoneError::DigitalParseError("gid", gid)))?;
             if group_id > MAX_ID_NUMBER {
@@ -111,7 +111,7 @@ impl OzoneHandler {
         }
         if let Some(node) = args.value_of("numa") {
             handler.node = Some(
-                (&node)
+                (node)
                     .parse::<String>()
                     .map_err(|_| anyhow!(OzoneError::DigitalParseError("numa", node)))?,
             );
@@ -261,7 +261,7 @@ impl OzoneHandler {
         namespace::set_mount_namespace(self.chroot_dir.to_str().unwrap())?;
 
         for folder in NEWROOT_FOLDERS.iter() {
-            self.create_newroot_folder(*folder)?;
+            self.create_newroot_folder(folder)?;
         }
 
         for index in 0..NEWROOT_DEVICE_NR {
@@ -330,6 +330,7 @@ impl OzoneHandler {
 /// Disinfect the process before launching the ozone process.
 fn disinfect_process() -> Result<()> {
     let fd_entries = read_dir(SELF_FD).with_context(|| "Failed to open process fd proc")?;
+    let mut open_fds = vec![];
     for entry in fd_entries {
         if entry.is_err() {
             break;
@@ -339,9 +340,17 @@ fn disinfect_process() -> Result<()> {
         let fd = file_name.parse::<libc::c_int>().unwrap_or(0);
 
         if fd > 2 {
-            syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?;
+            open_fds.push(fd);
         }
     }
+
+    for fd in open_fds {
+        let ret = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if ret != -1 {
+            syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?
+        }
+    }
+
     Ok(())
 }
 

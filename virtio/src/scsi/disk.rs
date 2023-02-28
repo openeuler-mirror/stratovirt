@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::sync::{Arc, Mutex, Weak};
@@ -17,8 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
-use machine_manager::config::ScsiDevConfig;
-use util::file::open_disk_file;
+use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -44,10 +44,18 @@ pub const SCSI_DISK_F_REMOVABLE: u32 = 0;
 pub const SCSI_DISK_F_DPOFUA: u32 = 1;
 
 /// Used to compute the number of sectors.
-const SECTOR_SHIFT: u8 = 9;
+pub const SECTOR_SHIFT: u8 = 9;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 pub const DEFAULT_SECTOR_SIZE: u32 = 1_u32 << SECTOR_SHIFT;
+
+/// Scsi disk's block size is 512 Bytes.
+pub const SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT: u32 = 9;
+pub const SCSI_DISK_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT;
+
+/// Scsi media device's block size is 2048 Bytes.
+pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT: u32 = 11;
+pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT;
 
 #[derive(Clone, Default)]
 pub struct ScsiDevState {
@@ -86,43 +94,51 @@ pub struct ScsiDevice {
     pub state: ScsiDevState,
     /// Image file opened.
     pub disk_image: Option<Arc<File>>,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
     /// Number of sectors of the image file.
     pub disk_sectors: u64,
+    /// Scsi Device block size.
+    pub block_size: u32,
     /// Scsi device type.
     pub scsi_type: u32,
     /// Scsi Bus attached to.
     pub parent_bus: Weak<Mutex<ScsiBus>>,
-}
-
-impl Default for ScsiDevice {
-    fn default() -> Self {
-        ScsiDevice {
-            config: Default::default(),
-            state: Default::default(),
-            disk_image: None,
-            disk_sectors: 0,
-            scsi_type: SCSI_TYPE_DISK,
-            parent_bus: Weak::new(),
-        }
-    }
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl ScsiDevice {
-    pub fn new(config: ScsiDevConfig, scsi_type: u32) -> ScsiDevice {
+    pub fn new(
+        config: ScsiDevConfig,
+        scsi_type: u32,
+        drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    ) -> ScsiDevice {
         ScsiDevice {
             config,
             state: ScsiDevState::new(),
             disk_image: None,
+            req_align: 1,
+            buf_align: 1,
             disk_sectors: 0,
+            block_size: 0,
             scsi_type,
             parent_bus: Weak::new(),
+            drive_files,
         }
     }
 
     pub fn realize(&mut self) -> Result<()> {
         match self.scsi_type {
             SCSI_TYPE_DISK => {
+                self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
                 self.state.product = "STRA HARDDISK".to_string();
+            }
+            SCSI_TYPE_ROM => {
+                self.block_size = SCSI_CDROM_DEFAULT_BLOCK_SIZE;
+                self.state.product = "STRA CDROM".to_string();
             }
             _ => {
                 bail!("Scsi type {} does not support now", self.scsi_type);
@@ -137,20 +153,20 @@ impl ScsiDevice {
         if !self.config.path_on_host.is_empty() {
             self.disk_image = None;
 
-            let mut file = open_disk_file(
-                &self.config.path_on_host,
-                self.config.read_only,
-                self.config.direct,
-            )?;
-
+            let drive_files = self.drive_files.lock().unwrap();
+            let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
             disk_size = file
                 .seek(SeekFrom::End(0))
-                .with_context(|| "Failed to seek the end for scsi device")?
-                as u64;
-
+                .with_context(|| "Failed to seek the end for scsi device")?;
             self.disk_image = Some(Arc::new(file));
+
+            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
+            self.req_align = alignments.0;
+            self.buf_align = alignments.1;
         } else {
             self.disk_image = None;
+            self.req_align = 1;
+            self.buf_align = 1;
         }
 
         self.disk_sectors = disk_size >> SECTOR_SHIFT;

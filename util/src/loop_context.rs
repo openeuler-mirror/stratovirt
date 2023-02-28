@@ -11,14 +11,18 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use libc::{c_void, read};
+use libc::{c_void, read, EFD_NONBLOCK};
 use log::warn;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
+use vmm_sys_util::eventfd::EventFd;
 
+use crate::test_helper::{get_test_time, is_test_enabled};
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -46,34 +50,36 @@ pub enum NotifierOperation {
     Resume = 32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum EventStatus {
     /// Event is currently monitored in epoll.
     Alive = 0,
     /// Event is parked, temporarily not monitored.
     Parked = 1,
-    /// Event is removed.
+    /// Event is removed, thus not monitored.
     Removed = 2,
 }
 
+// The NotifierCallback must NOT update notifier status of itself, otherwise causes
+// deadlock. Instead it should return notifiers and let caller to do so.
 pub type NotifierCallback = dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>;
 
 /// Epoll Event Notifier Entry.
 pub struct EventNotifier {
     /// Raw file descriptor
-    pub raw_fd: i32,
+    raw_fd: i32,
     /// Notifier operation
-    pub op: NotifierOperation,
+    op: NotifierOperation,
     /// Parked fd, temporarily removed from epoll
-    pub parked_fd: Option<i32>,
+    parked_fd: Option<i32>,
     /// The types of events for which we use this fd
-    pub event: EventSet,
+    event: EventSet,
     /// Event Handler List, one fd event may have many handlers
-    pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    handlers: Vec<Rc<NotifierCallback>>,
+    /// Pre-polling handler
+    pub handler_poll: Option<Box<NotifierCallback>>,
     /// Event status
-    status: EventStatus,
-    /// The flag representing whether pre polling is required
-    pub io_poll: bool,
+    status: Arc<Mutex<EventStatus>>,
 }
 
 impl fmt::Debug for EventNotifier {
@@ -84,7 +90,7 @@ impl fmt::Debug for EventNotifier {
             .field("parked_fd", &self.parked_fd)
             .field("event", &self.event)
             .field("status", &self.status)
-            .field("io_poll", &self.io_poll)
+            .field("io_poll", &self.handler_poll.is_some())
             .finish()
     }
 }
@@ -96,7 +102,7 @@ impl EventNotifier {
         raw_fd: i32,
         parked_fd: Option<i32>,
         event: EventSet,
-        handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+        handlers: Vec<Rc<NotifierCallback>>,
     ) -> Self {
         EventNotifier {
             raw_fd,
@@ -104,8 +110,8 @@ impl EventNotifier {
             parked_fd,
             event,
             handlers,
-            status: EventStatus::Alive,
-            io_poll: false,
+            handler_poll: None,
+            status: Arc::new(Mutex::new(EventStatus::Alive)),
         }
     }
 }
@@ -118,6 +124,36 @@ impl EventNotifier {
 /// easy to get notifiers, and add to epoll context.
 pub trait EventNotifierHelper {
     fn internal_notifiers(_: Arc<Mutex<Self>>) -> Vec<EventNotifier>;
+}
+
+pub fn get_notifiers_fds(notifiers: &[EventNotifier]) -> Vec<RawFd> {
+    let mut fds = Vec::with_capacity(notifiers.len());
+    for notifier in notifiers {
+        fds.push(notifier.raw_fd);
+    }
+    fds
+}
+
+pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
+    let mut notifiers = Vec::with_capacity(fds.len());
+    for fd in fds {
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            *fd,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+    }
+    notifiers
+}
+
+fn get_current_time() -> Instant {
+    if is_test_enabled() {
+        get_test_time()
+    } else {
+        Instant::now()
+    }
 }
 
 /// EventLoop manager, advise continue running or stop running
@@ -144,7 +180,7 @@ impl Timer {
     pub fn new(func: Box<dyn Fn()>, nsec: u64) -> Self {
         Timer {
             func,
-            expire_time: Instant::now() + Duration::new(0, nsec as u32),
+            expire_time: get_current_time() + Duration::new(0, nsec as u32),
         }
     }
 }
@@ -156,6 +192,13 @@ pub struct EventLoopContext {
     epoll: Epoll,
     /// Control epoll loop running.
     manager: Option<Arc<Mutex<dyn EventLoopManager>>>,
+    /// Used to wakeup epoll to re-evaluate events or timers.
+    kick_event: EventFd,
+    /// Used to avoid unnecessary kick operation when the
+    /// next re-evaluation is performed before next epoll.
+    kick_me: AtomicBool,
+    /// Used to identify that a kick operation ocurred.
+    kicked: AtomicBool,
     /// Fds registered to the `EventLoop`.
     events: Arc<RwLock<BTreeMap<RawFd, Box<EventNotifier>>>>,
     /// Events abandoned are stored in garbage collector.
@@ -163,22 +206,56 @@ pub struct EventLoopContext {
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
     /// Timer list
-    timers: Vec<Timer>,
+    timers: Arc<Mutex<Vec<Timer>>>,
 }
 
-unsafe impl Sync for EventLoopContext {}
+// SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
+// not sent between threads actually.
 unsafe impl Send for EventLoopContext {}
 
 impl EventLoopContext {
     /// Constructs a new `EventLoopContext`.
     pub fn new() -> Self {
-        EventLoopContext {
+        let mut ctx = EventLoopContext {
             epoll: Epoll::new().unwrap(),
             manager: None,
+            kick_event: EventFd::new(EFD_NONBLOCK).unwrap(),
+            kick_me: AtomicBool::new(false),
+            kicked: AtomicBool::new(false),
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
-            timers: Vec::new(),
+            timers: Arc::new(Mutex::new(Vec::new())),
+        };
+        ctx.init_kick();
+        ctx
+    }
+
+    fn init_kick(&mut self) {
+        let kick_handler: Rc<NotifierCallback> = Rc::new(|_, fd| {
+            read_fd(fd);
+            None
+        });
+        self.add_event(EventNotifier::new(
+            NotifierOperation::AddExclusion,
+            self.kick_event.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![kick_handler],
+        ))
+        .unwrap();
+    }
+
+    // Force epoll.wait to exit to re-evaluate events and timers.
+    fn kick(&mut self) {
+        self.kicked.store(true, Ordering::SeqCst);
+        if self.kick_me.load(Ordering::SeqCst) {
+            if let Err(e) = self.kick_event.write(1) {
+                // Rarely fails when event is full, even if this
+                // occurs, no need to add event again, so log is
+                // enough for error handling.
+                warn!("Failed to kick eventloop, {:?}", e);
+            }
         }
     }
 
@@ -187,13 +264,25 @@ impl EventLoopContext {
     }
 
     fn clear_gc(&mut self) {
-        let mut gc = self.gc.write().unwrap();
-        gc.clear();
+        let max_cnt = self.gc.write().unwrap().len();
+        let mut pop_cnt = 0;
+
+        loop {
+            // Loop to avoid hold lock for long time.
+            if pop_cnt >= max_cnt {
+                break;
+            }
+            // SAFETY: We will stop removing when reach max_cnt and no other place
+            // removes element of gc. This is to avoid infinite poping if other
+            // thread continuously adds element to gc.
+            self.gc.write().unwrap().remove(0);
+            pop_cnt += 1;
+        }
     }
 
-    fn add_event(&mut self, event: EventNotifier) -> Result<()> {
-        // If there is one same alive event monitored, update the handlers.
-        // If there is one same parked event, update the handlers but warn.
+    fn add_event(&mut self, mut event: EventNotifier) -> Result<()> {
+        // If there is one same alive event monitored, update the handlers and eventset.
+        // If there is one same parked event, update the handlers and eventset but warn.
         // If there is no event in the map, insert the event and park the related.
         let mut events_map = self.events.write().unwrap();
         if let Some(notifier) = events_map.get_mut(&event.raw_fd) {
@@ -201,28 +290,35 @@ impl EventLoopContext {
                 return Err(anyhow!(UtilError::BadNotifierOperation));
             }
 
-            let mut event = event;
+            if notifier.event != event.event {
+                self.epoll.ctl(
+                    ControlOperation::Modify,
+                    notifier.raw_fd,
+                    EpollEvent::new(notifier.event | event.event, &**notifier as *const _ as u64),
+                )?;
+                notifier.event |= event.event;
+            }
             notifier.handlers.append(&mut event.handlers);
-            if let EventStatus::Parked = notifier.status {
+            if *notifier.status.lock().unwrap() == EventStatus::Parked {
                 warn!("Parked event updated!");
             }
             return Ok(());
         }
 
-        let raw_fd = event.raw_fd;
-        events_map.insert(raw_fd, Box::new(event));
-        let event = events_map.get(&raw_fd).unwrap();
+        let event = Box::new(event);
         self.epoll.ctl(
             ControlOperation::Add,
             event.raw_fd,
-            EpollEvent::new(event.event, &**event as *const _ as u64),
+            EpollEvent::new(event.event, &*event as *const _ as u64),
         )?;
+        let parked_fd = event.parked_fd;
+        events_map.insert(event.raw_fd, event);
 
-        if let Some(parked_fd) = event.parked_fd {
+        if let Some(parked_fd) = parked_fd {
             if let Some(parked) = events_map.get_mut(&parked_fd) {
                 self.epoll
                     .ctl(ControlOperation::Delete, parked_fd, EpollEvent::default())?;
-                parked.status = EventStatus::Parked;
+                *parked.status.lock().unwrap() = EventStatus::Parked;
             } else {
                 return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
             }
@@ -232,14 +328,13 @@ impl EventLoopContext {
     }
 
     fn rm_event(&mut self, event: &EventNotifier) -> Result<()> {
-        // If there is one same parked event, return Ok.
         // If there is no event in the map, return Error.
-        // If there is one same alive event monitored, put the event in gc and reactivate the parked event.
+        // Else put the event in gc and reactivate the parked event.
         let mut events_map = self.events.write().unwrap();
-        match events_map.get_mut(&event.raw_fd) {
+        match events_map.get(&event.raw_fd) {
             Some(notifier) => {
-                if let EventStatus::Alive = notifier.status {
-                    // No need to delete fd if status is Parked, it's done in park_event.
+                // No need to delete fd if status is Parked, it's done in park_event.
+                if *notifier.status.lock().unwrap() == EventStatus::Alive {
                     if let Err(error) = self.epoll.ctl(
                         ControlOperation::Delete,
                         notifier.raw_fd,
@@ -251,24 +346,23 @@ impl EventLoopContext {
                         }
                     }
                 }
+                let parked_fd = notifier.parked_fd;
+                let event = events_map.remove(&event.raw_fd).unwrap();
+                *event.status.lock().unwrap() = EventStatus::Removed;
+                self.gc.write().unwrap().push(event);
 
-                notifier.status = EventStatus::Removed;
-
-                if let Some(parked_fd) = notifier.parked_fd {
+                if let Some(parked_fd) = parked_fd {
                     if let Some(parked) = events_map.get_mut(&parked_fd) {
                         self.epoll.ctl(
                             ControlOperation::Add,
                             parked_fd,
                             EpollEvent::new(parked.event, &**parked as *const _ as u64),
                         )?;
-                        parked.status = EventStatus::Alive;
+                        *parked.status.lock().unwrap() = EventStatus::Alive;
                     } else {
                         return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
                     }
                 }
-
-                let event = events_map.remove(&event.raw_fd).unwrap();
-                self.gc.write().unwrap().push(event);
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -279,12 +373,11 @@ impl EventLoopContext {
     }
 
     /// change the callback for event
-    fn modify_event(&mut self, event: EventNotifier) -> Result<()> {
+    fn modify_event(&mut self, mut event: EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
                 notifier.handlers.clear();
-                let mut event = event;
                 notifier.handlers.append(&mut event.handlers);
             }
             _ => {
@@ -307,7 +400,7 @@ impl EventLoopContext {
                     .with_context(|| {
                         format!("Failed to park event, event fd:{}", notifier.raw_fd)
                     })?;
-                notifier.status = EventStatus::Parked;
+                *notifier.status.lock().unwrap() = EventStatus::Parked;
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -329,7 +422,7 @@ impl EventLoopContext {
                     .with_context(|| {
                         format!("Failed to resume event, event fd: {}", notifier.raw_fd)
                     })?;
-                notifier.status = EventStatus::Alive;
+                *notifier.status.lock().unwrap() = EventStatus::Alive;
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -363,6 +456,7 @@ impl EventLoopContext {
                 }
             }
         }
+        self.kick();
 
         Ok(())
     }
@@ -376,7 +470,7 @@ impl EventLoopContext {
             }
         }
 
-        self.epoll_wait_manager(self.timers_min_timeout())
+        self.epoll_wait_manager(self.timers_min_timeout_ms())
     }
 
     pub fn iothread_run(&mut self) -> Result<bool> {
@@ -386,21 +480,18 @@ impl EventLoopContext {
                 return Ok(false);
             }
         }
-        let timeout = self.timers_min_timeout();
 
+        let timeout = self.timers_min_timeout_ms();
         if timeout == -1 {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
-                for (_fd, notifer) in self.events.read().unwrap().iter() {
-                    if notifer.io_poll {
-                        if let EventStatus::Alive = notifer.status {
-                            let handle = notifer.handlers[1].lock().unwrap();
-                            match handle(self.ready_events[1].event_set(), notifer.raw_fd) {
-                                None => {}
-                                Some(_) => {
-                                    break;
-                                }
-                            }
-                        }
+                for notifer in self.events.read().unwrap().values() {
+                    let status_locked = notifer.status.lock().unwrap();
+                    if *status_locked != EventStatus::Alive || notifer.handler_poll.is_none() {
+                        continue;
+                    }
+                    let handler_poll = notifer.handler_poll.as_ref().unwrap();
+                    if handler_poll(EventSet::empty(), notifer.raw_fd).is_some() {
+                        break;
                     }
                 }
             }
@@ -419,78 +510,122 @@ impl EventLoopContext {
         let timer = Timer::new(func, nsec);
 
         // insert in order of expire_time
-        let mut index = self.timers.len();
-        for (i, t) in self.timers.iter().enumerate() {
+        let mut timers = self.timers.lock().unwrap();
+        let mut index = timers.len();
+        for (i, t) in timers.iter().enumerate() {
             if timer.expire_time < t.expire_time {
                 index = i;
                 break;
             }
         }
-        self.timers.insert(index, timer);
+        timers.insert(index, timer);
+        drop(timers);
+        self.kick();
     }
 
-    /// Get the expire_time of the soonest Timer, and then translate it to timeout.
-    fn timers_min_timeout(&self) -> i32 {
-        if self.timers.is_empty() {
-            return -1;
+    /// Get the expire_time of the soonest Timer, and then translate it to duration.
+    fn timers_min_duration(&self) -> Option<Duration> {
+        // The kick event happens before re-evaluate can be ignored.
+        self.kicked.store(false, Ordering::SeqCst);
+        let timers = self.timers.lock().unwrap();
+        if timers.is_empty() {
+            return None;
         }
 
-        let now = Instant::now();
-        if self.timers[0].expire_time <= now {
-            return 0;
-        }
+        Some(
+            timers[0]
+                .expire_time
+                .saturating_duration_since(get_current_time()),
+        )
+    }
 
-        let timeout = (self.timers[0].expire_time - now).as_millis();
-        if timeout >= i32::MAX as u128 {
-            i32::MAX - 1
-        } else {
-            timeout as i32
+    fn timers_min_timeout_ms(&self) -> i32 {
+        match self.timers_min_duration() {
+            Some(d) => {
+                let timeout = d.as_millis();
+                if timeout >= i32::MAX as u128 {
+                    i32::MAX - 1
+                } else {
+                    timeout as i32
+                }
+            }
+            None => -1,
+        }
+    }
+
+    pub fn timers_min_timeout_ns(&self) -> i64 {
+        match self.timers_min_duration() {
+            Some(d) => {
+                let timeout = d.as_nanos();
+                if timeout >= i64::MAX as u128 {
+                    i64::MAX
+                } else {
+                    timeout as i64
+                }
+            }
+            None => -1,
         }
     }
 
     /// Call function of the timers which have already expired.
-    fn run_timers(&mut self) {
-        let now = Instant::now();
+    pub fn run_timers(&mut self) {
+        let now = get_current_time();
         let mut expired_nr = 0;
 
-        for timer in &self.timers {
+        let mut timers = self.timers.lock().unwrap();
+        for timer in timers.iter() {
             if timer.expire_time > now {
                 break;
             }
 
             expired_nr += 1;
-            (timer.func)();
         }
 
-        self.timers.drain(0..expired_nr);
+        let expired_timers: Vec<Timer> = timers.drain(0..expired_nr).collect();
+        drop(timers);
+        for timer in expired_timers {
+            (timer.func)();
+        }
     }
 
-    fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
+    fn epoll_wait_manager(&mut self, mut time_out: i32) -> Result<bool> {
+        let need_kick = time_out != 0;
+        if need_kick {
+            self.kick_me.store(true, Ordering::SeqCst);
+            if self.kicked.load(Ordering::SeqCst) {
+                time_out = 0;
+            }
+        }
         let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),
         };
+        if need_kick {
+            self.kick_me.store(false, Ordering::SeqCst);
+        }
 
         for i in 0..ev_count {
-            // It`s safe because elements in self.events_map never get released in other functions
+            // SAFETY: elements in self.events_map never get released in other functions
             let event = unsafe {
                 let event_ptr = self.ready_events[i].data() as *const EventNotifier;
                 &*event_ptr as &EventNotifier
             };
-            if let EventStatus::Alive = event.status {
-                let mut notifiers = Vec::new();
+            let mut notifiers = Vec::new();
+            let status_locked = event.status.lock().unwrap();
+            if *status_locked == EventStatus::Alive {
                 for j in 0..event.handlers.len() {
-                    let handle = event.handlers[j].lock().unwrap();
-                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
+                    let handler = &event.handlers[j];
+                    match handler(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
                             notifiers.append(&mut notifier);
                         }
                     }
                 }
-                self.update_events(notifiers)?;
             }
+            drop(status_locked);
+            self.update_events(notifiers)?;
         }
 
         self.run_timers();
@@ -508,6 +643,9 @@ impl Default for EventLoopContext {
 pub fn read_fd(fd: RawFd) -> u64 {
     let mut value: u64 = 0;
 
+    // SAFETY: this is called by notifier handler and notifier handler
+    // is executed with fd is is valid. The value is defined above thus
+    // valid too.
     let ret = unsafe {
         read(
             fd,
@@ -526,7 +664,6 @@ pub fn read_fd(fd: RawFd) -> u64 {
 #[cfg(test)]
 mod test {
     use super::*;
-    use libc::*;
     use std::os::unix::io::{AsRawFd, RawFd};
     use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -537,13 +674,7 @@ mod test {
                 None => {
                     return None;
                 }
-                Some(notifier) => {
-                    if let EventStatus::Alive = notifier.status {
-                        Some(true)
-                    } else {
-                        Some(false)
-                    }
-                }
+                Some(notifier) => Some(*notifier.status.lock().unwrap() == EventStatus::Alive),
             }
         }
 
@@ -562,8 +693,8 @@ mod test {
         }
     }
 
-    fn generate_handler(related_fd: i32) -> Box<NotifierCallback> {
-        Box::new(move |_, _| {
+    fn generate_handler(related_fd: i32) -> Rc<NotifierCallback> {
+        Rc::new(move |_, _| {
             let mut notifiers = Vec::new();
             let event = EventNotifier::new(
                 NotifierOperation::AddShared,
@@ -586,13 +717,13 @@ mod test {
 
         let handler1 = generate_handler(fd1_related.as_raw_fd());
         let mut handlers = Vec::new();
-        handlers.push(Arc::new(Mutex::new(handler1)));
+        handlers.push(handler1);
         let event1 = EventNotifier::new(
             NotifierOperation::AddShared,
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            handlers.clone(),
+            handlers,
         );
 
         notifiers.push(event1);
@@ -667,7 +798,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1))],
+            vec![handler1],
         );
 
         let event1_update = EventNotifier::new(
@@ -675,7 +806,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1_update))],
+            vec![handler1_update],
         );
 
         notifiers.push(event1);

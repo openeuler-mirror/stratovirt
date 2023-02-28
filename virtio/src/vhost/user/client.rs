@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
 use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
@@ -19,9 +21,9 @@ use address_space::{
     AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
 };
 use log::{error, info, warn};
-use machine_manager::event_loop::EventLoop;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::time::NANOSECONDS_PER_SECOND;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
@@ -34,14 +36,17 @@ use super::message::{
 };
 use super::sock::VhostUserSock;
 use crate::block::VirtioBlkConfig;
+use crate::virtio_has_feature;
 use crate::VhostUser::message::VhostUserConfig;
-use crate::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
+use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
-/// Vhost supports `VHOST_USER_GET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
+/// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
+/// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
+pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -50,7 +55,6 @@ struct ClientInternal {
     max_queue_num: u64,
 }
 
-#[allow(dead_code)]
 impl ClientInternal {
     fn new(sock: VhostUserSock, max_queue_num: u64) -> Self {
         ClientInternal {
@@ -60,15 +64,24 @@ impl ClientInternal {
     }
 
     fn wait_ack_msg<T: Sized + Default>(&self, request: u32) -> Result<T> {
+        self.wait_ack_msg_and_data::<T>(request, None, &mut [])
+    }
+
+    fn wait_ack_msg_and_data<T: Sized + Default>(
+        &self,
+        request: u32,
+        payload_opt: Option<&mut [u8]>,
+        fds: &mut [RawFd],
+    ) -> Result<T> {
         let mut hdr = VhostUserMsgHdr::default();
         let mut body: T = Default::default();
-        let payload_opt: Option<&mut [u8]> = None;
-
-        let (recv_len, _fds_num) = self
+        let (recv_len, fds_num) = self
             .sock
-            .recv_msg(Some(&mut hdr), Some(&mut body), payload_opt, &mut [])
+            .recv_msg(Some(&mut hdr), Some(&mut body), payload_opt, fds)
             .with_context(|| "Failed to recv ack msg")?;
-
+        if fds_num != fds.len() {
+            bail!("Unexpected fds num: {}, expected: {}", fds_num, fds.len());
+        }
         if request != hdr.request
             || recv_len != (size_of::<VhostUserMsgHdr>() + size_of::<T>())
             || !hdr.is_reply()
@@ -89,7 +102,6 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     });
 
     info!("Try to reconnect vhost-user net.");
-    let cloned_client = client.clone();
     if let Err(_e) = client
         .lock()
         .unwrap()
@@ -110,9 +122,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     }
 
     client.lock().unwrap().reconnecting = false;
-    if let Err(e) =
-        EventLoop::update_event(EventNotifierHelper::internal_notifiers(cloned_client), None)
-    {
+    if let Err(e) = VhostUserClient::add_event(client) {
         error!("Failed to update event for client sock, {:?}", e);
     }
 
@@ -126,28 +136,21 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
 impl EventNotifierHelper for VhostUserClient {
     fn internal_notifiers(client_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        let mut handlers = Vec::new();
 
         let cloned_client = client_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    let mut locked_client = cloned_client.lock().unwrap();
-                    if let Err(e) = locked_client.delete_event() {
-                        error!("Failed to delete vhost-user client event, {:?}", e);
-                    }
-                    if !locked_client.reconnecting {
-                        locked_client.reconnecting = true;
-                        drop(locked_client);
-                        vhost_user_reconnect(&cloned_client);
-                    }
-                    None
-                } else {
-                    None
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, fd| {
+            if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let mut locked_client = cloned_client.lock().unwrap();
+                if !locked_client.reconnecting {
+                    locked_client.reconnecting = true;
+                    drop(locked_client);
+                    vhost_user_reconnect(&cloned_client);
                 }
-            });
-        handlers.push(Arc::new(Mutex::new(handler)));
-
+                Some(gen_delete_notifiers(&[fd]))
+            } else {
+                None
+            }
+        });
         let locked_client = client_handler.lock().unwrap();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
@@ -160,21 +163,7 @@ impl EventNotifierHelper for VhostUserClient {
                 .get_stream_raw_fd(),
             None,
             EventSet::HANG_UP,
-            handlers,
-        ));
-
-        // Register event notifier for delete_evt.
-        let cloned_client = client_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_client.lock().unwrap().delete_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            locked_client.delete_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
@@ -193,7 +182,6 @@ struct VhostUserMemInfo {
     enabled: bool,
 }
 
-#[allow(dead_code)]
 impl VhostUserMemInfo {
     fn new() -> Self {
         VhostUserMemInfo {
@@ -205,9 +193,18 @@ impl VhostUserMemInfo {
     fn addr_to_host(&self, addr: GuestAddress) -> Option<u64> {
         let addr = addr.raw_value();
         for reg_info in self.regions.lock().unwrap().iter() {
-            if addr >= reg_info.region.guest_phys_addr
-                && addr < reg_info.region.guest_phys_addr + reg_info.region.memory_size
-            {
+            let gpa_end = reg_info
+                .region
+                .guest_phys_addr
+                .checked_add(reg_info.region.memory_size)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Overflow when adding gpa with memory_size in region {:x?}",
+                        reg_info.region
+                    )
+                })
+                .ok()?;
+            if addr >= reg_info.region.guest_phys_addr && addr < gpa_end {
                 let offset = addr - reg_info.region.guest_phys_addr;
                 return Some(reg_info.region.userspace_addr + offset);
             }
@@ -251,7 +248,10 @@ impl VhostUserMemInfo {
             return Ok(());
         }
 
-        let file_back = fr.owner.get_file_backend().unwrap();
+        let file_back = fr
+            .owner
+            .get_file_backend()
+            .ok_or_else(|| anyhow!("Failed to get file backend"))?;
         let mut mem_regions = self.regions.lock().unwrap();
         let host_address = match fr.owner.get_host_address() {
             Some(addr) => addr,
@@ -306,10 +306,14 @@ impl Listener for VhostUserMemInfo {
     ) -> std::result::Result<(), anyhow::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
-                self.add_mem_range(range.unwrap())?;
+                self.add_mem_range(
+                    range.ok_or_else(|| anyhow!("Flat range is None when adding region"))?,
+                )?;
             }
             ListenerReqType::DeleteRegion => {
-                self.delete_mem_range(range.unwrap())?;
+                self.delete_mem_range(
+                    range.ok_or_else(|| anyhow!("Flat range is None when deleting region"))?,
+                )?;
             }
             _ => {}
         }
@@ -317,21 +321,60 @@ impl Listener for VhostUserMemInfo {
     }
 }
 
+/// Struct for set and get inflight fd request, field is defined by dpdk.
+#[repr(C)]
+#[derive(Debug, Default, Clone)]
+pub struct VhostUserInflight {
+    // The size of memory area to track inflight I/O.
+    pub mmap_size: u64,
+    // The offset from the start of the supplied file descriptor.
+    pub mmap_offset: u64,
+    // The number of virtqueues.
+    pub queue_num: u16,
+    // The size of virtqueues.
+    pub queue_size: u16,
+}
+
+/// Struct for saving inflight info, create this struct to save inflight info when
+/// vhost client start, use this struct to set inflight fd when vhost client reconnect.
+#[derive(Debug)]
+pub struct VhostInflight {
+    // The inflight file.
+    pub file: Arc<File>,
+    // Fd mmap addr, used for migration.
+    pub addr: u64,
+    pub inner: VhostUserInflight,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum VhostBackendType {
+    TypeNet,
+    TypeBlock,
+    TypeFs,
+}
+
 /// Struct for communication with the vhost user backend in userspace
 pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
     mem_info: VhostUserMemInfo,
-    delete_evt: EventFd,
+    delete_evts: Vec<RawFd>,
+    mem_space: Arc<AddressSpace>,
     queues: Vec<Arc<Mutex<Queue>>>,
-    queue_evts: Vec<EventFd>,
-    call_events: Vec<EventFd>,
+    queue_evts: Vec<Arc<EventFd>>,
+    call_events: Vec<Arc<EventFd>>,
     pub features: u64,
     reconnecting: bool,
+    inflight: Option<VhostInflight>,
+    backend_type: VhostBackendType,
 }
 
-#[allow(dead_code)]
 impl VhostUserClient {
-    pub fn new(mem_space: &Arc<AddressSpace>, path: &str, max_queue_num: u64) -> Result<Self> {
+    pub fn new(
+        mem_space: &Arc<AddressSpace>,
+        path: &str,
+        max_queue_num: u64,
+        backend_type: VhostBackendType,
+    ) -> Result<Self> {
         let mut sock = VhostUserSock::new(path);
         sock.domain.connect().with_context(|| {
             format!(
@@ -346,16 +389,18 @@ impl VhostUserClient {
             .with_context(|| "Failed to register memory for vhost user client")?;
 
         let client = Arc::new(Mutex::new(ClientInternal::new(sock, max_queue_num)));
-        let delete_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         Ok(VhostUserClient {
             client,
             mem_info,
-            delete_evt,
+            delete_evts: Vec::new(),
+            mem_space: mem_space.clone(),
             queues: Vec::new(),
             queue_evts: Vec::new(),
             call_events: Vec::new(),
             features: 0,
             reconnecting: false,
+            inflight: None,
+            backend_type,
         })
     }
 
@@ -367,43 +412,96 @@ impl VhostUserClient {
     }
 
     /// Save eventfd used for reconnection.
-    pub fn set_queue_evts(&mut self, queue_evts: &[EventFd]) {
+    pub fn set_queue_evts(&mut self, queue_evts: &[Arc<EventFd>]) {
         for evt in queue_evts.iter() {
-            self.queue_evts.push(evt.try_clone().unwrap());
+            self.queue_evts.push(evt.clone());
         }
     }
 
     /// Save irqfd used for reconnection.
-    pub fn set_call_events(&mut self, call_events: &[EventFd]) {
+    pub fn set_call_events(&mut self, call_events: &[Arc<EventFd>]) {
         for evt in call_events.iter() {
-            self.call_events.push(evt.try_clone().unwrap());
+            self.call_events.push(evt.clone());
         }
+    }
+
+    /// Set inflight fd, include get inflight fd from vhost and set inflight to vhost.
+    pub fn set_inflight(&mut self, queue_num: u16, queue_size: u16) -> Result<()> {
+        if self.backend_type != VhostBackendType::TypeBlock {
+            // Only vhost-user-blk supports inflight fd now.
+            return Ok(());
+        }
+        let protocol_feature = self
+            .get_protocol_features()
+            .with_context(|| "Failed to get protocol features for vhost-user blk")?;
+        if virtio_has_feature(
+            protocol_feature,
+            VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD as u32,
+        ) {
+            if self.inflight.is_none() {
+                // Expect 1 fd.
+                let mut fds = [RawFd::default()];
+                let vhost_user_inflight = self.get_inflight_fd(queue_num, queue_size, &mut fds)?;
+                let file = Arc::new(unsafe { File::from_raw_fd(fds[0]) });
+                let hva = do_mmap(
+                    &Some(file.as_ref()),
+                    vhost_user_inflight.mmap_size,
+                    vhost_user_inflight.mmap_offset,
+                    true,
+                    true,
+                    false,
+                )?;
+                let inflight = VhostInflight {
+                    file,
+                    addr: hva as u64,
+                    inner: vhost_user_inflight,
+                };
+                self.inflight = Some(inflight);
+            }
+            let inflight = self.inflight.as_ref().unwrap();
+            self.set_inflight_fd(inflight.inner.clone(), inflight.file.as_raw_fd())?;
+        } else {
+            bail!(
+                "Failed to get inflight fd, spdk doesn't support, spdk protocol feature: {:#b}",
+                protocol_feature
+            );
+        }
+        Ok(())
     }
 
     /// Activate device by vhost-user protocol.
     pub fn activate_vhost_user(&mut self) -> Result<()> {
         self.set_owner()
-            .with_context(|| "Failed to set owner for vhost-user net")?;
+            .with_context(|| "Failed to set owner for vhost-user")?;
 
         self.set_features(self.features)
-            .with_context(|| "Failed to set features for vhost-user net")?;
+            .with_context(|| "Failed to set features for vhost-user")?;
 
         self.set_mem_table()
-            .with_context(|| "Failed to set mem table for vhost-user net")?;
+            .with_context(|| "Failed to set mem table for vhost-user")?;
 
         let mut queue_num = self.queues.len();
         if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
             queue_num -= 1;
         }
+
+        let queue_size = self
+            .queues
+            .first()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .vring
+            .actual_size();
+        self.set_inflight(queue_num as u16, queue_size)?;
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
-            let queue = queue_mutex.lock().unwrap();
-            let actual_size = queue.vring.actual_size();
+            let actual_size = queue_mutex.lock().unwrap().vring.actual_size();
             self.set_vring_num(queue_index, actual_size)
                 .with_context(|| {
                     format!(
-                        "Failed to set vring num for vhost-user net, index: {}, size: {}",
+                        "Failed to set vring num for vhost-user, index: {}, size: {}",
                         queue_index, actual_size,
                     )
                 })?;
@@ -416,27 +514,29 @@ impl VhostUserClient {
             self.set_vring_addr(&queue_config, queue_index, 0)
                 .with_context(|| {
                     format!(
-                        "Failed to set vring addr for vhost-user net, index: {}",
+                        "Failed to set vring addr for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
-            self.set_vring_base(queue_index, 0).with_context(|| {
-                format!(
-                    "Failed to set vring base for vhost-user net, index: {}",
-                    queue_index,
-                )
-            })?;
-            self.set_vring_kick(queue_index, &self.queue_evts[queue_index])
+            let last_avail_idx = queue.vring.get_avail_idx(&self.mem_space)?;
+            self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
-                        "Failed to set vring kick for vhost-user net, index: {}",
+                        "Failed to set vring base for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
-            self.set_vring_call(queue_index, &self.call_events[queue_index])
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
                 .with_context(|| {
                     format!(
-                        "Failed to set vring call for vhost-user net, index: {}",
+                        "Failed to set vring kick for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_call(queue_index, self.call_events[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring call for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
@@ -445,7 +545,7 @@ impl VhostUserClient {
         for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
             self.set_vring_enable(queue_index, true).with_context(|| {
                 format!(
-                    "Failed to set vring enable for vhost-user net, index: {}",
+                    "Failed to set vring enable for vhost-user, index: {}",
                     queue_index,
                 )
             })?;
@@ -454,40 +554,44 @@ impl VhostUserClient {
         Ok(())
     }
 
-    /// Delete the socket event in ClientInternal.
-    pub fn delete_event(&self) -> Result<()> {
-        self.delete_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+    pub fn reset_vhost_user(&mut self) -> Result<()> {
+        let mut queue_num = self.queues.len();
+        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
+            queue_num -= 1;
+        }
+
+        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
+            self.set_vring_enable(queue_index, false)
+                .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
+            self.get_vring_base(queue_index)
+                .with_context(|| format!("Failed to get vring base, index: {}", queue_index))?;
+        }
+
+        self.queue_evts.clear();
+        self.call_events.clear();
+        self.queues.clear();
+
         Ok(())
     }
 
-    fn delete_evt_handler(&mut self) -> Vec<EventNotifier> {
-        vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.lock().unwrap().sock.domain.get_stream_raw_fd(),
-                None,
-                EventSet::HANG_UP,
-                vec![],
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.delete_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![],
-            ),
-        ]
+    pub fn add_event(client: &Arc<Mutex<Self>>) -> Result<()> {
+        let notifiers = EventNotifierHelper::internal_notifiers(client.clone());
+        register_event_helper(notifiers, None, &mut client.lock().unwrap().delete_evts)
+            .with_context(|| "Failed to update event for client sock")
+    }
+
+    /// Delete the socket event in ClientInternal.
+    pub fn delete_event(&mut self) -> Result<()> {
+        unregister_event_helper(None, &mut self.delete_evts)
     }
 
     /// Send get protocol features request to vhost.
     pub fn get_protocol_features(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetProtocolFeatures as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -499,26 +603,27 @@ impl VhostUserClient {
         Ok(features)
     }
 
-    /// Send set protocol features request to vhost.
-    pub fn set_protocol_features(&self, features: u64) -> Result<()> {
-        let client = self.client.lock().unwrap();
-        let hdr = VhostUserMsgHdr::new(
-            VhostUserMsgReq::SetProtocolFeatures as u32,
-            0,
-            size_of::<u64>() as u32,
-        );
+    /// Send u64 value to vhost.
+    fn set_value(&self, request: VhostUserMsgReq, value: u64) -> Result<()> {
+        let hdr = VhostUserMsgHdr::new(request as u32, 0, size_of::<u64>() as u32);
         let payload_opt: Option<&[u8]> = None;
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
-            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
-            .with_context(|| "Failed to send msg for setting protocols features")?;
+            .send_msg(Some(&hdr), Some(&value), payload_opt, &[])
+            .with_context(|| "Failed to send msg for setting value")?;
 
         Ok(())
     }
 
+    /// Set protocol features to vhost.
+    pub fn set_protocol_features(&self, features: u64) -> Result<()> {
+        self.set_value(VhostUserMsgReq::SetProtocolFeatures, features)
+    }
+
     /// Get virtio blk config from vhost.
     pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetConfig as u32;
         let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
         let hdr = VhostUserMsgHdr::new(
@@ -528,12 +633,14 @@ impl VhostUserClient {
         );
         let cnf = VhostUserConfig::new(0, 0, VirtioBlkConfig::default())?;
         let body_opt: Option<&u32> = None;
+        // SAFETY: the memory is allocated by us and it has been already aligned.
         let payload_opt: Option<&[u8]> = Some(unsafe {
             from_raw_parts(
                 (&cnf as *const VhostUserConfig<VirtioBlkConfig>) as *const u8,
                 config_len,
             )
         });
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -561,11 +668,11 @@ impl VhostUserClient {
 
     /// Get max queues number that vhost supports.
     pub fn get_max_queue_num(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetQueueNum as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -575,15 +682,66 @@ impl VhostUserClient {
             .with_context(|| "Failed to wait ack msg for getting queue num")?;
         Ok(queue_num)
     }
+
+    /// Get inflight file info and inflight fd from vhost.
+    pub fn get_inflight_fd(
+        &self,
+        queue_num: u16,
+        queue_size: u16,
+        fds: &mut [RawFd],
+    ) -> Result<VhostUserInflight> {
+        let request = VhostUserMsgReq::GetInflightFd as u32;
+        let data_len = size_of::<VhostUserInflight>();
+        let hdr =
+            VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, data_len as u32);
+        let inflight = VhostUserInflight {
+            mmap_size: 0,
+            mmap_offset: 0,
+            queue_num,
+            queue_size,
+        };
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = Some(unsafe {
+            from_raw_parts(
+                (&inflight as *const VhostUserInflight) as *const u8,
+                data_len,
+            )
+        });
+        let client = self.client.lock().unwrap();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .with_context(|| "Failed to send msg for getting inflight fd")?;
+        let res = client
+            .wait_ack_msg_and_data::<VhostUserInflight>(request, None, fds)
+            .with_context(|| "Failed to wait ack msg for getting inflight fd")?;
+        Ok(res)
+    }
+
+    /// Set inflight file info and send inflight fd to vhost.
+    pub fn set_inflight_fd(&self, inflight: VhostUserInflight, fd: RawFd) -> Result<()> {
+        let request = VhostUserMsgReq::SetInflightFd as u32;
+        let len = size_of::<VhostUserInflight>();
+        let hdr = VhostUserMsgHdr::new(request, 0, len as u32);
+        let payload_opt: Option<&[u8]> = None;
+        self.client
+            .lock()
+            .unwrap()
+            .sock
+            .send_msg(Some(&hdr), Some(&inflight), payload_opt, &[fd])
+            .with_context(|| "Failed to send msg for setting inflight fd")?;
+        Ok(())
+    }
 }
 
 impl VhostOps for VhostUserClient {
     fn set_owner(&self) -> Result<()> {
-        let client = self.client.lock().unwrap();
         let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetOwner as u32, 0, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for setting owner")?;
@@ -592,11 +750,11 @@ impl VhostOps for VhostUserClient {
     }
 
     fn get_features(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetFeatures as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -609,19 +767,7 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
-        let client = self.client.lock().unwrap();
-        let hdr = VhostUserMsgHdr::new(
-            VhostUserMsgReq::SetFeatures as u32,
-            0,
-            size_of::<u64>() as u32,
-        );
-        let payload_opt: Option<&[u8]> = None;
-        client
-            .sock
-            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
-            .with_context(|| "Failed to send msg for setting features")?;
-
-        Ok(())
+        self.set_value(VhostUserMsgReq::SetFeatures, features)
     }
 
     fn set_mem_table(&self) -> Result<()> {
@@ -637,12 +783,14 @@ impl VhostOps for VhostUserClient {
             memcontext.region_add(region_info.region);
             fds.push(region_info.file_back.file.as_raw_fd());
         }
+        drop(mem_regions);
 
-        let client = self.client.lock().unwrap();
         let len = size_of::<VhostUserMemHdr>() + num_region * size_of::<RegionMemInfo>();
         let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetMemTable as u32, 0, len as u32);
         let memhdr = VhostUserMemHdr::new(num_region as u32, 0);
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(
                 Some(&hdr),
@@ -681,7 +829,6 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_vring_addr(&self, queue: &QueueConfig, index: usize, flags: u32) -> Result<()> {
-        let client = self.client.lock().unwrap();
         let hdr = VhostUserMsgHdr::new(
             VhostUserMsgReq::SetVringAddr as u32,
             0,
@@ -720,7 +867,9 @@ impl VhostOps for VhostUserClient {
             avail_user_addr,
             log_guest_addr: 0_u64,
         };
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(Some(&hdr), Some(&_vring_addr), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting vring addr")?;
@@ -753,7 +902,7 @@ impl VhostOps for VhostUserClient {
         Ok(())
     }
 
-    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -777,7 +926,7 @@ impl VhostOps for VhostUserClient {
         Ok(())
     }
 
-    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -830,7 +979,25 @@ impl VhostOps for VhostUserClient {
         bail!("Does not support for resetting owner")
     }
 
-    fn get_vring_base(&self, _queue_idx: usize) -> Result<u16> {
-        bail!("Does not support for getting vring base")
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
+        let request = VhostUserMsgReq::GetVringBase as u32;
+        let hdr = VhostUserMsgHdr::new(
+            request,
+            VhostUserHdrFlag::NeedReply as u32,
+            size_of::<VhostUserVringState>() as u32,
+        );
+
+        let vring_state = VhostUserVringState::new(queue_idx as u32, 0_u32);
+        let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
+            .with_context(|| "Failed to send msg for getting vring base")?;
+        let res = client
+            .wait_ack_msg::<VhostUserVringState>(request)
+            .with_context(|| "Failed to wait ack msg for getting vring base")?;
+
+        Ok(res.value as u16)
     }
 }

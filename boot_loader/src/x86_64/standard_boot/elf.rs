@@ -22,8 +22,6 @@ use util::num_ops::round_up;
 use anyhow::{anyhow, bail, Context, Result};
 
 const EI_MAG0: usize = 0;
-const EI_MAG1: usize = 1;
-const EI_MAG2: usize = 2;
 const EI_MAG3: usize = 3;
 const EI_CLASS: usize = 4;
 const EI_DATA: usize = 5;
@@ -33,11 +31,9 @@ const ELFMAG1: u8 = b'E';
 const ELFMAG2: u8 = b'L';
 const ELFMAG3: u8 = b'F';
 
-const ELFCLASS32: u8 = 1;
 const ELFCLASS64: u8 = 2;
 
 const ELFDATA2LSB: u8 = 1;
-const ELFDATA2MSB: u8 = 2;
 
 const PT_LOAD: u32 = 1;
 const PT_NOTE: u32 = 4;

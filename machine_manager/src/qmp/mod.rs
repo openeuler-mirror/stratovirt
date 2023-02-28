@@ -37,7 +37,7 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use log::{info, warn};
+use log::{error, info, warn};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -221,7 +221,7 @@ impl QmpGreeting {
 ///
 /// It contains two kind response: `BadResponse` and `GoodResponse`. This two
 /// kind response are fit by executing qmp command by success and failure.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Response {
     #[serde(rename = "return", default, skip_serializing_if = "Option::is_none")]
     return_: Option<Value>,
@@ -289,7 +289,7 @@ impl From<bool> for Response {
 }
 
 /// `ErrorMessage` for Qmp Response.
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorMessage {
     #[serde(rename = "class")]
     errorkind: String,
@@ -311,7 +311,7 @@ impl ErrorMessage {
 }
 
 /// Empty message for QMP.
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Empty {}
 
 /// Command trait for Deserialize and find back Response.
@@ -423,6 +423,7 @@ fn qmp_command_exec(
         qmp_command.clone(); controller.lock().unwrap(); qmp_response;
         (stop, pause),
         (cont, resume),
+        (system_reset, reset),
         (query_status, query_status),
         (query_version, query_version),
         (query_commands, query_commands),
@@ -449,8 +450,10 @@ fn qmp_command_exec(
         (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (query_vnc, query_vnc),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
+        (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
         (blockdev_del, blockdev_del, node_name),
@@ -461,7 +464,8 @@ fn qmp_command_exec(
         (device_add, device_add),
         (blockdev_add, blockdev_add),
         (netdev_add, netdev_add),
-        (chardev_add, chardev_add)
+        (chardev_add, chardev_add),
+        (update_region, update_region)
     );
 
     // Handle the Qmp command which macro can't cover
@@ -558,13 +562,19 @@ impl QmpChannel {
     #[allow(clippy::unused_io_amount)]
     pub fn send_event(event: &schema::QmpEvent) {
         if Self::is_connected() {
-            let event_str = serde_json::to_string(&event).unwrap();
+            let mut event_str = serde_json::to_string(&event).unwrap();
             let mut writer_unlocked = Self::inner().event_writer.write().unwrap();
             let writer = writer_unlocked.as_mut().unwrap();
-            writer.flush().unwrap();
-            writer.write(event_str.as_bytes()).unwrap();
-            writer.write(&[b'\r']).unwrap();
-            writer.write(&[b'\n']).unwrap();
+
+            if let Err(e) = writer.flush() {
+                error!("flush err, {:?}", e);
+                return;
+            }
+            event_str.push_str("\r\n");
+            if let Err(e) = writer.write(event_str.as_bytes()) {
+                error!("write err, {:?}", e);
+                return;
+            }
             info!("EVENT: --> {:?}", event);
         }
     }
@@ -743,20 +753,22 @@ mod tests {
         socket.bind_unix_stream(server);
 
         // 1.send greeting response
-        socket.send_response(true);
+        let res = socket.send_response(true);
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: QmpGreeting =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
+        assert_eq!(res.is_err(), false);
 
         // 2.send empty response
-        socket.send_response(false);
+        let res = socket.send_response(false);
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: Response =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_empty_response = Response::create_empty_response();
         assert_eq!(qmp_empty_response, qmp_response);
+        assert_eq!(res.is_err(), false);
 
         // After test. Environment Recover
         recover_unix_socket_environment("07");

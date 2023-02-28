@@ -30,7 +30,6 @@ const GICD_CTLR: u64 = 0x0000;
 const GICD_STATUSR: u64 = 0x0010;
 const GICD_IGROUPR: u64 = 0x0080;
 const GICD_ISENABLER: u64 = 0x0100;
-const GICD_ICENABLER: u64 = 0x0180;
 const GICD_ISPENDR: u64 = 0x0200;
 const GICD_ISACTIVER: u64 = 0x0300;
 const GICD_IPRIORITYR: u64 = 0x0400;
@@ -47,18 +46,17 @@ const GICR_STATUSR: u64 = 0x0010;
 const GICR_WAKER: u64 = 0x0014;
 const GICR_PROPBASER: u64 = 0x0070;
 const GICR_PENDBASER: u64 = 0x0078;
+const NR_GICR_IPRIORITYR: usize = 8;
 
 /// SGI and PPI Redistributor registers, offsets from RD_base
 const GICR_IGROUPR0: u64 = 0x1_0080;
 const GICR_ISENABLER0: u64 = 0x1_0100;
-const GICR_ICENABLER0: u64 = 0x1_0180;
 const GICR_ISPENDR0: u64 = 0x1_0200;
 const GICR_ICPENDR0: u64 = 0x1_0280;
 const GICR_ISACTIVER0: u64 = 0x1_0300;
 const GICR_ICACTIVER0: u64 = 0x1_0380;
 const GICR_IPRIORITYR: u64 = 0x1_0400;
 const GICR_ICFGR1: u64 = 0x1_0C04;
-const NR_GICR_IPRIORITYR: usize = 8;
 
 /// GIC CPU interface registers
 const ICC_PMR_EL1: u64 = 0xc230;
@@ -87,7 +85,6 @@ const GITS_CBASER: u32 = 0x0080;
 const GITS_CWRITER: u32 = 0x0088;
 const GITS_CREADR: u32 = 0x0090;
 const GITS_BASER: u32 = 0x0100;
-const NR_GITS_BASER: usize = 8;
 
 /// The status of GICv3 redistributor.
 #[repr(C)]

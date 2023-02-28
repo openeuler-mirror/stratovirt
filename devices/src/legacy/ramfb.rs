@@ -17,50 +17,40 @@ use address_space::{AddressSpace, GuestAddress};
 use anyhow::Context;
 use drm_fourcc::DrmFourcc;
 use log::error;
-use migration_derive::ByteCode;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
-use util::byte_code::ByteCode;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
-use vnc::vnc::{vnc_display_switch, vnc_loop_update_display, DisplaySurface};
+use vnc::console::{
+    console_init, display_graphic_update, display_replace_surface, DisplayConsole, DisplaySurface,
+    HardWareOperations,
+};
 
 const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
 const HEIGHT_MAX: u32 = 12_000;
 
 #[repr(packed)]
-#[derive(ByteCode, Clone, Copy)]
 struct RamfbCfg {
-    addr: u64,
-    fourcc: u32,
-    flags: u32,
-    width: u32,
-    height: u32,
-    stride: u32,
-}
-
-impl RamfbCfg {
-    pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
-    }
-}
-
-impl AmlBuilder for RamfbCfg {
-    fn aml_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
+    _addr: u64,
+    _fourcc: u32,
+    _flags: u32,
+    _width: u32,
+    _height: u32,
+    _stride: u32,
 }
 
 #[derive(Clone)]
 pub struct RamfbState {
     pub surface: Option<DisplaySurface>,
-    cfg: RamfbCfg,
     sys_mem: Arc<AddressSpace>,
 }
 
+// SAFETY: The type of image, the field of the struct DisplaySurface
+// is the raw pointer. create_display_surface() method will create
+// image object. The memory that the image pointer refers to is
+// modified by guest OS and accessed by vnc. So implement Sync and
+// Send is safe.
 unsafe impl Sync for RamfbState {}
 unsafe impl Send for RamfbState {}
 
@@ -68,7 +58,6 @@ impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         Self {
             surface: None,
-            cfg: RamfbCfg::new(),
             sys_mem,
         }
     }
@@ -76,10 +65,11 @@ impl RamfbState {
     pub fn setup(&mut self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
         let ramfb_state_cb = self.clone();
+        let cfg: Vec<u8> = [0; size_of::<RamfbCfg>()].to_vec();
         locked_fw_cfg
             .add_file_callback_entry(
                 "etc/ramfb",
-                self.cfg.clone().aml_bytes(),
+                cfg,
                 None,
                 Some(Arc::new(Mutex::new(ramfb_state_cb))),
                 true,
@@ -117,7 +107,9 @@ impl RamfbState {
             format,
             ..Default::default()
         };
-        // pixman_image_create_bits() is C function, it's an unsafe function.
+        // SAFETY: pixman_image_create_bits() is C function. All
+        // parameters passed of the function have been checked.
+        // It returns a raw pointer.
         unsafe {
             ds.image = pixman_image_create_bits(
                 format,
@@ -127,17 +119,26 @@ impl RamfbState {
                 stride as i32,
             );
         }
+
+        if ds.image.is_null() {
+            error!("Failed to create the surface of Ramfb!");
+            return;
+        }
+
         self.surface = Some(ds);
     }
 
     fn reset_ramfb_state(&mut self) {
         self.surface = None;
-        self.cfg = RamfbCfg::new();
     }
 }
 
 impl FwCfgWriteCallback for RamfbState {
     fn write_callback(&mut self, data: Vec<u8>, _start: u64, _len: usize) {
+        if data.len() < 28 {
+            error!("RamfbCfg data format is incorrect");
+            return;
+        }
         let addr = u64::from_be_bytes(
             data.as_slice()
                 .split_at(size_of::<u64>())
@@ -174,18 +175,33 @@ impl FwCfgWriteCallback for RamfbState {
                 .unwrap(),
         );
 
-        let format: pixman_format_code_t;
-        if fourcc == DrmFourcc::Xrgb8888 as u32 {
-            format = pixman_format_code_t::PIXMAN_x8r8g8b8;
+        let format: pixman_format_code_t = if fourcc == DrmFourcc::Xrgb8888 as u32 {
+            pixman_format_code_t::PIXMAN_x8r8g8b8
         } else {
             error!("Unsupported drm format: {}", fourcc);
             return;
-        }
+        };
 
         self.create_display_surface(width, height, format, stride, addr);
 
-        vnc_display_switch(&self.surface.unwrap());
-        vnc_loop_update_display(0, 0, width as i32, height as i32);
+        let ramfb_opts = Arc::new(RamfbInterface {
+            width: width as i32,
+            height: height as i32,
+        });
+        let con = console_init(ramfb_opts);
+        display_replace_surface(&con, self.surface)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    }
+}
+
+pub struct RamfbInterface {
+    width: i32,
+    height: i32,
+}
+impl HardWareOperations for RamfbInterface {
+    fn hw_update(&self, con: Arc<Mutex<DisplayConsole>>) {
+        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, self.width, self.height)
+            .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
     }
 }
 

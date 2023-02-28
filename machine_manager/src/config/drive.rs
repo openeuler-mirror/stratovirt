@@ -10,24 +10,47 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::metadata;
+use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
-use util::aio::{AIO_IOURING, AIO_NATIVE};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
-
+use crate::qmp::qmp_schema;
+use util::aio::{aio_probe, AioEngine};
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
+
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-blk should be larger than 2.
+const MIN_QUEUE_SIZE_BLK: u16 = 2;
+// Max size of each virtqueue for virtio-blk.
+const MAX_QUEUE_SIZE_BLK: u16 = 1024;
+
+/// Represent a single drive backend file.
+pub struct DriveFile {
+    /// The opened file.
+    pub file: File,
+    /// The num of drives share same file.
+    pub count: u32,
+    /// File path.
+    pub path: String,
+    /// File is read only or not.
+    pub read_only: bool,
+    /// File lock status.
+    pub locked: bool,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,7 +66,8 @@ pub struct BlkDevConfig {
     pub boot_index: Option<u8>,
     pub chardev: Option<String>,
     pub socket_path: Option<String>,
-    pub aio: Option<String>,
+    pub aio: AioEngine,
+    pub queue_size: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +91,8 @@ impl Default for BlkDevConfig {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            aio: Some(AIO_NATIVE.to_string()),
+            aio: AioEngine::Native,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -82,7 +107,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub iops: Option<u64>,
-    pub aio: Option<String>,
+    pub aio: AioEngine,
 }
 
 impl Default for DriveConfig {
@@ -93,7 +118,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
-            aio: Some(String::from(AIO_NATIVE)),
+            aio: AioEngine::Native,
         }
     }
 }
@@ -161,13 +186,15 @@ impl ConfigCheck for DriveConfig {
                 true,
             )));
         }
-        if self.aio == Some(String::from(AIO_NATIVE)) && !self.direct {
-            return Err(anyhow!(ConfigError::InvalidParam(
-                "aio".to_string(),
-                "native aio type should be used with \"direct\" on".to_string(),
-            )));
-        }
-        if self.aio.is_none() && self.direct {
+        if self.aio != AioEngine::Off {
+            if self.aio == AioEngine::Native && !self.direct {
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    "aio".to_string(),
+                    "native aio type should be used with \"direct\" on".to_string(),
+                )));
+            }
+            aio_probe(self.aio)?;
+        } else if self.direct {
             return Err(anyhow!(ConfigError::InvalidParam(
                 "aio".to_string(),
                 "low performance expected when use sync io with \"direct\" on".to_string(),
@@ -210,11 +237,25 @@ impl ConfigCheck for BlkDevConfig {
             )));
         }
 
+        if self.queue_size <= MIN_QUEUE_SIZE_BLK || self.queue_size > MAX_QUEUE_SIZE_BLK {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "queue size of block device".to_string(),
+                MIN_QUEUE_SIZE_BLK as u64,
+                false,
+                MAX_QUEUE_SIZE_BLK as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("Queue size should be power of 2!");
+        }
+
         let fake_drive = DriveConfig {
             path_on_host: self.path_on_host.clone(),
             direct: self.direct,
             iops: self.iops,
-            aio: self.aio.clone(),
+            aio: self.aio,
             ..Default::default()
         };
         fake_drive.check()?;
@@ -255,26 +296,13 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         drive.direct = direct.into();
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
-    drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
-        let aio_off = "off";
-        if aio != AIO_NATIVE && aio != AIO_IOURING && aio != aio_off {
-            bail!(
-                "Invalid aio configure, should be one of {}|{}|{}",
-                AIO_NATIVE,
-                AIO_IOURING,
-                aio_off
-            );
-        }
-        if aio != aio_off {
-            Some(aio)
+    drive.aio = cmd_parser.get_value::<AioEngine>("aio")?.unwrap_or({
+        if drive.direct {
+            AioEngine::Native
         } else {
-            None
+            AioEngine::Off
         }
-    } else if drive.direct {
-        Some(AIO_NATIVE.to_string())
-    } else {
-        None
-    };
+    });
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -297,7 +325,8 @@ pub fn parse_blk(
         .push("bootindex")
         .push("serial")
         .push("iothread")
-        .push("num-queues");
+        .push("num-queues")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -334,12 +363,16 @@ pub fn parse_blk(
         blkdevcfg.queues = queues;
     }
 
+    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
+        blkdevcfg.queue_size = queue_size;
+    }
+
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
         blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
-        blkdevcfg.aio = drive_arg.aio.clone();
+        blkdevcfg.aio = drive_arg.aio;
     } else {
         bail!("No drive configured matched for blk device");
     }
@@ -359,13 +392,19 @@ pub fn parse_vhost_user_blk_pci(
         .push("bus")
         .push("addr")
         .push("num-queues")
-        .push("chardev");
+        .push("chardev")
+        .push("queue-size")
+        .push("bootindex");
 
     cmd_parser.parse(drive_config)?;
 
     pci_args_check(&cmd_parser)?;
 
     let mut blkdevcfg = BlkDevConfig::default();
+
+    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
+        blkdevcfg.boot_index = Some(boot_index);
+    }
 
     if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
         blkdevcfg.chardev = Some(chardev);
@@ -386,6 +425,10 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.queues = queues;
     } else if let Some(queues) = queues_auto {
         blkdevcfg.queues = queues;
+    }
+
+    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
+        blkdevcfg.queue_size = size;
     }
 
     if let Some(chardev) = &blkdevcfg.chardev {
@@ -415,7 +458,11 @@ impl ConfigCheck for PFlashConfig {
         }
 
         if self.unit >= MAX_UNIT_ID {
-            return Err(anyhow!(ConfigError::UnitIdError(self.unit, MAX_UNIT_ID)));
+            return Err(anyhow!(ConfigError::UnitIdError(
+                "PFlash unit id".to_string(),
+                self.unit,
+                MAX_UNIT_ID - 1
+            )));
         }
         Ok(())
     }
@@ -480,18 +527,64 @@ impl VmConfig {
         Ok(())
     }
 
+    /// Add 'pci blk devices' to `VmConfig devices`.
+    pub fn add_blk_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
+        let mut device_info = args.driver.clone();
+
+        device_info = format!("{},id={}", device_info, args.id);
+
+        if let Some(drive) = &args.drive {
+            device_info = format!("{},drive={}", device_info, drive);
+        }
+
+        if let Some(serial_num) = &args.serial_num {
+            device_info = format!("{},serial={}", device_info, serial_num);
+        }
+
+        if let Some(addr) = &args.addr {
+            device_info = format!("{},addr={}", device_info, addr);
+        }
+        if let Some(bus) = &args.bus {
+            device_info = format!("{},bus={}", device_info, bus);
+        }
+
+        if args.multifunction.is_some() {
+            if args.multifunction.unwrap() {
+                device_info = format!("{},multifunction=on", device_info);
+            } else {
+                device_info = format!("{},multifunction=off", device_info);
+            }
+        }
+
+        if let Some(iothread) = &args.iothread {
+            device_info = format!("{},iothread={}", device_info, iothread);
+        }
+
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+
+        if let Some(queues) = &args.queues {
+            device_info = format!("{},num-queues={}", device_info, queues);
+        }
+
+        if let Some(boot_index) = &args.boot_index {
+            device_info = format!("{},bootindex={}", device_info, boot_index);
+        }
+
+        self.devices.push((args.driver.clone(), device_info));
+    }
     /// Delete drive config in vm config by id.
     ///
     /// # Arguments
     ///
     /// * `drive_id` - Drive id.
-    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<()> {
+    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<String> {
         if self.drives.get(drive_id).is_some() {
-            self.drives.remove(drive_id);
+            Ok(self.drives.remove(drive_id).unwrap().path_on_host)
         } else {
             bail!("Drive {} not found", drive_id);
         }
-        Ok(())
     }
 
     /// Add new flash device to `VmConfig`.

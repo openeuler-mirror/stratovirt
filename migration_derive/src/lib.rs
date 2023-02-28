@@ -100,8 +100,6 @@ pub fn derive_bytecode(input: TokenStream) -> TokenStream {
                 #struct_default
             }
         }
-        unsafe impl Send for #ident {}
-        unsafe impl Sync for #ident {}
         impl util::byte_code::ByteCode for #ident {}
     })
     .into()

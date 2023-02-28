@@ -27,19 +27,14 @@
 
 mod chardev;
 pub mod error;
-#[allow(dead_code)]
 mod fwcfg;
-#[allow(dead_code)]
 mod pflash;
-#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
 mod pl011;
 #[cfg(target_arch = "aarch64")]
 mod pl031;
-#[allow(dead_code)]
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), target_arch = "aarch64"))]
 mod ramfb;
-#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 mod rtc;
 mod serial;
@@ -57,7 +52,7 @@ pub use pflash::PFlash;
 #[cfg(target_arch = "aarch64")]
 pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
-pub use pl031::PL031;
+pub use pl031::{PL031, RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
 #[cfg(target_arch = "aarch64")]
 #[cfg(not(target_env = "musl"))]
 pub use ramfb::Ramfb;

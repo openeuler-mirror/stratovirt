@@ -11,11 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-pub use anyhow::Result;
 pub use error::VncError;
 
 pub mod auth;
 pub mod client;
+pub mod console;
 mod data;
 pub mod encoding;
 pub mod input;

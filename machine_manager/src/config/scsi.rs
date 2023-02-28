@@ -10,10 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 use super::{error::ConfigError, pci_args_check};
-use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
+use crate::config::{
+    CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+};
+use util::aio::AioEngine;
 
 /// According to Virtio Spec.
 /// Max_channel should be 0.
@@ -26,6 +29,11 @@ pub const VIRTIO_SCSI_MAX_LUN: u16 = 16383;
 /// So, max lun id supported is 255 (2^8 - 1).
 const SUPPORT_SCSI_MAX_LUN: u16 = 255;
 
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi should be larger than 2.
+const MIN_QUEUE_SIZE_SCSI: u16 = 2;
+// Max size of each virtqueue for virtio-scsi.
+const MAX_QUEUE_SIZE_SCSI: u16 = 1024;
+
 #[derive(Debug, Clone)]
 pub struct ScsiCntlrConfig {
     /// Virtio-scsi-pci device id.
@@ -34,6 +42,10 @@ pub struct ScsiCntlrConfig {
     pub iothread: Option<String>,
     /// Number of scsi cmd queues.
     pub queues: u32,
+    /// Boot path of this scsi controller. It's prefix of scsi device's boot path.
+    pub boot_prefix: Option<String>,
+    /// Virtqueue size for all queues.
+    pub queue_size: u16,
 }
 
 impl Default for ScsiCntlrConfig {
@@ -43,6 +55,8 @@ impl Default for ScsiCntlrConfig {
             iothread: None,
             //At least 1 cmd queue.
             queues: 1,
+            boot_prefix: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -73,6 +87,20 @@ impl ConfigCheck for ScsiCntlrConfig {
             )));
         }
 
+        if self.queue_size <= MIN_QUEUE_SIZE_SCSI || self.queue_size > MAX_QUEUE_SIZE_SCSI {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "virtqueue size of scsi controller".to_string(),
+                MIN_QUEUE_SIZE_SCSI as u64,
+                false,
+                MAX_QUEUE_SIZE_SCSI as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("Virtqueue size should be power of 2!");
+        }
+
         Ok(())
     }
 }
@@ -89,7 +117,8 @@ pub fn parse_scsi_controller(
         .push("addr")
         .push("multifunction")
         .push("iothread")
-        .push("num-queues");
+        .push("num-queues")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -116,11 +145,15 @@ pub fn parse_scsi_controller(
         cntlr_cfg.queues = queues as u32;
     }
 
+    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
+        cntlr_cfg.queue_size = size;
+    }
+
     cntlr_cfg.check()?;
     Ok(cntlr_cfg)
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScsiDevConfig {
     /// Scsi Device id.
     pub id: String,
@@ -135,11 +168,31 @@ pub struct ScsiDevConfig {
     /// If true, use direct access io.
     pub direct: bool,
     /// Async IO type.
-    pub aio_type: Option<String>,
+    pub aio_type: AioEngine,
+    /// Boot order.
+    pub boot_index: Option<u8>,
     /// Scsi four level hierarchical address(host, channel, target, lun).
     pub channel: u8,
     pub target: u8,
     pub lun: u16,
+}
+
+impl Default for ScsiDevConfig {
+    fn default() -> Self {
+        ScsiDevConfig {
+            id: "".to_string(),
+            path_on_host: "".to_string(),
+            serial: None,
+            bus: "".to_string(),
+            read_only: false,
+            direct: true,
+            aio_type: AioEngine::Native,
+            boot_index: None,
+            channel: 0,
+            target: 0,
+            lun: 0,
+        }
+    }
 }
 
 pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result<ScsiDevConfig> {
@@ -151,6 +204,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         .push("scsi-id")
         .push("lun")
         .push("serial")
+        .push("bootindex")
         .push("drive");
 
     cmd_parser.parse(drive_config)?;
@@ -162,6 +216,10 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing("drive", "scsi device")));
     };
+
+    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
+        scsi_dev_cfg.boot_index = Some(boot_index);
+    }
 
     if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
         scsi_dev_cfg.serial = Some(serial);
@@ -212,7 +270,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
         scsi_dev_cfg.read_only = drive_arg.read_only;
         scsi_dev_cfg.direct = drive_arg.direct;
-        scsi_dev_cfg.aio_type = drive_arg.aio.clone();
+        scsi_dev_cfg.aio_type = drive_arg.aio;
     }
 
     Ok(scsi_dev_cfg)

@@ -11,12 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::{align_of, size_of};
-use std::os::raw::c_ulong;
 
 use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
 use kvm_ioctls::{Cap, Kvm};
 use util::bitmap::Bitmap;
-use vmm_sys_util::ioctl::ioctl_with_val;
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
 use anyhow::{Context, Result};
@@ -39,18 +37,9 @@ const IOCHIP_NUM_PINS: u32 = 192;
 #[cfg(target_arch = "aarch64")]
 const KVM_IRQCHIP: u32 = 0;
 
-/// Wrapper over `KVM_CHECK_EXTENSION`.
-///
-/// Returns 0 if the capability is not available and a positive integer otherwise.
-fn check_extension_int(kvmfd: &Kvm, c: Cap) -> i32 {
-    // Safe because we know that our file is a KVM fd and that the extension is one of the ones
-    // defined by kernel.
-    unsafe { ioctl_with_val(kvmfd, KVM_CHECK_EXTENSION(), c as c_ulong) }
-}
-
 /// Return the max number kvm supports.
 fn get_maximum_gsi_cnt(kvmfd: &Kvm) -> u32 {
-    let mut gsi_count = check_extension_int(kvmfd, Cap::IrqRouting);
+    let mut gsi_count = kvmfd.check_extension_int(Cap::IrqRouting);
     if gsi_count < 0 {
         gsi_count = 0;
     }

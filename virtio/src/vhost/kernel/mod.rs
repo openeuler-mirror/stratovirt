@@ -19,6 +19,8 @@ pub use vsock::{Vsock, VsockState};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
@@ -425,7 +427,7 @@ impl VhostOps for VhostBackend {
         Ok(vring_state.num as u16)
     }
 
-    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
@@ -439,7 +441,7 @@ impl VhostOps for VhostBackend {
         Ok(())
     }
 
-    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
@@ -457,85 +459,43 @@ impl VhostOps for VhostBackend {
 pub struct VhostIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
-    deactivate_evt: EventFd,
-}
-
-impl VhostIoHandler {
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        for host_notify in self.host_notifies.iter() {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::Delete,
-                host_notify.notify_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ));
-        }
-
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.deactivate_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
-
-        notifiers
-    }
+    device_broken: Arc<AtomicBool>,
 }
 
 impl EventNotifierHelper for VhostIoHandler {
     fn internal_notifiers(vhost_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
+
         let vhost = vhost_handler.clone();
-
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-
-                let locked_vhost_handler = vhost.lock().unwrap();
-
-                for host_notify in locked_vhost_handler.host_notifies.iter() {
-                    if let Err(e) = (locked_vhost_handler.interrupt_cb)(
-                        &VirtioInterruptType::Vring,
-                        Some(&host_notify.queue.lock().unwrap()),
-                        false,
-                    ) {
-                        error!(
-                            "Failed to trigger interrupt for vhost device, error is {:?}",
-                            e
-                        );
-                    }
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            let locked_vhost_handler = vhost.lock().unwrap();
+            if locked_vhost_handler.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            for host_notify in locked_vhost_handler.host_notifies.iter() {
+                if let Err(e) = (locked_vhost_handler.interrupt_cb)(
+                    &VirtioInterruptType::Vring,
+                    Some(&host_notify.queue.lock().unwrap()),
+                    false,
+                ) {
+                    error!(
+                        "Failed to trigger interrupt for vhost device, error is {:?}",
+                        e
+                    );
                 }
-
-                None as Option<Vec<EventNotifier>>
-            });
-        let h = Arc::new(Mutex::new(handler));
-
+            }
+            None as Option<Vec<EventNotifier>>
+        });
         for host_notify in vhost_handler.lock().unwrap().host_notifies.iter() {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::AddShared,
                 host_notify.notify_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
-                vec![h.clone()],
+                vec![handler.clone()],
             ));
         }
-
-        // Register event notifier for deactivate_evt.
-        let vhost = vhost_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(vhost.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            vhost_handler.lock().unwrap().deactivate_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
-        ));
 
         notifiers
     }

@@ -26,19 +26,18 @@
 //! - `aarch64`
 
 mod balloon;
-mod block;
+pub mod block;
 mod console;
 pub mod error;
 #[cfg(not(target_env = "musl"))]
 mod gpu;
 mod net;
-mod queue;
 mod rng;
 mod scsi;
 pub mod vhost;
 mod virtio_mmio;
-#[allow(dead_code)]
 mod virtio_pci;
+mod virtqueue;
 pub use anyhow::Result;
 pub use balloon::*;
 pub use block::{Block, BlockState};
@@ -49,7 +48,6 @@ pub use error::*;
 pub use gpu::*;
 use log::{error, warn};
 pub use net::*;
-pub use queue::*;
 pub use rng::{Rng, RngState};
 pub use scsi::bus as ScsiBus;
 pub use scsi::controller as ScsiCntlr;
@@ -58,8 +56,10 @@ pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
+pub use virtqueue::*;
 
 use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -162,6 +162,8 @@ pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
 pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
+/// GPU EDID feature is supported.
+pub const VIRTIO_GPU_F_EDID: u32 = 1;
 
 /// The device sets control ok status to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
@@ -237,6 +239,49 @@ pub const VIRTIO_BLK_S_IOERR: u8 = 1;
 /// Unsupport.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 
+/// The Type of virtio gpu, refer to Virtio Spec.
+/// 2D commands:
+/// Retrieve the current output configuration.
+pub const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+/// Create a 2D resource on the host.
+pub const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
+/// Destroy a resource on the host.
+pub const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
+/// Set the scanout parameters for a single output.
+pub const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
+/// Flush a scanout resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
+/// Transfer from guest memory to host resource.
+pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+/// Assign backing pages to a resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+/// Detach backing pages from a resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
+//// Retrieve the EDID data for a given scanout.
+pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
+/// update cursor
+pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
+/// move cursor
+pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
+/// Success for cmd without data back.
+pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
+/// Success for VIRTIO_GPU_CMD_GET_DISPLAY_INFO.
+pub const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+/// Success for VIRTIO_GPU_CMD_GET_EDID.
+pub const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
+/// unspecificated
+pub const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
+/// out of host memory
+pub const VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY: u32 = 0x1201;
+/// invalid id of scanout
+pub const VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID: u32 = 0x1202;
+/// invalid id of 2D resource
+pub const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
+/// invalid parameter
+pub const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
+/// Flags in virtio gpu cmd which means need a fence.
+pub const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
+
 /// Interrupt status: Used Buffer Notification
 pub const VIRTIO_MMIO_INT_VRING: u32 = 0x01;
 /// Interrupt status: Configuration Change Notification
@@ -248,7 +293,7 @@ pub const NOTIFY_REG_OFFSET: u32 = 0x50;
 
 /// Packet header, refer to Virtio Spec.
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct VirtioNetHdr {
     pub flags: u8,
     pub gso_type: u8,
@@ -273,7 +318,7 @@ pub trait VirtioDevice: Send {
     /// Realize low level device.
     fn realize(&mut self) -> Result<()>;
 
-    /// Unrealize low level device
+    /// Unrealize low level device.
     fn unrealize(&mut self) -> Result<()> {
         bail!("Unrealize of the virtio device is not implemented");
     }
@@ -326,8 +371,7 @@ pub trait VirtioDevice: Send {
     /// # Arguments
     ///
     /// * `mem_space` - System mem.
-    /// * `interrupt_evt` - The eventfd used to send interrupt to guest.
-    /// * `interrupt_status` - The interrupt status present to guest.
+    /// * `interrupt_cb` - The callback used to send interrupt to guest.
     /// * `queues` - The virtio queues.
     /// * `queue_evts` - The notifier events from guest.
     fn activate(
@@ -335,7 +379,7 @@ pub trait VirtioDevice: Send {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()>;
 
     /// Deactivate virtio device, this function remove event fd
@@ -347,7 +391,8 @@ pub trait VirtioDevice: Send {
         );
     }
 
-    /// Reset virtio device.
+    /// Reset virtio device, used to do some special reset action for
+    /// different device.
     fn reset(&mut self) -> Result<()> {
         Ok(())
     }
@@ -367,7 +412,7 @@ pub trait VirtioDevice: Send {
     /// # Arguments
     ///
     /// * `_queue_evts` - The notifier events from host.
-    fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, _queue_evts: &[Arc<EventFd>]) -> Result<()> {
         Ok(())
     }
 
@@ -402,7 +447,7 @@ pub trait VirtioTrace {
 pub fn report_virtio_error(
     interrupt_cb: Arc<VirtioInterrupt>,
     features: u64,
-    deactivate_evt: Option<&EventFd>,
+    broken: &Arc<AtomicBool>,
 ) {
     if virtio_has_feature(features, VIRTIO_F_VERSION_1) {
         interrupt_cb(&VirtioInterruptType::Config, None, true).unwrap_or_else(|e| {
@@ -412,12 +457,8 @@ pub fn report_virtio_error(
             )
         });
     }
-    // The queue should not work when meeting virtio error.
-    // So, using deactivate evt to disable the queue.
-    if let Some(evt) = deactivate_evt {
-        evt.write(1)
-            .unwrap_or_else(|e| error!("Failed to deactivate event, error is {}", e));
-    }
+    // The device should not work when meeting virtio error.
+    broken.store(true, Ordering::SeqCst);
 }
 
 /// Read iovec to buf and return the readed number of bytes.
@@ -443,7 +484,7 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
 /// Discard "size" bytes of the front of iovec.
 pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     for (index, iov) in iovec.iter_mut().enumerate() {
-        if iov.len as u64 > size {
+        if iov.len as u64 >= size {
             iov.addr.0 += size;
             iov.len -= size as u32;
             return Some(&mut iovec[index..]);

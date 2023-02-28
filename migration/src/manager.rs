@@ -160,14 +160,16 @@ impl ByteCode for Instance {}
 #[derive(Default)]
 pub struct Vmm {
     /// Vm config
-    pub config: VmConfig,
+    pub config: Arc<Mutex<VmConfig>>,
     /// Trait to represent a Vm.
     pub vm: Option<Arc<Mutex<dyn MachineLifecycle + Send + Sync>>>,
     /// Trait to represent CPU devices.
     pub cpus: HashMap<u64, Arc<dyn MigrationHook + Send + Sync>>,
     /// Trait to represent memory devices.
     pub memory: Option<Arc<dyn MigrationHook + Send + Sync>>,
-    /// Trait to represent virtio-pci devices.
+    /// Trait to represent transports.
+    pub transports: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
+    /// Trait to represent devices.
     pub devices: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     #[cfg(target_arch = "aarch64")]
     /// Trait to represent GIC devices(GICv3, GICv3 ITS).
@@ -231,8 +233,8 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `config` - The configuration from virtual machine.
-    pub fn register_vm_config(config: &mut VmConfig) {
-        MIGRATION_MANAGER.vmm.write().unwrap().config = config.clone();
+    pub fn register_vm_config(config: Arc<Mutex<VmConfig>>) {
+        MIGRATION_MANAGER.vmm.write().unwrap().config = config;
     }
 
     /// Register vm instance to vmm.
@@ -279,6 +281,27 @@ impl MigrationManager {
     {
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.memory = Some(memory);
+    }
+
+    /// Register transport instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_desc` - The `DeviceStateDesc` of device instance.
+    /// * `device` - The transport instance with MigrationHook trait.
+    /// * `id` - The unique id for device.
+    pub fn register_transport_instance<T>(
+        device_desc: DeviceStateDesc,
+        device: Arc<Mutex<T>>,
+        id: &str,
+    ) where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let name = device_desc.name.clone() + "/" + id;
+        Self::register_device_desc(device_desc);
+
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.transports.insert(translate_id(&name), device);
     }
 
     /// Register device instance to vmm.
@@ -334,6 +357,18 @@ impl MigrationManager {
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.gic_group.insert(translate_id(id), gic);
+    }
+
+    /// Unregister transport instance from vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_desc` - The `DeviceStateDesc` of device instance.
+    /// * `id` - The unique id for device.
+    pub fn unregister_transport_instance(device_desc: DeviceStateDesc, id: &str) {
+        let name = device_desc.name + "/" + id;
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.transports.remove(&translate_id(&name));
     }
 
     /// Unregister device instance from vmm.

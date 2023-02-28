@@ -16,28 +16,114 @@ use std::os::unix::io::AsRawFd;
 
 use anyhow::{bail, Context, Result};
 
-pub fn open_disk_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
+const MIN_FILE_ALIGN: u32 = 512;
+const MAX_FILE_ALIGN: u32 = 4096;
+
+pub fn open_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(!read_only);
     if direct {
         options.custom_flags(libc::O_DIRECT);
     }
-    let file = options
-        .open(path)
-        .with_context(|| format!("failed to open the file for block {}", path))?;
+    let file = options.open(path).with_context(|| {
+        format!(
+            "failed to open the file for block {}. Error: {}",
+            path,
+            std::io::Error::last_os_error(),
+        )
+    })?;
 
+    Ok(file)
+}
+
+fn is_io_aligned(file: &File, buf: u64, size: usize) -> bool {
+    // SAFETY: file and buf is valid.
+    let ret = unsafe {
+        libc::pread(
+            file.as_raw_fd() as libc::c_int,
+            buf as *mut libc::c_void,
+            size as libc::size_t,
+            0,
+        )
+    };
+    ret >= 0 || errno::errno().0 != libc::EINVAL
+}
+
+pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
+    if !direct {
+        return (1, 1);
+    }
+
+    let mut req_align = 0;
+    let mut buf_align = 0;
+    // SAFETY: we allocate aligned memory and free it later.
+    let aligned_buffer = unsafe {
+        libc::memalign(
+            MAX_FILE_ALIGN as libc::size_t,
+            (MAX_FILE_ALIGN * 2) as libc::size_t,
+        )
+    };
+
+    // Guess alignment requirement of request.
+    let mut align = MIN_FILE_ALIGN;
+    while align <= MAX_FILE_ALIGN {
+        if is_io_aligned(file, aligned_buffer as u64, align as usize) {
+            req_align = align;
+            break;
+        }
+        align <<= 1;
+    }
+
+    // Guess alignment requirement of buffer.
+    let mut align = MIN_FILE_ALIGN;
+    while align <= MAX_FILE_ALIGN {
+        if is_io_aligned(
+            file,
+            aligned_buffer as u64 + align as u64,
+            MAX_FILE_ALIGN as usize,
+        ) {
+            buf_align = align;
+            break;
+        }
+        align <<= 1;
+    }
+
+    // SAFETY: the memory is allocated by us and will not be used anymore.
+    unsafe { libc::free(aligned_buffer) };
+    (req_align, buf_align)
+}
+
+pub fn lock_file(file: &File, path: &str, read_only: bool) -> Result<()> {
     let (lockop, lockname) = if read_only {
         (libc::LOCK_SH | libc::LOCK_NB, "read lock")
     } else {
         (libc::LOCK_EX | libc::LOCK_NB, "write lock")
     };
+    // SAFETY: the file has a valid raw fd.
     let ret = unsafe { libc::flock(file.as_raw_fd(), lockop) };
     if ret < 0 {
         bail!(
-            "Failed to get {} on file: {}. Maybe it's used more than once.",
+            "Failed to get {} on file: {}. Is it used more than once or \
+            another process using the same file?. Error: {}",
             lockname,
-            path
+            path,
+            std::io::Error::last_os_error(),
         );
     }
-    Ok(file)
+
+    Ok(())
+}
+
+pub fn unlock_file(file: &File, path: &str) -> Result<()> {
+    // SAFETY: the file has a valid raw fd.
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if ret < 0 {
+        bail!(
+            "Failed to release lock on file: {}. Error: {}",
+            path,
+            std::io::Error::last_os_error(),
+        );
+    }
+
+    Ok(())
 }

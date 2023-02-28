@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::os::unix::prelude::RawFd;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
@@ -20,7 +21,9 @@ use crate::qmp::qmp_schema::IothreadInfo;
 
 use anyhow::bail;
 use log::info;
-use util::loop_context::{EventLoopContext, EventLoopManager, EventNotifier};
+use util::loop_context::{
+    gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
+};
 
 /// This struct used to manage all events occur during VM lifetime.
 /// # Notes
@@ -51,6 +54,8 @@ impl EventLoop {
             }
         }
 
+        // SAFETY: This function is called at startup thus no concurrent accessing to
+        // GLOBAL_EVENT_LOOP. And each iothread has a dedicated EventLoopContext.
         unsafe {
             if GLOBAL_EVENT_LOOP.is_none() {
                 GLOBAL_EVENT_LOOP = Some(EventLoop {
@@ -91,6 +96,7 @@ impl EventLoop {
     ///
     /// * `name` - if None, return main loop, OR return io-thread-loop which is related to `name`.
     pub fn get_ctx(name: Option<&String>) -> Option<&mut EventLoopContext> {
+        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 if let Some(name) = name {
@@ -137,6 +143,8 @@ impl EventLoop {
     /// Once run main loop, `epoll` in `MainLoopContext` will execute
     /// `epoll_wait()` function to wait for events.
     pub fn loop_run() -> util::Result<()> {
+        // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
+        // accessing.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 loop {
@@ -150,4 +158,24 @@ impl EventLoop {
             }
         }
     }
+}
+
+pub fn register_event_helper(
+    notifiers: Vec<EventNotifier>,
+    ctx_name: Option<&String>,
+    record_evts: &mut Vec<RawFd>,
+) -> util::Result<()> {
+    let mut notifiers_fds = get_notifiers_fds(&notifiers);
+    EventLoop::update_event(notifiers, ctx_name)?;
+    record_evts.append(&mut notifiers_fds);
+    Ok(())
+}
+
+pub fn unregister_event_helper(
+    ctx_name: Option<&String>,
+    record_evts: &mut Vec<RawFd>,
+) -> util::Result<()> {
+    EventLoop::update_event(gen_delete_notifiers(record_evts), ctx_name)?;
+    record_evts.clear();
+    Ok(())
 }

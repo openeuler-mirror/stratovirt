@@ -74,6 +74,8 @@ use log::{error, info, warn};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
+#[cfg(not(test))]
+use util::test_helper::is_test_enabled;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
@@ -101,7 +103,7 @@ const MAGIC_VALUE_SIGNAL_GUEST_BOOT_START: u8 = 0x01;
 const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 0x02;
 
 /// State for `CPU` lifecycle.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuLifecycleState {
     /// `CPU` structure is only be initialized, but nothing set.
     Nothing = 0,
@@ -404,15 +406,17 @@ impl CPUInterface for CPU {
 
     fn destroy(&self) -> Result<()> {
         let (cpu_state, cvar) = &*self.state;
-        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopping;
-        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Stopped {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Nothing;
+        let mut cpu_state = cpu_state.lock().unwrap();
+        if *cpu_state == CpuLifecycleState::Running {
+            *cpu_state = CpuLifecycleState::Stopping;
+        } else if *cpu_state == CpuLifecycleState::Stopped
+            || *cpu_state == CpuLifecycleState::Paused
+        {
+            *cpu_state = CpuLifecycleState::Nothing;
             return Ok(());
         }
 
         self.kick()?;
-        let mut cpu_state = cpu_state.lock().unwrap();
         cpu_state = cvar
             .wait_timeout(cpu_state, Duration::from_millis(32))
             .unwrap()
@@ -455,11 +459,6 @@ impl CPUInterface for CPU {
             vm.lock().unwrap().reset();
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));
-        }
-
-        if QmpChannel::is_connected() {
-            let reset_msg = schema::Reset { guest: true };
-            event!(Reset; reset_msg);
         }
 
         Ok(())
@@ -534,8 +533,11 @@ impl CPUInterface for CPU {
 
                     return Ok(false);
                 }
-                VcpuExit::FailEntry => {
-                    info!("Vcpu{} received KVM_EXIT_FAIL_ENTRY signal", self.id());
+                VcpuExit::FailEntry(reason, cpuid) => {
+                    info!(
+                        "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
+                        cpuid, reason
+                    );
                     return Ok(false);
                 }
                 VcpuExit::InternalError => {
@@ -683,7 +685,14 @@ impl CPUThreadWorker {
         // reset its running environment.
         #[cfg(not(test))]
         self.thread_cpu
-            .reset()
+            .arch_cpu
+            .lock()
+            .unwrap()
+            .reset_vcpu(
+                &self.thread_cpu.fd,
+                #[cfg(target_arch = "x86_64")]
+                &self.thread_cpu.caps,
+            )
             .with_context(|| "Failed to reset for cpu register state")?;
 
         // Wait for all vcpu to complete the running
@@ -693,14 +702,19 @@ impl CPUThreadWorker {
         info!("vcpu{} start running", self.thread_cpu.id);
         while let Ok(true) = self.ready_for_running() {
             #[cfg(not(test))]
-            if !self
-                .thread_cpu
-                .kvm_vcpu_exec()
-                .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
             {
-                break;
+                if is_test_enabled() {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                if !self
+                    .thread_cpu
+                    .kvm_vcpu_exec()
+                    .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
+                {
+                    break;
+                }
             }
-
             #[cfg(test)]
             {
                 thread::sleep(Duration::from_millis(5));

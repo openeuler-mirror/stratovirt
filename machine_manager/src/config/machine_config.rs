@@ -212,6 +212,7 @@ impl VmConfig {
         }
 
         if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
+            // Libvirt checks the parameter types of 'kvm', 'kvm:tcg' and 'tcg'.
             if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") {
                 bail!("Only \'kvm\', \'kvm:tcg\' and \'tcg\' are supported for \'accel\' of \'machine\'");
             }
@@ -238,6 +239,21 @@ impl VmConfig {
         }
         if let Some(mem_share) = cmd_parser.get_value::<ExBool>("mem-share")? {
             self.machine_config.mem_config.mem_share = mem_share.into();
+        }
+
+        Ok(())
+    }
+
+    /// Add '-accel' accelerator config to `VmConfig`.
+    pub fn add_accel(&mut self, accel_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("accel");
+        cmd_parser.push("");
+        cmd_parser.parse(accel_config)?;
+
+        if let Some(accel) = cmd_parser.get_value::<String>("")? {
+            if accel.ne("kvm") {
+                bail!("Only \'kvm\' is supported for \'accel\'");
+            }
         }
 
         Ok(())
@@ -334,7 +350,7 @@ impl VmConfig {
         if max_cpus < cpu {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "maxcpus".to_string(),
-                cpu as u64,
+                cpu,
                 true,
                 MAX_NR_CPUS,
                 true,

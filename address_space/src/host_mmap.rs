@@ -260,7 +260,7 @@ pub fn create_host_mmaps(
         });
     }
 
-    let backend = (&f_back).as_ref();
+    let backend = f_back.as_ref();
     let mut host_addr = do_mmap(
         &backend.map(|fb| fb.file.as_ref()),
         mem_config.mem_size,
@@ -387,7 +387,7 @@ impl HostMemMapping {
         let host_addr = if let Some(addr) = host_addr {
             addr
         } else {
-            let fb = (&file_back).as_ref();
+            let fb = file_back.as_ref();
             do_mmap(
                 &fb.map(|f| f.file.as_ref()),
                 size,

@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
+
 // This module implements some operations of Rust primitive types.
 
 /// Calculate the aligned-up u64 value.
@@ -273,7 +275,7 @@ pub fn write_data_u16(data: &mut [u8], value: u16) -> bool {
     match data.len() {
         1 => data[0] = value as u8,
         2 => {
-            LittleEndian::write_u16(data, value as u16);
+            LittleEndian::write_u16(data, value);
         }
         n => {
             error!("Invalid data length {} for reading value {}", n, value);
@@ -378,6 +380,39 @@ pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
         }
     };
     true
+}
+
+///  Parse a string to a number, decimal and heximal numbers supported now.
+///
+/// # Arguments
+///
+/// * `string_in` - The string that means a number, eg. "18", "0x1c".
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::str_to_usize;
+///
+/// let value = str_to_usize("0x17".to_string()).unwrap();
+/// assert!(value == 0x17);
+/// let value = str_to_usize("0X17".to_string()).unwrap();
+/// assert!(value == 0x17);
+/// let value = str_to_usize("17".to_string()).unwrap();
+/// assert!(value == 17);
+/// ```
+pub fn str_to_usize(string_in: String) -> Result<usize> {
+    let mut base = 10;
+    if string_in.starts_with("0x") || string_in.starts_with("0X") {
+        base = 16;
+    }
+    let without_prefix = string_in
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    let num = usize::from_str_radix(without_prefix, base)
+        .with_context(|| format!("Invalid num: {}", string_in))?;
+    Ok(num)
 }
 
 #[cfg(test)]
@@ -531,5 +566,15 @@ mod test {
         assert!(!ret);
         let ret = read_data_u32(&[0x11, 0x22, 0x33, 0x44], &mut value);
         assert!(ret && value == 0x44332211);
+    }
+
+    #[test]
+    fn test_str_to_usize() {
+        let value = str_to_usize("0x17".to_string()).unwrap();
+        assert!(value == 0x17);
+        let value = str_to_usize("0X17".to_string()).unwrap();
+        assert!(value == 0x17);
+        let value = str_to_usize("17".to_string()).unwrap();
+        assert!(value == 17);
     }
 }

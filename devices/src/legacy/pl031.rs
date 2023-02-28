@@ -31,15 +31,15 @@ use vmm_sys_util::eventfd::EventFd;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
-const RTC_DR: u64 = 0x00;
+pub const RTC_DR: u64 = 0x00;
 /// Match Register.
 const RTC_MR: u64 = 0x04;
 /// Load Register.
-const RTC_LR: u64 = 0x08;
+pub const RTC_LR: u64 = 0x08;
 /// Control Register.
-const RTC_CR: u64 = 0x0c;
+pub const RTC_CR: u64 = 0x0c;
 /// Interrupt Mask Set or Clear Register.
-const RTC_IMSC: u64 = 0x10;
+pub const RTC_IMSC: u64 = 0x10;
 /// Raw Interrupt Status Register.
 const RTC_RIS: u64 = 0x14;
 /// Masked Interrupt Status Register.
@@ -121,7 +121,7 @@ impl PL031 {
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
-        self.base_time.elapsed().as_secs() as u32 + self.tick_offset
+        (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
     }
 
     fn inject_interrupt(&self) {
@@ -163,7 +163,14 @@ impl SysBusDevOps for PL031 {
         let value = LittleEndian::read_u32(data);
 
         match offset {
-            RTC_MR => self.state.mr = value,
+            RTC_MR => {
+                // TODO: The MR register is used for implemeting the RTC alarm. A RTC alarm is a feature
+                // that can be used to allow a computer to 'wake up' after shut down to execute tasks
+                // every day or on a certain day. It can sometimes be found in the 'Power Management'
+                // section of motherboard's BIOS setup. This RTC alarm function is not implemented yet,
+                // here is a reminder just in case.
+                self.state.mr = value;
+            }
             RTC_LR => {
                 self.state.lr = value;
                 self.tick_offset = value;
@@ -238,13 +245,24 @@ mod test {
     fn test_set_year_20xx() {
         let mut rtc = PL031::default();
         // Set rtc time: 2013-11-13 02:04:56.
-        let wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
+        let mut wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
         let mut data = [0; 4];
         LittleEndian::write_u32(&mut data, wtick);
         PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
 
         PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
-        let rtick = LittleEndian::read_u32(&data);
+        let mut rtick = LittleEndian::read_u32(&data);
+
+        assert!((rtick - wtick) <= WIGGLE);
+
+        // Set rtc time: 2080-11-13 02:04:56, ensure there is no year-2080 overflow.
+        wtick = mktime64(2080, 11, 13, 2, 4, 56) as u32;
+        data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        rtick = LittleEndian::read_u32(&data);
 
         assert!((rtick - wtick) <= WIGGLE);
     }

@@ -93,11 +93,11 @@ fn compress_each_tile<'a>(
     let mut n_subtiles = 0; // Number of subrectangle.
     let mut tmp_buf: Vec<u8> = Vec::new();
 
-    if *last_bg == None || Some(bg) != *last_bg {
+    if last_bg.is_none() || Some(bg) != *last_bg {
         flag |= BACKGROUND_SPECIFIC;
         *last_bg = Some(bg);
     }
-    if n_colors < 3 && (*last_fg == None || Some(fg) != *last_fg) {
+    if n_colors < 3 && (last_fg.is_none() || Some(fg) != *last_fg) {
         flag |= FOREGROUND_SPECIFIC;
         *last_fg = Some(fg);
     }
@@ -110,7 +110,7 @@ fn compress_each_tile<'a>(
         }
         3 => {
             flag |= ANY_SUBRECTS | SUBRECTS_COLOURED;
-            if *last_bg == None || Some(bg) != *last_bg {
+            if last_bg.is_none() || Some(bg) != *last_bg {
                 flag |= BACKGROUND_SPECIFIC;
             }
             n_subtiles = subrectangle_with_pixel_value(
@@ -132,7 +132,7 @@ fn compress_each_tile<'a>(
         _ => {}
     }
 
-    buf.append(&mut (flag as u8).to_be_bytes().to_vec()); // SubEncoding-mask.
+    buf.append(&mut flag.to_be_bytes().to_vec()); // SubEncoding-mask.
     if flag & RAW == 0 {
         if flag & BACKGROUND_SPECIFIC != 0 {
             write_pixel(
@@ -186,6 +186,7 @@ fn subrectangle_of_foreground(
         let ptr = (data_ptr as usize + (j * stride) as usize) as *mut u32;
         let mut x_begin = -1;
         for i in 0..sub_rect.w {
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             let value = unsafe { *ptr.add(i as usize) };
             if value == fg && x_begin == -1 {
                 x_begin = i;
@@ -227,6 +228,7 @@ fn subrectangle_with_pixel_value(
         let mut last_color: Option<u32> = None;
         let ptr = (data_ptr as usize + (j * stride) as usize) as *mut u32;
         for i in 0..sub_rect.w {
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             let value = unsafe { *ptr.offset(i as isize) };
             match last_color {
                 Some(color) => {
@@ -310,6 +312,7 @@ fn pixel_statistical<'a>(
     for j in 0..sub_rect.h {
         let ptr = (data_ptr as usize + (j * stride) as usize) as *mut u32;
         for i in 0..sub_rect.w {
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             let value = unsafe { *ptr.offset(i as isize) };
             match n_colors {
                 0 => {
@@ -357,9 +360,9 @@ mod tests {
             IMAGE_DATA_MULTI_PIXELS, IMAGE_DATA_SINGLE_PIXEL, IMAGE_DATA_TWO_PIXEL,
             TARGET_DATA_MULTI_PIXELS, TARGET_DATA_SINGLE_PIXEL, TARGET_DATA_TWO_PIXEL,
         },
-        pixman::PixelFormat,
+        pixman::{create_pixman_image, PixelFormat},
     };
-    use util::pixman::{pixman_format_code_t, pixman_image_create_bits};
+    use util::pixman::pixman_format_code_t;
     fn color_init() -> PixelFormat {
         let mut pf = PixelFormat::default();
         pf.red.set_color_info(16, 255);
@@ -384,15 +387,13 @@ mod tests {
         let image_height: i32 = 32;
         let image_stride: i32 = 128;
 
-        let image = unsafe {
-            pixman_image_create_bits(
-                pixman_format_code_t::PIXMAN_x8r8g8b8,
-                image_width as i32,
-                image_height as i32,
-                image_data.as_ptr() as *mut u32,
-                image_stride,
-            )
-        };
+        let image = create_pixman_image(
+            pixman_format_code_t::PIXMAN_x8r8g8b8,
+            image_width as i32,
+            image_height as i32,
+            image_data.as_ptr() as *mut u32,
+            image_stride,
+        );
         let mut buf: Vec<u8> = Vec::new();
         let rect = Rectangle {
             x: 0,
@@ -417,15 +418,13 @@ mod tests {
         let image_height: i32 = 40;
         let image_stride: i32 = 160;
 
-        let image = unsafe {
-            pixman_image_create_bits(
-                pixman_format_code_t::PIXMAN_x8r8g8b8,
-                image_width as i32,
-                image_height as i32,
-                image_data.as_ptr() as *mut u32,
-                image_stride,
-            )
-        };
+        let image = create_pixman_image(
+            pixman_format_code_t::PIXMAN_x8r8g8b8,
+            image_width as i32,
+            image_height as i32,
+            image_data.as_ptr() as *mut u32,
+            image_stride,
+        );
         let mut buf: Vec<u8> = Vec::new();
         let rect = Rectangle {
             x: 0,
@@ -450,15 +449,13 @@ mod tests {
         let image_height: i32 = 40;
         let image_stride: i32 = 160;
 
-        let image = unsafe {
-            pixman_image_create_bits(
-                pixman_format_code_t::PIXMAN_x8r8g8b8,
-                image_width as i32,
-                image_height as i32,
-                image_data.as_ptr() as *mut u32,
-                image_stride,
-            )
-        };
+        let image = create_pixman_image(
+            pixman_format_code_t::PIXMAN_x8r8g8b8,
+            image_width as i32,
+            image_height as i32,
+            image_data.as_ptr() as *mut u32,
+            image_stride,
+        );
         let mut buf: Vec<u8> = Vec::new();
         let rect = Rectangle {
             x: 0,

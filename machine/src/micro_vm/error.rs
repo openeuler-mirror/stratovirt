@@ -30,17 +30,14 @@ pub enum MicroVmError {
         source: std::io::Error,
     },
     #[error("Util")]
-    Kvm {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
-    #[error("Util")]
     Nul {
         #[from]
         source: std::ffi::NulError,
     },
     #[error("A maximum of {0} {1} replaceable devices are supported.")]
     RplDevLmtErr(String, usize),
+    #[error("The device type is {0}, but the target config is not for this type.")]
+    DevTypeErr(String),
     #[error("{0}: failed to update config.")]
     UpdCfgErr(String),
     #[error("Failed to realize virtio mmio.")]

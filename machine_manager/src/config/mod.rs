@@ -13,6 +13,7 @@
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
+pub use demo_dev::*;
 pub use devices::*;
 pub use drive::*;
 pub use error::ConfigError;
@@ -35,6 +36,7 @@ pub use vnc::*;
 mod balloon;
 mod boot_source;
 mod chardev;
+mod demo_dev;
 mod devices;
 mod drive;
 pub mod error;
@@ -54,8 +56,9 @@ mod usb;
 mod vfio;
 pub mod vnc;
 
-use std::any::Any;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Seek, SeekFrom};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -64,7 +67,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
-use util::trace::enable_trace_events;
+use util::{
+    file::{get_file_alignment, open_file},
+    test_helper::is_test_enabled,
+    trace::enable_trace_events,
+    AsAny,
+};
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
@@ -76,6 +84,8 @@ pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
+/// Default virtqueue size for virtio devices excepts virtio-fs.
+pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
@@ -125,8 +135,12 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.boot_source.initrd.is_none() && self.drives.is_empty() {
-            bail!("Before Vm start, set a initrd or drive_file as rootfs");
+        if self.boot_source.initrd.is_none()
+            && self.drives.is_empty()
+            && self.chardev.is_empty()
+            && !is_test_enabled()
+        {
+            bail!("Before Vm start, set a initrd or drive_file or vhost-user blk as rootfs");
         }
 
         let mut stdio_count = 0;
@@ -238,23 +252,122 @@ impl VmConfig {
         }
         Ok(())
     }
+
+    /// Add a file to drive file store.
+    pub fn add_drive_file(
+        drive_files: &mut HashMap<String, DriveFile>,
+        path: &str,
+        read_only: bool,
+        direct: bool,
+    ) -> Result<()> {
+        if let Some(drive_file) = drive_files.get_mut(path) {
+            if drive_file.read_only && read_only {
+                // File can be shared with read_only.
+                drive_file.count += 1;
+                return Ok(());
+            } else {
+                return Err(anyhow!(
+                    "Failed to add drive {}, file can only be shared with read_only. \
+                    Is it used more than once or another process using the same file?",
+                    path
+                ));
+            }
+        }
+        let mut file = open_file(path, read_only, direct)?;
+        let (req_align, buf_align) = get_file_alignment(&file, direct);
+        if req_align == 0 || buf_align == 0 {
+            bail!(
+                "Failed to detect alignment requirement of drive file {}.",
+                path
+            );
+        }
+        let file_size = file.seek(SeekFrom::End(0))?;
+        if file_size & (req_align as u64 - 1) != 0 {
+            bail!("The size of file {} is not aligned to {}.", path, req_align);
+        }
+        let drive_file = DriveFile {
+            file,
+            count: 1,
+            read_only,
+            path: path.to_string(),
+            locked: false,
+            req_align,
+            buf_align,
+        };
+        drive_files.insert(path.to_string(), drive_file);
+        Ok(())
+    }
+
+    /// Remove a file from drive file store.
+    pub fn remove_drive_file(
+        drive_files: &mut HashMap<String, DriveFile>,
+        path: &str,
+    ) -> Result<()> {
+        if let Some(drive_file) = drive_files.get_mut(path) {
+            drive_file.count -= 1;
+            if drive_file.count == 0 {
+                drive_files.remove(path);
+            }
+        } else {
+            return Err(anyhow!(
+                "Failed to remove drive {}, it does not exist",
+                path
+            ));
+        }
+        Ok(())
+    }
+
+    /// Get a file from drive file store.
+    pub fn fetch_drive_file(drive_files: &HashMap<String, DriveFile>, path: &str) -> Result<File> {
+        match drive_files.get(path) {
+            Some(drive_file) => drive_file
+                .file
+                .try_clone()
+                .with_context(|| format!("Failed to clone drive backend file {}", path)),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
+    /// Get alignment requirement from drive file store.
+    pub fn fetch_drive_align(
+        drive_files: &HashMap<String, DriveFile>,
+        path: &str,
+    ) -> Result<(u32, u32)> {
+        match drive_files.get(path) {
+            Some(drive_file) => Ok((drive_file.req_align, drive_file.buf_align)),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
+    /// Create initial drive file store from cmdline drive.
+    pub fn init_drive_files(&self) -> Result<HashMap<String, DriveFile>> {
+        let mut drive_files: HashMap<String, DriveFile> = HashMap::new();
+        for drive in self.drives.values() {
+            Self::add_drive_file(
+                &mut drive_files,
+                &drive.path_on_host,
+                drive.read_only,
+                drive.direct,
+            )?;
+        }
+        if let Some(pflashs) = self.pflashs.as_ref() {
+            for pflash in pflashs {
+                Self::add_drive_file(
+                    &mut drive_files,
+                    &pflash.path_on_host,
+                    pflash.read_only,
+                    false,
+                )?;
+            }
+        }
+        Ok(drive_files)
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for VmConfig {
     fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::Result<()> {
         Ok(())
-    }
-}
-
-/// This trait is to cast trait object to struct.
-pub trait AsAny {
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl<T: Any> AsAny for T {
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

@@ -1,0 +1,20 @@
+[package]
+name = "mod_test"
+version = "2.2.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+
+[dependencies]
+rand = "0.8.5"
+hex = "0.4.3"
+vmm-sys-util = "0.11.0"
+anyhow = "1.0"
+serde_json = "1.0"
+byteorder = "1.4.3"
+devices = { path = "../../devices" }
+util = { path = "../../util" }
+acpi = { path = "../../acpi" }
+machine = { path = "../../machine" }
+virtio = { path = "../../virtio"}
+usb = { path = "../../usb" }

@@ -12,6 +12,7 @@
 
 /// We use Leaky Bucket Algorithm to limit iops of block device and qmp.
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::Arc;
 use std::time::Instant;
 
 use log::error;
@@ -19,6 +20,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::loop_context::EventLoopContext;
 use crate::time::NANOSECONDS_PER_SECOND;
+use anyhow::Result;
 
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;
@@ -35,7 +37,7 @@ pub struct LeakBucket {
     timer_started: bool,
     /// When bucket is ready for allowing more IO operation, the internal callback will write this FD.
     /// This FD should be listened by IO thread.
-    timer_wakeup: EventFd,
+    timer_wakeup: Arc<EventFd>,
 }
 
 impl LeakBucket {
@@ -44,14 +46,14 @@ impl LeakBucket {
     /// # Arguments
     ///
     /// * `units_ps` - units per second.
-    pub fn new(units_ps: u64) -> Self {
-        LeakBucket {
+    pub fn new(units_ps: u64) -> Result<Self> {
+        Ok(LeakBucket {
             capacity: units_ps * ACCURACY_SCALE,
             level: 0,
             prev_time: Instant::now(),
             timer_started: false,
-            timer_wakeup: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-        }
+            timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+        })
     }
 
     /// Return true if the bucket is full, and caller must return directly instead of launching IO.
@@ -82,7 +84,7 @@ impl LeakBucket {
 
         // need to be throttled
         if self.level > self.capacity {
-            let wakeup_clone = self.timer_wakeup.try_clone().unwrap();
+            let wakeup_clone = self.timer_wakeup.clone();
             let func = Box::new(move || {
                 wakeup_clone
                     .write(1)

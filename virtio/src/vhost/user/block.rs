@@ -18,28 +18,23 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::config::BlkDevConfig;
-use machine_manager::event_loop::EventLoop;
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
-use crate::block::VirtioBlkConfig;
 use crate::vhost::VhostOps;
-use crate::VhostUser::client::{VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ};
+use crate::VhostUser::client::{
+    VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
+};
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
     virtio_has_feature, BlockState, VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE,
     VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
     VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
-    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
-/// Size of each virtqueue.
-const QUEUE_SIZE_BLK: u16 = 256;
-
-#[allow(dead_code)]
 pub struct Block {
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
@@ -50,11 +45,7 @@ pub struct Block {
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
     /// The notifier events from host.
-    call_events: Vec<EventFd>,
-    /// Eventfd used to update the config space.
-    update_evt: EventFd,
-    /// Eventfd used to deactivate device.
-    deactivate_evt: EventFd,
+    call_events: Vec<Arc<EventFd>>,
 }
 
 impl Block {
@@ -62,36 +53,20 @@ impl Block {
         Block {
             blk_cfg: cfg.clone(),
             state: BlockState::default(),
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             mem_space: mem_space.clone(),
             client: None,
-            call_events: Vec::<EventFd>::new(),
+            call_events: Vec::<Arc<EventFd>>::new(),
         }
     }
 
     fn delete_event(&mut self) -> Result<()> {
-        match &self.client {
-            Some(client) => {
-                client
-                    .lock()
-                    .unwrap()
-                    .delete_event()
-                    .with_context(|| "Failed to delete vhost-user blk event")?;
-            }
-            None => return Err(anyhow!("Failed to get client when stoping event")),
-        };
-
-        Ok(())
-    }
-
-    fn clean_up(&mut self) -> Result<()> {
-        self.delete_event()?;
-        self.state.config_space = VirtioBlkConfig::default();
-        self.state.device_features = 0u64;
-        self.state.driver_features = 0u64;
-        self.client = None;
-
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow!("Failed to get client when stoping event"))?
+            .lock()
+            .unwrap()
+            .delete_event()
+            .with_context(|| "Failed to delete vhost-user blk event")?;
         Ok(())
     }
 
@@ -103,50 +78,52 @@ impl Block {
             .as_ref()
             .map(|path| path.to_string())
             .with_context(|| "vhost-user: socket path is not found")?;
-        let client = VhostUserClient::new(&self.mem_space, &socket_path, self.queue_num() as u64)
-            .with_context(|| {
+        let client = VhostUserClient::new(
+            &self.mem_space,
+            &socket_path,
+            self.queue_num() as u64,
+            VhostBackendType::TypeBlock,
+        )
+        .with_context(|| {
             "Failed to create the client which communicates with the server for vhost-user blk"
         })?;
         let client = Arc::new(Mutex::new(client));
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(client.clone()),
-            None,
-        )
-        .with_context(|| "Failed to update event for client sock")?;
+        VhostUserClient::add_event(&client)?;
         self.client = Some(client);
         Ok(())
     }
 
-    /// Get config from spdk and setup config space.
-    fn setup_device(&mut self) -> Result<()> {
-        let client = self.client.as_ref().unwrap();
-        let feature = self.state.device_features;
+    /// Negotiate features with spdk.
+    fn negotiate_features(&mut self) -> Result<()> {
+        let locked_client = self.client.as_ref().unwrap().lock().unwrap();
+        let features = locked_client
+            .get_features()
+            .with_context(|| "Failed to get features for vhost-user blk")?;
 
-        if virtio_has_feature(feature, VHOST_USER_F_PROTOCOL_FEATURES) {
-            let protocol_feature = client
-                .lock()
-                .unwrap()
+        if virtio_has_feature(features, VHOST_USER_F_PROTOCOL_FEATURES) {
+            let protocol_features = locked_client
                 .get_protocol_features()
                 .with_context(|| "Failed to get protocol features for vhost-user blk")?;
+            let supported_protocol_features =
+                1 << VHOST_USER_PROTOCOL_F_MQ | 1 << VHOST_USER_PROTOCOL_F_CONFIG;
+            locked_client
+                .set_protocol_features(supported_protocol_features & protocol_features)
+                .with_context(|| "Failed to set protocol features for vhost-user blk")?;
 
-            if virtio_has_feature(protocol_feature, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
-                let config = client
-                    .lock()
-                    .unwrap()
+            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
+                let config = locked_client
                     .get_virtio_blk_config()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
                 self.state.config_space = config;
             } else {
                 bail!(
-                    "Failed to get config, spdk doesn't support, spdk protocol feature: {:#b}",
-                    protocol_feature
+                    "Failed to get config, spdk doesn't support, spdk protocol features: {:#b}",
+                    protocol_features
                 );
             }
 
-            if virtio_has_feature(protocol_feature, VHOST_USER_PROTOCOL_F_MQ as u32) {
-                let max_queue_num = client
-                    .lock()
-                    .unwrap()
+            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_MQ as u32) {
+                let max_queue_num = locked_client
                     .get_max_queue_num()
                     .with_context(|| "Failed to get queue num for vhost-user blk")?;
                 if self.queue_num() > max_queue_num as usize {
@@ -161,53 +138,31 @@ impl Block {
                 }
             } else if self.blk_cfg.queues > 1 {
                 bail!(
-                    "spdk doesn't support multi queue, spdk protocol feature: {:#b}",
-                    protocol_feature
+                    "spdk doesn't support multi queue, spdk protocol features: {:#b}",
+                    protocol_features
                 );
             }
+        } else {
+            bail!("Bad spdk feature: {:#b}", features);
         }
-        client
-            .lock()
-            .unwrap()
-            .set_virtio_blk_config(self.state.config_space)
-            .with_context(|| "Failed to set config for vhost-user blk")?;
-        Ok(())
-    }
+        drop(locked_client);
 
-    /// Negotiate feature with spdk.
-    fn negotiate_feature(&mut self) -> Result<()> {
-        let client = self.client.as_ref().unwrap();
-
-        let mut feature = client
-            .lock()
-            .unwrap()
-            .get_features()
-            .with_context(|| "Failed to get features for vhost-user blk")?;
-
-        feature |= 1_u64 << VIRTIO_F_VERSION_1;
-        feature |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
-        feature |= 1_u64 << VIRTIO_BLK_F_TOPOLOGY;
-        feature |= 1_u64 << VIRTIO_BLK_F_BLK_SIZE;
-        feature |= 1_u64 << VIRTIO_BLK_F_FLUSH;
-        feature |= 1_u64 << VIRTIO_BLK_F_DISCARD;
-        feature |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
-        feature |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        feature &= !(1_u64 << VIRTIO_F_RING_PACKED);
-
+        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+            | 1_u64 << VIRTIO_BLK_F_SIZE_MAX
+            | 1_u64 << VIRTIO_BLK_F_TOPOLOGY
+            | 1_u64 << VIRTIO_BLK_F_BLK_SIZE
+            | 1_u64 << VIRTIO_BLK_F_FLUSH
+            | 1_u64 << VIRTIO_BLK_F_DISCARD
+            | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
+            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         if self.blk_cfg.read_only {
-            feature |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         if self.blk_cfg.queues > 1 {
-            feature |= 1_u64 << VIRTIO_BLK_F_MQ;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
+        self.state.device_features &= features;
 
-        self.state.device_features = feature;
-
-        client
-            .lock()
-            .unwrap()
-            .set_features(feature)
-            .with_context(|| "Failed to set features for vhost-user blk")?;
         Ok(())
     }
 }
@@ -216,8 +171,8 @@ impl VirtioDevice for Block {
     /// Realize vhost user blk pci device.
     fn realize(&mut self) -> Result<()> {
         self.init_client()?;
-        self.negotiate_feature()?;
-        self.setup_device()?;
+        self.negotiate_features()?;
+
         Ok(())
     }
 
@@ -233,7 +188,7 @@ impl VirtioDevice for Block {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_BLK
+        self.blk_cfg.queue_size
     }
 
     /// Get device features from host.
@@ -288,16 +243,24 @@ impl VirtioDevice for Block {
             bail!("Failed to write config to guest for vhost user blk pci, config space address overflow.")
         }
 
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow!("Failed to get client when writing config"))?
+            .lock()
+            .unwrap()
+            .set_virtio_blk_config(self.state.config_space)
+            .with_context(|| "Failed to set config for vhost-user blk")?;
+
         Ok(())
     }
 
-    /// activate device
+    /// Activate device.
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
         _interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<crate::Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
@@ -310,21 +273,30 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
+    /// Deactivate device.
     fn deactivate(&mut self) -> Result<()> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow!("Failed to get client when deactivating device"))?
+            .lock()
+            .unwrap()
+            .reset_vhost_user()?;
         self.call_events.clear();
-        self.clean_up()?;
-        self.realize()
+        self.delete_event()
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.clean_up()?;
-        self.realize()
+    /// Unrealize device.
+    fn unrealize(&mut self) -> Result<()> {
+        self.delete_event()?;
+        self.call_events.clear();
+        self.client = None;
+        Ok(())
     }
 
     /// Set guest notifiers for notifying the guest.
-    fn set_guest_notifiers(&mut self, queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
+            let cloned_evt_fd = fd.clone();
             self.call_events.push(cloned_evt_fd);
         }
 

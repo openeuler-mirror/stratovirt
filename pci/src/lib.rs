@@ -13,10 +13,12 @@
 pub mod error;
 pub use error::PciError;
 pub mod config;
+pub mod demo_dev;
 pub mod hotplug;
 pub mod msix;
 
 mod bus;
+pub mod demo_device;
 mod host;
 mod root_port;
 
@@ -24,6 +26,7 @@ pub use bus::PciBus;
 pub use host::PciHost;
 pub use msix::init_msix;
 pub use root_port::RootPort;
+use util::AsAny;
 
 use std::{
     mem::size_of,
@@ -118,7 +121,7 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
-pub trait PciDevOps: Send {
+pub trait PciDevOps: Send + AsAny {
     /// Init writable bit mask.
     fn init_write_mask(&mut self) -> Result<()>;
 
@@ -200,21 +203,18 @@ pub trait PciDevOps: Send {
         parent_dev_path
     }
 
-    /// Fill the device patch accroding to parent device patch and device function.
+    /// Fill the device path accroding to parent device path and device function.
     fn populate_dev_path(&self, parent_dev_path: String, devfn: u8, dev_type: &str) -> String {
-        let mut dev_path = parent_dev_path;
-        dev_path.push_str(dev_type);
-
         let slot = pci_slot(devfn);
-        dev_path.push_str(&slot.to_string());
-
         let function = pci_func(devfn);
-        if function != 0 {
-            dev_path.push(',');
-            dev_path.push_str(&function.to_string());
-        }
 
-        dev_path
+        let slot_function = if function != 0 {
+            format!("{:x},{:x}", slot, function)
+        } else {
+            format!("{:x}", slot)
+        };
+
+        format!("{}{}{}", parent_dev_path, dev_type, slot_function)
     }
 
     /// Get firmware device path.
@@ -242,7 +242,7 @@ pub fn init_multifunction(
     if multifunction {
         header_type |= HEADER_TYPE_MULTIFUNC as u16;
     }
-    le_write_u16(config, HEADER_TYPE as usize, header_type as u16)?;
+    le_write_u16(config, HEADER_TYPE as usize, header_type)?;
 
     // Allow two ways of multifunction bit:
     // 1. The multifunction bit of all devices must be set;
