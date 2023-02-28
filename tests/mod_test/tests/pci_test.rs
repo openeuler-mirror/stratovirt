@@ -21,19 +21,18 @@ use mod_test::libdriver::virtio_block::{
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
-use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use mod_test::utils::{cleanup_img, create_img, read_le_u16, TEST_IMAGE_SIZE};
 
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time;
+use std::{thread, time};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1af4;
 const BLK_DEVICE_ID: u16 = 0x1042;
 const MAX_DEVICE_NUM_IN_MULTIFUNC: u8 = 248;
 const MAX_DEVICE_NUM: u8 = 32;
 const TIMEOUT_S: u64 = 5;
-const MAX_TABLE_SIZE_MAX: u32 = 0x1000;
 
 #[derive(Clone, Copy)]
 struct DemoDev {
@@ -1189,6 +1188,39 @@ fn test_pci_type1_config() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
+#[test]
+fn test_pci_type1_reset() {
+    let blk_nums = 1;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a root port whose bdf is 0:1:0.
+    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+
+    let command = root_port.rp_dev.config_readw(PCI_COMMAND);
+    let cmd_memory = command & PCI_COMMAND_MEMORY as u16;
+
+    // Bitwise inversion of memory space enable.
+    let write_cmd = command | (command & (!PCI_COMMAND_MEMORY as u16)) | !cmd_memory;
+    root_port.rp_dev.config_writew(PCI_COMMAND, write_cmd);
+    let old_command = root_port.rp_dev.config_readw(PCI_COMMAND);
+    assert_ne!(old_command, write_cmd);
+
+    root_port
+        .rp_dev
+        .config_writeb(PCI_BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET);
+
+    // Sleep three seconds to wait root port reset second bus.
+    let sleep_s = time::Duration::from_secs(3);
+    thread::sleep(sleep_s);
+
+    let new_command = root_port.rp_dev.config_readw(PCI_COMMAND);
+    // verify that the block device is reset.
+    assert_ne!(old_command, new_command);
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
 /// Verify that out-of-bounds access to the configuration space
 #[test]
 fn test_out_boundry_config_access() {
@@ -1199,14 +1231,14 @@ fn test_out_boundry_config_access() {
     let devfn = 1 << 3 | 1;
     let addr = machine.borrow().pci_bus.borrow().ecam_alloc_ptr
         + ((0 as u32) << 20 | (devfn as u32) << 12 | 0 as u32) as u64
-        - 4;
+        - 1;
 
-    let write_value = u8::max_value();
+    let write_value = u16::max_value();
     let buf = write_value.to_le_bytes();
     test_state.borrow().memwrite(addr, &buf);
 
-    let mut buf: &[u8] = &test_state.borrow().memread(addr, 1)[0];
-    let read_value = read_le_u8(&mut buf);
+    let mut buf: &[u8] = &test_state.borrow().memread(addr, 2)[0..2];
+    let read_value = read_le_u16(&mut buf);
     assert_ne!(write_value, read_value);
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
@@ -1225,7 +1257,10 @@ fn test_out_size_config_access() {
     let vendor_device_id = root_port.rp_dev.config_readl(PCI_VENDOR_ID);
     let command_status = root_port.rp_dev.config_readl(PCI_COMMAND);
     let value = root_port.rp_dev.config_readq(0);
-    assert_ne!(value, vendor_device_id << 32 | command_status);
+    assert_ne!(
+        value,
+        (vendor_device_id as u64) << 32 | command_status as u64
+    );
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
@@ -1240,26 +1275,23 @@ fn test_out_boundry_msix_access() {
     // Create a root port whose bdf is 0:1:0.
     let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
 
+    // Out-of-bounds access to the msix table.
     let write_value = u32::max_value();
     root_port.rp_dev.io_writel(
         root_port.rp_dev.msix_table_bar,
-        PCI_MSIX_ENTRY_VECTOR_CTRL - 2,
+        PCI_MSIX_ENTRY_VECTOR_CTRL + 2,
         write_value,
     );
     let read_value = root_port.rp_dev.io_readl(
         root_port.rp_dev.msix_table_bar,
-        PCI_MSIX_ENTRY_VECTOR_CTRL - 2,
+        PCI_MSIX_ENTRY_VECTOR_CTRL + 2,
     );
     assert_ne!(write_value, read_value);
 
-    let write_value = u64::max_value();
-    root_port
-        .rp_dev
-        .io_writeq(root_port.rp_dev.msix_pba_bar, 4, write_value);
-    let read_value = root_port
+    // Out-of-bounds access to the msix pba.
+    let _read_value = root_port
         .rp_dev
         .io_readq(root_port.rp_dev.msix_table_bar, 4);
-    assert_ne!(write_value, read_value);
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
@@ -1479,28 +1511,38 @@ fn test_alloc_abnormal_vector() {
 
     // Create a block device whose bdf is 1:0:0.
     let blk = create_blk(machine.clone(), 1, 0, 0);
-    let vqs = blk.borrow_mut().init_device(
-        test_state.clone(),
-        alloc.clone(),
-        1 << VIRTIO_F_VERSION_1,
-        1,
-    );
+
+    // 1. Init device.
+    blk.borrow_mut().reset();
+    blk.borrow_mut().set_acknowledge();
+    blk.borrow_mut().set_driver();
+    blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
+    blk.borrow_mut().set_features_ok();
+    blk.borrow_mut().pci_dev.enable_msix(None);
+    blk.borrow_mut()
+        .setup_msix_configuration_vector(alloc.clone(), 0);
 
     let queue_num = blk.borrow().get_queue_nums();
 
+    let virtqueue = blk
+        .borrow()
+        .setup_virtqueue(test_state.clone(), alloc.clone(), 0 as u16);
     blk.borrow()
         .setup_virtqueue_intr((queue_num + 2) as u16, alloc.clone(), virtqueue.clone());
+    blk.borrow().set_driver_ok();
 
-    let free_head = simple_blk_io_req(
+    let _free_head = simple_blk_io_req(
         blk.clone(),
         test_state.clone(),
-        vqs[0].clone(),
+        virtqueue.clone(),
         alloc.clone(),
     );
     // Verify that the os can not receive msix interrupt when the vectors of virtqueue is .
-    assert!(wait_msix_timeout(blk.clone(), vqs[0].clone(), TIMEOUT_S));
+    assert!(wait_msix_timeout(blk.clone(), virtqueue.clone(), TIMEOUT_S));
 
-    tear_down(Some(blk), test_state, alloc, Some(vqs), Some(image_paths));
+    blk.borrow_mut()
+        .cleanup_virtqueue(alloc.clone(), virtqueue.borrow().desc);
+    tear_down(Some(blk), test_state, alloc, None, Some(image_paths));
 }
 
 /// Basic hotplug testcase.

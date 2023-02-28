@@ -38,6 +38,7 @@ pub const PCI_SUBSYSTEM_ID: u8 = 0x2e;
 
 pub const PCI_CAPABILITY_LIST: u8 = 0x34;
 pub const PCI_BRIDGE_CONTROL: u8 = 0x3e;
+pub const BRIDGE_CTL_SEC_BUS_RESET: u8 = 0x40;
 
 pub const PCI_CAP_LIST_NEXT: u8 = 1;
 pub const PCI_CAP_ID_VNDR: u8 = 0x09;
@@ -339,7 +340,6 @@ impl TestPciDev {
 impl PciMsixOps for TestPciDev {
     fn set_msix_vector(&self, msix_entry: u16, msix_addr: u64, msix_data: u32) {
         assert!(self.msix_enabled);
-        assert!(msix_entry <= self.get_msix_table_size());
         let offset = self.msix_table_off + (msix_entry * 16) as u64;
 
         let msix_table_bar = self.msix_table_bar;
