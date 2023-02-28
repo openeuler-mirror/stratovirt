@@ -93,9 +93,9 @@ pub struct TestPciDev {
     pub devfn: u8,
     pub msix_enabled: bool,
     pub msix_table_bar: PCIBarAddr,
-    msix_pba_bar: PCIBarAddr,
+    pub msix_pba_bar: PCIBarAddr,
     pub msix_table_off: u64,
-    msix_pba_off: u64,
+    pub msix_pba_off: u64,
     pub msix_used_vectors: u32,
 }
 
