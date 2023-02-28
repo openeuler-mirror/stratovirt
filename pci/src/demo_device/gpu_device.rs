@@ -37,7 +37,7 @@ use vnc::{
         create_pixman_image, get_image_data, get_image_format, get_image_stride, ref_pixman_image,
     },
 };
-
+pub const UPDATE_FACTOR: [u8; 7] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40];
 use crate::demo_dev::DeviceTypeOperation;
 
 #[derive(Debug)]
@@ -142,9 +142,16 @@ impl DemoGpu {
         for i in y..y + h {
             let ptr = (image_ptr as usize + i as usize * stride as usize) as *mut u8;
             for j in x..x + w {
-                let tmp_ptr = (ptr as usize + 4 * j as usize) as *mut u8;
-                // ^_ ， byte reverse.
-                unsafe { *tmp_ptr ^= 0xff };
+                let tmp_ptr = ptr as usize + 4 * j as usize;
+                let rand_factor = (i * j) as usize;
+                let len = UPDATE_FACTOR.len();
+                unsafe {
+                    // byte reverse by ^.
+                    *(tmp_ptr as *mut u8) ^= UPDATE_FACTOR[rand_factor % len];
+                    *((tmp_ptr + 1) as *mut u8) ^= UPDATE_FACTOR[(rand_factor + 1) % len];
+                    *((tmp_ptr + 2) as *mut u8) ^= UPDATE_FACTOR[(rand_factor + 2) % len];
+                    *((tmp_ptr + 3) as *mut u8) ^= UPDATE_FACTOR[(rand_factor + 3) % len];
+                }
             }
         }
         self.graphic_update(x, y, w, h)
