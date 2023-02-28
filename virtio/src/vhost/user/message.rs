@@ -105,9 +105,9 @@ impl From<u32> for VhostUserMsgReq {
 pub enum VhostUserHdrFlag {
     /// Bits[0..1] is message version number.
     Version = 0x3,
-    /// Bits[2] Mark message as reply.
+    /// Bits`\[`2`]` Mark message as reply.
     Reply = 0x4,
-    /// Bits[3] Sender anticipates a reply message from the peer.
+    /// Bits`\[`3`\]` Sender anticipates a reply message from the peer.
     NeedReply = 0x8,
     /// All valid bits.
     AllFlags = 0xc,
