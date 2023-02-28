@@ -126,6 +126,87 @@ fn test_set_area_dirty() {
 }
 
 /// Brief:
+/// 1. When received a framebuffer request from the client, the vnc server can
+/// send the pixel which is changed to the client.
+/// Preparation:
+/// 1. Configure a demo pointer device and test GPU device.
+/// 2. Start a VNC Server and listens on local ports.
+/// 3. The demo gpu device create an image with size of 640 * 480 and sends it to VNC.
+/// TestStep:
+/// 1. VNC client connect to server.
+/// 2. VNC client set pixel format (Raw of Hextile).
+/// 3. VNC client send framebuffer request + NotIncremental
+/// + The Demo GPU device changes the pixel and update image -> expect 1.
+/// ExpectOutput
+/// 1. VNC client can receive image updates event, and the image format meets expectations.
+#[test]
+fn test_set_multiple_area_dirty() {
+    let port: u16 = 8;
+    let mut gpu_list: Vec<DemoGpuConfig> = vec![];
+    let gpu_conf = DemoGpuConfig {
+        pci_slot: 3,
+        id: "demo-pci-gpu".to_string(),
+    };
+    gpu_list.push(gpu_conf);
+    let input_conf = InputConfig {
+        pci_slot: 4,
+        id: "demo-pci-input".to_string(),
+    };
+    let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
+    let demo_gpu = gpu_list[0].clone();
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
+    assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
+    // Encoding -> Raw.
+    // Multiple areas of image have been updated.
+    // Demo update image -> VNC client send update request.
+    assert!(vnc_client
+        .test_setup_encodings(None, Some(EncodingType::EncodingRaw))
+        .is_ok());
+    let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
+    demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
+    demo_gpu.borrow_mut().update_image_area(72, 72, 109, 109);
+    demo_gpu.borrow_mut().update_image_area(119, 120, 160, 160);
+    demo_gpu.borrow_mut().set_area_dirty(0, 0, 640, 480);
+    assert!(vnc_client
+        .test_update_request(UpdateState::NotIncremental, 0, 0, 640 as u16, 480 as u16,)
+        .is_ok());
+
+    let res = vnc_client.test_recv_server_data(pf);
+    assert!(res.is_ok());
+    assert!(res
+        .unwrap()
+        .contains(&(RfbServerMsg::FramebufferUpdate, EncodingType::EncodingRaw)));
+
+    // Encoding -> Hextile.
+    // Multiple areas of image have been updated.
+    // Demo update image -> VNC client send update request.
+    assert!(vnc_client
+        .test_setup_encodings(None, Some(EncodingType::EncodingHextile))
+        .is_ok());
+    let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
+    demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
+    demo_gpu.borrow_mut().update_image_area(72, 72, 109, 109);
+    demo_gpu.borrow_mut().update_image_area(119, 120, 160, 160);
+    demo_gpu.borrow_mut().set_area_dirty(0, 0, 640, 480);
+    assert!(vnc_client
+        .test_update_request(UpdateState::NotIncremental, 0, 0, 640 as u16, 480 as u16,)
+        .is_ok());
+
+    let res = vnc_client.test_recv_server_data(pf);
+    assert!(res.is_ok());
+    assert!(res.unwrap().contains(&(
+        RfbServerMsg::FramebufferUpdate,
+        EncodingType::EncodingHextile
+    )));
+
+    assert!(vnc_client.disconnect().is_ok());
+
+    tear_down(gpu_list, input, test_state);
+}
+
+/// Brief:
 /// 1. VNC Server can update cursor image.
 /// Preparation:
 /// 1. Configure a demo pointer device and test GPU device.
