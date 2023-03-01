@@ -22,7 +22,7 @@ use crate::{
     vnc::{
         auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
         auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
-        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState, RectInfo},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState, IoChannel, RectInfo},
         round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
         VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
@@ -506,10 +506,12 @@ pub fn handle_connection(
         .set_nonblocking(true)
         .expect("set nonblocking failed");
 
+    let io_channel = Rc::new(RefCell::new(IoChannel::new(stream.try_clone().unwrap())));
     // Register event notifier for vnc client.
     let client = Arc::new(ClientState::new(addr.to_string()));
     let client_io = Arc::new(Mutex::new(ClientIoHandler::new(
         stream,
+        io_channel,
         client.clone(),
         server.clone(),
     )));
