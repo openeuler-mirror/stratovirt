@@ -14,9 +14,9 @@ use anyhow::Result;
 use mod_test::{
     libdriver::vnc::{
         create_new_client, set_up, tear_down, DemoGpuConfig, EncodingType, InputConfig,
-        RfbPixelFormat, RfbServerMsg, TestAuthType, UpdateState, KEYEVENTLIST, PIXMAN_A1,
-        PIXMAN_A8B8G8R8, PIXMAN_R8G8B8, PIXMAN_X2R10G10B10, PIXMAN_YUY2, POINTEVENTLIST,
-        TEST_CLIENT_RAND_MSG,
+        RfbClientMessage, RfbPixelFormat, RfbServerMsg, TestAuthType, TestClientCut, UpdateState,
+        KEYEVENTLIST, PIXMAN_A1, PIXMAN_A8B8G8R8, PIXMAN_R8G8B8, PIXMAN_X2R10G10B10, PIXMAN_YUY2,
+        POINTEVENTLIST, TEST_CLIENT_RAND_MSG,
     },
     libtest::TestState,
 };
@@ -684,6 +684,38 @@ fn test_set_pixel_format_abnormal(test_state: Rc<RefCell<TestState>>, port: u16)
     Ok(())
 }
 
+fn test_set_encoding_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
+    assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
+    assert!(vnc_client.test_setup_encodings(Some(100), None).is_ok());
+    // Send a qmp to query vnc client state.
+    let value = qmp_query_vnc(test_state.clone());
+    let client_num = value["return"]["clients"].as_array().unwrap().len();
+    assert_eq!(client_num, 1);
+    assert!(vnc_client.disconnect().is_ok());
+    Ok(())
+}
+
+fn test_client_cut_event(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
+    let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
+    assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
+    let text = "Stratovirt".to_string();
+    let client_cut = TestClientCut {
+        event_type: RfbClientMessage::RfbClientCutText,
+        pad0: 0,
+        pad1: 0,
+        length: text.len() as u32,
+        text: text,
+    };
+    assert!(vnc_client.test_send_client_cut(client_cut).is_ok());
+    // Send a qmp to query vnc client state.
+    let value = qmp_query_vnc(test_state.clone());
+    let client_num = value["return"]["clients"].as_array().unwrap().len();
+    assert_eq!(client_num, 1);
+    assert!(vnc_client.disconnect().is_ok());
+    Ok(())
+}
+
 fn test_client_rand_bytes(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
     let mut vnc_client = create_new_client(test_state, port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
@@ -709,6 +741,8 @@ fn test_client_rand_bytes(test_state: Rc<RefCell<TestState>>, port: u16) -> Resu
 ///     2. Unsupport security type -> expect 1 + 2.
 ///     3. The message of set pixel formal is abnormal -> expect 1 + 2.
 ///     4. Send the rand bytes from the client -> expect 2.
+///     5. Send set encoding event: encoding number abnormal -> expect 2.
+///     6. Unsupported event: Client cut event is not supported now -> expect 2.
 /// ExpectOutput:
 /// 1. VNC server close the connection.
 /// 2. The status of VNC server status is normal and can handle the next connect request.
@@ -730,13 +764,15 @@ fn test_rfb_abnormal() {
     assert!(test_rfb_version_abnormal(test_state.clone(), port).is_ok());
     assert!(test_unsupport_sec_type(test_state.clone(), port).is_ok());
     assert!(test_set_pixel_format_abnormal(test_state.clone(), port).is_ok());
+    assert!(test_set_encoding_abnormal(test_state.clone(), port).is_ok());
+    assert!(test_client_cut_event(test_state.clone(), port).is_ok());
     assert!(test_client_rand_bytes(test_state.clone(), port).is_ok());
 
     let mut vnc_client = create_new_client(test_state.clone(), port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let value = qmp_query_vnc(test_state.clone());
     let client_num = value["return"]["clients"].as_array().unwrap().len();
-    assert!(client_num >= 1);
+    assert_eq!(client_num, 1);
     assert!(vnc_client.disconnect().is_ok());
 
     tear_down(gpu_list, input, test_state);
