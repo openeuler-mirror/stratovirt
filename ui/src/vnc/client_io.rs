@@ -25,12 +25,13 @@ use crate::{
         MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
     },
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use log::error;
-use rustls::ServerConnection;
 use sscanf::scanf;
 use std::{
+    cell::RefCell,
     cmp,
+    collections::HashMap,
     io::{Read, Write},
     net::{Shutdown, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
@@ -48,7 +49,6 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub const APP_NAME: &str = "stratovirt";
 const MAX_RECVBUF_LEN: usize = 1024;
-const MAX_SEND_LEN: usize = 64 * 1024;
 const NUM_OF_COLORMAP: u16 = 256;
 
 // VNC encodings types.
@@ -65,6 +65,13 @@ const ENCODING_LED_STATE: i32 = -261;
 const ENCODING_DESKTOP_RESIZE_EXT: i32 = -308;
 pub const ENCODING_ALPHA_CURSOR: i32 = -314;
 const ENCODING_WMVI: i32 = 1464686185;
+
+/// This trait is used to send bytes,
+/// the return is the total number of bytes sented.
+pub trait IoOperations {
+    fn channel_write(&mut self, buf: &[u8]) -> Result<usize>;
+    fn channel_read(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
+}
 
 /// Image display feature.
 pub enum VncFeatures {
@@ -233,6 +240,67 @@ impl Clone for RectInfo {
     }
 }
 
+pub struct IoChannel {
+    stream: TcpStream,
+}
+
+impl IoChannel {
+    pub fn new(stream: TcpStream) -> Self {
+        Self { stream }
+    }
+}
+
+impl IoOperations for IoChannel {
+    fn channel_write(&mut self, buf: &[u8]) -> Result<usize> {
+        let buf_size = buf.len();
+        let mut offset = 0;
+        while offset < buf_size {
+            let tmp_buf = &buf[offset..];
+            match self.stream.write(tmp_buf) {
+                Ok(ret) => {
+                    offset += ret;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Ok(offset);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    continue;
+                }
+                Err(e) => {
+                    bail!("Unable to write msg on socket: {:?}", e);
+                }
+            }
+        }
+
+        Ok(buf_size)
+    }
+
+    fn channel_read(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let mut len = 0_usize;
+        loop {
+            let mut bytes = vec![0_u8; MAX_RECVBUF_LEN];
+            match self.stream.read(&mut bytes) {
+                Ok(ret) => {
+                    buf.append(&mut bytes[..ret].to_vec());
+                    len += ret;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Ok(len);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    continue;
+                }
+                Err(e) => {
+                    bail!("Unable to read msg from socket: {:?}", e);
+                }
+            }
+            break;
+        }
+
+        Ok(len)
+    }
+}
+
 /// The connection state of vnc client.
 pub struct ConnState {
     /// Dirty number need to update.
@@ -325,6 +393,10 @@ impl ClientState {
 pub struct ClientIoHandler {
     /// TcpStream connected with client.
     pub stream: TcpStream,
+    /// Io channel to handle read or write.
+    pub io_channel: Rc<RefCell<dyn IoOperations>>,
+    /// Vnc client io handler.
+    pub handlers: HashMap<String, Rc<NotifierCallback>>,
     /// Tls server connection.
     pub tls_conn: Option<rustls::ServerConnection>,
     /// Message handler.
@@ -338,9 +410,16 @@ pub struct ClientIoHandler {
 }
 
 impl ClientIoHandler {
-    pub fn new(stream: TcpStream, client: Arc<ClientState>, server: Arc<VncServer>) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        io_channel: Rc<RefCell<dyn IoOperations>>,
+        client: Arc<ClientState>,
+        server: Arc<VncServer>,
+    ) -> Self {
         ClientIoHandler {
             stream,
+            io_channel,
+            handlers: HashMap::new(),
             tls_conn: None,
             msg_handler: ClientIoHandler::handle_version,
             expect: 12,
@@ -407,141 +486,19 @@ impl ClientIoHandler {
 
     /// Read buf from stream, return the size.
     fn read_msg(&mut self) -> Result<usize> {
-        let mut buf = Vec::new();
-        let mut len: usize = 0;
-        if self.tls_conn.is_none() {
-            match self.read_plain_msg(&mut buf) {
-                Ok(n) => len = n,
-                Err(e) => return Err(e),
-            }
-        }
-        if let Some(tc) = &self.tls_conn {
-            if tc.is_handshaking() {
-                return Ok(0_usize);
-            }
-        }
-        if self.tls_conn.is_some() {
-            match self.read_tls_msg(&mut buf) {
-                Ok(n) => len = n,
-                Err(e) => return Err(e),
-            }
-        }
+        let mut buf: Vec<u8> = vec![];
+        let len = self.io_channel.borrow_mut().channel_read(&mut buf)?;
         if len > 0 {
             buf = buf[..len].to_vec();
             self.client.in_buffer.lock().unwrap().append_limit(buf);
         }
-
-        Ok(len)
-    }
-
-    // Read from vencrypt channel.
-    fn read_tls_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        let mut len = 0_usize;
-        if self.tls_conn.is_none() {
-            return Ok(0_usize);
-        }
-        let tc: &mut ServerConnection = match &mut self.tls_conn {
-            Some(sc) => sc,
-            None => return Ok(0_usize),
-        };
-
-        if let Err(e) = tc.read_tls(&mut self.stream) {
-            error!("tls_conn read error {:?}", e);
-            return Err(anyhow!(VncError::ReadMessageFailed(format!(
-                "tls_conn read error {:?}",
-                e
-            ))));
-        }
-
-        if let Ok(io_state) = tc.process_new_packets() {
-            if io_state.plaintext_bytes_to_read() > 0 {
-                len = io_state.plaintext_bytes_to_read();
-                buf.resize(len, 0u8);
-                if let Err(e) = tc.reader().read_exact(buf) {
-                    error!("tls_conn read error {:?}", e);
-                    buf.clear();
-                    return Err(anyhow!(VncError::ReadMessageFailed(format!(
-                        "tls_conn read error {:?}",
-                        e
-                    ))));
-                }
-            }
-        }
-        Ok(len)
-    }
-
-    /// Read plain txt.
-    fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        let mut len = 0_usize;
-        buf.resize(MAX_RECVBUF_LEN, 0u8);
-        match self.stream.read(buf) {
-            Ok(ret) => len = ret,
-            Err(e) => error!("read msg error: {:?}", e),
-        }
-
         Ok(len)
     }
 
     /// Write buf to stream
     /// Choose different channel according to whether or not to encrypt
     pub fn write_msg(&mut self, buf: &[u8]) -> Result<usize> {
-        if self.tls_conn.is_none() {
-            self.write_plain_msg(buf)
-        } else {
-            self.write_tls_msg(buf)
-        }
-    }
-
-    // Send vencrypt message.
-    fn write_tls_msg(&mut self, buf: &[u8]) -> Result<usize> {
-        let buf_size = buf.len();
-        let mut offset = 0;
-
-        let tc: &mut ServerConnection = match &mut self.tls_conn {
-            Some(ts) => ts,
-            None => {
-                return Err(anyhow!(VncError::Disconnection));
-            }
-        };
-
-        while offset < buf_size {
-            let next = cmp::min(buf_size, offset + MAX_SEND_LEN);
-            let tmp_buf = &buf[offset..next].to_vec();
-            if let Err(e) = tc.writer().write_all(tmp_buf) {
-                error!("write msg error: {:?}", e);
-                return Err(anyhow!(VncError::Disconnection));
-            }
-            if let Err(_e) = vnc_write_tls_message(tc, &mut self.stream) {
-                self.client.conn_state.lock().unwrap().dis_conn = true;
-                return Err(anyhow!(VncError::Disconnection));
-            }
-            offset = next;
-        }
-
-        Ok(buf_size)
-    }
-
-    /// Send plain txt.
-    fn write_plain_msg(&mut self, buf: &[u8]) -> Result<usize> {
-        let buf_size = buf.len();
-        let mut offset = 0;
-        while offset < buf_size {
-            let tmp_buf = &buf[offset..];
-            match self.stream.write(tmp_buf) {
-                Ok(ret) => {
-                    offset += ret;
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    return Ok(offset);
-                }
-                Err(e) => {
-                    error!("write msg error: {:?}", e);
-                    return Err(anyhow!(VncError::Disconnection));
-                }
-            }
-        }
-
-        Ok(buf_size)
+        self.io_channel.borrow_mut().channel_write(buf)
     }
 
     /// Exchange RFB protocol version with client.
@@ -1125,6 +1082,11 @@ impl EventNotifierHelper for ClientIoHandler {
             None
         });
         let client_io = client_io_handler.clone();
+        client_io
+            .lock()
+            .unwrap()
+            .handlers
+            .insert("vnc_client_io".to_string(), handler.clone());
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             client_io.lock().unwrap().stream.as_raw_fd(),
@@ -1260,25 +1222,6 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
         .push(RectInfo::new(client, rects));
 
     client.conn_state.lock().unwrap().clear_update_state();
-    Ok(())
-}
-
-fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> Result<()> {
-    while tc.wants_write() {
-        match tc.write_tls(stream) {
-            Ok(_) => {}
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    stream.flush().unwrap();
-                    continue;
-                } else {
-                    error!("write msg error: {:?}", e);
-                    return Err(anyhow!(VncError::Disconnection));
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
