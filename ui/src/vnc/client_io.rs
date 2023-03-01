@@ -234,10 +234,6 @@ impl Clone for RectInfo {
             rects,
         }
     }
-
-    fn clone_from(&mut self, source: &Self) {
-        *self = source.clone()
-    }
 }
 
 pub struct IoChannel {
@@ -1063,10 +1059,7 @@ impl EventNotifierHelper for ClientIoHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _fd: RawFd| {
             let mut locked_client_io = client_io.lock().unwrap();
             let client = locked_client_io.client.clone();
-            if event & EventSet::ERROR == EventSet::ERROR
-                || event & EventSet::HANG_UP == EventSet::HANG_UP
-                || event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP
-            {
+            if event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP {
                 client.conn_state.lock().unwrap().dis_conn = true;
             } else if event & EventSet::IN == EventSet::IN {
                 if let Err(e) = locked_client_io.client_handle_read() {
