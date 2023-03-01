@@ -21,15 +21,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
 use std::ops::Deref;
-use std::os::unix::{io::AsRawFd, net::UnixListener};
+use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
 use log::warn;
 use util::file::{lock_file, unlock_file};
-use util::loop_context::read_fd;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
 
@@ -59,10 +56,7 @@ use machine_manager::config::{
 };
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::{parse_gpu, parse_usb_keyboard, parse_usb_tablet, parse_xhci};
-use machine_manager::{
-    event_loop::EventLoop,
-    machine::{KvmVmState, MachineInterface},
-};
+use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::Result as StdResult;
@@ -74,7 +68,6 @@ use usb::{
 };
 use util::{
     arg_parser,
-    loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
@@ -234,6 +227,10 @@ pub trait MachineOps {
 
     /// Add RTC device.
     fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
+
+    /// Add Generic event device.
+    #[cfg(target_arch = "aarch64")]
+    fn add_ged_device(&mut self) -> Result<()>;
 
     /// Add serial device.
     ///
@@ -1178,6 +1175,10 @@ pub trait MachineOps {
         )
         .with_context(|| anyhow!(MachineError::AddDevErr("RTC".to_string())))?;
 
+        #[cfg(target_arch = "aarch64")]
+        self.add_ged_device()
+            .with_context(|| anyhow!(MachineError::AddDevErr("Ged".to_string())))?;
+
         let cloned_vm_config = vm_config.clone();
         if let Some(serial) = cloned_vm_config.serial.as_ref() {
             self.add_serial_device(serial)
@@ -1320,31 +1321,6 @@ pub trait MachineOps {
         seccomp_filter
             .realize()
             .with_context(|| "Failed to init seccomp filter.")?;
-        Ok(())
-    }
-
-    /// Register event notifier for power button of mainboard.
-    ///
-    /// # Arguments
-    ///
-    /// * `power_button` - Eventfd of the power button.
-    fn register_power_event(&self, power_button: Arc<EventFd>) -> Result<()> {
-        let button_fd = power_button.as_raw_fd();
-        let power_button_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            read_fd(button_fd);
-            None
-        });
-        let notifier = EventNotifier::new(
-            NotifierOperation::AddShared,
-            button_fd,
-            None,
-            EventSet::IN,
-            vec![power_button_handler],
-        );
-        trace_eventnotifier(&notifier);
-
-        EventLoop::update_event(vec![notifier], None)
-            .with_context(|| anyhow!(MachineError::RegNotifierErr))?;
         Ok(())
     }
 
@@ -1657,11 +1633,6 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     }
 
     Ok(())
-}
-
-/// Description of the trace for eventnotifier.
-fn trace_eventnotifier(eventnotifier: &EventNotifier) {
-    util::ftrace!(trace_eventnotifier, "{:#?}", eventnotifier);
 }
 
 fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
