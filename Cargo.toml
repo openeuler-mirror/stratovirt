@@ -1,5 +1,5 @@
 [package]
-name = "StratoVirt"
+name = "stratovirt"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"
@@ -9,57 +9,17 @@ license = "Mulan PSL v2"
 [dependencies]
 thiserror = "1.0"
 anyhow = "1.0"
-capng = "0.2.2"
-error-chain = "0.12.4"
-kvm-ioctls = "0.12.0"
-libc = "0.2"
 log = "0.4"
-vmm-sys-util = "0.11.0"
-hypervisor = { path = "hypervisor" }
 machine = { path = "machine" }
 machine_manager = { path = "machine_manager" }
-migration = { path = "migration" }
 util = { path = "util" }
-virtio = { path = "virtio" }
-vhost_user_fs = { path = "vhost_user_fs" }
-vfio = { path = "vfio" }
-
-[target.'cfg(not(target_env = "musl"))'.dependencies]
-vnc = { path = "vnc" }
 
 [workspace]
 members = [
-    "address_space",
-    "boot_loader",
-    "cpu",
-    "devices",
-    "hypervisor",
-    "machine",
-    "machine_manager",
-    "migration",
-    "migration_derive",
-    "pci",
-    "sysbus",
-    "util",
-    "acpi",
-    "virtio",
     "vhost_user_fs",
     "ozone",
-    "vfio",
     "tests/mod_test",
 ]
-
-[[bin]]
-name = "stratovirt"
-path = "src/main.rs"
-
-[[bin]]
-name = "ozone"
-path = "ozone/src/main.rs"
-
-[[bin]]
-name = "vhost_user_fs"
-path = "vhost_user_fs/src/main.rs"
 
 [features]
 default = []

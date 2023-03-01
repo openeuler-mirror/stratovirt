@@ -1,6 +1,10 @@
 .PHONY: build
 build: yum-deps
-	cargo build --release
+	cargo build --workspace --bins --release
+
+.PHONY: dbg-build
+dbg-build: yum-deps
+	cargo build --workspace --bins
 
 .PHONY: install
 install:
