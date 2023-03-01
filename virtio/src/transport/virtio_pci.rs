@@ -23,8 +23,8 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID,
-    SUB_CLASS_CODE, VENDOR_ID,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
+    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
 use pci::Result as PciResult;
@@ -51,7 +51,7 @@ use crate::{
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
-const VIRTIO_PCI_VENDOR_ID: u16 = 0x1af4;
+const VIRTIO_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const VIRTIO_PCI_DEVICE_ID_BASE: u16 = 0x1040;
 const VIRTIO_PCI_ABI_VERSION: u8 = 1;
 const VIRTIO_PCI_CLASS_ID_NET: u16 = 0x0280;

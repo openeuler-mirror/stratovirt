@@ -19,6 +19,7 @@
 pub mod acpi;
 mod interrupt_controller;
 pub mod legacy;
+pub mod misc;
 pub mod usb;
 
 #[cfg(target_arch = "aarch64")]
