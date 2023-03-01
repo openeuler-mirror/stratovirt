@@ -41,7 +41,6 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use core::time;
-use log::error;
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
@@ -95,9 +94,9 @@ pub struct VncInterface {}
 impl DisplayChangeListenerOperations for VncInterface {
     /// Update guest_image
     /// Send a resize command to the client based on whether the image size has changed
-    fn dpy_switch(&self, surface: &DisplaySurface) {
+    fn dpy_switch(&self, surface: &DisplaySurface) -> Result<()> {
         if VNC_SERVERS.lock().unwrap().is_empty() {
-            return;
+            return Ok(());
         }
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
@@ -119,11 +118,11 @@ impl DisplayChangeListenerOperations for VncInterface {
                 guest_height,
                 guest_width,
                 guest_height,
-            );
-            return;
+            )?;
+            return Ok(());
         }
         drop(locked_vnc_surface);
-        update_server_surface(&server);
+        update_server_surface(&server)?;
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
@@ -133,7 +132,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             // Set Color depth.
             set_color_depth(client, &mut buf);
             // Desktop_resize.
-            desktop_resize(client, &server, &mut buf);
+            desktop_resize(client, &server, &mut buf)?;
             // Cursor define.
             display_cursor_define(client, &server, &mut buf);
             vnc_write(client, buf);
@@ -147,26 +146,27 @@ impl DisplayChangeListenerOperations for VncInterface {
                 height,
                 guest_width,
                 guest_height,
-            );
+            )?;
             vnc_update_output_throttle(client);
         }
+        Ok(())
     }
 
     /// Refresh server_image to guest_image.
-    fn dpy_refresh(&self, dcl: &Arc<Mutex<DisplayChangeListener>>) {
+    fn dpy_refresh(&self, dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
         if VNC_SERVERS.lock().unwrap().is_empty() {
-            return;
+            return Ok(());
         }
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         if server.client_handlers.lock().unwrap().is_empty() {
-            return;
+            return Ok(());
         }
         let con_id = dcl.lock().unwrap().con_id;
         graphic_hardware_update(con_id);
 
         // Update refresh interval.
         let mut update_interval = dcl.lock().unwrap().update_interval;
-        let dirty_num = server.vnc_surface.lock().unwrap().update_server_image();
+        let dirty_num = server.vnc_surface.lock().unwrap().update_server_image()?;
         if dirty_num != 0 {
             update_interval /= 2;
             if update_interval < DISPLAY_UPDATE_INTERVAL_DEFAULT {
@@ -182,13 +182,14 @@ impl DisplayChangeListenerOperations for VncInterface {
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
-            get_rects(client, dirty_num);
+            get_rects(client, dirty_num)?;
         }
+        Ok(())
     }
 
-    fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) {
+    fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
         if VNC_SERVERS.lock().unwrap().is_empty() {
-            return;
+            return Ok(());
         }
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
@@ -202,13 +203,14 @@ impl DisplayChangeListenerOperations for VncInterface {
             h,
             g_w,
             g_h,
-        );
+        )?;
         drop(locked_vnc_surface);
+        Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) {
+    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) -> Result<()> {
         if VNC_SERVERS.lock().unwrap().is_empty() {
-            return;
+            return Ok(());
         }
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let width = cursor.width as u64;
@@ -251,6 +253,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             vnc_write(client, buf);
             vnc_flush(client);
         }
+        Ok(())
     }
 }
 
@@ -270,7 +273,6 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         Ok(l) => l,
         Err(e) => {
             let msg = format!("Bind {} failed {}", addr, e);
-            error!("{}", e);
             return Err(anyhow!(VncError::TcpBindFailed(msg)));
         }
     };
@@ -410,7 +412,7 @@ pub fn set_area_dirty(
     mut h: i32,
     g_w: i32,
     g_h: i32,
-) {
+) -> Result<()> {
     let width: i32 = vnc_width(g_w);
     let height: i32 = vnc_height(g_h);
 
@@ -424,12 +426,10 @@ pub fn set_area_dirty(
     while y < h {
         let pos = (y * VNC_BITMAP_WIDTH as i32 + x / DIRTY_PIXELS_NUM as i32) as usize;
         let len = round_up_div(w as u64, DIRTY_PIXELS_NUM as u64) as usize;
-        if let Err(e) = dirty.set_range(pos, len) {
-            error!("set bitmap error: {:?}", e);
-            return;
-        }
+        dirty.set_range(pos, len)?;
         y += 1;
     }
+    Ok(())
 }
 
 /// Get the width of image.
@@ -446,14 +446,14 @@ fn vnc_height(height: i32) -> i32 {
 }
 
 /// Update server image
-pub fn update_server_surface(server: &Arc<VncServer>) {
+pub fn update_server_surface(server: &Arc<VncServer>) -> Result<()> {
     let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
     unref_pixman_image(locked_vnc_surface.server_image);
     locked_vnc_surface.server_image = ptr::null_mut();
     // Server image changes, clear the task queue.
     VNC_RECT_INFO.lock().unwrap().clear();
     if server.client_handlers.lock().unwrap().is_empty() {
-        return;
+        return Ok(());
     }
 
     let g_width = get_image_width(locked_vnc_surface.guest_image);
@@ -477,7 +477,7 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
         height,
         g_width,
         g_height,
-    );
+    )
 }
 
 /// Check if the suface for VncClient is need update
