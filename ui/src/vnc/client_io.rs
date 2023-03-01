@@ -14,16 +14,11 @@ use crate::{
     console::DisplayMouse,
     error::VncError,
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
-    round_up_div,
     utils::BuffPool,
     vnc::{
-        auth_sasl::AuthState,
-        server_io::VncServer,
-        vnc::{
-            framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-            DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT,
-            OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
-        },
+        auth_sasl::AuthState, framebuffer_upadate, round_up_div, server_io::VncServer,
+        set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
+        MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
 };
 use anyhow::{anyhow, Result};

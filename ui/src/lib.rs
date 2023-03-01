@@ -17,11 +17,3 @@ pub mod input;
 pub mod pixman;
 pub mod utils;
 pub mod vnc;
-
-pub const fn round_up_div(n: u64, d: u64) -> u64 {
-    (n + d - 1) / d
-}
-
-pub const fn round_up(n: u64, d: u64) -> u64 {
-    round_up_div(n, d) * d
-}

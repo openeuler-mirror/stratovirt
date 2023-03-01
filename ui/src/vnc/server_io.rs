@@ -19,15 +19,12 @@ use crate::{
         get_image_width, pixman_image_linebuf_create, pixman_image_linebuf_fill,
         unref_pixman_image,
     },
-    round_up_div,
     vnc::{
         auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
         auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
         client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState},
-        vnc::{
-            update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
-            VNC_BITMAP_WIDTH, VNC_SERVERS,
-        },
+        round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+        VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
 };
 use anyhow::{anyhow, Result};
