@@ -11,11 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    auth::SaslAuth,
-    auth::{AuthState, SaslConfig, SubAuthState},
-    client::vnc_write,
-    client::{vnc_flush, ClientIoHandler, ClientState},
     console::{DisplayChangeListener, DisplayMouse},
+    error::VncError,
     input::KeyBoardState,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
@@ -23,12 +20,15 @@ use crate::{
         unref_pixman_image,
     },
     round_up_div,
-    vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
     vnc::{
-        update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
-        VNC_BITMAP_WIDTH, VNC_SERVERS,
+        auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
+        auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState},
+        vnc::{
+            update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+            VNC_BITMAP_WIDTH, VNC_SERVERS,
+        },
     },
-    VncError,
 };
 use anyhow::{anyhow, Result};
 use log::{error, info};

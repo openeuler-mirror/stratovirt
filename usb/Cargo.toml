@@ -19,4 +19,4 @@ pci = { path = "../pci" }
 machine_manager = { path = "../machine_manager" }
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
-vnc = { path = "../vnc" }
+ui = { path = "../ui" }

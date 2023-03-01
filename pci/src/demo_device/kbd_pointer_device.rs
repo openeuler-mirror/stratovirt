@@ -16,7 +16,7 @@ use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
-use vnc::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
+use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
 
 use anyhow::{bail, Result};
 

@@ -10,19 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod error;
-pub use error::VncError;
-
-pub mod auth;
-pub mod client;
 pub mod console;
 mod data;
-pub mod encoding;
+pub mod error;
 pub mod input;
 pub mod pixman;
-pub mod server;
 pub mod utils;
-pub mod vencrypt;
 pub mod vnc;
 
 pub const fn round_up_div(n: u64, d: u64) -> u64 {

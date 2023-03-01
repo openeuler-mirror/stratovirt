@@ -73,7 +73,7 @@ impl BuffPool {
     ///
     /// # Example
     /// ```rust
-    /// use vnc::utils::BuffPool;
+    /// use ui::utils::BuffPool;
     ///
     /// let mut buffpool = BuffPool::new();
     /// buffpool.set_limit(Some(1));
@@ -89,7 +89,7 @@ impl BuffPool {
     ///
     /// # Example
     /// ```rust
-    /// use vnc::utils::BuffPool;
+    /// use ui::utils::BuffPool;
     ///
     /// let mut buffpool = BuffPool::new();
     /// buffpool.append_limit((0_u8).to_be_bytes().to_vec());
@@ -109,7 +109,7 @@ impl BuffPool {
     ///
     /// # Example
     /// ```rust
-    /// use vnc::utils::BuffPool;
+    /// use ui::utils::BuffPool;
     ///
     /// let mut buffpool = BuffPool::new();
     /// buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());
@@ -140,7 +140,7 @@ impl BuffPool {
     ///
     /// # Example
     /// ```rust
-    /// use vnc::utils::BuffPool;
+    /// use ui::utils::BuffPool;
     ///
     /// let mut buffpool = BuffPool::new();
     /// buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());

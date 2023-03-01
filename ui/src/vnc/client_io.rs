@@ -11,18 +11,20 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    auth::AuthState,
     console::DisplayMouse,
+    error::VncError,
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     round_up_div,
-    server::VncServer,
     utils::BuffPool,
     vnc::{
-        framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-        DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT,
-        OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
+        auth_sasl::AuthState,
+        server_io::VncServer,
+        vnc::{
+            framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+            DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT,
+            OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
+        },
     },
-    VncError,
 };
 use anyhow::{anyhow, Result};
 use log::error;

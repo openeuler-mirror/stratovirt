@@ -62,9 +62,9 @@ use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineOps};
 use anyhow::{anyhow, bail, Context, Result};
-use virtio::ScsiCntlr::ScsiCntlrMap;
 #[cfg(not(target_env = "musl"))]
-use vnc::vnc;
+use ui::vnc;
+use virtio::ScsiCntlr::ScsiCntlrMap;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -444,7 +444,7 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
         #[cfg(not(target_env = "musl"))]
-        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
+        vnc::vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 

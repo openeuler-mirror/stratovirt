@@ -11,10 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::ClientIoHandler,
     console::console_select,
     pixman::{get_image_height, get_image_width},
-    vnc::BIT_PER_BYTE,
+    vnc::{client_io::ClientIoHandler, vnc::BIT_PER_BYTE},
 };
 use anyhow::Result;
 use log::error;

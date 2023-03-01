@@ -11,9 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    auth::SubAuthState,
-    client::{vnc_flush, vnc_write, ClientIoHandler},
-    VncError,
+    error::VncError,
+    vnc::{
+        auth_sasl::SubAuthState,
+        client_io::{vnc_flush, vnc_write, ClientIoHandler},
+    },
 };
 use anyhow::{anyhow, Result};
 use log::{error, info};

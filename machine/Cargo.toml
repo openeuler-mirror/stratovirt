@@ -33,7 +33,7 @@ vfio = { path = "../vfio" }
 usb = { path = "../usb" }
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
-vnc = { path = "../vnc" }
+ui = { path = "../ui" }
 
 [features]
 default = ["qmp"]
