@@ -86,6 +86,7 @@ pub struct MemZoneConfig {
     pub size: u64,
     pub host_numa_nodes: Option<Vec<u32>>,
     pub policy: String,
+    pub share: bool,
 }
 
 impl Default for MemZoneConfig {
@@ -95,6 +96,7 @@ impl Default for MemZoneConfig {
             size: 0,
             host_numa_nodes: None,
             policy: String::from("bind"),
+            share: false,
         }
     }
 }
@@ -470,26 +472,34 @@ impl VmConfig {
             }
             Ok(Some(host_nodes))
         } else {
-            Err(anyhow!(ConfigError::FieldIsMissing(
-                "host-nodes",
-                "memory-backend-ram"
-            )))
+            Ok(None)
         }
     }
 
     fn get_mem_zone_policy(&self, cmd_parser: &CmdParser) -> Result<String> {
-        if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
-            if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
-                return Err(anyhow!(ConfigError::InvalidParam(
-                    "policy".to_string(),
-                    policy
-                )));
-            }
-            Ok(policy)
+        let policy = cmd_parser
+            .get_value::<String>("policy")?
+            .unwrap_or_else(|| "default".to_string());
+        if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "policy".to_string(),
+                policy
+            )));
+        }
+        Ok(policy)
+    }
+
+    fn get_mem_share(&self, cmd_parser: &CmdParser) -> Result<bool> {
+        let share = cmd_parser
+            .get_value::<String>("share")?
+            .unwrap_or_else(|| "off".to_string());
+
+        if share.eq("on") || share.eq("off") {
+            Ok(share.eq("on"))
         } else {
-            Err(anyhow!(ConfigError::FieldIsMissing(
-                "policy",
-                "memory-backend-ram"
+            Err(anyhow!(ConfigError::InvalidParam(
+                "share".to_string(),
+                share
             )))
         }
     }
@@ -506,7 +516,8 @@ impl VmConfig {
             .push("id")
             .push("size")
             .push("host-nodes")
-            .push("policy");
+            .push("policy")
+            .push("share");
         cmd_parser.parse(mem_zone)?;
 
         let zone_config = MemZoneConfig {
@@ -514,7 +525,12 @@ impl VmConfig {
             size: self.get_mem_zone_size(&cmd_parser)?,
             host_numa_nodes: self.get_mem_zone_host_nodes(&cmd_parser)?,
             policy: self.get_mem_zone_policy(&cmd_parser)?,
+            share: self.get_mem_share(&cmd_parser)?,
         };
+
+        if zone_config.host_numa_nodes.is_none() {
+            return Ok(zone_config);
+        }
 
         if self.machine_config.mem_config.mem_zones.is_some() {
             self.machine_config
@@ -1001,23 +1017,23 @@ mod tests {
         assert_eq!(zone_config_1.host_numa_nodes, Some(vec![1]));
         assert_eq!(zone_config_1.policy, "bind");
 
-        assert!(vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1")
-            .is_err());
-        assert!(vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G")
-            .is_err());
-        assert!(vm_config
-            .add_mem_zone("-object memory-backend-ram,id=mem1")
-            .is_err());
-
-        let mut vm_config = VmConfig::default();
         let zone_config_2 = vm_config
             .add_mem_zone(
                 "-object memory-backend-ram,size=2G,id=mem1,host-nodes=1-2,policy=default",
             )
             .unwrap();
         assert_eq!(zone_config_2.host_numa_nodes, Some(vec![1, 2]));
+
+        let zone_config_3 = vm_config
+            .add_mem_zone("-object memory-backend-ram,size=2M,id=mem1,share=on")
+            .unwrap();
+        assert_eq!(zone_config_3.size, 2 * 1024 * 1024);
+        assert_eq!(zone_config_3.share, true);
+
+        let zone_config_4 = vm_config
+            .add_mem_zone("-object memory-backend-ram,size=2M,id=mem1")
+            .unwrap();
+        assert_eq!(zone_config_4.share, false);
     }
 
     #[test]

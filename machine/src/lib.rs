@@ -25,7 +25,9 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
+use devices::misc::scream::Scream;
 use log::warn;
+use machine_manager::config::scream::parse_scream;
 use util::file::{lock_file, unlock_file};
 
 pub use micro_vm::LightMachine;
@@ -1079,6 +1081,33 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Add scream sound based on ivshmem.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - scream configuration.
+    fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+        let memdev =
+            parse_scream(cfg_args).with_context(|| "Failed to parse cmdline for ivshmem")?;
+
+        let mem_cfg =
+            vm_config.object.mem_object.remove(&memdev).ok_or_else(|| {
+                anyhow!("Object for memory-backend-ram {} config not found", memdev)
+            })?;
+
+        if !mem_cfg.share {
+            bail!("Object for share config is not on");
+        }
+
+        let scream = Scream::new(mem_cfg.size);
+        scream
+            .realize(devfn, parent_bus)
+            .with_context(|| "Failed to realize scream device")
+    }
+
     /// Get the corresponding device from the PCI bus based on the device name.
     ///
     /// # Arguments
@@ -1267,6 +1296,9 @@ pub trait MachineOps {
                 }
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
+                }
+                "ivshmem-scream" => {
+                    self.add_ivshmem_scream(vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

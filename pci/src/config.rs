@@ -85,6 +85,8 @@ pub const HEADER_TYPE_ENDPOINT: u8 = 0x0;
 pub const HEADER_TYPE_BRIDGE: u8 = 0x01;
 /// Multi-function device.
 pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
+/// The vendor ID for Red Hat / Qumranet.
+pub const PCI_VENDOR_ID_REDHAT_QUMRANET: u16 = 0x1af4;
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
@@ -292,6 +294,9 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
+
+/* Device classes and subclasses */
+pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
 /// Type of bar region.
@@ -1109,8 +1114,6 @@ impl PciConfig {
 
     fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
         if !size.is_power_of_two()
-            || ((bar_type == RegionType::Mem32Bit || bar_type == RegionType::Mem64Bit)
-                && size < MINMUM_BAR_SIZE_FOR_MMIO.try_into().unwrap())
             || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO.try_into().unwrap())
             || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
             || (bar_type == RegionType::Io && size > u16::MAX as u64)
@@ -1181,11 +1184,7 @@ mod tests {
         assert!(pci_config
             .register_bar(7, region, RegionType::Mem64Bit, true, 8192)
             .is_err());
-        // test when bar size is incorrect(below 4KB, or not power of 2)
-        let region_size_too_small = Region::init_io_region(2048, region_ops.clone());
-        assert!(pci_config
-            .register_bar(3, region_size_too_small, RegionType::Mem64Bit, true, 2048)
-            .is_err());
+        // test when bar size is incorrect(not power of 2)
         let region_size_not_pow_2 = Region::init_io_region(4238, region_ops);
         assert!(pci_config
             .register_bar(4, region_size_not_pow_2, RegionType::Mem64Bit, true, 4238)
