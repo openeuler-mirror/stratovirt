@@ -32,7 +32,7 @@ use crate::{
     vnc::{
         client_io::{
             desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush,
-            vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
+            vnc_update_output_throttle, vnc_write, DisplayMode, Rectangle, ServerMsg,
             ENCODING_HEXTILE, ENCODING_RAW,
         },
         encoding::enc_hextile::hextile_send_framebuffer_update,
@@ -182,7 +182,7 @@ impl DisplayChangeListenerOperations for VncInterface {
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
-            get_rects(client, dirty_num)?;
+            get_rects(client, &server, dirty_num)?;
         }
         Ok(())
     }
@@ -328,13 +328,14 @@ fn start_vnc_thread() -> Result<()> {
     let _handle = thread::Builder::new()
         .name("vnc_worker".to_string())
         .spawn(move || loop {
-            if VNC_RECT_INFO.lock().unwrap().is_empty() {
+            let rect_jobs = server.rect_jobs.clone();
+            if rect_jobs.lock().unwrap().is_empty() {
                 thread::sleep(time::Duration::from_millis(interval));
                 continue;
             }
 
             let mut rect_info;
-            match VNC_RECT_INFO.lock().unwrap().get_mut(0) {
+            match rect_jobs.lock().unwrap().get_mut(0) {
                 Some(rect) => {
                     rect_info = rect.clone();
                 }
@@ -343,7 +344,7 @@ fn start_vnc_thread() -> Result<()> {
                     continue;
                 }
             }
-            VNC_RECT_INFO.lock().unwrap().remove(0);
+            rect_jobs.lock().unwrap().remove(0);
 
             let mut num_rects: i32 = 0;
             let mut buf = Vec::new();
@@ -451,7 +452,7 @@ pub fn update_server_surface(server: &Arc<VncServer>) -> Result<()> {
     unref_pixman_image(locked_vnc_surface.server_image);
     locked_vnc_surface.server_image = ptr::null_mut();
     // Server image changes, clear the task queue.
-    VNC_RECT_INFO.lock().unwrap().clear();
+    server.rect_jobs.lock().unwrap().clear();
     if server.client_handlers.lock().unwrap().is_empty() {
         return Ok(());
     }
@@ -680,5 +681,3 @@ fn get_client_image() -> *mut pixman_image_t {
 }
 
 pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<VncServer>>>> = Lazy::new(|| Mutex::new(Vec::new()));
-pub static VNC_RECT_INFO: Lazy<Arc<Mutex<Vec<RectInfo>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));

@@ -22,7 +22,7 @@ use crate::{
     vnc::{
         auth_sasl::AuthState, framebuffer_upadate, round_up_div, server_io::VncServer,
         set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
-        MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
+        MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
     },
 };
 use anyhow::{anyhow, Result};
@@ -806,7 +806,7 @@ impl ClientIoHandler {
             self.send_color_map();
         }
 
-        VNC_RECT_INFO.lock().unwrap().clear();
+        self.server.rect_jobs.lock().unwrap().clear();
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
@@ -1186,7 +1186,7 @@ impl EventNotifierHelper for ClientIoHandler {
 
 /// Generate the data that needs to be sent.
 /// Add to send queue
-pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) -> Result<()> {
+pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: i32) -> Result<()> {
     let mut locked_state = client.conn_state.lock().unwrap();
     let num = locked_state.dirty_num;
     locked_state.dirty_num = num.checked_add(dirty_num).unwrap_or(0);
@@ -1249,7 +1249,9 @@ pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) -> Result<()> {
     }
 
     drop(locked_dirty);
-    VNC_RECT_INFO
+
+    server
+        .rect_jobs
         .lock()
         .unwrap()
         .push(RectInfo::new(client, rects));

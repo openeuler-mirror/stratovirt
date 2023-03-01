@@ -22,7 +22,7 @@ use crate::{
     vnc::{
         auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
         auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
-        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState, RectInfo},
         round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
         VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
@@ -70,6 +70,10 @@ pub struct VncServer {
     pub vnc_cursor: Arc<Mutex<VncCursor>>,
     /// Display Change Listener.
     pub display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
+    /// Saves all image regions that need to be updated.
+    /// It will be sent to vnc_worker thread, and be transfered into byte stream,
+    /// which will be sent to vnc client in main loop.
+    pub rect_jobs: Arc<Mutex<Vec<RectInfo>>>,
     /// Connection limit.
     pub conn_limits: usize,
 }
@@ -97,6 +101,7 @@ impl VncServer {
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
             display_listener,
+            rect_jobs: Arc::new(Mutex::new(Vec::new())),
             conn_limits: CONNECTION_LIMIT,
         }
     }
