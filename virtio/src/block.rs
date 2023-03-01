@@ -954,25 +954,6 @@ pub struct Block {
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
-impl Default for Block {
-    fn default() -> Self {
-        Block {
-            blk_cfg: Default::default(),
-            disk_image: None,
-            req_align: 1,
-            buf_align: 1,
-            disk_sectors: 0,
-            state: BlockState::default(),
-            interrupt_cb: None,
-            senders: Vec::new(),
-            update_evts: Vec::new(),
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-}
-
 impl Block {
     pub fn new(
         blk_cfg: BlkDevConfig,
@@ -1275,6 +1256,25 @@ mod tests {
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+
+    impl Default for Block {
+        fn default() -> Self {
+            Block {
+                blk_cfg: Default::default(),
+                disk_image: None,
+                req_align: 1,
+                buf_align: 1,
+                disk_sectors: 0,
+                state: BlockState::default(),
+                interrupt_cb: None,
+                senders: Vec::new(),
+                update_evts: Vec::new(),
+                deactivate_evts: Vec::new(),
+                broken: Arc::new(AtomicBool::new(false)),
+                drive_files: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+    }
 
     // build dummy address space of vm
     fn address_space_init() -> Arc<AddressSpace> {
