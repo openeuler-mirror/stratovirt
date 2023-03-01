@@ -35,7 +35,7 @@ use std::{
     net::{Shutdown, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 use util::{
     bitmap::Bitmap,
@@ -243,6 +243,8 @@ pub struct ConnState {
     update_state: UpdateState,
     /// RFB protocol version.
     pub version: VncVersion,
+    /// Point to Client Io handler.
+    pub client_io: Option<Weak<Mutex<ClientIoHandler>>>,
 }
 
 impl Default for ConnState {
@@ -252,6 +254,7 @@ impl Default for ConnState {
             dis_conn: false,
             update_state: UpdateState::No,
             version: VncVersion::default(),
+            client_io: None,
         }
     }
 }

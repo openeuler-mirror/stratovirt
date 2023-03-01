@@ -513,6 +513,7 @@ pub fn handle_connection(
         client.clone(),
         server.clone(),
     )));
+    client.conn_state.lock().unwrap().client_io = Some(Arc::downgrade(&client_io));
     vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
     vnc_flush(&client);
     server
