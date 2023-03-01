@@ -11,26 +11,28 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::{
-        desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush,
-        vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
-        ENCODING_HEXTILE, ENCODING_RAW,
-    },
     console::{
         graphic_hardware_update, register_display, DisplayChangeListener,
         DisplayChangeListenerOperations, DisplayMouse, DisplaySurface,
         DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
     },
     data::keycode::KEYSYM2KEYCODE,
-    encoding::enc_hextile::hextile_send_framebuffer_update,
+    error::VncError,
     input::KeyBoardState,
     pixman::{
         bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
         get_image_width, ref_pixman_image, unref_pixman_image,
     },
     round_up, round_up_div,
-    server::{make_server_config, VncConnHandler, VncServer, VncSurface},
-    VncError,
+    vnc::{
+        client_io::{
+            desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush,
+            vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
+            ENCODING_HEXTILE, ENCODING_RAW,
+        },
+        encoding::enc_hextile::hextile_send_framebuffer_update,
+        server_io::{make_server_config, VncConnHandler, VncServer, VncSurface},
+    },
 };
 use anyhow::{anyhow, Result};
 use core::time;

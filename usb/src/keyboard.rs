@@ -27,7 +27,7 @@ use crate::usb::{
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
-use vnc::input::{register_keyboard, KeyboardOpts};
+use ui::input::{register_keyboard, KeyboardOpts};
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {

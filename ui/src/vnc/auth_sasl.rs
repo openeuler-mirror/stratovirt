@@ -11,8 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
-    VncError,
+    error::VncError,
+    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
 };
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};

@@ -64,13 +64,13 @@ use pci::{PciDevOps, PciHost};
 use pci_host_root::PciHostRoot;
 use sysbus::{SysBus, SysBusDevType, SysRes, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
+#[cfg(not(target_env = "musl"))]
+use ui::vnc;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
-#[cfg(not(target_env = "musl"))]
-use vnc::vnc;
 
 use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
 use crate::MachineOps;
@@ -515,7 +515,7 @@ impl MachineOps for StdMachine {
             .with_context(|| anyhow!(StdErrorKind::InitPCIeHostErr))?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
         #[cfg(not(target_env = "musl"))]
-        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
+        vnc::vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
 
         let migrate = locked_vm.get_migrate_info();

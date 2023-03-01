@@ -27,8 +27,7 @@ use std::{
     ptr,
     sync::{Arc, Mutex},
 };
-use util::pixman::{pixman_format_bpp, pixman_image_get_stride, pixman_image_t};
-use vnc::{
+use ui::{
     console::{
         register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayMouse,
         DisplaySurface,
@@ -37,6 +36,7 @@ use vnc::{
         get_image_data, get_image_format, get_image_height, ref_pixman_image, unref_pixman_image,
     },
 };
+use util::pixman::{pixman_format_bpp, pixman_image_get_stride, pixman_image_t};
 
 unsafe impl Send for Surface {}
 unsafe impl Sync for Surface {}

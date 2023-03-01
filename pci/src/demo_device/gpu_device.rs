@@ -27,8 +27,7 @@ use std::{
     ptr,
     sync::{Arc, Mutex, Weak},
 };
-use util::pixman::pixman_format_code_t;
-use vnc::{
+use ui::{
     console::{
         console_close, console_init, display_cursor_define, display_graphic_update,
         display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
@@ -37,6 +36,7 @@ use vnc::{
         create_pixman_image, get_image_data, get_image_format, get_image_stride, ref_pixman_image,
     },
 };
+use util::pixman::pixman_format_code_t;
 pub const UPDATE_FACTOR: [u8; 7] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40];
 use crate::demo_dev::DeviceTypeOperation;
 
