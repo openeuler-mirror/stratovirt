@@ -14,7 +14,9 @@ use acpi::{AcpiError, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUpdateRule};
 use address_space::GuestAddress;
 use anyhow::{anyhow, Context, Result};
 use log::error;
+use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
+use machine_manager::qmp::QmpChannel;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -89,6 +91,9 @@ impl Ged {
                 .notification_type
                 .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
             ged_clone.inject_interrupt();
+            if QmpChannel::is_connected() {
+                event!(Powerdown);
+            }
             None
         });
 

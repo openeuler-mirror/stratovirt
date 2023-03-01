@@ -80,6 +80,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    system_powerdown {
+        #[serde(default)]
+        arguments: system_powerdown,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     system_reset {
         #[serde(default)]
         arguments: system_reset,
@@ -479,6 +485,28 @@ impl Command for stop {
 pub struct cont {}
 
 impl Command for cont {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// system_powerdown
+///
+/// Requests that a guest perform a powerdown operation.
+///
+/// # Examples
+///
+/// ```test
+/// -> { "execute": "system_powerdown" }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct system_powerdown {}
+
+impl Command for system_powerdown {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -1309,6 +1337,13 @@ pub struct Stop {}
 #[serde(deny_unknown_fields)]
 pub struct Resume {}
 
+/// Powerdown
+///
+/// Emitted when the virtual machine powerdown execution
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Powerdown {}
+
 /// DeviceDeleted
 ///
 /// Emitted whenever the device removal completion is acknowledged by the guest.
@@ -1354,6 +1389,12 @@ pub enum QmpEvent {
     Resume {
         #[serde(default)]
         data: Resume,
+        timestamp: TimeStamp,
+    },
+    #[serde(rename = "POWERDOWN")]
+    Powerdown {
+        #[serde(default)]
+        data: Powerdown,
         timestamp: TimeStamp,
     },
     #[serde(rename = "DEVICE_DELETED")]
@@ -1515,8 +1556,8 @@ impl Command for query_version {
 /// ```text
 /// -> { "execute": "query-commands" }
 /// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},
-/// {"name":"cont"},{"name":"system_reset"},{"name":"device_add"},{"name":"device_del"},
-/// {"name":"netdev_add"},{"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},
+/// {"name":"cont"},{"name":"system_powerdown"},{"name":"system_reset"},{"name":"device_add"},
+/// {"name":"device_del"},{"name":"netdev_add"},{"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},
 /// {"name":"query-cpus"},{"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
 /// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query_vnc"},
 /// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
