@@ -346,3 +346,35 @@ fn rng_read_with_max() {
 
     tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
 }
+
+/// Rng device read/write config space.
+/// TestStep:
+///   1. Init device.
+///   2. Read/write rng device config space.
+///   3. Destroy device.
+/// Expect:
+///   1/3: success, 2: failed.
+#[test]
+fn rng_rw_config() {
+    let max_bytes = 1024;
+    let period = 1000;
+
+    let random_file = get_random_file();
+    let (rng, test_state, alloc) = create_rng(random_file, max_bytes, period);
+
+    let virtqueues = rng.borrow_mut().init_device(
+        test_state.clone(),
+        alloc.clone(),
+        1 << VIRTIO_F_VERSION_1,
+        1,
+    );
+
+    let config = rng.borrow().config_readq(0);
+    assert_eq!(config, 0);
+
+    rng.borrow().config_writeq(0, 0xff);
+    let config = rng.borrow().config_readq(0);
+    assert_ne!(config, 0xff);
+
+    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+}
