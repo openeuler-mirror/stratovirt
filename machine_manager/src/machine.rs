@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use strum::VariantNames;
 
+use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
     DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
@@ -91,6 +92,11 @@ pub trait MachineLifecycle {
         self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
     }
 
+    /// Close VM by power_button.
+    fn powerdown(&self) -> bool {
+        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+    }
+
     /// Reset VM, stop running and restart a new VM.
     fn reset(&mut self) -> bool {
         self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
@@ -103,6 +109,11 @@ pub trait MachineLifecycle {
     /// * `old` - The current `KvmVmState`.
     /// * `new` - The new `KvmVmState` expected to transform.
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool;
+
+    /// Get shutdown_action to determine the poweroff operation.
+    fn get_shutdown_action(&self) -> ShutdownAction {
+        ShutdownAction::ShutdownActionPoweroff
+    }
 }
 
 /// `AddressSpace` access interface of `Machine`.

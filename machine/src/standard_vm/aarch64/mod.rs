@@ -16,6 +16,7 @@ mod syscall;
 pub use crate::error::MachineError;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use log::{error, info};
+use machine_manager::config::ShutdownAction;
 use machine_manager::event_loop::EventLoop;
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -993,6 +994,22 @@ impl MachineLifecycle for StdMachine {
             ctx.kick();
         }
         true
+    }
+
+    fn powerdown(&self) -> bool {
+        if self.power_button.write(1).is_err() {
+            error!("ARM standard vm write power button failed");
+            return false;
+        }
+        true
+    }
+
+    fn get_shutdown_action(&self) -> ShutdownAction {
+        self.vm_config
+            .lock()
+            .unwrap()
+            .machine_config
+            .shutdown_action
     }
 
     fn reset(&mut self) -> bool {
