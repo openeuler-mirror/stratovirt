@@ -177,6 +177,26 @@ fn check_req_result(
     assert_eq!(status, VIRTIO_BLK_S_OK);
 }
 
+fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: u64) {
+    let bar = blk.borrow().bar;
+    let common_base = blk.borrow().common_base as u64;
+    let reqs = [
+        (offset_of!(VirtioPciCommonCfg, queue_desc_lo), desc),
+        (offset_of!(VirtioPciCommonCfg, queue_desc_hi), desc >> 32),
+        (offset_of!(VirtioPciCommonCfg, queue_avail_lo), avail),
+        (offset_of!(VirtioPciCommonCfg, queue_avail_hi), avail >> 32),
+        (offset_of!(VirtioPciCommonCfg, queue_used_lo), used),
+        (offset_of!(VirtioPciCommonCfg, queue_used_hi), used >> 32),
+    ];
+    for (offset, value) in reqs {
+        let addr = blk
+            .borrow()
+            .pci_dev
+            .io_readl(bar, common_base as u64 + offset as u64);
+        assert_eq!(addr, value as u32);
+    }
+}
+
 fn do_event_idx_with_flag(flag: u16) {
     let (blk, test_state, alloc, image_path) = set_up();
 
@@ -843,6 +863,7 @@ fn virtio_init_device_abnormal_features() {
 ///    5) set invalid desc/avail/used address:
 ///     0, 1 << 48, u64::MAX
 ///    6) set 0 to enable vq;
+///    7) check if the writed queue info is right.
 ///   2. Do the I/O request.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
@@ -873,6 +894,7 @@ fn virtio_init_device_abnormal_vring_info() {
         (8, 1 << 48, 0xff, 0),
         (8, u64::MAX, 0xff, 0),
         (9, 0, 0xff, 0),
+        (10, 1, 0, 0),
     ];
 
     for (err_type, value, ack, device_status) in reqs {
@@ -880,6 +902,7 @@ fn virtio_init_device_abnormal_vring_info() {
 
         // 1. Init device.
         blk.borrow_mut().reset();
+        assert_eq!(blk.borrow().get_generation(), 0);
         blk.borrow_mut().set_acknowledge();
         blk.borrow_mut().set_driver();
         blk.borrow_mut().negotiate_features(1 << VIRTIO_F_VERSION_1);
@@ -893,6 +916,8 @@ fn virtio_init_device_abnormal_vring_info() {
         let features = blk.borrow().get_guest_features();
         // Set invalid value to select queue.
         if err_type == 0 {
+            let q_select = blk.borrow().get_queue_select();
+            assert_ne!(q_select, value as u16);
             blk.borrow().queue_select(value as u16);
         }
 
@@ -983,6 +1008,10 @@ fn virtio_init_device_abnormal_vring_info() {
             used = value;
         }
         blk.borrow().activate_queue(desc, avail, used);
+        // TEST if the writed queue info is right.
+        if err_type == 10 {
+            check_queue(blk.clone(), desc, avail, used);
+        }
 
         let notify_off = blk.borrow().pci_dev.io_readw(
             blk.borrow().bar,
@@ -992,12 +1021,12 @@ fn virtio_init_device_abnormal_vring_info() {
         vq.borrow_mut().queue_notify_off = blk.borrow().notify_base as u64
             + notify_off as u64 * blk.borrow().notify_off_multiplier as u64;
 
+        let offset = offset_of!(VirtioPciCommonCfg, queue_enable) as u64;
         // TEST enable vq with 0
         if err_type == 9 {
             blk.borrow().pci_dev.io_writew(
                 blk.borrow().bar,
-                blk.borrow().common_base as u64
-                    + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
+                blk.borrow().common_base as u64 + offset,
                 0,
             );
         } else {
@@ -1007,6 +1036,13 @@ fn virtio_init_device_abnormal_vring_info() {
                     + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
                 1,
             );
+            if err_type == 10 {
+                let status = blk
+                    .borrow()
+                    .pci_dev
+                    .io_readw(blk.borrow().bar, blk.borrow().common_base as u64 + offset);
+                assert_eq!(status, 1);
+            }
         }
 
         blk.borrow()
