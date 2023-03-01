@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 const TIMEOUT_US: u64 = 10 * 1000 * 1000;
 const RANDOM_FILE: &str = "/dev/random";
@@ -276,15 +277,13 @@ fn rng_limited_rate() {
     let free_head = virtqueues[0]
         .borrow_mut()
         .add_chained(test_state.clone(), data_entries);
-
     rng.borrow()
         .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
-    test_state.borrow().clock_step();
-
     assert!(!random_num_check(
         test_state.borrow().memread(req_addr, RNG_DATA_BYTES)
     ));
 
+    let time_out = Instant::now() + Duration::from_micros(TIMEOUT_US);
     loop {
         test_state.borrow().clock_step();
         if rng.borrow().queue_was_notified(virtqueues[0].clone())
@@ -293,6 +292,7 @@ fn rng_limited_rate() {
             assert!(virtqueues[0].borrow().desc_len.contains_key(&free_head));
             break;
         }
+        assert!(Instant::now() <= time_out);
     }
 
     assert!(random_num_check(test_state.borrow().memread(
