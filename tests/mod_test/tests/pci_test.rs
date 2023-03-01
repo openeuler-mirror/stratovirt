@@ -1985,6 +1985,53 @@ fn test_pci_hotunplug_006() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
+/// Guest sets PIC/PCC twice during hotunplug, the device ignores the 2nd write to speed up hotunplug.
+#[test]
+fn test_pci_hotunplug_007() {
+    let blk_nums = 1;
+    let root_port_nums = 1;
+    let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
+
+    // Create a root port whose bdf is 0:2:0.
+    let root_port = Rc::new(RefCell::new(RootPort::new(
+        machine.clone(),
+        alloc.clone(),
+        0,
+        1 << 3 | 0,
+    )));
+
+    // Create a block device whose bdf is 1:0:0.
+    let blk = create_blk(machine.clone(), 1, 0, 0);
+
+    let unplug_blk_id = 0;
+    // Hotunplug the block device attaching the root port.
+    let (delete_device_command, _delete_blk_command) = build_hotunplug_blk_cmd(unplug_blk_id);
+    let _ret = test_state.borrow().qmp(&delete_device_command);
+    assert!(
+        wait_root_port_intr(root_port.clone()),
+        "Wait for interrupt of root port timeout"
+    );
+
+    // The block device will be unplugged when indicator of power and slot is power off.
+    power_off_device(root_port.clone());
+    // Trigger a 2nd write to PIC/PCC, which will be ignored by the device, and causes no harm.
+    power_off_device(root_port.clone());
+
+    test_state.borrow().wait_qmp_event();
+
+    // Verify the vendor id for the virtio block device.
+    validate_config_value_2byte(
+        blk.borrow().pci_dev.pci_bus.clone(),
+        blk.borrow().pci_dev.bus_num,
+        blk.borrow().pci_dev.devfn,
+        PCI_VENDOR_ID,
+        0xFFFF,
+        0xFFFF,
+    );
+
+    tear_down(None, test_state, alloc, None, Some(image_paths));
+}
+
 /// Hotplug and hotunplug in sequence.
 #[test]
 fn test_pci_hotplug_combine_001() {
