@@ -14,7 +14,7 @@ use crate::{
     pixman::{bytes_per_pixel, get_image_data, get_image_stride},
     vnc::{
         client_io::{DisplayMode, Rectangle},
-        vnc::write_pixel,
+        write_pixel,
     },
 };
 use std::{cmp, mem};

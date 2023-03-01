@@ -26,7 +26,7 @@ use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 #[cfg(not(target_env = "musl"))]
 use ui::{
     input::{key_event, point_event},
-    vnc::vnc::qmp_query_vnc,
+    vnc::qmp_query_vnc,
 };
 use util::aio::AioEngine;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};

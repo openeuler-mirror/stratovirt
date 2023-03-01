@@ -515,7 +515,7 @@ impl MachineOps for StdMachine {
             .with_context(|| anyhow!(StdErrorKind::InitPCIeHostErr))?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
         #[cfg(not(target_env = "musl"))]
-        vnc::vnc::vnc_init(&vm_config.vnc, &vm_config.object)
+        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
 
         let migrate = locked_vm.get_migrate_info();
