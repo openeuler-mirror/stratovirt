@@ -163,17 +163,6 @@ pub struct ImageInfo {
     ptr: *mut u8,
 }
 
-impl Default for ImageInfo {
-    fn default() -> Self {
-        ImageInfo {
-            data: ptr::null_mut(),
-            stride: 0,
-            length: 0,
-            ptr: ptr::null_mut(),
-        }
-    }
-}
-
 impl ImageInfo {
     fn new(image: *mut pixman_image_t) -> Self {
         let bpp = pixman_format_bpp(get_image_format(image) as u32);
