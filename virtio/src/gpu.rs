@@ -24,7 +24,7 @@ use super::{
 };
 use crate::{iov_discard_front, iov_to_buf, VirtioError, VIRTIO_GPU_F_EDID};
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use log::{error, warn};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -60,16 +60,6 @@ use vnc::console::{
 // number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
 
-// simple formats for fbcon/X use
-const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
-const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
-const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
-const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
-const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
-const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
-const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
-const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
-
 #[derive(Debug)]
 struct GpuResource {
     resource_id: u32,
@@ -99,7 +89,7 @@ impl Default for GpuResource {
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuReqState {
+struct VirtioGpuReqState {
     width: u32,
     height: u32,
     x_coor: i32,
@@ -108,7 +98,7 @@ pub struct VirtioGpuReqState {
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuCtrlHdr {
+struct VirtioGpuCtrlHdr {
     hdr_type: u32,
     flags: u32,
     fence_id: u64,
@@ -120,7 +110,7 @@ impl ByteCode for VirtioGpuCtrlHdr {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuRect {
+struct VirtioGpuRect {
     x_coord: u32,
     y_coord: u32,
     width: u32,
@@ -130,7 +120,7 @@ pub struct VirtioGpuRect {
 impl ByteCode for VirtioGpuRect {}
 
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuDisplayOne {
+struct VirtioGpuDisplayOne {
     rect: VirtioGpuRect,
     enabled: u32,
     flags: u32,
@@ -139,7 +129,7 @@ pub struct VirtioGpuDisplayOne {
 impl ByteCode for VirtioGpuDisplayOne {}
 
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuDisplayInfo {
+struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
     pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_SCANOUTS],
 }
@@ -147,7 +137,7 @@ impl ByteCode for VirtioGpuDisplayInfo {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuGetEdid {
+struct VirtioGpuGetEdid {
     scanouts: u32,
     padding: u32,
 }
@@ -156,7 +146,7 @@ impl ByteCode for VirtioGpuGetEdid {}
 #[allow(unused)]
 // data which transfer to frontend need padding
 #[derive(Clone, Copy)]
-pub struct VirtioGpuRespEdid {
+struct VirtioGpuRespEdid {
     header: VirtioGpuCtrlHdr,
     size: u32,
     padding: u32,
@@ -178,7 +168,7 @@ impl ByteCode for VirtioGpuRespEdid {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuResourceCreate2d {
+struct VirtioGpuResourceCreate2d {
     resource_id: u32,
     format: u32,
     width: u32,
@@ -189,7 +179,7 @@ impl ByteCode for VirtioGpuResourceCreate2d {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuResourceUnref {
+struct VirtioGpuResourceUnref {
     resource_id: u32,
     padding: u32,
 }
@@ -198,7 +188,7 @@ impl ByteCode for VirtioGpuResourceUnref {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuSetScanout {
+struct VirtioGpuSetScanout {
     rect: VirtioGpuRect,
     scanout_id: u32,
     resource_id: u32,
@@ -208,7 +198,7 @@ impl ByteCode for VirtioGpuSetScanout {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuResourceFlush {
+struct VirtioGpuResourceFlush {
     rect: VirtioGpuRect,
     resource_id: u32,
     padding: u32,
@@ -218,7 +208,7 @@ impl ByteCode for VirtioGpuResourceFlush {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuTransferToHost2d {
+struct VirtioGpuTransferToHost2d {
     rect: VirtioGpuRect,
     offset: u64,
     resource_id: u32,
@@ -229,7 +219,7 @@ impl ByteCode for VirtioGpuTransferToHost2d {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuResourceAttachBacking {
+struct VirtioGpuResourceAttachBacking {
     resource_id: u32,
     nr_entries: u32,
 }
@@ -238,7 +228,7 @@ impl ByteCode for VirtioGpuResourceAttachBacking {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuMemEntry {
+struct VirtioGpuMemEntry {
     addr: u64,
     length: u32,
     padding: u32,
@@ -248,7 +238,7 @@ impl ByteCode for VirtioGpuMemEntry {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuResourceDetachBacking {
+struct VirtioGpuResourceDetachBacking {
     resource_id: u32,
     padding: u32,
 }
@@ -261,7 +251,7 @@ impl HardWareOperations for GpuOpts {}
 
 #[allow(unused)]
 #[derive(Default, Clone)]
-pub struct VirtioGpuRequest {
+struct VirtioGpuRequest {
     header: VirtioGpuCtrlHdr,
     index: u16,
     out_iovec: Vec<Iovec>,
@@ -341,7 +331,7 @@ impl VirtioGpuRequest {
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuCursorPos {
+struct VirtioGpuCursorPos {
     scanout_id: u32,
     x_coord: u32,
     y_coord: u32,
@@ -352,7 +342,7 @@ impl ByteCode for VirtioGpuCursorPos {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioGpuUpdateCursor {
+struct VirtioGpuUpdateCursor {
     pos: VirtioGpuCursorPos,
     resource_id: u32,
     hot_x: u32,
@@ -453,7 +443,18 @@ fn create_surface(
     surface
 }
 
-fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
+// simple formats for fbcon/X use
+pub const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
+pub const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+pub const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
+pub const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
+pub const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
+pub const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
+pub const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
+pub const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
+pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
+
+pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     match format {
         VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM => Ok(pixman_format_code_t::PIXMAN_a8r8g8b8),
         VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8r8g8b8),
@@ -469,7 +470,7 @@ fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     }
 }
 
-fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) -> u64 {
+pub fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) -> u64 {
     let bpp = pixman_format_bpp(format as u32);
     let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
     height as u64 * stride
@@ -518,32 +519,14 @@ impl GpuIoHandler {
         })
     }
 
-    fn send_response<T: ByteCode>(&mut self, req: &VirtioGpuRequest, resp: &T) -> Result<()> {
-        if let Err(e) = iov_from_buf_direct(&req.in_iovec, resp.as_bytes()).and_then(|size| {
-            if size == size_of::<T>() {
-                Ok(())
-            } else {
-                bail!(
-                    "Failed to response gpu request, invalid reponse len {}.",
-                    size
-                );
-            }
-        }) {
-            error!(
-                "Failed to response gpu request, {:?}, may cause suspended.",
-                e
-            );
-        }
-
+    fn complete_one_request(&mut self, index: u16, len: u32) -> Result<()> {
         let mut queue_lock = self.ctrl_queue.lock().unwrap();
-        if let Err(e) = queue_lock
-            .vring
-            .add_used(&self.mem_space, req.index, size_of::<T>() as u32)
-        {
+
+        if let Err(e) = queue_lock.vring.add_used(&self.mem_space, index, len) {
             bail!(
                 "Failed to add used ring(gpu ctrl), index {}, len {} {:?}.",
-                req.index,
-                size_of::<T>() as u32,
+                index,
+                len,
                 e,
             );
         }
@@ -555,11 +538,35 @@ impl GpuIoHandler {
             if let Err(e) =
                 (*self.interrupt_cb.as_ref())(&VirtioInterruptType::Vring, Some(&queue_lock), false)
             {
-                error!("Failed to trigger interrupt(gpu ctrl), error is {:?}.", e);
+                bail!("Failed to trigger interrupt(gpu ctrl), error is {:?}.", e);
             }
         }
 
         Ok(())
+    }
+
+    fn send_response<T: ByteCode>(&mut self, req: &VirtioGpuRequest, resp: &T) -> Result<()> {
+        let mut len = 0;
+        if let Err(e) = iov_from_buf_direct(&req.in_iovec, resp.as_bytes()).and_then(|size| {
+            len = size;
+            if size == size_of::<T>() {
+                Ok(())
+            } else {
+                bail!(
+                    "Expected response length is {}, actual get reponse length {}.",
+                    size_of::<T>(),
+                    size
+                );
+            }
+        }) {
+            error!(
+                "GuestError: An incomplete response will be used instead of the expected, because {:?}. \
+                 Also, be aware that the virtual machine may suspended if reponse is too short to  \
+                 carry the necessary information.",
+                e
+            );
+        }
+        self.complete_one_request(req.index, len as u32)
     }
 
     fn response_nodata(&mut self, resp_head_type: u32, req: &VirtioGpuRequest) -> Result<()> {
@@ -580,6 +587,14 @@ impl GpuIoHandler {
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_cursor = VirtioGpuUpdateCursor::default();
         self.get_request(req, &mut info_cursor)?;
+
+        if info_cursor.pos.scanout_id >= self.num_scanouts {
+            error!(
+                "GuestError: The scanout id {} is out of range.",
+                info_cursor.pos.scanout_id
+            );
+            return Ok(());
+        }
 
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
@@ -720,7 +735,7 @@ impl GpuIoHandler {
             Ok(f) => f,
             Err(e) => {
                 error!("GuestError: {:?}.", e);
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
+                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
             }
         };
 
@@ -1305,7 +1320,8 @@ impl GpuIoHandler {
                 VIRTIO_GPU_CMD_GET_EDID => self.cmd_get_edid(req),
                 _ => self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req),
             } {
-                bail!("Fail to handle GPU request, {:?}.", e);
+                error!("Fail to handle GPU request, {:?}.", e);
+                self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)?;
             }
         }
 
@@ -1315,6 +1331,8 @@ impl GpuIoHandler {
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
         let mut req_queue = Vec::new();
+        let mut need_break = false;
+        let mut invalid_elem_index = 0;
 
         loop {
             let elem = queue
@@ -1328,23 +1346,27 @@ impl GpuIoHandler {
                 Ok(req) => {
                     req_queue.push(req);
                 }
-                // TODO: Ignore this request may cause vnc suspended
                 Err(e) => {
                     error!(
-                        "GuestError: Failed to create GPU request, {:?}, just ignore it.",
+                        "GuestError: Request will be ignored, because request header is incomplete and {:?}. \
+                         Also, be aware that the virtual machine may suspended if reponse does not  \
+                         carry the necessary information.",
                         e
                     );
-                    queue
-                        .vring
-                        .add_used(&self.mem_space, elem.index, 0)
-                        .with_context(|| "Failed to add used ring")?;
+                    need_break = true;
+                    invalid_elem_index = elem.index;
                     break;
                 }
             }
         }
 
         drop(queue);
-        self.process_control_queue(req_queue)
+
+        self.process_control_queue(req_queue)?;
+        if need_break {
+            self.complete_one_request(invalid_elem_index, 0)?;
+        }
+        Ok(())
     }
 
     fn cursor_queue_evt_handler(&mut self) -> Result<()> {
