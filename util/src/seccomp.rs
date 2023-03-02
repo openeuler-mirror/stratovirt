@@ -218,7 +218,7 @@ impl SeccompData {
 
 /// Filter block
 ///
-/// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/filter.h#L24
+/// See: `<https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/filter.h#L24>`
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SockFilter {

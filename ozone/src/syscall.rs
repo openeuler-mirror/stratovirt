@@ -142,7 +142,7 @@ pub fn set_host_name(host_name: &str) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `fd` - File descriptor referring to one of magic links in a /proc/[pid]/ns/ directory.
+/// * `fd` - File descriptor referring to one of magic links in a /proc/`\[`pid`\]`/ns/ directory.
 /// * `nstype` - Namespace type.
 pub fn setns(fd: i32, nstype: i32) -> Result<()> {
     SyscallResult {

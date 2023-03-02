@@ -271,7 +271,7 @@ pub struct AcpiSratProcessorAffinity {
     pub type_id: u8,
     /// The length of this structure.
     pub length: u8,
-    /// Bit [7:0] of the proximity domain to which the processor belongs.
+    /// Bit `\[`7:0`\]` of the proximity domain to which the processor belongs.
     pub proximity_lo: u8,
     /// The processor local APIC ID.
     pub local_apic_id: u8,
@@ -279,7 +279,7 @@ pub struct AcpiSratProcessorAffinity {
     pub flags: u32,
     /// The processor local SAPIC EID.
     pub local_sapic_eid: u8,
-    /// Bit [31:8] of the proximity domain to which the processor belongs.
+    /// Bit `\[`31:8`\]` of the proximity domain to which the processor belongs.
     pub proximity_hi: [u8; 3],
     /// The clock domain to which the processor belongs.
     pub clock_domain: u32,
