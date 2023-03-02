@@ -538,7 +538,12 @@ pub fn console_close(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<()
         Some(c) => c,
         None => return Ok(()),
     };
-    let con_id = con.lock().unwrap().con_id;
+    let locked_con = con.lock().unwrap();
+    let con_id = locked_con.con_id;
+    if let Some(surface) = locked_con.surface {
+        unref_pixman_image(surface.image);
+    }
+    drop(locked_con);
     let mut locked_consoles = CONSOLES.lock().unwrap();
     if con_id.is_none() {
         return Ok(());
