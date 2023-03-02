@@ -18,7 +18,7 @@ use std::time::Instant;
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::loop_context::EventLoopContext;
+use crate::loop_context::{get_current_time, EventLoopContext};
 use crate::time::NANOSECONDS_PER_SECOND;
 use anyhow::Result;
 
@@ -50,7 +50,7 @@ impl LeakBucket {
         Ok(LeakBucket {
             capacity: units_ps * ACCURACY_SCALE,
             level: 0,
-            prev_time: Instant::now(),
+            prev_time: get_current_time(),
             timer_started: false,
             timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
         })
@@ -72,7 +72,7 @@ impl LeakBucket {
         }
 
         // update the water level
-        let now = Instant::now();
+        let now = get_current_time();
         let nanos = (now - self.prev_time).as_nanos();
         if nanos > (self.level * NANOSECONDS_PER_SECOND / self.capacity) as u128 {
             self.level = 0;

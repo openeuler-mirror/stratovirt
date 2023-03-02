@@ -57,6 +57,7 @@ pub trait VirtioDeviceOps {
     fn get_status(&self) -> u8;
     fn set_status(&self, status: u8);
     fn get_queue_nums(&self) -> u16;
+    fn get_generation(&self) -> u8;
     fn queue_select(&self, index: u16);
     fn get_queue_select(&self) -> u16;
     fn set_queue_size(&self, size: u16);

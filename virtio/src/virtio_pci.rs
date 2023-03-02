@@ -26,7 +26,7 @@ use pci::config::{
     REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID,
     SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::msix::{update_dev_id, MsixState};
+use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
 use pci::Result as PciResult;
 use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, le_write_u32, ranges_overlap,
@@ -235,7 +235,8 @@ impl VirtioPciCommonConfig {
         if msix.is_none() {
             return INVALID_VECTOR_NUM as u32;
         }
-        let max_vector = msix.as_ref().unwrap().lock().unwrap().table.len();
+        let max_vector =
+            msix.as_ref().unwrap().lock().unwrap().table.len() / MSIX_TABLE_ENTRY_SIZE as usize;
         if vector_nr >= max_vector as u32 {
             INVALID_VECTOR_NUM as u32
         } else {

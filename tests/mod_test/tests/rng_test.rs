@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 const TIMEOUT_US: u64 = 10 * 1000 * 1000;
 const RANDOM_FILE: &str = "/dev/random";
@@ -276,15 +277,13 @@ fn rng_limited_rate() {
     let free_head = virtqueues[0]
         .borrow_mut()
         .add_chained(test_state.clone(), data_entries);
-
     rng.borrow()
         .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
-    test_state.borrow().clock_step();
-
     assert!(!random_num_check(
         test_state.borrow().memread(req_addr, RNG_DATA_BYTES)
     ));
 
+    let time_out = Instant::now() + Duration::from_micros(TIMEOUT_US);
     loop {
         test_state.borrow().clock_step();
         if rng.borrow().queue_was_notified(virtqueues[0].clone())
@@ -293,6 +292,7 @@ fn rng_limited_rate() {
             assert!(virtqueues[0].borrow().desc_len.contains_key(&free_head));
             break;
         }
+        assert!(Instant::now() <= time_out);
     }
 
     assert!(random_num_check(test_state.borrow().memread(
@@ -343,6 +343,38 @@ fn rng_read_with_max() {
         max_bytes_read,
     );
     assert!(random_num_check(data));
+
+    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+}
+
+/// Rng device read/write config space.
+/// TestStep:
+///   1. Init device.
+///   2. Read/write rng device config space.
+///   3. Destroy device.
+/// Expect:
+///   1/3: success, 2: failed.
+#[test]
+fn rng_rw_config() {
+    let max_bytes = 1024;
+    let period = 1000;
+
+    let random_file = get_random_file();
+    let (rng, test_state, alloc) = create_rng(random_file, max_bytes, period);
+
+    let virtqueues = rng.borrow_mut().init_device(
+        test_state.clone(),
+        alloc.clone(),
+        1 << VIRTIO_F_VERSION_1,
+        1,
+    );
+
+    let config = rng.borrow().config_readq(0);
+    assert_eq!(config, 0);
+
+    rng.borrow().config_writeq(0, 0xff);
+    let config = rng.borrow().config_readq(0);
+    assert_ne!(config, 0xff);
 
     tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
 }

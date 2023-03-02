@@ -66,12 +66,12 @@ pub struct VirtioPciCommonCfg {
     queue_msix_vector: u16,
     pub queue_enable: u16,
     pub queue_notify_off: u16,
-    queue_desc_lo: u32,
-    queue_desc_hi: u32,
-    queue_avail_lo: u32,
-    queue_avail_hi: u32,
-    queue_used_lo: u32,
-    queue_used_hi: u32,
+    pub queue_desc_lo: u32,
+    pub queue_desc_hi: u32,
+    pub queue_avail_lo: u32,
+    pub queue_avail_hi: u32,
+    pub queue_used_lo: u32,
+    pub queue_used_hi: u32,
 }
 
 pub trait VirtioPCIMSIXOps {
@@ -423,6 +423,13 @@ impl VirtioDeviceOps for TestVirtioPciDev {
             self.bar,
             self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_status) as u64,
             status,
+        )
+    }
+
+    fn get_generation(&self) -> u8 {
+        self.pci_dev.io_readb(
+            self.bar,
+            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, config_generation) as u64,
         )
     }
 

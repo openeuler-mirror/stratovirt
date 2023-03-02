@@ -40,7 +40,7 @@ pub trait PciBusOps {
 pub struct TestPciBus {
     pub mmio_alloc_ptr: u64,
     pub mmio_limit: u64,
-    ecam_alloc_ptr: u64,
+    pub ecam_alloc_ptr: u64,
     not_hotpluggable: bool,
     pub test_state: Rc<RefCell<TestState>>,
 }
@@ -125,7 +125,7 @@ impl PciBusOps for TestPciBus {
 
     fn config_readq(&self, bus_num: u8, devfn: u8, offset: u8) -> u64 {
         let addr = self.get_addr(bus_num, devfn, offset);
-        let mut buf: &[u8] = &self.test_state.borrow().memread(addr, 4)[0..8];
+        let mut buf: &[u8] = &self.test_state.borrow().memread(addr, 8)[0..8];
         read_le_u64(&mut buf)
     }
 
