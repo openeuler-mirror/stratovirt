@@ -73,7 +73,7 @@ impl ConfigCheck for GpuDevConfig {
 
         if self.max_hostmem < VIRTIO_GPU_MAX_HOSTMEM {
             warn!(
-                "max_hostmem must >= {}, allocating less than it may cause \
+                "max_hostmem should >= {}, allocating less than it may cause \
                 the GPU to fail to start or refresh.",
                 VIRTIO_GPU_MAX_HOSTMEM
             );
