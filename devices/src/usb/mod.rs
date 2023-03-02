@@ -10,16 +10,29 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod error;
+pub use anyhow::Result;
+pub use error::UsbError;
+
+pub mod config;
+mod descriptor;
+pub mod hid;
+#[cfg(not(target_env = "musl"))]
+pub mod keyboard;
+#[cfg(not(target_env = "musl"))]
+pub mod tablet;
+pub mod xhci;
+
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use log::{debug, error};
 use util::aio::{mem_from_buf, mem_to_buf};
 
-use crate::config::*;
-use crate::descriptor::{UsbDescriptor, UsbDescriptorOps};
-use crate::xhci::xhci_controller::{UsbPort, XhciDevice};
+use config::*;
+use descriptor::{UsbDescriptor, UsbDescriptorOps};
+use xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 /// USB max address.

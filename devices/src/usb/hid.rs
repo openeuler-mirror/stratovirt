@@ -14,8 +14,8 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use log::{debug, error, warn};
 
-use crate::config::*;
-use crate::usb::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
+use super::config::*;
+use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 
 /// HID keycode
 const HID_KEYBOARD_LEFT_CONTROL: u8 = 0xe0;

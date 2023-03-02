@@ -17,4 +17,3 @@ util = { path = "../../util" }
 acpi = { path = "../../acpi" }
 machine = { path = "../../machine" }
 virtio = { path = "../../virtio"}
-usb = { path = "../../usb" }
