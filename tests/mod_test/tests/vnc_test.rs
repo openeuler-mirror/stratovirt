@@ -300,6 +300,8 @@ fn test_send_cursor_image() {
 /// 3. Demo GPU replace the surface of VNC server. -> expect 1.
 /// 4. VNC client setting feature of Raw.
 /// 5. Demo GPU replace the surface of VNC server. -> expect 2.
+/// 6. VNC client setting feature of All.
+/// 7. Demo GPU replace the surface of VNC server. -> expect 2.
 /// ExpectOutput
 /// 1. VNC client received a desktop resize request from VNC server.
 /// 2. VNC client not received any desktop resize request from VNC server.
@@ -348,6 +350,17 @@ fn test_desktop_resize() {
     let pf = RfbPixelFormat::new(8, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(!res.unwrap().contains(&(
+        RfbServerMsg::FramebufferUpdate,
+        EncodingType::EncodingDesktopresize
+    )));
+
+    assert!(vnc_client.test_setup_encodings(None, None).is_ok());
+    demo_gpu
+        .borrow_mut()
+        .replace_surface(1920, 1080, PIXMAN_A8B8G8R8);
+    let pf = RfbPixelFormat::new(8, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
+    let res = vnc_client.test_recv_server_data(pf);
+    assert!(res.unwrap().contains(&(
         RfbServerMsg::FramebufferUpdate,
         EncodingType::EncodingDesktopresize
     )));
