@@ -30,7 +30,6 @@ sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
-usb = { path = "../usb" }
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }

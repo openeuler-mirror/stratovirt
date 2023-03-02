@@ -10,33 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use crate::config::*;
-use crate::descriptor::{
+use super::config::*;
+use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use crate::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
-use crate::usb::{
+use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
+use super::xhci::xhci_controller::XhciDevice;
+use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
-use crate::xhci::xhci_controller::XhciDevice;
-use ui::input::{register_pointer, PointerOpts};
+use ui::input::{register_keyboard, KeyboardOpts};
 
-const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
-const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
-const INPUT_BUTTON_MASK: u32 = 0x7;
-const INPUT_COORDINATES_MAX: u32 = 0x7fff;
-
-/// Tablet device descriptor
-static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
+/// Keyboard device descriptor
+static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     Arc::new(UsbDescDevice {
         device_desc: UsbDeviceDescriptor {
             bLength: USB_DT_DEVICE_SIZE,
@@ -45,8 +39,8 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             idProduct: 0x0001,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
-            iProduct: STR_PRODUCT_TABLET_INDEX,
-            iSerialNumber: STR_SERIAL_TABLET_INDEX,
+            iProduct: STR_PRODUCT_KEYBOARD_INDEX,
+            iSerialNumber: STR_SERIAL_KEYBOARD_INDEX,
             bcdUSB: 0x0100,
             bDeviceClass: 0,
             bDeviceSubClass: 0,
@@ -61,16 +55,16 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 wTotalLength: 0,
                 bNumInterfaces: 1,
                 bConfigurationValue: 1,
-                iConfiguration: STR_CONFIG_TABLET_INDEX,
+                iConfiguration: STR_CONFIG_KEYBOARD_INDEX,
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_REMOTE_WAKEUP,
                 bMaxPower: 50,
             },
-            interfaces: vec![DESC_IFACE_TABLET.clone()],
+            interfaces: vec![DESC_IFACE_KEYBOARD.clone()],
         })],
     })
 });
-/// Tablet interface descriptor
-static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+/// Keyboard interface descriptor
+static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     Arc::new(UsbDescIface {
         interface_desc: UsbInterfaceDescriptor {
             bLength: USB_DT_INTERFACE_SIZE,
@@ -79,13 +73,13 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 1,
             bInterfaceClass: USB_CLASS_HID,
-            bInterfaceSubClass: 0,
-            bInterfaceProtocol: 0,
+            bInterfaceSubClass: 1,
+            bInterfaceProtocol: 1,
             iInterface: 0,
         },
         other_desc: vec![Arc::new(UsbDescOther {
             /// HID descriptor
-            data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0],
+            data: vec![0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0],
         })],
         endpoints: vec![Arc::new(UsbDescEndpoint {
             endpoint_desc: UsbEndpointDescriptor {
@@ -103,14 +97,28 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
 
 /// String descriptor index
 const STR_MANUFACTURER_INDEX: u8 = 1;
-const STR_PRODUCT_TABLET_INDEX: u8 = 2;
-const STR_CONFIG_TABLET_INDEX: u8 = 3;
-const STR_SERIAL_TABLET_INDEX: u8 = 4;
+const STR_PRODUCT_KEYBOARD_INDEX: u8 = 2;
+const STR_CONFIG_KEYBOARD_INDEX: u8 = 3;
+const STR_SERIAL_KEYBOARD_INDEX: u8 = 4;
+
+// Up flag.
+const SCANCODE_UP: u16 = 0x80;
+// Grey keys.
+const SCANCODE_GREY: u16 = 0x80;
+// Used to expand Grey keys.
+const SCANCODE_EMUL0: u16 = 0xe0;
 
 /// String descriptor
-const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
-/// USB tablet device.
-pub struct UsbTablet {
+const DESC_STRINGS: [&str; 5] = [
+    "",
+    "StratoVirt",
+    "StratoVirt USB Keyboard",
+    "HID Keyboard",
+    "1",
+];
+
+/// USB keyboard device.
+pub struct UsbKeyboard {
     id: String,
     usb_device: UsbDevice,
     hid: Hid,
@@ -118,12 +126,47 @@ pub struct UsbTablet {
     ctrl: Option<Weak<Mutex<XhciDevice>>>,
 }
 
-impl UsbTablet {
+pub struct UsbKeyboardAdapter {
+    usb_kbd: Arc<Mutex<UsbKeyboard>>,
+}
+
+impl KeyboardOpts for UsbKeyboardAdapter {
+    fn do_key_event(&mut self, keycode: u16, down: bool) -> Result<()> {
+        let mut scan_codes = Vec::new();
+        let mut keycode = keycode;
+        if keycode & SCANCODE_GREY != 0 {
+            scan_codes.push(SCANCODE_EMUL0 as u32);
+            keycode &= !SCANCODE_GREY;
+        }
+
+        if !down {
+            keycode |= SCANCODE_UP;
+        }
+        scan_codes.push(keycode as u32);
+
+        let mut locked_kbd = self.usb_kbd.lock().unwrap();
+        if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
+            debug!("Keyboard queue is full!");
+            // Return ok to ignore the request.
+            return Ok(());
+        }
+        for code in scan_codes {
+            let index = ((locked_kbd.hid.head + locked_kbd.hid.num) & QUEUE_MASK) as usize;
+            locked_kbd.hid.num += 1;
+            locked_kbd.hid.keyboard.keycodes[index] = code;
+        }
+        drop(locked_kbd);
+        let clone_kbd = self.usb_kbd.clone();
+        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+    }
+}
+
+impl UsbKeyboard {
     pub fn new(id: String) -> Self {
         Self {
             id,
             usb_device: UsbDevice::new(),
-            hid: Hid::new(HidType::Tablet),
+            hid: Hid::new(HidType::Keyboard),
             ctrl: None,
         }
     }
@@ -133,50 +176,20 @@ impl UsbTablet {
         self.usb_device.speed = USB_SPEED_FULL;
         let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
-            .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
-        let tablet = Arc::new(Mutex::new(self));
-        let tablet_adapter = Arc::new(Mutex::new(UsbTabletAdapter {
-            tablet: tablet.clone(),
+            .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
+        let kbd = Arc::new(Mutex::new(self));
+        let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
+            usb_kbd: kbd.clone(),
         }));
-        register_pointer("UsbTablet", tablet_adapter);
-        Ok(tablet)
+        register_keyboard("UsbKeyboard", kbd_adapter);
+
+        Ok(kbd)
     }
 }
 
-pub struct UsbTabletAdapter {
-    tablet: Arc<Mutex<UsbTablet>>,
-}
-
-impl PointerOpts for UsbTabletAdapter {
-    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
-        let mut locked_tablet = self.tablet.lock().unwrap();
-        if locked_tablet.hid.num >= QUEUE_LENGTH {
-            debug!("Pointer queue is full!");
-            // Return ok to ignore the request.
-            return Ok(());
-        }
-        let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
-        let mut evt = &mut locked_tablet.hid.pointer.queue[index];
-        if button == INPUT_BUTTON_WHEEL_UP {
-            evt.pos_z = 1;
-        } else if button == INPUT_BUTTON_WHEEL_DOWN {
-            evt.pos_z = -1;
-        } else {
-            evt.pos_z = 0;
-        }
-        evt.button_state = button & INPUT_BUTTON_MASK;
-        evt.pos_x = min(x, INPUT_COORDINATES_MAX);
-        evt.pos_y = min(y, INPUT_COORDINATES_MAX);
-        locked_tablet.hid.num += 1;
-        drop(locked_tablet);
-        let clone_tablet = self.tablet.clone();
-        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDeviceOps>>))
-    }
-}
-
-impl UsbDeviceOps for UsbTablet {
+impl UsbDeviceOps for UsbKeyboard {
     fn reset(&mut self) {
-        info!("Tablet device reset");
+        info!("Keyboard device reset");
         self.usb_device.remote_wakeup = 0;
         self.usb_device.addr = 0;
         self.hid.reset();
@@ -190,12 +203,12 @@ impl UsbDeviceOps for UsbTablet {
         {
             Ok(handled) => {
                 if handled {
-                    debug!("Tablet control handled by descriptor, return directly.");
+                    debug!("Keyboard control handled by descriptor, return directly.");
                     return;
                 }
             }
             Err(e) => {
-                error!("Tablet descriptor error {}", e);
+                error!("Keyboard descriptor error {}", e);
                 packet.status = UsbPacketStatus::Stall;
                 return;
             }

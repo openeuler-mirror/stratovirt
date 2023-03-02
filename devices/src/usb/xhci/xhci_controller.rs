@@ -25,10 +25,10 @@ use log::{debug, error, info, warn};
 use machine_manager::config::XhciConfig;
 use util::num_ops::{read_u32, write_u64_low};
 
-use crate::config::*;
+use super::xhci_regs::{XchiOperReg, XhciInterrupter};
+use crate::usb::config::*;
+use crate::usb::UsbError;
 use crate::usb::{Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
-use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter};
-use crate::UsbError;
 
 use super::xhci_ring::XhciEventRingSeg;
 use super::xhci_ring::XhciRing;
