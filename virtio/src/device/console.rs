@@ -16,11 +16,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
-use super::{
+use crate::VirtioError;
+use crate::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
-use crate::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};

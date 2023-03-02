@@ -25,38 +25,30 @@
 //! - `x86_64`
 //! - `aarch64`
 
-mod balloon;
-pub mod block;
-mod console;
+pub mod device;
 pub mod error;
-#[cfg(not(target_env = "musl"))]
-mod gpu;
-mod net;
-mod rng;
-mod scsi;
+mod queue;
+mod transport;
 pub mod vhost;
-mod virtio_mmio;
-mod virtio_pci;
-mod virtqueue;
 pub use anyhow::Result;
-pub use balloon::*;
-pub use block::{Block, BlockState};
-pub use console::{Console, VirtioConsoleState};
+pub use device::balloon::*;
+pub use device::block::{Block, BlockState};
+pub use device::console::{Console, VirtioConsoleState};
+#[cfg(not(target_env = "musl"))]
+pub use device::gpu::*;
+pub use device::net::*;
+pub use device::rng::{Rng, RngState};
+pub use device::scsi::bus as ScsiBus;
+pub use device::scsi::controller as ScsiCntlr;
+pub use device::scsi::disk as ScsiDisk;
 pub use error::VirtioError;
 pub use error::*;
-#[cfg(not(target_env = "musl"))]
-pub use gpu::*;
 use log::{error, warn};
-pub use net::*;
-pub use rng::{Rng, RngState};
-pub use scsi::bus as ScsiBus;
-pub use scsi::controller as ScsiCntlr;
-pub use scsi::disk as ScsiDisk;
+pub use queue::*;
+pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
+pub use transport::virtio_pci::VirtioPciDevice;
 pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
-pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
-pub use virtio_pci::VirtioPciDevice;
-pub use virtqueue::*;
 
 use std::cmp;
 use std::sync::atomic::{AtomicBool, Ordering};
