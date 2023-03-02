@@ -37,11 +37,11 @@ use migration_derive::{ByteCode, Desc};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{
+use crate::error::VirtioError;
+use crate::{
     ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
-use crate::error::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
@@ -379,8 +379,8 @@ impl VirtioTrace for RngHandler {}
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::*;
+    use crate::*;
 
     use std::io::Write;
     use std::mem::size_of;

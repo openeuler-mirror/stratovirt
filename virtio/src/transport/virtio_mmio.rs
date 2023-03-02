@@ -25,7 +25,7 @@ use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{
+use crate::{
     virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, NOTIFY_REG_OFFSET,

@@ -22,7 +22,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::{
+use crate::VirtioError;
+use crate::{
     iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
     Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
@@ -30,7 +31,6 @@ use super::{
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -1225,8 +1225,8 @@ impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::*;
+    use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
     use std::sync::atomic::{AtomicU32, Ordering};

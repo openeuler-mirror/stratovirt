@@ -45,7 +45,7 @@ use util::{
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
-use super::{
+use crate::{
     error::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
@@ -1086,8 +1086,8 @@ impl VirtioTrace for BalloonIoHandler {}
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
     pub use super::*;
+    pub use crate::*;
 
     use address_space::{AddressRange, HostMemMapping, Region};
 

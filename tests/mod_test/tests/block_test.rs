@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use virtio::block::VirtioBlkConfig;
+use virtio::device::block::VirtioBlkConfig;
 
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::TestVringDescEntry;
