@@ -1043,6 +1043,7 @@ impl VncClient {
                     let expect = w as usize * h as usize * bytes_per_pixel;
                     self.read_msg(buf, expect)?;
                     total_received += expect;
+                    buf.drain(..expect);
                 } else {
                     // Background colour.
                     if flag & BACKGROUND_SPECIFIC != 0 {
