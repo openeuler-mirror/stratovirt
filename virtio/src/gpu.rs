@@ -119,7 +119,6 @@ struct VirtioGpuRect {
 
 impl ByteCode for VirtioGpuRect {}
 
-#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayOne {
     rect: VirtioGpuRect,
@@ -129,7 +128,6 @@ struct VirtioGpuDisplayOne {
 
 impl ByteCode for VirtioGpuDisplayOne {}
 
-#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
@@ -145,7 +143,6 @@ struct VirtioGpuGetEdid {
 }
 impl ByteCode for VirtioGpuGetEdid {}
 
-#[repr(C)]
 #[allow(unused)]
 // data which transfer to frontend need padding
 #[derive(Clone, Copy)]
