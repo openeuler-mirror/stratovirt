@@ -38,7 +38,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 use ui::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
+    display_replace_surface, ConsoleType, DisplayConsole, DisplayMouse, DisplaySurface,
+    HardWareOperations,
 };
 use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
 use util::byte_code::ByteCode;
@@ -1648,10 +1649,11 @@ impl VirtioDevice for Gpu {
         self.interrupt_cb = Some(interrupt_cb.clone());
         let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
         let mut scanouts = vec![];
-        for _i in 0..VIRTIO_GPU_MAX_SCANOUTS {
+        for i in 0..VIRTIO_GPU_MAX_SCANOUTS {
             let mut scanout = GpuScanout::default();
             let gpu_opts = Arc::new(GpuOpts::default());
-            scanout.con = console_init(gpu_opts);
+            let dev_name = format!("virtio-gpu{}", i);
+            scanout.con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
             scanouts.push(scanout);
         }
 

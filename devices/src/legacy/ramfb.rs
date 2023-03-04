@@ -21,8 +21,8 @@ use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use ui::console::{
-    console_init, display_graphic_update, display_replace_surface, DisplayConsole, DisplaySurface,
-    HardWareOperations,
+    console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
+    DisplaySurface, HardWareOperations,
 };
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
@@ -188,7 +188,7 @@ impl FwCfgWriteCallback for RamfbState {
             width: width as i32,
             height: height as i32,
         });
-        let con = console_init(ramfb_opts);
+        let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
         display_replace_surface(&con, self.surface)
             .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     }
