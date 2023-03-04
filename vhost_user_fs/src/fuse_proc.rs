@@ -944,18 +944,20 @@ pub fn do_fuse_setxattr(
         }
     };
 
-    let value = match reader.read_cstring(sys_mem) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to read value for setxattr_in, {:?}", e);
-            return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
-        }
-    };
+    let mut value = Vec::new();
+    value.resize(setxattr_in.size as usize, 0);
+
+    if let Err(e) = reader.read_slice(sys_mem, &mut value, setxattr_in.size as usize) {
+        error!("Failed to read value for setxattr_in, {:?}", e);
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
+    }
+
+    let cvalue = CString::new(value).unwrap_or_else(|_| CString::from(Vec::new()));
 
     let ret = fs.lock().unwrap().setxattr(
         in_header.nodeid as usize,
         name,
-        value,
+        cvalue,
         setxattr_in.size,
         setxattr_in.flags,
     );
