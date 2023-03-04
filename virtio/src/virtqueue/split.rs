@@ -221,11 +221,14 @@ impl SplitVringDesc {
         if let Some(reg_cache) = cache {
             let base = self.addr.0;
             let offset = self.len as u64;
-            if base > reg_cache.start && base + offset < reg_cache.end {
-                if base.checked_add(offset).is_none() {
+            let end = match base.checked_add(offset) {
+                Some(addr) => addr,
+                None => {
                     error!("The memory of descriptor is invalid, range overflows");
                     return false;
                 }
+            };
+            if base > reg_cache.start && end < reg_cache.end {
                 miss_cached = false;
             }
         } else {
@@ -337,10 +340,7 @@ impl SplitVringDesc {
                 }
                 desc_table_host = sys_mem
                     .get_host_address_from_cache(desc.addr, cache)
-                    .unwrap_or(0);
-                if desc_table_host == 0 {
-                    bail!("Failed to get descriptor table entry host address");
-                };
+                    .ok_or_else(|| anyhow!("Failed to get descriptor table entry host address"))?;
                 queue_size = desc.get_desc_num();
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, 0, cache)?;
                 desc_size = elem
@@ -518,17 +518,9 @@ impl SplitVring {
             VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
         // Make sure the event idx read from sys_mem is new.
         fence(Ordering::SeqCst);
-        let used_event_addr = self
-            .addr_cache
-            .avail_ring_host
-            .checked_add(used_event_offset)
-            .with_context(|| {
-                anyhow!(VirtioError::AddressOverflow(
-                    "getting used event idx",
-                    self.avail_ring.raw_value(),
-                    used_event_offset,
-                ))
-            })?;
+        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // is_invalid_memory which must not be overflowed.
+        let used_event_addr = self.addr_cache.avail_ring_host + used_event_offset;
         let used_event = sys_mem
             .read_object_direct::<u16>(used_event_addr)
             .with_context(|| {
@@ -687,17 +679,9 @@ impl SplitVring {
     ) -> Result<()> {
         let index_offset = VRING_FLAGS_AND_IDX_LEN
             + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
-        let desc_index_addr = self
-            .addr_cache
-            .avail_ring_host
-            .checked_add(index_offset)
-            .with_context(|| {
-                anyhow!(VirtioError::AddressOverflow(
-                    "popping avail ring",
-                    self.avail_ring.raw_value(),
-                    index_offset,
-                ))
-            })?;
+        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // is_invalid_memory which must not be overflowed.
+        let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
         let desc_index = sys_mem
             .read_object_direct::<u16>(desc_index_addr)
             .with_context(|| {
