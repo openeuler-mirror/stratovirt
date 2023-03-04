@@ -1402,8 +1402,10 @@ fn virtio_io_abnormal_desc_addr() {
 ///     1) 0 with 1 request 3 desc elems;
 ///     2) 0x5000 with 1 request 3 desc elems;
 ///     3) u32::MAX with 1 request 3 desc elems;
-///     4) total length of all desc is bigger than (1 << 32):
+///     4) u32::MAX with 2 request to test overflow;
+///     5) total length of all desc is bigger than (1 << 32):
 ///         ((1 << 32) / 64) with indirect request which has 65 desc elems;
+///     6) test the invalid length of the indirect desc.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
 /// Expect:
@@ -1416,7 +1418,9 @@ fn virtio_io_abnormal_desc_len() {
         (0, 1, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
         (0x5000, 1, VIRTIO_BLK_S_IOERR, 0),
         (u32::MAX, 1, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
+        (u32::MAX, 2, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
         (1 << 26, 65, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
+        (16, 65, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
     ];
     for (length, io_num, ack, device_status) in reqs {
         let (blk, test_state, alloc, image_path) = set_up();
@@ -1428,7 +1432,7 @@ fn virtio_io_abnormal_desc_len() {
             1,
         );
 
-        let req_addr: u64;
+        let mut req_addr: u64 = 0;
         if io_num <= 1 {
             (_, req_addr) = add_request(
                 test_state.clone(),
@@ -1437,7 +1441,27 @@ fn virtio_io_abnormal_desc_len() {
                 VIRTIO_BLK_T_OUT,
                 0,
             );
-            test_state.borrow().writel(vqs[0].borrow().desc + 8, length);
+            test_state.borrow().writel(
+                vqs[0].borrow().desc + offset_of!(VringDesc, len) as u64,
+                length,
+            );
+        } else if io_num == 2 {
+            // Io request 1 is valid, used to create cache of desc[0]->addr.
+            // Io request 2 is invalid, test overflow for desc[1]->addr + desc[1]->len.
+            for i in 0..2 {
+                (_, req_addr) = add_request(
+                    test_state.clone(),
+                    alloc.clone(),
+                    vqs[0].clone(),
+                    VIRTIO_BLK_T_OUT,
+                    i as u64,
+                );
+            }
+            let req_1_addr = vqs[0].borrow().desc + VRING_DESC_SIZE;
+            test_state.borrow().writeq(req_1_addr, u64::MAX);
+            test_state
+                .borrow()
+                .writel(req_1_addr + offset_of!(VringDesc, len) as u64, length);
         } else {
             let mut blk_req = TestVirtBlkReq::new(VIRTIO_BLK_T_OUT, 1, 0, REQ_DATA_LEN as usize);
             blk_req.data.push_str("TEST");
@@ -1447,11 +1471,23 @@ fn virtio_io_abnormal_desc_len() {
             for _ in 0..io_num {
                 indirect_req.add_desc(test_state.clone(), req_addr, length, true);
             }
+            let indirect_desc = indirect_req.desc;
             let free_head =
                 vqs[0]
                     .borrow_mut()
                     .add_indirect(test_state.clone(), indirect_req, true);
             vqs[0].borrow().update_avail(test_state.clone(), free_head);
+            // Test invalid lengh of the indirect desc elem.
+            if length == 16 {
+                test_state.borrow().writel(
+                    indirect_desc + offset_of!(VringDesc, len) as u64,
+                    u16::MAX as u32 * (VRING_DESC_SIZE as u32 + 1),
+                );
+                test_state.borrow().writel(
+                    indirect_desc + offset_of!(VringDesc, flags) as u64,
+                    (VRING_DESC_F_INDIRECT | VRING_DESC_F_NEXT) as u32,
+                );
+            }
         }
         blk.borrow().virtqueue_notify(vqs[0].clone());
 
