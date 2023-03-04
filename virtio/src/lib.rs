@@ -484,7 +484,7 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
 /// Discard "size" bytes of the front of iovec.
 pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     for (index, iov) in iovec.iter_mut().enumerate() {
-        if iov.len as u64 >= size {
+        if iov.len as u64 > size {
             iov.addr.0 += size;
             iov.len -= size as u32;
             return Some(&mut iovec[index..]);
