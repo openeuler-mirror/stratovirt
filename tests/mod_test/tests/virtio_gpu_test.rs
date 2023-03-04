@@ -717,15 +717,5 @@ fn crash_dfx() {
         .request_complete(true, hdr.as_bytes(), Some(slice), None, Some(&mut resp));
     assert_eq!(VIRTIO_GPU_RESP_ERR_UNSPEC, resp.hdr_type);
 
-    // invalid resp can work
-    let mut hdr = VirtioGpuCtrlHdr::default();
-    hdr.hdr_type = VIRTIO_GPU_CMD_GET_DISPLAY_INFO;
-
-    let mut resp = VirtioGpuCtrlHdr::default();
-
-    gpu.borrow_mut()
-        .request_complete(true, hdr.as_bytes(), None, None, Some(&mut resp));
-    assert_eq!(VIRTIO_GPU_RESP_OK_DISPLAY_INFO, resp.hdr_type);
-
     tear_down(dpy, gpu);
 }

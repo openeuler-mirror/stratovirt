@@ -68,7 +68,6 @@ impl VirtioGpuRect {
 
 impl ByteCode for VirtioGpuRect {}
 
-#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct VirtioGpuDisplayOne {
     pub rect: VirtioGpuRect,
@@ -78,7 +77,6 @@ pub struct VirtioGpuDisplayOne {
 
 impl ByteCode for VirtioGpuDisplayOne {}
 
-#[repr(C)]
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
 pub struct VirtioGpuDisplayInfo {
@@ -105,7 +103,6 @@ impl VirtioGpuGetEdid {
 
 impl ByteCode for VirtioGpuGetEdid {}
 
-#[repr(C)]
 #[allow(unused)]
 #[derive(Clone, Copy)]
 pub struct VirtioGpuRespEdid {
