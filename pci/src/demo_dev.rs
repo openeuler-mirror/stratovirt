@@ -43,7 +43,9 @@ use machine_manager::config::DemoDevConfig;
 
 use crate::demo_device::base_device::BaseDevice;
 #[cfg(not(target_env = "musl"))]
-use crate::demo_device::{gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse};
+use crate::demo_device::{
+    dpy_device::DemoDisplay, gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse,
+};
 use crate::{
     config::{
         PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
@@ -77,6 +79,8 @@ impl DemoDev {
             "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem))),
             #[cfg(not(target_env = "musl"))]
             "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
+            #[cfg(not(target_env = "musl"))]
+            "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(_sys_mem))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };
         DemoDev {

@@ -942,7 +942,6 @@ impl ScsiCmdHandler {
                 );
                 if let Some(ref mut aio) = self.aio {
                     let aiocb = AioCb {
-                        last_aio: true,
                         direct,
                         req_align,
                         buf_align,
@@ -955,6 +954,7 @@ impl ScsiCmdHandler {
                         iocompletecb: scsicompletecb,
                     };
                     scsi_req.execute(aio, aiocb)?;
+                    aio.flush_request()?;
                 }
             }
         }

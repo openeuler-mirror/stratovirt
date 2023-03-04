@@ -27,13 +27,12 @@ use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::TestState;
 
 const TIMEOUT_US: u64 = 15 * 1000 * 1000;
-const QUEUE_NUM: u16 = 2;
-const QUEUE_SIZE: u16 = 256;
 const ROWS_DEFAULT: u16 = 0;
 const COLS_DEFAULT: u16 = 0;
 const EMERG_WR_DEFAULT: u32 = 0;
-const VIRTIO_F_VERSION_1: u32 = 32;
 const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
+const VIRTIO_CONSOLE_F_MULTIPORT: u64 = 1;
+const VIRTIO_CONSOLE_F_EMERG_WRITE: u64 = 2;
 const BUFFER_LEN: usize = 96;
 
 fn console_setup(
@@ -88,65 +87,11 @@ fn get_pty_path(test_state: Rc<RefCell<TestState>>) -> String {
     }
 }
 
-#[test]
-fn test_console_basic() {
-    let chardev = ChardevType::Pty;
-    let pci_slot = 0x04;
-    let pci_fn = 0x0;
-    let (console, test_state, _alloc) = create_console(chardev, pci_slot, pci_fn);
-
-    assert_eq!(
-        console.borrow().get_queue_nums(),
-        QUEUE_NUM,
-        "The virtqueue number of console is uncorrect or the testcase parament is out of date!"
-    );
-
-    assert_eq!(
-        console.borrow().get_queue_size(),
-        QUEUE_SIZE,
-        "The virtqueue size of console is uncorrect or the testcase parament is out of date!"
-    );
-
-    assert_eq!(
-        console.borrow().config_readw(0),
-        ROWS_DEFAULT,
-        "The rows of the console config is uncorrect or the testcase parament is out of date!"
-    );
-
-    assert_eq!(
-        console.borrow().config_readw(2),
-        COLS_DEFAULT,
-        "The cols of the console config is uncorrect or the testcase parament is out of date!"
-    );
-
-    assert_eq!(
-        console.borrow().config_readl(8),
-        EMERG_WR_DEFAULT,
-        "The emerg_wr of the console config is uncorrect or the testcase parament is out of date!"
-    );
-
-    console.borrow().config_writew(0, 1);
-    assert_eq!(
-        console.borrow().config_readw(0),
-        ROWS_DEFAULT,
-        "The console device doesn't support writing config. But config was written!"
-    );
-
-    assert_eq!(
-        console.borrow().get_device_features(),
-        1 << VIRTIO_F_VERSION_1 | 1 << VIRTIO_CONSOLE_F_SIZE,
-        "The feature which the console supports is uncorrect or the testcase parament is out of date!");
-
-    test_state.borrow_mut().stop();
-}
-
-#[test]
-fn test_pty_basic() {
-    let pty = ChardevType::Pty;
-    let pci_slot = 0x04;
-    let pci_fn = 0x0;
-    let (console, test_state, alloc) = create_console(pty, pci_slot, pci_fn);
-
+fn verify_pty_io(
+    test_state: Rc<RefCell<TestState>>,
+    alloc: Rc<RefCell<GuestAllocator>>,
+    console: Rc<RefCell<TestVirtioPciDev>>,
+) {
     let vqs = console_setup(console.clone(), test_state.clone(), alloc.clone());
     let input_queue = vqs[0].clone();
     let output_queue = vqs[1].clone();
@@ -225,11 +170,97 @@ fn test_pty_basic() {
     }
 
     console.borrow_mut().destroy_device(alloc, vqs);
+}
+
+#[test]
+fn console_rw_conifg() {
+    let chardev = ChardevType::Pty;
+    let pci_slot = 0x04;
+    let pci_fn = 0x0;
+    let (console, test_state, alloc) = create_console(chardev, pci_slot, pci_fn);
+
+    assert_eq!(
+        console.borrow().config_readw(0),
+        ROWS_DEFAULT,
+        "The rows of the console config is uncorrect or the testcase parament is out of date!"
+    );
+
+    assert_eq!(
+        console.borrow().config_readw(2),
+        COLS_DEFAULT,
+        "The cols of the console config is uncorrect or the testcase parament is out of date!"
+    );
+
+    assert_eq!(
+        console.borrow().config_readl(8),
+        EMERG_WR_DEFAULT,
+        "The emerg_wr of the console config is uncorrect or the testcase parament is out of date!"
+    );
+
+    console.borrow().config_writew(0, 1);
+    assert_eq!(
+        console.borrow().config_readw(0),
+        ROWS_DEFAULT,
+        "The console device doesn't support writing config. But config was written!"
+    );
+
+    verify_pty_io(test_state.clone(), alloc.clone(), console.clone());
+
     test_state.borrow_mut().stop();
 }
 
 #[test]
-fn test_socket_basic() {
+fn console_features_negotiate() {
+    let chardev = ChardevType::Pty;
+    let pci_slot = 0x04;
+    let pci_fn = 0x0;
+    let (console, test_state, alloc) = create_console(chardev, pci_slot, pci_fn);
+
+    let mut features = console.borrow().get_device_features();
+    features |= 1 << VIRTIO_CONSOLE_F_SIZE;
+    console.borrow_mut().negotiate_features(features);
+    console.borrow_mut().set_features_ok();
+    assert_eq!(features, console.borrow_mut().get_guest_features());
+
+    let unsupported_features = 1 << VIRTIO_CONSOLE_F_MULTIPORT;
+    features |= unsupported_features;
+    console.borrow_mut().negotiate_features(features);
+    console.borrow_mut().set_features_ok();
+    assert_ne!(features, console.borrow_mut().get_guest_features());
+    assert_eq!(
+        unsupported_features & console.borrow_mut().get_guest_features(),
+        0
+    );
+
+    let unsupported_features = 1 << VIRTIO_CONSOLE_F_EMERG_WRITE;
+    features |= unsupported_features;
+    console.borrow_mut().negotiate_features(features);
+    console.borrow_mut().set_features_ok();
+    assert_ne!(features, console.borrow_mut().get_guest_features());
+    assert_eq!(
+        unsupported_features & console.borrow_mut().get_guest_features(),
+        0
+    );
+
+    verify_pty_io(test_state.clone(), alloc.clone(), console.clone());
+
+    test_state.borrow_mut().stop();
+}
+
+#[test]
+fn console_pty_basic() {
+    let pty = ChardevType::Pty;
+    let pci_slot = 0x04;
+    let pci_fn = 0x0;
+    let (console, test_state, alloc) = create_console(pty, pci_slot, pci_fn);
+
+    verify_pty_io(test_state.clone(), alloc.clone(), console.clone());
+
+    test_state.borrow_mut().stop();
+}
+
+#[test]
+fn console_socket_basic() {
     let socket_path = "/tmp/test-console0.sock";
     if Path::new(socket_path).exists() {
         fs::remove_file(socket_path).unwrap();
@@ -320,7 +351,7 @@ fn test_socket_basic() {
 }
 
 #[test]
-fn test_console_reset() {
+fn console_parallel_req() {
     let socket_path = "/tmp/test-console1.sock";
     if Path::new(socket_path).exists() {
         fs::remove_file(socket_path).unwrap();

@@ -60,7 +60,7 @@ ioctl_iow_nr!(VHOST_VSOCK_SET_GUEST_CID, VHOST, 0x60, u64);
 ioctl_iow_nr!(VHOST_VSOCK_SET_RUNNING, VHOST, 0x61, i32);
 
 /// Refer to vhost_vring_file in
-/// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
+/// `<https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h>`
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct VhostVringFile {
