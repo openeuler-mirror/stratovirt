@@ -34,9 +34,9 @@ const FONT_WIDTH: i32 = 8;
 /// Height of font.
 const FONT_HEIGHT: i32 = 16;
 /// Width of image in surface.
-const DEFAULT_SURFACE_WIDTH: i32 = 640;
+pub const DEFAULT_SURFACE_WIDTH: i32 = 640;
 /// Height of image in surface.
-const DEFAULT_SURFACE_HEIGHT: i32 = 480;
+pub const DEFAULT_SURFACE_HEIGHT: i32 = 480;
 /// Maximum default window width.
 pub const MAX_WINDOW_WIDTH: u16 = 2560;
 /// Maximum default window height.
@@ -50,6 +50,11 @@ pub const DISPLAY_UPDATE_INTERVAL_INC: u64 = 50;
 pub const DISPLAY_UPDATE_INTERVAL_MAX: u64 = 3_000;
 /// Millisecond to nanosecond.
 pub const MILLI_PER_SEC: u64 = 1_000_000;
+
+pub enum ConsoleType {
+    Graphic,
+    Text,
+}
 
 /// Image data defined in display.
 #[derive(Clone, Copy)]
@@ -115,10 +120,10 @@ pub struct DisplayChangeListener {
 }
 
 impl DisplayChangeListener {
-    pub fn new(dcl_id: Option<usize>, dpy_opts: Arc<dyn DisplayChangeListenerOperations>) -> Self {
+    pub fn new(con_id: Option<usize>, dpy_opts: Arc<dyn DisplayChangeListenerOperations>) -> Self {
         Self {
-            con_id: None,
-            dcl_id,
+            con_id,
+            dcl_id: None,
             active: false,
             update_interval: 0,
             dpy_opts,
@@ -129,27 +134,35 @@ impl DisplayChangeListener {
 /// Graphic hardware can register a console during initialization
 /// and store the information of images in this structure.
 pub struct DisplayConsole {
-    pub con_id: Option<usize>,
+    pub con_id: usize,
+    pub dev_name: String,
+    pub con_type: ConsoleType,
     pub width: i32,
     pub height: i32,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
     dev_opts: Arc<dyn HardWareOperations>,
+    active: bool,
 }
 
 impl DisplayConsole {
     pub fn new(
-        con_id: Option<usize>,
+        con_id: usize,
+        dev_name: String,
+        con_type: ConsoleType,
         console_list: Weak<Mutex<ConsoleList>>,
         dev_opts: Arc<dyn HardWareOperations>,
     ) -> Self {
         Self {
             con_id,
-            width: DEFAULT_SURFACE_WIDTH,
-            height: DEFAULT_SURFACE_HEIGHT,
+            dev_name,
+            con_type,
+            width: 0,
+            height: 0,
             console_list,
             surface: None,
             dev_opts,
+            active: true,
         }
     }
 }
@@ -314,7 +327,7 @@ pub fn display_replace_surface(
             dcl_id = activate_id;
         }
 
-        if con_id == dcl_id {
+        if Some(con_id) == dcl_id {
             related_listeners.push(dcl.clone());
         }
     }
@@ -367,7 +380,7 @@ pub fn display_graphic_update(
             dcl_id = activate_id;
         }
 
-        if con_id == dcl_id {
+        if Some(con_id) == dcl_id {
             related_listeners.push(dcl.clone());
         }
     }
@@ -404,7 +417,7 @@ pub fn display_cursor_define(
             dcl_id = activate_id;
         }
 
-        if con_id == dcl_id {
+        if Some(con_id) == dcl_id {
             related_listeners.push(dcl.clone());
         }
     }
@@ -423,6 +436,19 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
         let con_opts = con.lock().unwrap().dev_opts.clone();
         (*con_opts).hw_update(con);
     }
+}
+
+/// Get the weak reference of all active consoles from the console lists.
+pub fn get_active_console() -> Vec<Weak<Mutex<DisplayConsole>>> {
+    let mut res: Vec<Weak<Mutex<DisplayConsole>>> = vec![];
+    let locked_cons = CONSOLES.lock().unwrap();
+    for con in locked_cons.console_list.iter().flatten() {
+        if con.lock().unwrap().active {
+            res.push(Arc::downgrade(con));
+        }
+    }
+
+    res
 }
 
 /// Register a dcl and return the id.
@@ -496,38 +522,43 @@ pub fn unregister_display(dcl: &Option<Weak<Mutex<DisplayChangeListener>>>) -> R
 
 /// Create a console and add into a global list. Then returen a console id
 /// for later finding the assigned console.
-pub fn console_init(dev_opts: Arc<dyn HardWareOperations>) -> Option<Weak<Mutex<DisplayConsole>>> {
+pub fn console_init(
+    dev_name: String,
+    con_type: ConsoleType,
+    dev_opts: Arc<dyn HardWareOperations>,
+) -> Option<Weak<Mutex<DisplayConsole>>> {
     let mut locked_consoles = CONSOLES.lock().unwrap();
-    let len = locked_consoles.console_list.len();
-    let mut con_id = len;
-    for idx in 0..len {
-        if locked_consoles.console_list[idx].is_none() {
-            con_id = idx;
-            break;
+    for con in locked_consoles.console_list.iter().flatten() {
+        let mut locked_con = con.lock().unwrap();
+        if locked_con.dev_name == dev_name {
+            locked_con.active = true;
+            locked_con.dev_opts = dev_opts;
+            return Some(Arc::downgrade(con));
         }
     }
-    let mut new_console =
-        DisplayConsole::new(Some(con_id), Arc::downgrade(&CONSOLES), dev_opts.clone());
-    new_console.surface = create_msg_surface(
-        DEFAULT_SURFACE_WIDTH,
-        DEFAULT_SURFACE_HEIGHT,
-        "Guest has not initialized the display yet.".to_string(),
+
+    let con_id = locked_consoles.console_list.len();
+    let new_con = DisplayConsole::new(
+        con_id,
+        dev_name,
+        con_type,
+        Arc::downgrade(&CONSOLES),
+        dev_opts,
     );
-    new_console.width = DEFAULT_SURFACE_WIDTH;
-    new_console.height = DEFAULT_SURFACE_HEIGHT;
-    let console = Arc::new(Mutex::new(new_console));
-    if con_id < len {
-        locked_consoles.console_list[con_id] = Some(console.clone())
-    } else {
-        locked_consoles.console_list.push(Some(console.clone()));
-    }
+    let con = Arc::new(Mutex::new(new_con));
+    locked_consoles.console_list.push(Some(con.clone()));
     if locked_consoles.activate_id.is_none() {
         locked_consoles.activate_id = Some(con_id);
     }
     drop(locked_consoles);
 
-    let con = Arc::downgrade(&console);
-    display_replace_surface(&Some(con.clone()), None)
+    let con = Arc::downgrade(&con);
+    let surface = create_msg_surface(
+        DEFAULT_SURFACE_WIDTH,
+        DEFAULT_SURFACE_HEIGHT,
+        "Guest has not initialized the display yet.".to_string(),
+    );
+    display_replace_surface(&Some(con.clone()), surface)
         .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     Some(con)
 }
@@ -538,35 +569,36 @@ pub fn console_close(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<()
         Some(c) => c,
         None => return Ok(()),
     };
-    let locked_con = con.lock().unwrap();
-    let con_id = locked_con.con_id;
+    let mut locked_con = con.lock().unwrap();
     if let Some(surface) = locked_con.surface {
         unref_pixman_image(surface.image);
     }
+    locked_con.active = false;
+    locked_con.surface = create_msg_surface(
+        DEFAULT_SURFACE_WIDTH,
+        DEFAULT_SURFACE_HEIGHT,
+        "Display is not active.".to_string(),
+    );
+    let con_id = locked_con.con_id;
     drop(locked_con);
+
+    // If the active console is closed, reset the active console.
     let mut locked_consoles = CONSOLES.lock().unwrap();
-    if con_id.is_none() {
-        return Ok(());
-    }
-    let len = locked_consoles.console_list.len();
-    let id = con_id.unwrap_or(len);
-    if id >= len {
-        return Ok(());
-    }
-    locked_consoles.console_list[id] = None;
     match locked_consoles.activate_id {
-        Some(activate_id) if id == activate_id => {
-            locked_consoles.activate_id = None;
-            for i in 0..len {
-                if locked_consoles.console_list[i].is_some() {
-                    locked_consoles.activate_id = Some(i);
+        Some(active_con) if active_con == con_id => {
+            let mut active_id: Option<usize> = None;
+            for con in locked_consoles.console_list.iter().flatten() {
+                let locked_con = con.lock().unwrap();
+                if locked_con.active {
+                    active_id = Some(locked_con.con_id);
                     break;
                 }
             }
+            locked_consoles.activate_id = active_id;
         }
         _ => {}
     }
-    drop(locked_consoles);
+
     Ok(())
 }
 
@@ -582,12 +614,8 @@ pub fn console_select(con_id: Option<usize>) -> Result<()> {
             locked_consoles.activate_id = Some(id);
             locked_consoles.console_list[id].clone()
         }
-        _ => None,
+        _ => return Ok(()),
     };
-    let activate_id: Option<usize> = locked_consoles.activate_id;
-    if activate_id.is_none() {
-        return Ok(());
-    }
     drop(locked_consoles);
 
     let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
@@ -689,34 +717,24 @@ mod tests {
     #[test]
     fn test_console_select() {
         let con_opts = Arc::new(HwOpts {});
-        let con_0 = console_init(con_opts.clone());
+        let dev_name0 = format!("test_device0");
+        let con_0 = console_init(dev_name0, ConsoleType::Graphic, con_opts.clone());
+        let clone_con = con_0.clone();
         assert_eq!(
-            con_0
-                .clone()
-                .unwrap()
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .con_id,
-            Some(0)
+            clone_con.unwrap().upgrade().unwrap().lock().unwrap().con_id,
+            0
         );
-        let con_1 = console_init(con_opts.clone());
-        assert_eq!(
-            con_1.unwrap().upgrade().unwrap().lock().unwrap().con_id,
-            Some(1)
-        );
-        let con_2 = console_init(con_opts.clone());
-        assert_eq!(
-            con_2.unwrap().upgrade().unwrap().lock().unwrap().con_id,
-            Some(2)
-        );
+        let dev_name1 = format!("test_device1");
+        let con_1 = console_init(dev_name1, ConsoleType::Graphic, con_opts.clone());
+        assert_eq!(con_1.unwrap().upgrade().unwrap().lock().unwrap().con_id, 1);
+        let dev_name2 = format!("test_device2");
+        let con_2 = console_init(dev_name2, ConsoleType::Graphic, con_opts.clone());
+        assert_eq!(con_2.unwrap().upgrade().unwrap().lock().unwrap().con_id, 2);
         assert!(console_close(&con_0).is_ok());
-        let con_3 = console_init(con_opts.clone());
-        assert_eq!(
-            con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id,
-            Some(0)
-        );
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(1));
+        let dev_name3 = format!("test_device3");
+        let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts.clone());
+        assert_eq!(con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id, 3);
         assert!(console_select(Some(0)).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(0));
         assert!(console_select(Some(1)).is_ok());
@@ -724,9 +742,9 @@ mod tests {
         assert!(console_select(Some(2)).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
         assert!(console_select(Some(3)).is_ok());
-        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(3));
         assert!(console_select(None).is_ok());
-        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(2));
+        assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(3));
     }
 
     #[test]
