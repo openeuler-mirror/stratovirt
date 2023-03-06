@@ -1425,11 +1425,6 @@ impl GpuIoHandler {
 
 impl Drop for GpuIoHandler {
     fn drop(&mut self) {
-        for scanout in &self.scanouts {
-            console_close(&scanout.con)
-                .unwrap_or_else(|e| error!("Error occurs during console closing:{:?}", e));
-        }
-
         while !self.resources_list.is_empty() {
             self.resource_destroy(0);
             self.resources_list.remove(0);
@@ -1508,17 +1503,24 @@ pub struct Gpu {
     cfg: GpuDevConfig,
     /// Status of the GPU device.
     state: GpuState,
+    /// Each console corresponds to a display.
+    consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
 }
 
+/// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
+/// to this memory will be locked. So implement Send safe.
+unsafe impl Send for Gpu {}
+
 impl Gpu {
     pub fn new(cfg: GpuDevConfig) -> Gpu {
         Self {
             cfg,
             state: GpuState::default(),
+            consoles: Vec::new(),
             interrupt_cb: None,
             deactivate_evts: Vec::new(),
         }
@@ -1548,6 +1550,13 @@ impl VirtioDevice for Gpu {
             self.state.device_features |= 1 << VIRTIO_GPU_F_EDID;
         }
 
+        for i in 0..self.cfg.max_outputs {
+            let gpu_opts = Arc::new(GpuOpts::default());
+            let dev_name = format!("virtio-gpu{}", i);
+            let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
+            self.consoles.push(con);
+        }
+
         self.build_device_config_space();
 
         Ok(())
@@ -1555,6 +1564,10 @@ impl VirtioDevice for Gpu {
 
     /// Unrealize low level device.
     fn unrealize(&mut self) -> Result<()> {
+        for con in &self.consoles {
+            console_close(con)?;
+        }
+
         MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.cfg.id);
         Ok(())
     }
@@ -1648,12 +1661,13 @@ impl VirtioDevice for Gpu {
 
         self.interrupt_cb = Some(interrupt_cb.clone());
         let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
+
         let mut scanouts = vec![];
-        for i in 0..VIRTIO_GPU_MAX_SCANOUTS {
-            let mut scanout = GpuScanout::default();
-            let gpu_opts = Arc::new(GpuOpts::default());
-            let dev_name = format!("virtio-gpu{}", i);
-            scanout.con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
+        for con in &self.consoles {
+            let scanout = GpuScanout {
+                con: con.clone(),
+                ..Default::default()
+            };
             scanouts.push(scanout);
         }
 
