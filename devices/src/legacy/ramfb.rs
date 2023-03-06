@@ -18,7 +18,7 @@ use anyhow::Context;
 use drm_fourcc::DrmFourcc;
 use log::error;
 use std::mem::size_of;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
@@ -43,6 +43,7 @@ struct RamfbCfg {
 #[derive(Clone)]
 pub struct RamfbState {
     pub surface: Option<DisplaySurface>,
+    pub con: Option<Weak<Mutex<DisplayConsole>>>,
     sys_mem: Arc<AddressSpace>,
 }
 
@@ -56,8 +57,11 @@ unsafe impl Send for RamfbState {}
 
 impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+        let ramfb_opts = Arc::new(RamfbInterface {});
+        let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
         Self {
             surface: None,
+            con,
             sys_mem,
         }
     }
@@ -183,24 +187,19 @@ impl FwCfgWriteCallback for RamfbState {
         };
 
         self.create_display_surface(width, height, format, stride, addr);
-
-        let ramfb_opts = Arc::new(RamfbInterface {
-            width: width as i32,
-            height: height as i32,
-        });
-        let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
-        display_replace_surface(&con, self.surface)
+        display_replace_surface(&self.con, self.surface)
             .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     }
 }
 
-pub struct RamfbInterface {
-    width: i32,
-    height: i32,
-}
+pub struct RamfbInterface {}
 impl HardWareOperations for RamfbInterface {
     fn hw_update(&self, con: Arc<Mutex<DisplayConsole>>) {
-        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, self.width, self.height)
+        let locked_con = con.lock().unwrap();
+        let width = locked_con.width;
+        let height = locked_con.height;
+        drop(locked_con);
+        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, width, height)
             .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
     }
 }
