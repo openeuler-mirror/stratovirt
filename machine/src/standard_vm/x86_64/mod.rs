@@ -15,7 +15,7 @@ mod mch;
 mod syscall;
 
 use crate::error::MachineError;
-use log::error;
+use log::{error, info};
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
@@ -42,6 +42,7 @@ use machine_manager::config::{
     NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
@@ -112,8 +113,6 @@ pub struct StdMachine {
     vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
-    /// VM power button, handle VM `Shutdown` event.
-    power_button: Arc<EventFd>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
     /// All configuration information of virtual machine.
@@ -171,9 +170,6 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?),
             reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("reset request".to_string()))
             })?),
@@ -475,8 +471,6 @@ impl MachineOps for StdMachine {
                 .build_acpi_tables(&fwcfg.unwrap())
                 .with_context(|| "Failed to create ACPI tables")?;
         }
-
-        locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
         locked_vm
             .reset_fwcfg_boot_order()
@@ -823,9 +817,9 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
-        if self.power_button.write(1).is_err() {
-            error!("X86 standard vm write power button failed");
-            return false;
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            info!("vm destroy");
+            ctx.kick();
         }
         true
     }

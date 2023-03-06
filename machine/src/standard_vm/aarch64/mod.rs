@@ -14,7 +14,10 @@ mod pci_host_root;
 mod syscall;
 
 pub use crate::error::MachineError;
-use log::error;
+use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
+use log::{error, info};
+use machine_manager::config::ShutdownAction;
+use machine_manager::event_loop::EventLoop;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -83,6 +86,7 @@ pub enum LayoutEntryType {
     Uart,
     Rtc,
     FwCfg,
+    Ged,
     Mmio,
     PcieMmio,
     PciePio,
@@ -101,6 +105,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0900_0000, 0x0000_1000),    // Uart
     (0x0901_0000, 0x0000_1000),    // Rtc
     (0x0902_0000, 0x0000_0018),    // FwCfg
+    (0x0908_0000, 0x0000_0004),    // Ged
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
@@ -452,6 +457,18 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn add_ged_device(&mut self) -> Result<()> {
+        let ged = Ged::default();
+        ged.realize(
+            &mut self.sysbus,
+            self.power_button.clone(),
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
+        )
+        .with_context(|| "Failed to realize Ged")?;
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
@@ -559,8 +576,6 @@ impl MachineOps for StdMachine {
         locked_vm
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
-
-        locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
@@ -799,6 +814,9 @@ impl AcpiBuilder for StdMachine {
 
         // 2. Create pci host bridge node.
         sb_scope.append_child(self.pci_host.lock().unwrap().clone());
+
+        sb_scope.append_child(acpi_dsdt_add_power_button());
+
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
         // 3. Info of devices attached to system bus.
@@ -971,11 +989,27 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            info!("vm destroy");
+            ctx.kick();
+        }
+        true
+    }
+
+    fn powerdown(&self) -> bool {
         if self.power_button.write(1).is_err() {
-            error!("ARM stdndard vm write power button failed");
+            error!("ARM standard vm write power button failed");
             return false;
         }
         true
+    }
+
+    fn get_shutdown_action(&self) -> ShutdownAction {
+        self.vm_config
+            .lock()
+            .unwrap()
+            .machine_config
+            .shutdown_action
     }
 
     fn reset(&mut self) -> bool {

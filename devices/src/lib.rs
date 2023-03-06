@@ -16,6 +16,7 @@
 //! - interrupt controller (aarch64)
 //! - legacy devices, such as serial devices
 
+pub mod acpi;
 mod interrupt_controller;
 pub mod legacy;
 

@@ -71,9 +71,11 @@ use std::time::Duration;
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
+use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
+
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
@@ -434,11 +436,18 @@ impl CPUInterface for CPU {
     }
 
     fn guest_shutdown(&self) -> Result<()> {
-        let (cpu_state, _) = &*self.state;
-        *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-
         if let Some(vm) = self.vm.upgrade() {
-            vm.lock().unwrap().destroy();
+            let shutdown_act = vm.lock().unwrap().get_shutdown_action();
+            match shutdown_act {
+                ShutdownActionPoweroff => {
+                    let (cpu_state, _) = &*self.state;
+                    *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+                    vm.lock().unwrap().destroy();
+                }
+                ShutdownActionPause => {
+                    vm.lock().unwrap().pause();
+                }
+            }
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));
         }
@@ -514,6 +523,7 @@ impl CPUInterface for CPU {
                         );
                         self.guest_shutdown()
                             .with_context(|| "Some error occurred in guest shutdown")?;
+                        return Ok(true);
                     } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
                         info!(
                             "Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal",
@@ -530,7 +540,6 @@ impl CPUInterface for CPU {
                             flags
                         );
                     }
-
                     return Ok(false);
                 }
                 VcpuExit::FailEntry(reason, cpuid) => {

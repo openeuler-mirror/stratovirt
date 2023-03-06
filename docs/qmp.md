@@ -277,6 +277,18 @@ Reset all guest VCPUs execution.
 -> {"event":"RESET","data":{"guest":true},"timestamp":{"seconds":1677381086,"microseconds":432033}}
 ```
 
+### system_powerdown
+
+Requests that a guest perform a powerdown operation.
+
+### Example
+
+```json
+<- {"execute":"system_powerdown"}
+-> {"return":{}}
+-> {"event":"POWERDOWN","data":{},"timestamp":{"seconds":1677850193,"microseconds":617907}}
+```
+
 ### quit
 
 This command will cause StratoVirt process to exit gracefully.
