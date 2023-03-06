@@ -75,6 +75,7 @@ impl ByteCode for i128 {}
 mod test {
     use super::*;
 
+    #[repr(C)]
     #[allow(dead_code)]
     #[derive(Copy, Clone, Default)]
     struct TestData {
@@ -105,9 +106,9 @@ mod test {
         };
 
         let mut target = Vec::new();
+        target.extend_from_slice(b"bytecode");
         target.extend_from_slice(&[0x79, 0x56, 0x34, 0x12]);
         target.extend_from_slice(&[0_u8; 4]);
-        target.extend_from_slice(b"bytecode");
         assert_eq!(data.as_bytes().to_vec(), target);
 
         // Convert failed because byte stream's length is not equal to size of struct.
