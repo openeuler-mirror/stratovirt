@@ -23,6 +23,25 @@ use std::{cell::RefCell, mem, rc::Rc};
 use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libtest::{test_init, TestState};
 
+// Now dsdt table data length is 877.
+const DSDT_TABLE_DATA_LENGTH: u32 = 877;
+// Now fadt table data length is 276.
+const FADT_TABLE_DATA_LENGTH: u32 = 276;
+// Now madt table data length is 744.
+const MADT_TABLE_DATA_LENGTH: u32 = 744;
+// Now gtdt table data length is 96.
+const GTDT_TABLE_DATA_LENGTH: u32 = 96;
+// Now iort table data length is 128.
+const IORT_TABLE_DATA_LENGTH: u32 = 128;
+// Now spcr table data length is 80.
+const SPCR_TABLE_DATA_LENGTH: u32 = 80;
+// Now mcfg table data length is 60.
+const MCFG_TABLE_DATA_LENGTH: u32 = 60;
+// Now acpi tables data length is 3005(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 3005;
+// Now acpi tables data length is 29354(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 29354;
+
 fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     let file_name = "etc/acpi/rsdp";
     let mut read_data: Vec<u8> = Vec::with_capacity(mem::size_of::<AcpiRsdp>());
@@ -54,12 +73,12 @@ fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
 
 fn check_dsdt(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "DSDT");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 736); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), DSDT_TABLE_DATA_LENGTH); // Check length
 }
 
 fn check_fadt(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "FACP");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 276); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), FADT_TABLE_DATA_LENGTH); // Check length
 
     assert_eq!(LittleEndian::read_i32(&data[112..]), 0x10_0500); // Enable HW_REDUCED_ACPI bit
     assert_eq!(LittleEndian::read_u16(&data[129..]), 0x3); // ARM Boot Architecture Flags
@@ -68,7 +87,7 @@ fn check_fadt(data: &[u8]) {
 
 fn check_madt(data: &[u8], cpu: u8) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "APIC");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 744); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), MADT_TABLE_DATA_LENGTH); // Check length
 
     let mut offset = 44;
 
@@ -108,7 +127,7 @@ fn check_madt(data: &[u8], cpu: u8) {
 
 fn check_gtdt(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "GTDT");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 96); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), GTDT_TABLE_DATA_LENGTH); // Check length
 
     assert_eq!(LittleEndian::read_u32(&data[48..]), 29); // Secure EL1 interrupt
     assert_eq!(LittleEndian::read_u32(&data[52..]), 0); // Secure EL1 flags
@@ -122,7 +141,7 @@ fn check_gtdt(data: &[u8]) {
 
 fn check_iort(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "IORT");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 128); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), IORT_TABLE_DATA_LENGTH); // Check length
 
     // Check IORT nodes is 2: ITS group node and Root Complex Node.
     assert_eq!(LittleEndian::read_u32(&data[36..]), 2);
@@ -142,7 +161,7 @@ fn check_iort(data: &[u8]) {
 
 fn check_spcr(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "SPCR");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 80); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), SPCR_TABLE_DATA_LENGTH); // Check length
 
     assert_eq!(data[36], 3); // Interface type: ARM PL011 UART
     assert_eq!(data[41], 8); // Bit width of AcpiGenericAddress
@@ -152,7 +171,7 @@ fn check_spcr(data: &[u8]) {
         MEM_LAYOUT[LayoutEntryType::Uart as usize].0
     );
     assert_eq!(data[52], 1_u8 << 3); // Interrupt Type: Arm GIC interrupu
-    assert_eq!(LittleEndian::read_u32(&data[54..]), 65); // Irq number used by the UART
+    assert_eq!(LittleEndian::read_u32(&data[54..]), 66); // Irq number used by the UART
     assert_eq!(data[58], 3); // Set baud rate: 3 = 9600
     assert_eq!(data[60], 1); // Stop bit
     assert_eq!(data[61], 2); // Hardware flow control
@@ -162,7 +181,7 @@ fn check_spcr(data: &[u8]) {
 
 fn check_mcfg(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "MCFG");
-    assert_eq!(LittleEndian::read_u32(&data[4..]), 60); // Check length
+    assert_eq!(LittleEndian::read_u32(&data[4..]), MCFG_TABLE_DATA_LENGTH); // Check length
 
     assert_eq!(
         LittleEndian::read_u64(&data[44..]),
@@ -250,12 +269,16 @@ fn check_pptt(data: &[u8]) {
 
 fn test_tables(test_state: &TestState, alloc: &mut GuestAllocator, xsdt_addr: usize, cpu: u8) {
     let file_name = "etc/acpi/tables";
-    // Now acpi tables data length is 2864.
-    let mut read_data: Vec<u8> = Vec::with_capacity(2864);
+    let mut read_data: Vec<u8> = Vec::with_capacity(ACPI_TABLES_DATA_LENGTH_8);
 
     // Select FileDir entry and read it.
-    let file_size = test_state.fw_cfg_read_file(alloc, file_name, &mut read_data, 2864);
-    assert_eq!(file_size, 2864);
+    let file_size = test_state.fw_cfg_read_file(
+        alloc,
+        file_name,
+        &mut read_data,
+        ACPI_TABLES_DATA_LENGTH_8 as u32,
+    );
+    assert_eq!(file_size, ACPI_TABLES_DATA_LENGTH_8 as u32);
 
     // Check XSDT
     assert_eq!(
@@ -325,11 +348,15 @@ fn check_madt_of_two_gicr(
     cpus: usize,
 ) {
     let file_name = "etc/acpi/tables";
-    // Now acpi tables data length is 29212.
-    let mut read_data: Vec<u8> = Vec::with_capacity(29212);
+    let mut read_data: Vec<u8> = Vec::with_capacity(ACPI_TABLES_DATA_LENGTH_200);
 
     // Select FileDir entry and read it.
-    test_state.fw_cfg_read_file(alloc, file_name, &mut read_data, 29212);
+    test_state.fw_cfg_read_file(
+        alloc,
+        file_name,
+        &mut read_data,
+        ACPI_TABLES_DATA_LENGTH_200 as u32,
+    );
 
     // XSDT entry: An array of 64-bit physical addresses that point to other DESCRIPTION_HEADERs.
     // DESCRIPTION_HEADERs: DSDT, FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
