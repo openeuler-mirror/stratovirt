@@ -13,11 +13,10 @@
 mod split;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use std::sync::Arc;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::VirtioError;
 pub use split::*;
 
 /// Split Virtqueue.
@@ -46,13 +45,7 @@ fn checked_offset_mem(
             offset
         );
     }
-    base.checked_add(offset).ok_or_else(|| {
-        anyhow!(VirtioError::AddressOverflow(
-            "queue",
-            base.raw_value(),
-            offset
-        ))
-    })
+    Ok(base.unchecked_add(offset))
 }
 
 /// IO vector element which contains the information of a descriptor.
