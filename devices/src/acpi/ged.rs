@@ -115,9 +115,7 @@ impl Ged {
             evt_fd
                 .write(1)
                 .unwrap_or_else(|e| error!("ged: failed to write interrupt eventfd ({}).", e));
-            return;
         }
-        error!("ged: failed to get interrupt event fd.");
     }
 }
 
