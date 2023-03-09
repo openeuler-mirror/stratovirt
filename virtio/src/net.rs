@@ -744,23 +744,20 @@ impl NetIoHandler {
         mem_space: &Arc<AddressSpace>,
         cache: &Option<RegionCache>,
         elem_iovecs: &[ElemIovec],
-    ) -> Result<Vec<libc::iovec>> {
+    ) -> Vec<libc::iovec> {
         let mut iovecs = Vec::new();
         for elem_iov in elem_iovecs.iter() {
+            // elem_iov.addr has been checked in pop_avail().
             let host_addr = mem_space
                 .get_host_address_from_cache(elem_iov.addr, cache)
-                .unwrap_or(0);
-            if host_addr != 0 {
-                let iovec = libc::iovec {
-                    iov_base: host_addr as *mut libc::c_void,
-                    iov_len: elem_iov.len as libc::size_t,
-                };
-                iovecs.push(iovec);
-            } else {
-                bail!("Failed to get host address for {}", elem_iov.addr.0);
-            }
+                .unwrap();
+            let iovec = libc::iovec {
+                iov_base: host_addr as *mut libc::c_void,
+                iov_len: elem_iov.len as libc::size_t,
+            };
+            iovecs.push(iovec);
         }
-        Ok(iovecs)
+        iovecs
     }
 
     fn handle_rx(&mut self) -> Result<()> {
@@ -769,27 +766,15 @@ impl NetIoHandler {
         if !queue.is_enabled() {
             return Ok(());
         }
+
         let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
-            if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
-                self.rx.queue_full = true;
-                break;
-            }
-
-            rx_packets += 1;
-            if rx_packets >= self.queue_size {
-                self.rx
-                    .queue_evt
-                    .write(1)
-                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
-                break;
-            }
-
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
             if elem.desc_num == 0 {
+                self.rx.queue_full = true;
                 break;
             } else if elem.in_iovec.is_empty() {
                 bail!("The lengh of in iovec is 0");
@@ -798,8 +783,7 @@ impl NetIoHandler {
                 &self.mem_space,
                 queue.vring.get_cache(),
                 &elem.in_iovec,
-            )
-            .with_context(|| "Failed to get libc iovecs for net rx")?;
+            );
 
             if MigrationManager::is_active() {
                 // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
@@ -860,6 +844,15 @@ impl NetIoHandler {
                     })?;
                 self.trace_send_interrupt("Net".to_string());
             }
+
+            rx_packets += 1;
+            if rx_packets >= self.queue_size {
+                self.rx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
+                break;
+            }
         }
 
         Ok(())
@@ -892,6 +885,9 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
+        if !queue.is_enabled() {
+            return Ok(());
+        }
         let mut tx_packets = 0;
         loop {
             let elem = queue
@@ -904,21 +900,11 @@ impl NetIoHandler {
                 bail!("The lengh of out iovec is 0");
             }
 
-            tx_packets += 1;
-            if tx_packets >= self.queue_size {
-                self.tx
-                    .queue_evt
-                    .write(1)
-                    .with_context(|| "Failed to trigger tx queue event".to_string())?;
-                break;
-            }
-
             let iovecs = NetIoHandler::get_libc_iovecs(
                 &self.mem_space,
                 queue.vring.get_cache(),
                 &elem.out_iovec,
-            )
-            .with_context(|| "Failed to get libc iovecs for net tx")?;
+            );
             let tap_fd = if let Some(tap) = self.tap.as_mut() {
                 tap.as_raw_fd() as libc::c_int
             } else {
@@ -949,6 +935,14 @@ impl NetIoHandler {
                         ))
                     })?;
                 self.trace_send_interrupt("Net".to_string());
+            }
+            tx_packets += 1;
+            if tx_packets >= self.queue_size {
+                self.tx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger tx queue event".to_string())?;
+                break;
             }
         }
 
@@ -1106,6 +1100,7 @@ impl EventNotifierHelper for NetIoHandler {
                 if locked_net_io.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
+
                 if let Err(ref e) = locked_net_io.handle_rx() {
                     error!("Failed to handle rx(tap event), {:?}", e);
                     report_virtio_error(
@@ -1553,9 +1548,6 @@ impl VirtioDevice for Net {
         mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
-        if queue_num == 0 {
-            bail!("Length of queues is 0 when activating virtio net");
-        }
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.state.lock().unwrap().driver_features;
@@ -1794,5 +1786,121 @@ mod tests {
         let offset: u64 = 0;
         let mut data: Vec<u8> = vec![0; len as usize];
         assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+    }
+
+    #[test]
+    fn test_net_create_tap() {
+        // Test None net_fds and host_dev_name.
+        assert!(create_tap(None, None, 16).unwrap().is_none());
+
+        // Test create tap with net_fds and host_dev_name.
+        let net_fds = vec![32, 33];
+        let tap_name = "tap0";
+        if let Err(err) = create_tap(Some(&net_fds), Some(&tap_name), 1) {
+            let err_msg = format!("Failed to create tap, index is 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        // Test create tap with empty net_fds.
+        if let Err(err) = create_tap(Some(&vec![]), None, 1) {
+            let err_msg = format!("Failed to get fd from index 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        // Test create tap with tap_name which is not exist.
+        if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), 1) {
+            let err_msg =
+                format!("Failed to create tap with name the_tap_is_not_exist, index is 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn test_net_filter_vlan() {
+        let mut ctrl_info = CtrlInfo::new(Arc::new(Mutex::new(VirtioNetState::default())));
+        ctrl_info.rx_mode.promisc = false;
+        let mut buf = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00,
+            0x00, 0x00,
+        ];
+        // It has no vla vid, the packet is filtered.
+        assert_eq!(ctrl_info.filter_packets(&buf), true);
+
+        // It has valid vlan id, the packet is not filtered.
+        let vid: u16 = 1023;
+        buf[ETHERNET_HDR_LENGTH] = u16::to_be_bytes(vid)[0];
+        buf[ETHERNET_HDR_LENGTH + 1] = u16::to_be_bytes(vid)[1];
+        ctrl_info.vlan_map.insert(vid >> 5, 1 << (vid & 0x1f));
+        assert_eq!(ctrl_info.filter_packets(&buf), false);
+    }
+
+    #[test]
+    fn test_net_config_space() {
+        let mut net_config = VirtioNetConfig::default();
+        // Parsing the normal mac address.
+        let mac = "52:54:00:12:34:56";
+        let ret = build_device_config_space(&mut net_config, &mac);
+        assert_eq!(ret, 1 << VIRTIO_NET_F_MAC);
+
+        // Parsing the abnormale mac address.
+        let mac = "52:54:00:12:34:";
+        let ret = build_device_config_space(&mut net_config, &mac);
+        assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn test_mac_table() {
+        let mut mac = FIRST_DEFAULT_MAC;
+        // Add mac to mac table.
+        mark_mac_table(&mac, true);
+        assert_eq!(
+            USED_MAC_TABLE.lock().unwrap()[mac[MAC_ADDR_LEN - 1] as usize],
+            1
+        );
+        // Delete mac from mac table.
+        mark_mac_table(&mac, false);
+        assert_eq!(
+            USED_MAC_TABLE.lock().unwrap()[mac[MAC_ADDR_LEN - 1] as usize],
+            0
+        );
+
+        // Mac not in the default mac range.
+        mac[0] += 1;
+        mark_mac_table(&mac, true);
+        assert_eq!(
+            USED_MAC_TABLE.lock().unwrap()[mac[MAC_ADDR_LEN - 1] as usize],
+            0
+        );
+
+        // Test no free mac in mac table.
+        for i in FIRST_DEFAULT_MAC[MAC_ADDR_LEN - 1]..MAX_MAC_ADDR_NUM as u8 {
+            USED_MAC_TABLE.lock().unwrap()[i as usize] = 1;
+        }
+        assert!(get_default_mac_addr().is_err());
+        // Recover it.
+        for i in FIRST_DEFAULT_MAC[MAC_ADDR_LEN - 1]..MAX_MAC_ADDR_NUM as u8 {
+            USED_MAC_TABLE.lock().unwrap()[i as usize] = 0;
+        }
+    }
+
+    #[test]
+    fn test_iothread() {
+        let mut net = Net::default();
+        net.net_cfg.iothread = Some("iothread".to_string());
+        if let Err(err) = net.realize() {
+            let err_msg = format!(
+                "IOThread {:?} of Net is not configured in params.",
+                net.net_cfg.iothread
+            );
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
     }
 }
