@@ -24,11 +24,11 @@ use util::offset_of;
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{
-    TestVirtQueue, TestVringDescEntry, VirtioDeviceOps, VringUsed, VringUsedElem,
-    VIRTIO_CONFIG_S_DRIVER_OK, VIRTIO_CONFIG_S_NEEDS_RESET, VIRTIO_F_VERSION_1,
-    VIRTIO_RING_F_EVENT_IDX, VRING_DESC_SIZE,
+    TestVirtQueue, TestVringDescEntry, VirtioDeviceOps, VringAvail, VringDesc, VringUsed,
+    VringUsedElem, VIRTIO_CONFIG_S_DRIVER_OK, VIRTIO_CONFIG_S_NEEDS_RESET, VIRTIO_F_VERSION_1,
+    VIRTIO_RING_F_EVENT_IDX, VRING_DESC_F_WRITE, VRING_DESC_SIZE,
 };
-use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
+use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::{test_init, TestState};
 
 /// Device handles packets with partial checksum.
@@ -350,6 +350,7 @@ fn execute_cmd(cmd: String) {
     let output = cmd_exe
         .output()
         .expect(format!("Failed to execute {}", cmd).as_str());
+    println!("{:?}", args);
     assert!(output.status.success());
 }
 
@@ -525,8 +526,9 @@ fn init_net_device(
     let vqs = net
         .borrow_mut()
         .init_virtqueue(test_state.clone(), alloc.clone(), num_queues);
-    // vqs[0] is rx queue.
-    fill_rx_vq(test_state.clone(), alloc.clone(), vqs[0].clone());
+    for i in 0..num_queues / 2 {
+        fill_rx_vq(test_state.clone(), alloc.clone(), vqs[i * 2].clone());
+    }
     net.borrow().set_driver_ok();
 
     vqs
@@ -535,7 +537,7 @@ fn init_net_device(
 fn check_arp_mac(
     net: Rc<RefCell<TestVirtioPciDev>>,
     test_state: Rc<RefCell<TestState>>,
-    vqs: Vec<Rc<RefCell<TestVirtQueue>>>,
+    vq: Rc<RefCell<TestVirtQueue>>,
     arp_request: &[u8],
     need_reply: bool,
 ) {
@@ -546,7 +548,7 @@ fn check_arp_mac(
     loop {
         if need_reply {
             assert!(time::Instant::now() - start_time < timeout_us);
-            if !net.borrow().queue_was_notified(vqs[0].clone()) {
+            if !net.borrow().queue_was_notified(vq.clone()) {
                 continue;
             }
         } else if time::Instant::now() - start_time > timeout_us_no_reply {
@@ -555,22 +557,22 @@ fn check_arp_mac(
 
         let idx = test_state
             .borrow()
-            .readw(vqs[0].borrow().used + offset_of!(VringUsed, idx) as u64);
+            .readw(vq.borrow().used + offset_of!(VringUsed, idx) as u64);
         for i in start..idx as u64 {
             let len = test_state.borrow().readw(
-                vqs[0].borrow().used
+                vq.borrow().used
                     + offset_of!(VringUsed, ring) as u64
                     + i * USED_ELEM_SIZE
                     + offset_of!(VringUsedElem, len) as u64,
             );
             if len == arp_request.len() as u16 {
                 let id = test_state.borrow().readw(
-                    vqs[0].borrow().used + offset_of!(VringUsed, ring) as u64 + i * USED_ELEM_SIZE,
+                    vq.borrow().used + offset_of!(VringUsed, ring) as u64 + i * USED_ELEM_SIZE,
                 );
 
                 let addr = test_state
                     .borrow()
-                    .readq(vqs[0].borrow().desc + id as u64 * VRING_DESC_SIZE);
+                    .readq(vq.borrow().desc + id as u64 * VRING_DESC_SIZE);
                 let packets = test_state.borrow().memread(addr, len as u64);
                 let src_mac_pos = VIRTIO_NET_HDR_SIZE + ETHERNET_HDR_SIZE + ARP_HDR_SIZE;
                 let dst_mac_pos = src_mac_pos + 10;
@@ -639,7 +641,7 @@ fn send_request(
     net: Rc<RefCell<TestVirtioPciDev>>,
     test_state: Rc<RefCell<TestState>>,
     alloc: Rc<RefCell<GuestAllocator>>,
-    vqs: Vec<Rc<RefCell<TestVirtQueue>>>,
+    vq: Rc<RefCell<TestVirtQueue>>,
     request: &[u8],
 ) {
     let length = request.len() as u64;
@@ -663,13 +665,13 @@ fn send_request(
             .borrow()
             .memwrite(addr + offset, &request[offset as usize..]);
     }
-    let free_head = vqs[1]
+    let free_head = vq
         .borrow_mut()
         .add(test_state.clone(), addr, request.len() as u32, false);
-    net.borrow().virtqueue_notify(vqs[1].clone());
+    net.borrow().virtqueue_notify(vq.clone());
     net.borrow().poll_used_elem(
         test_state.clone(),
-        vqs[1].clone(),
+        vq,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -689,16 +691,28 @@ fn send_arp_request(
         net.clone(),
         test_state.clone(),
         alloc.clone(),
-        vqs.clone(),
+        vqs[1].clone(),
         &arp_request,
     );
     check_arp_mac(
         net.clone(),
         test_state.clone(),
-        vqs.clone(),
+        vqs[0].clone(),
         &arp_request,
         need_reply,
     );
+}
+
+fn check_device_status(net: Rc<RefCell<TestVirtioPciDev>>, status: u8) {
+    let start_time = time::Instant::now();
+    let timeout_us = time::Duration::from_micros(TIMEOUT_US);
+    loop {
+        if net.borrow().get_status() & status > 0 {
+            break;
+        }
+        sleep(time::Duration::from_millis(50));
+        assert!(time::Instant::now() - start_time < timeout_us);
+    }
 }
 
 /// Send and receive packet test.
@@ -1602,7 +1616,7 @@ fn virtio_net_ctrl_rx_test() {
 /// Test the control abnormal command.
 /// TestStep:
 ///   1. Init device with control vq.
-///   2. Test the control rx command without ack, expect NEEDS_RESET.
+///   2. Test the control rx command without ack(2 times), expect NEEDS_RESET.
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
@@ -1624,37 +1638,50 @@ fn virtio_net_ctrl_abnormal_test() {
     let ctrl_rx_info = CtrlRxInfo::new(VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_PROMISC, 0);
     let ctrl_data = &ctrl_rx_info.as_bytes();
 
-    let ctrl_vq = &vqs[2];
-    let addr = alloc
-        .borrow_mut()
-        .alloc(ctrl_data.len() as u64)
-        .try_into()
-        .unwrap();
-    test_state.borrow().memwrite(addr, &ctrl_data);
+    // The first request cause device needs reset.
+    // The second request test if the device can handle request.
+    let test_num = 2;
+    for i in 0..test_num {
+        let ctrl_vq = &vqs[2];
+        let addr = alloc
+            .borrow_mut()
+            .alloc(ctrl_data.len() as u64)
+            .try_into()
+            .unwrap();
+        test_state.borrow().memwrite(addr, &ctrl_data);
 
-    let data_entries: Vec<TestVringDescEntry> = vec![
-        TestVringDescEntry {
-            data: addr,
-            len: 1,
-            write: false,
-        },
-        TestVringDescEntry {
-            data: addr + 1,
-            len: 1,
-            write: false,
-        },
-        TestVringDescEntry {
-            data: addr + 2,
-            len: ctrl_data.len() as u32 - 3,
-            write: false,
-        },
-    ];
-    ctrl_vq
-        .borrow_mut()
-        .add_chained(test_state.clone(), data_entries);
-    net.borrow()
-        .kick_virtqueue(test_state.clone(), ctrl_vq.clone());
-    assert!(net.borrow().get_status() & VIRTIO_CONFIG_S_NEEDS_RESET > 0);
+        // ctrl_rx_info.switch: u8
+        let mut data_len = 1;
+        if i == test_num - 1 {
+            // ctrl_rx_info.switch and ctrl_rx_info.ack
+            data_len = 2;
+        }
+        let data_entries: Vec<TestVringDescEntry> = vec![
+            // ctrl_rx_info.ctrl_hdr.class: u8
+            TestVringDescEntry {
+                data: addr,
+                len: 1,
+                write: false,
+            },
+            // ctrl_rx_info.ctrl_hdr.cmd: u8
+            TestVringDescEntry {
+                data: addr + 1,
+                len: 1,
+                write: false,
+            },
+            TestVringDescEntry {
+                data: addr + 2,
+                len: data_len,
+                write: false,
+            },
+        ];
+        ctrl_vq
+            .borrow_mut()
+            .add_chained(test_state.clone(), data_entries);
+        net.borrow()
+            .kick_virtqueue(test_state.clone(), ctrl_vq.clone());
+        check_device_status(net.clone(), VIRTIO_CONFIG_S_NEEDS_RESET);
+    }
 
     tear_down(
         net.clone(),
@@ -1749,6 +1776,7 @@ fn virtio_net_abnormal_rx_tx_test() {
 ///   2. Test the rx/tx request:
 ///     1) handle rx error
 ///     2) handle tx error
+///     3) test tx packet with no in_iovec
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
@@ -1758,7 +1786,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
     let queue_pairs: u16 = 1;
     let queues: usize = 2 * queue_pairs as usize + 1;
 
-    for i in 0..2 {
+    for i in 0..3 {
         let (net, test_state, alloc) = set_up(id, false, queue_pairs, false);
 
         net.borrow_mut().reset();
@@ -1774,8 +1802,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
             .init_virtqueue(test_state.clone(), alloc.clone(), queues);
         fill_rx_vq(test_state.clone(), alloc.clone(), vqs[0].clone());
 
-        // Test receive packet failed.
-        // Set u16::MAX to rx->avail->ring[0].
+        // Test rx packet failed with invalid avail->ring[i].
         if i == 0 {
             test_state
                 .borrow()
@@ -1793,13 +1820,28 @@ fn virtio_net_abnormal_rx_tx_test_2() {
             .borrow_mut()
             .add(test_state.clone(), addr, length as u32, false);
         if i == 1 {
-            test_state
-                .borrow()
-                .writew(vqs[1].borrow().avail + 4, u16::MAX);
+            // Test tx packet failed with invalid avail->ring[i].
+            test_state.borrow().writew(
+                vqs[1].borrow().avail + offset_of!(VringAvail, ring) as u64,
+                u16::MAX,
+            );
+        } else if i == 2 {
+            // Test tx packet with no in_iovec.
+            test_state.borrow().writew(
+                vqs[1].borrow().desc + offset_of!(VringDesc, flags) as u64,
+                VRING_DESC_F_WRITE,
+            );
         }
         net.borrow().virtqueue_notify(vqs[1].clone());
-        sleep(time::Duration::from_millis(500));
-        assert!(net.borrow().get_status() & VIRTIO_CONFIG_S_NEEDS_RESET > 0);
+        // Check if it will affect the stratovirt when device broken.
+        net.borrow().virtqueue_notify(vqs[0].clone());
+        check_device_status(net.clone(), VIRTIO_CONFIG_S_NEEDS_RESET);
+        sleep(time::Duration::from_millis(5000));
+
+        let ret = test_state
+            .borrow()
+            .qmp("{\"execute\": \"qmp_capabilities\"}");
+        assert_eq!(*ret.get("return").unwrap(), json!({}));
 
         tear_down(
             net.clone(),
@@ -1903,7 +1945,7 @@ fn virtio_net_send_abnormal_packet() {
             net.clone(),
             test_state.clone(),
             alloc.clone(),
-            vqs.clone(),
+            vqs[1].clone(),
             &data_bytes,
         );
     }
@@ -1917,7 +1959,7 @@ fn virtio_net_send_abnormal_packet() {
             net.clone(),
             test_state.clone(),
             alloc.clone(),
-            vqs.clone(),
+            vqs[1].clone(),
             &data_bytes,
         );
     }
@@ -1926,6 +1968,121 @@ fn virtio_net_send_abnormal_packet() {
         .borrow()
         .qmp("{\"execute\": \"qmp_capabilities\"}");
     assert_eq!(*ret.get("return").unwrap(), json!({}));
+
+    tear_down(
+        net.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        vqs,
+        id,
+        false,
+    );
+}
+
+/// Send and receive packet test with mq.
+/// TestStep:
+///   1. Init device with mq.
+///   2. Send ARP packet and check the reply.
+///   3. Destroy device.
+/// Expect:
+///   1/2/3: success.
+#[test]
+fn virtio_net_rx_tx_mq_test() {
+    let id = 13 * TEST_MAC_ADDR_NUMS;
+    let num_queues = 2;
+    let (net, test_state, alloc) = set_up(id, true, num_queues, false);
+
+    // Three virtqueues: tx/rx/ctrl.
+    let vqs = init_net_device(
+        net.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        DEFAULT_NET_FEATURES,
+        2 * num_queues as usize + 1,
+    );
+
+    for i in 0..num_queues {
+        send_request(
+            net.clone(),
+            test_state.clone(),
+            alloc.clone(),
+            vqs[i as usize * 2 + 1].clone(),
+            &get_arp_request(id + i as u8 * TEST_MAC_ADDR_NUMS).as_bytes(),
+        );
+    }
+
+    tear_down(
+        net.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        vqs,
+        id,
+        true,
+    );
+}
+
+/// Test the abnormal rx/tx request 3.
+/// TestStep:
+///   1. Init device.
+///   2. Test the rx/tx request with not enable virtqueue:
+///   3. Destroy device.
+/// Expect:
+///   1/2/3: success.
+#[test]
+fn virtio_net_abnormal_rx_tx_test_3() {
+    let id = 14 * TEST_MAC_ADDR_NUMS;
+    let (net, test_state, alloc) = set_up(id, false, 0, false);
+
+    net.borrow_mut().reset();
+    net.borrow_mut().set_acknowledge();
+    net.borrow_mut().set_driver();
+    net.borrow_mut().negotiate_features(DEFAULT_NET_FEATURES);
+    net.borrow_mut().set_features_ok();
+    net.borrow_mut().pci_dev.enable_msix(None);
+    net.borrow_mut()
+        .setup_msix_configuration_vector(alloc.clone(), 0);
+
+    let mut vqs = Vec::new();
+    // Init virtqueue, but don't enable it.
+    for i in 0..3 {
+        let vq = Rc::new(RefCell::new(TestVirtQueue::new()));
+        vq.borrow_mut().setup(&*net.borrow(), alloc.clone(), i);
+        vq.borrow().vring_init(test_state.clone());
+
+        let desc = vq.borrow().desc;
+        let avail = vq.borrow().avail;
+        let used = vq.borrow().used;
+        net.borrow().activate_queue(desc, avail, used);
+
+        let notify_off = net.borrow().pci_dev.io_readw(
+            net.borrow().bar,
+            net.borrow().common_base as u64
+                + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
+        );
+
+        vq.borrow_mut().queue_notify_off = net.borrow().notify_base as u64
+            + notify_off as u64 * net.borrow().notify_off_multiplier as u64;
+
+        net.borrow()
+            .setup_virtqueue_intr((i + 1) as u16, alloc.clone(), vq.clone());
+        vqs.push(vq);
+    }
+    fill_rx_vq(test_state.clone(), alloc.clone(), vqs[0].clone());
+    net.borrow().set_driver_ok();
+
+    let request = get_arp_request(id);
+    let length = request.as_bytes().len() as u64;
+    let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
+    test_state.borrow().memwrite(addr, &request.as_bytes());
+    vqs[1]
+        .borrow_mut()
+        .add(test_state.clone(), addr, length as u32, false);
+    net.borrow().virtqueue_notify(vqs[1].clone());
+    sleep(time::Duration::from_millis(500));
+    let used_idx = test_state
+        .borrow()
+        .readw(vqs[1].borrow().used + offset_of!(VringUsed, idx) as u64);
+    assert_eq!(used_idx, 0);
 
     tear_down(
         net.clone(),
