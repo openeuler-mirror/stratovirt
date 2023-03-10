@@ -38,7 +38,7 @@ use machine_manager::{
     config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
-use util::aio::{Aio, AioCb, AioEngine, Iovec, OpCode};
+use util::aio::{Aio, AioCb, Iovec, OpCode};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -313,30 +313,28 @@ impl VirtioDevice for ScsiCntlr {
 
         let queues_num = queues.len();
         for cmd_queue in queues.iter().take(queues_num).skip(2) {
-            if let Some(bus) = &self.bus {
-                let mut cmd_handler = ScsiCmdHandler {
-                    aio: None,
-                    scsibus: bus.clone(),
-                    queue: cmd_queue.clone(),
-                    queue_evt: queue_evts.remove(0),
-                    mem_space: mem_space.clone(),
-                    interrupt_cb: interrupt_cb.clone(),
-                    driver_features: self.state.driver_features,
-                    device_broken: self.broken.clone(),
-                };
+            let bus = self.bus.as_ref().unwrap();
+            let cmd_handler = ScsiCmdHandler {
+                scsibus: bus.clone(),
+                queue: cmd_queue.clone(),
+                queue_evt: queue_evts.remove(0),
+                mem_space: mem_space.clone(),
+                interrupt_cb: interrupt_cb.clone(),
+                driver_features: self.state.driver_features,
+                device_broken: self.broken.clone(),
+            };
 
-                cmd_handler.aio = Some(cmd_handler.build_aio()?);
-
-                let notifiers =
-                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler)));
-                register_event_helper(
-                    notifiers,
-                    self.config.iothread.as_ref(),
-                    &mut self.deactivate_evts,
-                )?;
-            } else {
-                bail!("Scsi controller has no bus!");
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler)));
+            if notifiers.is_empty() {
+                bail!("Error in create scsi device aio!");
             }
+
+            register_event_helper(
+                notifiers,
+                self.config.iothread.as_ref(),
+                &mut self.deactivate_evts,
+            )?;
         }
         self.broken.store(false, Ordering::SeqCst);
 
@@ -778,6 +776,23 @@ impl ScsiEventHandler {
     }
 }
 
+fn complete_func(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
+    let complete_cb = &aiocb.iocompletecb;
+    let request = &aiocb.iocompletecb.req.lock().unwrap();
+    let mut virtio_scsi_req = request.virtioscsireq.lock().unwrap();
+
+    virtio_scsi_req.resp.response = if ret < 0 {
+        VIRTIO_SCSI_S_FAILURE
+    } else {
+        VIRTIO_SCSI_S_OK
+    };
+
+    virtio_scsi_req.resp.status = GOOD;
+    virtio_scsi_req.resp.resid = 0;
+    virtio_scsi_req.resp.sense_len = 0;
+    virtio_scsi_req.complete(&complete_cb.mem_space)
+}
+
 pub struct ScsiCmdHandler {
     /// The scsi controller.
     scsibus: Arc<Mutex<ScsiBus>>,
@@ -791,8 +806,6 @@ pub struct ScsiCmdHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
-    /// Aio context.
-    aio: Option<Box<Aio<ScsiCompleteCb>>>,
     /// Device is broken or not.
     device_broken: Arc<AtomicBool>,
 }
@@ -801,6 +814,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
+        // Register event notifier for queue evt.
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -817,8 +831,22 @@ impl EventNotifierHelper for ScsiCmdHandler {
         });
         notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
-        // Register event notifier for aio.
-        if let Some(ref aio) = h_locked.aio {
+        // Register event notifier for device aio.
+        let locked_bus = h_locked.scsibus.lock().unwrap();
+        for device in locked_bus.devices.values() {
+            let mut locked_device = device.lock().unwrap();
+
+            let aio = if let Ok(engine_aio) =
+                Aio::new(Arc::new(complete_func), locked_device.config.aio_type)
+            {
+                engine_aio
+            } else {
+                return Vec::new();
+            };
+            let dev_aio = Arc::new(Mutex::new(aio));
+            let dev_aio_h = dev_aio.clone();
+            locked_device.aio = Some(dev_aio.clone());
+
             let h_clone = handler.clone();
             let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
@@ -826,19 +854,15 @@ impl EventNotifierHelper for ScsiCmdHandler {
                 if h_lock.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
-                if let Some(aio) = &mut h_lock.aio {
-                    if let Err(ref e) = aio.handle_complete() {
-                        error!("Failed to handle aio, {:?}", e);
-                        report_virtio_error(
-                            h_lock.interrupt_cb.clone(),
-                            h_lock.driver_features,
-                            &h_lock.device_broken,
-                        );
-                    }
+                if let Err(ref e) = h_lock.aio_complete_handler(&dev_aio_h) {
+                    error!("Failed to handle aio {:?}", e);
                 }
                 None
             });
-            notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), h));
+            notifiers.push(build_event_notifier(
+                (*dev_aio).lock().unwrap().fd.as_raw_fd(),
+                h,
+            ));
         }
 
         notifiers
@@ -846,6 +870,17 @@ impl EventNotifierHelper for ScsiCmdHandler {
 }
 
 impl ScsiCmdHandler {
+    fn aio_complete_handler(&mut self, aio: &Arc<Mutex<Aio<ScsiCompleteCb>>>) -> Result<bool> {
+        aio.lock().unwrap().handle_complete().map_err(|e| {
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                &self.device_broken,
+            );
+            e
+        })
+    }
+
     fn handle_cmd(&mut self) -> Result<()> {
         let result = self.handle_cmd_request();
         if result.is_err() {
@@ -940,50 +975,24 @@ impl ScsiCmdHandler {
                     self.mem_space.clone(),
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
-                if let Some(ref mut aio) = self.aio {
-                    let aiocb = AioCb {
-                        direct,
-                        req_align,
-                        buf_align,
-                        file_fd: disk_img.as_raw_fd(),
-                        opcode: OpCode::Noop,
-                        iovec: Vec::new(),
-                        offset: 0,
-                        nbytes: 0,
-                        user_data: 0,
-                        iocompletecb: scsicompletecb,
-                    };
-                    scsi_req.execute(aio, aiocb)?;
-                    aio.flush_request()?;
-                }
+
+                let aiocb = AioCb {
+                    direct,
+                    req_align,
+                    buf_align,
+                    file_fd: disk_img.as_raw_fd(),
+                    opcode: OpCode::Noop,
+                    iovec: Vec::new(),
+                    offset: 0,
+                    nbytes: 0,
+                    user_data: 0,
+                    iocompletecb: scsicompletecb,
+                };
+                scsi_req.execute(aiocb)?;
             }
         }
 
         Ok(())
-    }
-
-    fn complete_func(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
-        let complete_cb = &aiocb.iocompletecb;
-        let request = &aiocb.iocompletecb.req.lock().unwrap();
-        let mut virtio_scsi_req = request.virtioscsireq.lock().unwrap();
-
-        virtio_scsi_req.resp.response = if ret < 0 {
-            VIRTIO_SCSI_S_FAILURE
-        } else {
-            VIRTIO_SCSI_S_OK
-        };
-
-        virtio_scsi_req.resp.status = GOOD;
-        virtio_scsi_req.resp.resid = 0;
-        virtio_scsi_req.resp.sense_len = 0;
-        virtio_scsi_req.complete(&complete_cb.mem_space)
-    }
-
-    fn build_aio(&self) -> Result<Box<Aio<ScsiCompleteCb>>> {
-        Ok(Box::new(Aio::new(
-            Arc::new(Self::complete_func),
-            AioEngine::Off,
-        )?))
     }
 }
 
