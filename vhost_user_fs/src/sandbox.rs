@@ -10,12 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{bail, Result};
-use log::error;
 use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::os::unix::io::FromRawFd;
+
+use anyhow::{bail, Result};
+use log::error;
 
 /// Sandbox mechanism to isolate process.
 pub struct Sandbox {
