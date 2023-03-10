@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-const MAX_WRITE_SIZE: u32 = 1 << 20;
-
-use super::fs::FileSystem;
-use super::fuse_msg::*;
-use address_space::AddressSpace;
-use log::error;
 use std::convert::TryInto;
 use std::ffi::CString;
 use std::mem;
 use std::sync::{Arc, Mutex};
+
+use log::error;
+
+use super::fs::FileSystem;
+use super::fuse_msg::*;
+use address_space::AddressSpace;
+
+const MAX_WRITE_SIZE: u32 = 1 << 20;
 
 fn is_safe_path(path: &CString) -> bool {
     let path_str = match path.clone().into_string() {

@@ -10,12 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::{Arc, Mutex};
+
+use log::error;
+
 use super::fs::FileSystem;
 use super::fuse_msg::*;
 use super::fuse_proc::*;
 use address_space::AddressSpace;
-use log::error;
-use std::sync::{Arc, Mutex};
 use virtio::Element;
 
 /// The request of fuse message parsed from virtio queue.
