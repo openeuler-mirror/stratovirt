@@ -139,30 +139,27 @@ impl AioCompleteCb {
         }
 
         let mut queue_lock = self.queue.lock().unwrap();
-        if let Err(ref e) = queue_lock
+        queue_lock
             .vring
             .add_used(&self.mem_space, req.desc_index, req.in_len)
-        {
-            bail!(
-                "Failed to add used ring(blk io completion), index {}, len {} {:?}",
-                req.desc_index,
-                req.in_len,
-                e,
-            );
-        }
+            .with_context(|| {
+                format!(
+                    "Failed to add used ring(blk io completion), index {}, len {}",
+                    req.desc_index, req.in_len
+                )
+            })?;
 
         if queue_lock
             .vring
             .should_notify(&self.mem_space, self.driver_features)
         {
-            if let Err(e) =
-                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
-            {
-                bail!(
-                    "Failed to trigger interrupt(blk io completion), error is {:?}",
-                    e
-                );
-            }
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "blk io completion",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
             self.trace_send_interrupt("Block".to_string());
         }
         Ok(())
@@ -477,11 +474,6 @@ impl BlockIoHandler {
                         queue.vring.push_back();
                         break;
                     }
-                } else {
-                    bail!(
-                        "IOThread {:?} of Block is not found in cmdline.",
-                        self.iothread,
-                    );
                 };
             }
 

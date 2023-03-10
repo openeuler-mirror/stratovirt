@@ -32,6 +32,7 @@ use mod_test::utils::{create_img, TEST_IMAGE_SIZE};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use std::{thread, time};
 use util::aio::{aio_probe, AioEngine};
 use util::num_ops::round_up;
 use util::offset_of;
@@ -1053,6 +1054,7 @@ fn blk_abnormal_req() {
 
     let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, false);
 
+    // Desc: req_hdr length 8, data length 256.
     let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
     data_entries.push(TestVringDescEntry {
         data: req_addr,
@@ -1087,6 +1089,7 @@ fn blk_abnormal_req() {
     let status = test_state.borrow().readb(req_addr + 264);
     assert_ne!(status, VIRTIO_BLK_S_OK);
 
+    // Desc: req_hdr length 32.
     let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
     data_entries.push(TestVringDescEntry {
         data: req_addr,
@@ -1121,6 +1124,7 @@ fn blk_abnormal_req() {
     let status = test_state.borrow().readb(req_addr + 544);
     assert_ne!(status, VIRTIO_BLK_S_OK);
 
+    // Desc: data length 256.
     let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
     data_entries.push(TestVringDescEntry {
         data: req_addr,
@@ -1153,6 +1157,138 @@ fn blk_abnormal_req() {
     );
 
     let status = test_state.borrow().readb(req_addr + 272);
+    assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    // Desc: data length 4, small size desc.
+    let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
+    data_entries.push(TestVringDescEntry {
+        data: req_addr,
+        len: 16,
+        write: false,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 16,
+        len: 4,
+        write: false,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 20,
+        len: 1,
+        write: true,
+    });
+    let free_head = virtqueues[0]
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+
+    blk.borrow()
+        .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
+    blk.borrow().poll_used_elem(
+        test_state.clone(),
+        virtqueues[0].clone(),
+        free_head,
+        TIMEOUT_US,
+        &mut None,
+        true,
+    );
+
+    let status = test_state.borrow().readb(req_addr + 20);
+    assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    // Desc: miss data.
+    let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
+    data_entries.push(TestVringDescEntry {
+        data: req_addr,
+        len: 16,
+        write: false,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 16,
+        len: 1,
+        write: true,
+    });
+    let _free_head = virtqueues[0]
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+
+    blk.borrow()
+        .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
+    thread::sleep(time::Duration::from_secs(1));
+
+    let status = test_state.borrow().readb(req_addr + 16);
+    assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    // Desc: all 'out' desc.
+    let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
+    data_entries.push(TestVringDescEntry {
+        data: req_addr,
+        len: 16,
+        write: true,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 16,
+        len: 512,
+        write: true,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 528,
+        len: 1,
+        write: true,
+    });
+    let _free_head = virtqueues[0]
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+
+    blk.borrow()
+        .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
+    thread::sleep(time::Duration::from_secs(1));
+
+    let status = test_state.borrow().readb(req_addr + 528);
+    assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    // Desc: data length 0.
+    let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
+    data_entries.push(TestVringDescEntry {
+        data: req_addr,
+        len: 16,
+        write: false,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 16,
+        len: 0,
+        write: true,
+    });
+    data_entries.push(TestVringDescEntry {
+        data: req_addr + 20,
+        len: 1,
+        write: true,
+    });
+    let _free_head = virtqueues[0]
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+
+    blk.borrow()
+        .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
+    thread::sleep(time::Duration::from_secs(1));
+
+    let status = test_state.borrow().readb(req_addr + 20);
+    assert_ne!(status, VIRTIO_BLK_S_OK);
+
+    // Desc: only status desc.
+    let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
+    data_entries.push(TestVringDescEntry {
+        data: req_addr,
+        len: 1,
+        write: true,
+    });
+    let _free_head = virtqueues[0]
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+
+    blk.borrow()
+        .kick_virtqueue(test_state.clone(), virtqueues[0].clone());
+    thread::sleep(time::Duration::from_secs(1));
+
+    let status = test_state.borrow().readb(req_addr);
     assert_ne!(status, VIRTIO_BLK_S_OK);
 
     tear_down(
