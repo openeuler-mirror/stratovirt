@@ -16,6 +16,8 @@ use std::io::Write;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{BigEndian, ByteOrder};
+use log::{debug, error, info};
 
 use crate::ScsiCntlr::{
     ScsiCntlr, ScsiCompleteCb, ScsiXferMode, VirtioScsiCmdReq, VirtioScsiCmdResp,
@@ -27,9 +29,7 @@ use crate::ScsiDisk::{
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
 use address_space::AddressSpace;
-use byteorder::{BigEndian, ByteOrder};
-use log::{debug, error, info};
-use util::aio::{Aio, AioCb, Iovec, OpCode};
+use util::aio::{AioCb, Iovec, OpCode};
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -535,17 +535,15 @@ impl ScsiRequest {
         }
     }
 
-    pub fn execute(
-        &self,
-        aio: &mut Box<Aio<ScsiCompleteCb>>,
-        mut aiocb: AioCb<ScsiCompleteCb>,
-    ) -> Result<u32> {
+    pub fn execute(&self, mut aiocb: AioCb<ScsiCompleteCb>) -> Result<u32> {
         let dev_lock = self.dev.lock().unwrap();
         let offset = match dev_lock.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
         aiocb.offset = (self.cmd.lba << offset) as usize;
+
+        let mut aio = dev_lock.aio.as_ref().unwrap().lock().unwrap();
 
         for iov in self.virtioscsireq.lock().unwrap().iovec.iter() {
             let iovec = Iovec {
@@ -561,6 +559,7 @@ impl ScsiRequest {
             aiocb.opcode = OpCode::Fdsync;
             aio.submit_request(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
+            aio.flush_request()?;
             return Ok(0);
         }
 
@@ -579,6 +578,8 @@ impl ScsiRequest {
                 info!("xfer none");
             }
         }
+
+        aio.flush_request()?;
         Ok(0)
     }
 

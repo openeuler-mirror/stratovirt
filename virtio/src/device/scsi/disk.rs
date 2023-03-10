@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
+use crate::ScsiCntlr::ScsiCompleteCb;
 use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
+use util::aio::Aio;
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -86,7 +88,6 @@ impl ScsiDevState {
     }
 }
 
-#[derive(Clone)]
 pub struct ScsiDevice {
     /// Configuration of the scsi device.
     pub config: ScsiDevConfig,
@@ -108,7 +109,13 @@ pub struct ScsiDevice {
     pub parent_bus: Weak<Mutex<ScsiBus>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// Aio context.
+    pub aio: Option<Arc<Mutex<Aio<ScsiCompleteCb>>>>,
 }
+
+// SAFETY: the devices attached in one scsi controller will process IO in the same thread.
+unsafe impl Send for ScsiDevice {}
+unsafe impl Sync for ScsiDevice {}
 
 impl ScsiDevice {
     pub fn new(
@@ -127,6 +134,7 @@ impl ScsiDevice {
             scsi_type,
             parent_bus: Weak::new(),
             drive_files,
+            aio: None,
         }
     }
 
