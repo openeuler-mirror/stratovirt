@@ -114,6 +114,7 @@ const SECCOMP_RET_TRAP: u32 = 0x0003_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const SECCOMP_RET_TRACE: u32 = 0x7ff0_0000;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+const SECCOMP_RET_LOG: u32 = 0x7ffc_0000;
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L45
 const SECCOMP_RET_MASK: u32 = 0x0000_ffff;
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L16
@@ -170,6 +171,8 @@ pub enum SeccompOpt {
     Trace(u32),
     /// Allow.
     Allow,
+    /// The syscall will be logged.
+    Log,
 }
 
 impl From<SeccompOpt> for u32 {
@@ -180,6 +183,7 @@ impl From<SeccompOpt> for u32 {
             SeccompOpt::Errno(x) => SECCOMP_RET_ERRNO | (x & SECCOMP_RET_MASK),
             SeccompOpt::Trace(x) => SECCOMP_RET_TRACE | (x & SECCOMP_RET_MASK),
             SeccompOpt::Allow => SECCOMP_RET_ALLOW,
+            SeccompOpt::Log => SECCOMP_RET_LOG,
         }
     }
 }
