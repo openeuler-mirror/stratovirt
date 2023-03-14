@@ -151,7 +151,7 @@ pub trait VirtioDeviceOps {
 #[derive(Default, Copy, Clone, Debug)]
 pub struct VringDesc {
     addr: u64,
-    len: u32,
+    pub len: u32,
     pub flags: u16,
     next: u16,
 }

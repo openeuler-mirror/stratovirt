@@ -140,6 +140,18 @@ impl Default for PmuConfig {
     }
 }
 
+impl Default for ShutdownAction {
+    fn default() -> Self {
+        ShutdownAction::ShutdownActionPoweroff
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ShutdownAction {
+    ShutdownActionPoweroff,
+    ShutdownActionPause,
+}
+
 /// Config struct for machine-config.
 /// Contains some basic Vm config about cpu, memory, name.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -154,6 +166,7 @@ pub struct MachineConfig {
     pub max_cpus: u8,
     pub mem_config: MachineMemConfig,
     pub cpu_config: CpuConfig,
+    pub shutdown_action: ShutdownAction,
 }
 
 impl Default for MachineConfig {
@@ -170,6 +183,7 @@ impl Default for MachineConfig {
             max_cpus: DEFAULT_MAX_CPUS,
             mem_config: MachineMemConfig::default(),
             cpu_config: CpuConfig::default(),
+            shutdown_action: ShutdownAction::default(),
         }
     }
 }
@@ -395,6 +409,11 @@ impl VmConfig {
 
     pub fn enable_mem_prealloc(&mut self) {
         self.machine_config.mem_config.mem_prealloc = true;
+    }
+
+    pub fn add_no_shutdown(&mut self) -> bool {
+        self.machine_config.shutdown_action = ShutdownAction::ShutdownActionPause;
+        true
     }
 }
 
@@ -653,6 +672,7 @@ mod tests {
             max_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
             cpu_config: CpuConfig::default(),
+            shutdown_action: ShutdownAction::default(),
         };
         assert!(machine_config.check().is_ok());
 

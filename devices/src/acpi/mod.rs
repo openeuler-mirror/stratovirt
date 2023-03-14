@@ -10,17 +10,4 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod fwcfg;
-pub mod machine;
-pub mod malloc;
-pub mod pci;
-pub mod pci_bus;
-pub mod usb;
-pub mod virtio;
-pub mod virtio_block;
-pub mod virtio_console;
-pub mod virtio_gpu;
-pub mod virtio_pci_modern;
-pub mod virtio_rng;
-pub mod virtiofs;
-pub mod vnc;
+pub mod ged;

@@ -249,7 +249,7 @@ impl EventLoopContext {
     }
 
     // Force epoll.wait to exit to re-evaluate events and timers.
-    fn kick(&mut self) {
+    pub fn kick(&mut self) {
         self.kicked.store(true, Ordering::SeqCst);
         if self.kick_me.load(Ordering::SeqCst) {
             if let Err(e) = self.kick_event.write(1) {

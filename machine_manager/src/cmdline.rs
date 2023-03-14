@@ -476,6 +476,12 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
     add_args_to_config!(
+        (args.is_present("no-shutdown")),
+        vm_cfg,
+        add_no_shutdown,
+        bool
+    );
+    add_args_to_config!(
         (args.is_present("mem-prealloc")),
         vm_cfg,
         enable_mem_prealloc,

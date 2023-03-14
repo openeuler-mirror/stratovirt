@@ -30,6 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
+use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 use util::aio::AioEngine;
 
@@ -37,7 +38,7 @@ mod mem_layout;
 mod syscall;
 
 use super::Result as MachineResult;
-use log::error;
+use log::{error, info};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -45,7 +46,6 @@ use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
-use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -182,8 +182,6 @@ pub struct LightMachine {
     vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
     // Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
-    // VM power button, handle VM `Shutdown` event.
-    power_button: Arc<EventFd>,
     // All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     // Drive backend files.
@@ -217,10 +215,6 @@ impl LightMachine {
 
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-        let power_button =
-            Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?);
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(
@@ -244,7 +238,6 @@ impl LightMachine {
             replaceable_info: MmioReplaceableInfo::new(),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            power_button,
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
@@ -681,6 +674,11 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
+    #[cfg(target_arch = "aarch64")]
+    fn add_ged_device(&mut self) -> MachineResult<()> {
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         #[cfg(target_arch = "x86_64")]
         let region_base: u64 = SERIAL_ADDR;
@@ -855,10 +853,6 @@ impl MachineOps for LightMachine {
             }
         }
 
-        locked_vm
-            .register_power_event(locked_vm.power_button.clone())
-            .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
-
         MigrationManager::register_vm_instance(vm.clone());
         #[cfg(target_arch = "x86_64")]
         MigrationManager::register_kvm_instance(
@@ -906,9 +900,9 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        if self.power_button.write(1).is_err() {
-            error!("Micro vm write power button failed");
-            return false;
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            info!("vm destroy");
+            ctx.kick();
         }
         true
     }
