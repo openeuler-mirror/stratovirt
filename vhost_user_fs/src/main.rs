@@ -21,10 +21,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use util::arg_parser::ArgMatches;
-use util::{arg_parser, logger};
+use util::{arg_parser, logger, seccomp::SeccompOpt};
 use vhost_user_fs::cmdline::{create_args_parser, create_fs_config, FsConfig};
 use vhost_user_fs::sandbox::Sandbox;
-use vhost_user_fs::securecomputing::{seccomp_filter, string_to_seccompopt, SeccompOpt};
+use vhost_user_fs::securecomputing::{seccomp_filter, string_to_seccompopt};
 use vhost_user_fs::vhost_user_fs::VhostUserFs;
 
 #[derive(Error, Debug)]

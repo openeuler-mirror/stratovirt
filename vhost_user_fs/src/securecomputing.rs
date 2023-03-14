@@ -10,38 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{bail, Result};
-use libc::c_int;
-use libseccomp_sys::{
-    seccomp_init, seccomp_load, seccomp_release, seccomp_rule_add, SCMP_ACT_ALLOW,
-    SCMP_ACT_KILL_PROCESS, SCMP_ACT_LOG, SCMP_ACT_TRAP,
-};
+use anyhow::{Context, Result};
+use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 
-/// Seccomp option parsed from command line.
-#[derive(Copy, Clone, Debug)]
-pub enum SeccompOpt {
-    /// The seccomp filter will have no effect.
-    Allow,
-    /// Same as 'allow', but the syscall will be logged.
-    Log,
-    /// Kill the task immediately.
-    Kill,
-    /// Disallow and force a SIGSYS.
-    Trap,
-}
-
-impl From<SeccompOpt> for u32 {
-    fn from(action: SeccompOpt) -> u32 {
-        match action {
-            SeccompOpt::Allow => SCMP_ACT_ALLOW,
-            SeccompOpt::Kill => SCMP_ACT_KILL_PROCESS,
-            SeccompOpt::Log => SCMP_ACT_LOG,
-            SeccompOpt::Trap => SCMP_ACT_TRAP,
-        }
-    }
-}
-
-pub fn add_syscall() -> Vec<i64> {
+fn syscall_whitelist() -> Vec<i64> {
     let mut v = vec![libc::SYS_accept4];
     v.push(libc::SYS_brk);
     v.push(libc::SYS_bind);
@@ -154,22 +126,14 @@ pub fn add_syscall() -> Vec<i64> {
 ///
 /// * `action` - The default action.
 pub fn seccomp_filter(action: SeccompOpt) -> Result<()> {
-    let action_value = action.into();
-    let scmp_filter_ctx = unsafe { seccomp_init(action_value) };
-    if scmp_filter_ctx.is_null() {
-        bail!("seccomp_init fail");
+    let mut seccomp_filter = SyscallFilter::new(action);
+    let allowed_syscalls = syscall_whitelist();
+    for call in allowed_syscalls {
+        seccomp_filter.push(&mut BpfRule::new(call));
     }
-
-    let allowed_syscalls = add_syscall();
-    for i in allowed_syscalls {
-        if unsafe { seccomp_rule_add(scmp_filter_ctx, SCMP_ACT_ALLOW, i as c_int, 0) } != 0 {
-            bail!("seccomp rule add fail {}", i);
-        }
-    }
-    if unsafe { seccomp_load(scmp_filter_ctx) } != 0 {
-        bail!("seccomp_load fail");
-    }
-    unsafe { seccomp_release(scmp_filter_ctx) };
+    seccomp_filter
+        .realize()
+        .with_context(|| "Failed to realize seccomp filter.")?;
     Ok(())
 }
 
