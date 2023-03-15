@@ -3,29 +3,6 @@
 version = 3
 
 [[package]]
-name = "StratoVirt"
-version = "2.2.0"
-dependencies = [
- "anyhow",
- "capng",
- "error-chain",
- "hypervisor",
- "kvm-ioctls",
- "libc",
- "log",
- "machine",
- "machine_manager",
- "migration",
- "thiserror",
- "util",
- "vfio",
- "vhost_user_fs",
- "virtio",
- "vmm-sys-util",
- "vnc",
-]
-
-[[package]]
 name = "acpi"
 version = "2.2.0"
 dependencies = [
@@ -884,6 +861,18 @@ dependencies = [
  "quote",
  "regex-syntax",
  "syn",
+]
+
+[[package]]
+name = "stratovirt"
+version = "2.2.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "machine",
+ "machine_manager",
+ "thiserror",
+ "util",
 ]
 
 [[package]]
