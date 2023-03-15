@@ -164,7 +164,7 @@ pub static VRING_DESC_SIZE: u64 = size_of::<VringDesc>() as u64;
 pub struct VringAvail {
     flags: u16,
     idx: u16,
-    ring: Vec<u16>,
+    pub ring: Vec<u16>,
 }
 
 #[repr(C, packed(4))]

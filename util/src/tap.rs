@@ -32,6 +32,7 @@ pub const IFF_MULTI_QUEUE: u16 = 0x100;
 const IFF_NO_PI: u16 = 0x1000;
 const IFF_VNET_HDR: u16 = 0x4000;
 const TUNTAP_PATH: &str = "/dev/net/tun";
+const IFNAME_SIZE: usize = 16;
 
 ioctl_iow_nr!(TUNSETIFF, 84, 202, ::std::os::raw::c_int);
 ioctl_ior_nr!(TUNGETFEATURES, 84, 207, ::std::os::raw::c_uint);
@@ -40,7 +41,7 @@ ioctl_iow_nr!(TUNSETVNETHDRSZ, 84, 216, ::std::os::raw::c_int);
 
 #[repr(C)]
 pub struct IfReq {
-    ifr_name: [u8; 16],
+    ifr_name: [u8; IFNAME_SIZE],
     ifr_flags: u16,
 }
 
@@ -53,11 +54,11 @@ impl Tap {
         let file;
 
         if let Some(name) = name {
-            if name.len() > 15 {
+            if name.len() > IFNAME_SIZE - 1 {
                 return Err(anyhow!("Open tap {} failed, name too long.", name));
             }
 
-            let mut ifr_name = [0_u8; 16];
+            let mut ifr_name = [0_u8; IFNAME_SIZE];
             let (left, _) = ifr_name.split_at_mut(name.len());
             left.copy_from_slice(name.as_bytes());
 
