@@ -10,7 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Result};
+use std::os::unix::io::RawFd;
+
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
@@ -25,6 +27,8 @@ const MAC_ADDRESS_LENGTH: usize = 17;
 
 /// Max virtqueue size of each virtqueue.
 pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
+/// Max num of virtqueues.
+const MAX_QUEUE_PAIRS: usize = MAX_VIRTIO_QUEUE / 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetDevcfg {
@@ -336,12 +340,47 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     Ok(netdevinterfacecfg)
 }
 
+fn get_netdev_fd(fd_name: &str) -> Result<RawFd> {
+    if let Some(fd) = QmpChannel::get_fd(fd_name) {
+        Ok(fd)
+    } else {
+        // try to convert string to RawFd
+        let fd_num = fd_name
+            .parse::<i32>()
+            .with_context(|| anyhow!("Failed to parse fd: {}", fd_name))?;
+        Ok(fd_num)
+    }
+}
+
+fn get_netdev_fds(fds_name: &str) -> Result<Vec<RawFd>> {
+    let fds_vec: Vec<&str> = fds_name.split(':').collect();
+    let mut fds = Vec::new();
+    for fd_name in fds_vec {
+        fds.push(get_netdev_fd(fd_name)?);
+    }
+    if fds.len() > MAX_QUEUE_PAIRS {
+        bail!(
+            "The num of fd {} is bigger than max queue num {}",
+            fds.len(),
+            MAX_QUEUE_PAIRS
+        );
+    }
+    Ok(fds)
+}
+
 pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<NetDevcfg> {
     let queues = args
         .queues
         .unwrap_or(1)
         .checked_mul(2)
         .ok_or_else(|| anyhow!("Invalid 'queues' value"))?;
+    if !is_netdev_queues_valid(queues) {
+        bail!(
+            "The 'queues' {} is bigger than max queue num {}",
+            queues / 2,
+            MAX_QUEUE_PAIRS
+        );
+    }
     let mut config = NetDevcfg {
         id: args.id,
         tap_fds: None,
@@ -352,67 +391,63 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         chardev: args.chardev,
     };
 
-    if let Some(fds) = args.fds {
-        let netdev_fd = if fds.contains(':') {
-            let col: Vec<_> = fds.split(':').collect();
-            String::from(col[col.len() - 1])
-        } else {
-            String::from(&fds)
-        };
-        if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
-            config.tap_fds = Some(vec![fd_num]);
-        } else {
-            // try to convert string to RawFd
-            let fd_num = match netdev_fd.parse::<i32>() {
-                Ok(fd) => fd,
-                _ => {
-                    bail!("Failed to parse fd: {}", netdev_fd);
-                }
-            };
-            config.tap_fds = Some(vec![fd_num]);
+    if let Some(tap_fd) = args.fd {
+        if args.if_name.is_some()
+            || args.script.is_some()
+            || args.downscript.is_some()
+            || args.queues.is_some()
+            || args.fds.is_some()
+            || args.vhostfds.is_some()
+        {
+            bail!("fd is conflict with ifname/script/downscript/queues/fds/vhostfds");
+        }
+        let fd = get_netdev_fd(&tap_fd)?;
+        config.tap_fds = Some(vec![fd]);
+
+        if let Some(vhostfd) = args.vhostfd {
+            let fd = get_netdev_fd(&vhostfd)?;
+            config.vhost_fds = Some(vec![fd]);
+        }
+    } else if let Some(tap_fds) = args.fds {
+        if args.if_name.is_some()
+            || args.script.is_some()
+            || args.downscript.is_some()
+            || args.queues.is_some()
+            || args.vhostfd.is_some()
+        {
+            bail!("fds are conflict with ifname/script/downscript/queues/vhostfd");
+        }
+        config.tap_fds = Some(get_netdev_fds(&tap_fds)?);
+        config.queues = 2 * config.tap_fds.as_ref().unwrap().len() as u16;
+
+        if let Some(vhostfds) = args.vhostfds {
+            config.vhost_fds = Some(get_netdev_fds(&vhostfds)?);
+            if config.tap_fds.as_ref().unwrap().len() != config.vhost_fds.as_ref().unwrap().len() {
+                bail!("The num of vhostfds must equal to fds");
+            }
         }
     } else if let Some(if_name) = args.if_name {
         config.ifname = if_name;
     }
 
-    let netdev_type = if let Some(net_type) = args.net_type {
-        net_type
-    } else {
-        "".to_string()
-    };
-
-    if let Some(vhost) = args.vhost {
-        match vhost.parse::<ExBool>() {
-            Ok(vhost) => {
-                if vhost.into() {
-                    if netdev_type.ne("vhost-user") {
-                        config.vhost_type = Some(String::from("vhost-kernel"));
-                    } else {
-                        bail!("vhost-user netdev does not support \"vhost\" option");
-                    }
-                }
-            }
-            Err(_) => {
-                bail!("Failed to get vhost type: {}", vhost);
-            }
-        };
+    // Get net device type.
+    let netdev_type = args.net_type.unwrap_or_default();
+    let vhost = args.vhost.unwrap_or_default();
+    if vhost {
+        if netdev_type.ne("vhost-user") {
+            config.vhost_type = Some(String::from("vhost-kernel"));
+        } else {
+            bail!("vhost-user netdev does not support 'vhost' option");
+        }
     } else if netdev_type.eq("vhost-user") {
         config.vhost_type = Some(netdev_type.clone());
     }
 
-    if let Some(vhostfd) = args.vhostfds {
-        match vhostfd.parse::<i32>() {
-            Ok(fd) => config.vhost_fds = Some(vec![fd]),
-            Err(_e) => {
-                bail!("Failed to get vhost fd: {}", vhostfd);
-            }
-        };
-    }
     if config.vhost_fds.is_some() && config.vhost_type.is_none() {
-        bail!("Argument \'vhostfd\' is not needed for virtio-net device");
+        bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
     }
     if config.tap_fds.is_none() && config.ifname.eq("") && netdev_type.ne("vhost-user") {
-        bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
+        bail!("Tap device is missing, use 'ifname' or 'fd' to configure a tap device");
     }
 
     Ok(config)
@@ -796,108 +831,187 @@ mod tests {
         }
     }
 
-    fn create_netdev_add(
-        id: String,
-        if_name: Option<String>,
-        fds: Option<String>,
-        vhost: Option<String>,
-        vhostfds: Option<String>,
-    ) -> Box<qmp_schema::NetDevAddArgument> {
-        Box::new(qmp_schema::NetDevAddArgument {
-            id,
-            if_name,
-            fds,
-            dnssearch: None,
-            net_type: None,
-            vhost,
-            vhostfds,
-            ifname: None,
-            downscript: None,
-            script: None,
-            queues: None,
-            chardev: None,
-        })
+    fn check_err_msg(netdev: Box<qmp_schema::NetDevAddArgument>, err_msg: &str) {
+        if let Err(err) = get_netdev_config(netdev) {
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
     }
 
     #[test]
     fn test_get_netdev_config() {
-        // Invalid vhost
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            None,
-            None,
-            Some(String::from("1")),
-            None,
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_err());
+        QmpChannel::object_init();
+        // Normal test with common elem.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            id: "netdev".to_string(),
+            if_name: Some("tap0".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        let net_cfg = get_netdev_config(netdev).unwrap();
+        assert_eq!(net_cfg.id, "netdev");
+        assert_eq!(net_cfg.ifname, "tap0");
 
-        // Invalid vhost fd
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            None,
-            None,
-            None,
-            Some(String::from("999999999999999999999")),
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_err());
+        // Set fd_name and fd_value to qmp channel.
+        for i in 0..5 {
+            let fd_name = "fd-net0".to_string() + &i.to_string();
+            QmpChannel::set_fd(fd_name, 11 + i);
+            let vhostfd_name = "vhostfd-net0".to_string() + &i.to_string();
+            QmpChannel::set_fd(vhostfd_name, 21 + i);
+        }
 
-        // No need to config vhost fd
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            None,
-            None,
-            None,
-            Some(String::from("55")),
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_err());
+        // Normal test with 'fd' value or name.
+        for value in ["11", "fd-net00"] {
+            let netdev = Box::new(qmp_schema::NetDevAddArgument {
+                fd: Some(value.to_string()),
+                ..qmp_schema::NetDevAddArgument::default()
+            });
+            let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.tap_fds.unwrap()[0], 11);
+        }
 
-        // No ifname or fd
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            None,
-            None,
-            Some(String::from("on")),
-            Some(String::from("55")),
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_err());
+        // Normal test with 'fds' value or name.
+        for value in ["11:12:13:14", "fd-net00:fd-net01:fd-net02:fd-net03"] {
+            let netdev = Box::new(qmp_schema::NetDevAddArgument {
+                fds: Some(value.to_string()),
+                ..qmp_schema::NetDevAddArgument::default()
+            });
+            let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.tap_fds.unwrap(), [11, 12, 13, 14]);
+        }
 
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            Some(String::from("tap0")),
-            None,
-            None,
-            None,
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_ok());
-        assert_eq!(net_cfg.unwrap().ifname, "tap0");
+        // Normal test with 'vhostfd'.
+        for (fd, vhostfd) in [("11", "21"), ("fd-net00", "vhostfd-net00")] {
+            let netdev = Box::new(qmp_schema::NetDevAddArgument {
+                fd: Some(fd.to_string()),
+                vhostfd: Some(vhostfd.to_string()),
+                vhost: Some(true),
+                ..qmp_schema::NetDevAddArgument::default()
+            });
+            let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.tap_fds.unwrap()[0], 11);
+            assert_eq!(net_cfg.vhost_fds.unwrap()[0], 21);
+            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
+        }
 
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            Some(String::from("tap0")),
-            None,
-            Some(String::from("on")),
-            None,
-        );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_ok());
-        assert_eq!(net_cfg.unwrap().vhost_type.unwrap(), "vhost-kernel");
+        // Normal test with 'vhostfds'.
+        for (fds, vhostfds) in [
+            ("11:12:13:14", "21:22:23:24"),
+            (
+                "fd-net00:fd-net01:fd-net02:fd-net03",
+                "vhostfd-net00:vhostfd-net01:vhostfd-net02:vhostfd-net03",
+            ),
+        ] {
+            let netdev = Box::new(qmp_schema::NetDevAddArgument {
+                fds: Some(fds.to_string()),
+                vhostfds: Some(vhostfds.to_string()),
+                vhost: Some(true),
+                ..qmp_schema::NetDevAddArgument::default()
+            });
+            let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.tap_fds.unwrap(), [11, 12, 13, 14]);
+            assert_eq!(net_cfg.vhost_fds.unwrap(), [21, 22, 23, 24]);
+            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
+        }
 
-        let netdev_add = create_netdev_add(
-            String::from("netdev"),
-            Some(String::from("tap0")),
-            None,
-            Some(String::from("on")),
-            Some(String::from("12")),
+        let err_msgs = [
+            "Invalid 'queues' value",
+            "fd is conflict with ifname/script/downscript/queues/fds/vhostfds",
+            "fds are conflict with ifname/script/downscript/queues/vhostfd",
+            "The num of vhostfds must equal to fds",
+            "vhost-user netdev does not support 'vhost' option",
+            "Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device",
+            "Tap device is missing, use 'ifname' or 'fd' to configure a tap device",
+        ];
+
+        // Abnornal test with invalid 'queues': u16::MAX.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            queues: Some(u16::MAX),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[0]);
+
+        // Abnornal test with invalid 'queues': MAX_QUEUE_PAIRS + 1.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            queues: Some(MAX_QUEUE_PAIRS as u16 + 1),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        let err_msg = format!(
+            "The 'queues' {} is bigger than max queue num {}",
+            MAX_QUEUE_PAIRS + 1,
+            MAX_QUEUE_PAIRS
         );
-        let net_cfg = get_netdev_config(netdev_add);
-        assert!(net_cfg.is_ok());
-        let net_cfg = net_cfg.unwrap();
-        assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
-        assert_eq!(net_cfg.vhost_fds.unwrap()[0], 12);
+        check_err_msg(netdev, &err_msg);
+
+        // Abnornal test with 'fd' and 'vhostfds'.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fd: Some("11".to_string()),
+            vhostfds: Some("21:22:23:24".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[1]);
+
+        // Abnornal test with 'fds' and 'vhostfd'.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fds: Some("11:12:13:14".to_string()),
+            vhostfd: Some("21".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[2]);
+
+        // Abnornal test with different num of 'fds' and 'vhostfds'.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fds: Some("11:12:13:14".to_string()),
+            vhostfds: Some("21:22:23".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[3]);
+
+        // Abnornal test with 'net_type=vhost-user'.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fd: Some("11".to_string()),
+            vhostfd: Some("21".to_string()),
+            vhost: Some(true),
+            net_type: Some("vhost-user".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[4]);
+
+        // Abnornal test with 'fds/vhostfds' and no 'vhost'.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fds: Some("11:12:13:14".to_string()),
+            vhostfds: Some("21:22:23:24".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[5]);
+
+        // Abnornal test with all default value.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, &err_msgs[6]);
+
+        // Abnornal test with invalid fd value.
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fd: Some("invalid_fd".to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        check_err_msg(netdev, "Failed to parse fd: invalid_fd");
+
+        // Abnornal test with fd num bigger than MAX_QUEUE_PAIRS.
+        let mut fds = "0".to_string();
+        for i in 1..MAX_QUEUE_PAIRS + 1 {
+            fds += &(":".to_string() + &i.to_string());
+        }
+        let netdev = Box::new(qmp_schema::NetDevAddArgument {
+            fds: Some(fds.to_string()),
+            ..qmp_schema::NetDevAddArgument::default()
+        });
+        let err_msg = format!(
+            "The num of fd {} is bigger than max queue num {}",
+            MAX_QUEUE_PAIRS + 1,
+            MAX_QUEUE_PAIRS
+        );
+        check_err_msg(netdev, &err_msg);
     }
 }
