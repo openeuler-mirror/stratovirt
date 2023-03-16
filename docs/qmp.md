@@ -106,7 +106,13 @@ Add a network backend.
 
 * `id` : the device's ID, must be unique.
 * `ifname` : the backend tap dev name.
-* `fds` : the file fd opened by upper level.
+* `fd` : the opened tap fd.
+* `fds` : the opened tap fds.
+* `queues` : the num of queues for multi-queue.
+* `vhost` : whether to run as a vhost-net device.
+* `vhostfd` : the vhost-net device fd.
+* `vhostfds` : the vhost-net device fds.
+* `chardev` : the chardev name for vhost-user net.
 
 #### Notes
 
@@ -115,6 +121,8 @@ Add a network backend.
 * `id` in `netdev_add` should be same as `id` in `device_add`.
 
 * For `addr`, it start at `0x0` mapping in guest with `eth0`.
+
+* It does not support multi-queue.
 
 #### Example
 
