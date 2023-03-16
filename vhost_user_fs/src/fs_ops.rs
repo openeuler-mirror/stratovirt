@@ -10,14 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-const MAX_PATH_LEN: usize = 4096;
-const OFFSET_MAX: u64 = 0x7fffffffffffffff;
-
 use std::ffi::CString;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 use super::fuse_msg::*;
+
+const MAX_PATH_LEN: usize = 4096;
+const OFFSET_MAX: u64 = 0x7fffffffffffffff;
 
 /// The pointer to open a directory.
 pub type DirPtr = *mut libc::DIR;

@@ -10,19 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::ffi::CString;
+use std::fs::File;
+use std::{fs, path::PathBuf};
+
+use anyhow::{bail, Context, Result};
+
+use crate::fs_ops::open;
+use crate::fuse_msg::FUSE_OK;
+use util::arg_parser::{Arg, ArgMatches, ArgParser};
+
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 const MAX_PATH_LENGTH: usize = 4096;
 // Maximum length of the socket path is restricted by linux.
 const MAX_SOCK_PATH_LENGTH: usize = 108;
-
-use crate::fs_ops::open;
-use crate::fuse_msg::FUSE_OK;
-use anyhow::{bail, Context, Result};
-use std::ffi::CString;
-use std::fs::File;
-use std::{fs, path::PathBuf};
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
 /// This function is to define all command line arguments.
 pub fn create_args_parser<'a>() -> ArgParser<'a> {

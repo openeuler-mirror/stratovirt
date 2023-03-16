@@ -10,29 +10,44 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{bail, Context, Result};
-use log::{error, info};
-use machine_manager::event_loop::EventLoop;
-use machine_manager::signal_handler;
-use machine_manager::temp_cleaner::TempCleaner;
+pub mod cmdline;
+pub mod error;
+pub mod fs;
+pub mod fs_ops;
+pub mod fuse_msg;
+pub mod fuse_proc;
+pub mod fuse_req;
+pub mod sandbox;
+pub mod securecomputing;
+pub mod vhost_user_fs;
+pub mod vhost_user_server;
+pub mod virtio_fs;
+
 use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
+
+use anyhow::{bail, Context, Result};
+use log::{error, info};
 use thiserror::Error;
+
+use crate::cmdline::{create_args_parser, create_fs_config, FsConfig};
+use crate::sandbox::Sandbox;
+use crate::securecomputing::{seccomp_filter, string_to_seccompopt};
+use crate::vhost_user_fs::VhostUserFs;
+use machine_manager::event_loop::EventLoop;
+use machine_manager::signal_handler;
+use machine_manager::temp_cleaner::TempCleaner;
 use util::arg_parser::ArgMatches;
 use util::{arg_parser, logger, seccomp::SeccompOpt};
-use vhost_user_fs::cmdline::{create_args_parser, create_fs_config, FsConfig};
-use vhost_user_fs::sandbox::Sandbox;
-use vhost_user_fs::securecomputing::{seccomp_filter, string_to_seccompopt};
-use vhost_user_fs::vhost_user_fs::VhostUserFs;
 
 #[derive(Error, Debug)]
 pub enum MainError {
     #[error("VhostUserFs")]
     VhostUserFs {
         #[from]
-        source: vhost_user_fs::error::VhostUserFsError,
+        source: crate::error::VhostUserFsError,
     },
     #[error("Util")]
     Util {
