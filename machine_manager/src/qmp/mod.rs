@@ -487,10 +487,7 @@ fn qmp_command_exec(
 
     // Change response id with input qmp message
     qmp_response.change_id(id);
-    (
-        serde_json::to_string(&qmp_response).unwrap() + "\r",
-        shutdown_flag,
-    )
+    (serde_json::to_string(&qmp_response).unwrap(), shutdown_flag)
 }
 
 /// The struct `QmpChannel` is the only struct can handle Global variable
