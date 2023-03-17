@@ -11,8 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    console::DisplayMouse,
+    console::{console_select, DisplayMouse},
     error::VncError,
+    input::{
+        key_event, point_event, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT,
+        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+    },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
     vnc::{
@@ -937,6 +941,101 @@ impl ClientIoHandler {
             );
         }
         drop(locked_state);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+    }
+
+    /// Keyboard event.
+    pub fn key_envent(&mut self) {
+        if self.expect == 1 {
+            self.expect = 8;
+            return;
+        }
+        let buf = self.read_incoming_msg();
+        let down: bool = buf[1] != 0;
+        let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let server = self.server.clone();
+
+        // Uppercase -> Lowercase.
+        if (ASCII_A..=ASCII_Z).contains(&keysym) {
+            keysym += UPPERCASE_TO_LOWERCASE;
+        }
+        let mut kbd_state = server.keyboard_state.borrow_mut();
+
+        let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
+            Some(k) => *k,
+            None => 0,
+        };
+
+        // Ctr + Alt + Num(1~9)
+        // Switch to the corresponding display device.
+        if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
+            && down
+            && self.server.display_listener.is_some()
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+        {
+            kbd_state.keyboard_state_reset();
+            console_select(Some((keycode - KEYCODE_1) as usize))
+                .unwrap_or_else(|e| error!("{:?}", e));
+        }
+
+        kbd_state
+            .keyboard_state_update(keycode, down)
+            .unwrap_or_else(|e| error!("Key State update error: {:?}", e));
+        key_event(keycode, down).unwrap_or_else(|e| error!("Key event error: {:?}", e));
+
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+    }
+
+    // Mouse event.
+    pub fn point_event(&mut self) {
+        if self.expect == 1 {
+            self.expect = 6;
+            return;
+        }
+
+        let buf = self.read_incoming_msg();
+        let mut x = ((buf[2] as u16) << 8) + buf[3] as u16;
+        let mut y = ((buf[4] as u16) << 8) + buf[5] as u16;
+
+        // Window size alignment.
+        let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+        x = ((x as u64 * ABS_MAX) / width as u64) as u16;
+        y = ((y as u64 * ABS_MAX) / height as u64) as u16;
+
+        // ASCII -> HidCode.
+        let button_mask: u8 = match buf[1] {
+            INPUT_POINT_LEFT => 0x01,
+            INPUT_POINT_MIDDLE => 0x04,
+            INPUT_POINT_RIGHT => 0x02,
+            _ => buf[1],
+        };
+
+        point_event(button_mask as u32, x as u32, y as u32)
+            .unwrap_or_else(|e| error!("Point event error: {:?}", e));
+
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+    }
+
+    /// Client cut text.
+    pub fn client_cut_event(&mut self) {
+        let buf = self.read_incoming_msg();
+        if self.expect == 1 {
+            self.expect = 8;
+            return;
+        }
+        if self.expect == 8 {
+            let buf = [buf[4], buf[5], buf[6], buf[7]];
+            let len = u32::from_be_bytes(buf);
+            if len > 0 {
+                self.expect += len as usize;
+                return;
+            }
+        }
+
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
