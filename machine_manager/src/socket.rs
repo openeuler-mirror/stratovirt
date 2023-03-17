@@ -154,9 +154,9 @@ impl Socket {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
-                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap() + "\r"
+                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap()
             } else {
-                serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
+                serde_json::to_string(&Response::create_empty_response()).unwrap()
             };
             handler.send_str(&resp)?;
             info!("QMP: --> {:?}", resp);
@@ -626,7 +626,8 @@ impl SocketHandler {
     /// The socket file descriptor is broken.
     pub fn send_str(&mut self, s: &str) -> std::io::Result<()> {
         self.stream.flush().unwrap();
-        match self.stream.write(s.as_bytes()) {
+        let msg = s.to_string() + "\r";
+        match self.stream.write(msg.as_bytes()) {
             Ok(_) => {
                 let _ = self.stream.write(&[b'\n'])?;
                 Ok(())
@@ -746,7 +747,7 @@ mod tests {
         let length = client.read(&mut response).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&response[..length]),
-            "I am a test str\n".to_string()
+            "I am a test str\r\n".to_string()
         );
 
         // 2.send String
@@ -755,7 +756,7 @@ mod tests {
         let length = client.read(&mut response).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&response[..length]),
-            "I am a test String\n".to_string()
+            "I am a test String\r\n".to_string()
         );
 
         // After test. Environment Recover
