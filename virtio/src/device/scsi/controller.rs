@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::collections::HashMap;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -59,9 +58,6 @@ pub const VIRTIO_SCSI_SENSE_DEFAULT_SIZE: usize = 96;
 
 /// Basic length of fixed format sense data.
 pub const SCSI_SENSE_LEN: u32 = 18;
-
-/// The key is bus name, the value is the attached Scsi Controller.
-pub type ScsiCntlrMap = Arc<Mutex<HashMap<String, Arc<Mutex<ScsiCntlr>>>>>;
 
 /// Control type codes.
 /// Task Management Function.

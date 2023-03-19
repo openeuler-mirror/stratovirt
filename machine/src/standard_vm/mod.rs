@@ -821,28 +821,11 @@ impl StdMachine {
 
         let bus_name = format!("{}.0", dev_cfg.id);
         ScsiBus::create_scsi_bus(&bus_name, &device)?;
-        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
-            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
-            lock_cntlr_list.insert(bus_name.clone(), device.clone());
-        } else {
-            bail!("No scsi controller list found");
-        }
 
-        let result =
-            self.add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false);
-        let pci_dev = if let Err(ref e) = result {
-            // SAFETY: unwrap is safe because Standard machine always make sure it not return null.
-            self.get_scsi_cntlr_list()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .remove(&bus_name);
-            bail!("Failed to add virtio scsi controller, error is {:?}", e);
-        } else {
-            result.unwrap()
-        };
-
-        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
+        let virtio_pci_dev = self
+            .add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false)
+            .with_context(|| "Failed to add virtio scsi controller")?;
+        device.lock().unwrap().config.boot_prefix = virtio_pci_dev.lock().unwrap().get_dev_path();
 
         Ok(())
     }

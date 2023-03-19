@@ -161,8 +161,8 @@ pub struct ScsiDevConfig {
     pub path_on_host: String,
     /// Serial number of the scsi device.
     pub serial: Option<String>,
-    /// Scsi bus which the scsi device attaches to.
-    pub bus: String,
+    /// Scsi controller which the scsi device attaches to.
+    pub cntlr: String,
     /// Scsi device can not do write operation.
     pub read_only: bool,
     /// If true, use direct access io.
@@ -183,7 +183,7 @@ impl Default for ScsiDevConfig {
             id: "".to_string(),
             path_on_host: "".to_string(),
             serial: None,
-            bus: "".to_string(),
+            cntlr: "".to_string(),
             read_only: false,
             direct: true,
             aio_type: AioEngine::Native,
@@ -232,7 +232,12 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     }
 
     if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
-        scsi_dev_cfg.bus = bus;
+        // Format "$parent_cntlr_name.0" is required by scsi bus.
+        let strs = bus.split('.').collect::<Vec<&str>>();
+        if strs.len() != 2 || strs[1] != "0" {
+            bail!("Invalid scsi bus {}", bus);
+        }
+        scsi_dev_cfg.cntlr = strs[0].to_string();
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing("bus", "scsi device")));
     }

@@ -82,7 +82,6 @@ use virtio::{
     ScsiCntlr, ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice,
 };
-use ScsiCntlr::ScsiCntlrMap;
 use ScsiDisk::{SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 
 pub trait MachineOps {
@@ -311,11 +310,6 @@ pub trait MachineOps {
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
-
-    /// Get the Scsi Controller list. The map stores the mapping between scsi bus name and scsi controller.
-    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
-        None
-    }
 
     /// Add net device.
     ///
@@ -679,12 +673,6 @@ pub trait MachineOps {
 
         let bus_name = format!("{}.0", device_cfg.id);
         ScsiBus::create_scsi_bus(&bus_name, &device)?;
-        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
-            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
-            lock_cntlr_list.insert(bus_name, device.clone());
-        } else {
-            bail!("No scsi controller list found!");
-        }
 
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
@@ -711,38 +699,43 @@ pub trait MachineOps {
             self.get_drive_files(),
         )));
 
-        let cntlr_list = self
-            .get_scsi_cntlr_list()
-            .ok_or_else(|| anyhow!("Wrong! No scsi controller list found!"))?;
-        let cntlr_list_clone = cntlr_list.clone();
-        let cntlr_list_lock = cntlr_list_clone.lock().unwrap();
+        let pci_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, Some(&device_cfg.cntlr), "virtio-scsi-pci")
+            .with_context(|| {
+                format!(
+                    "Can not find scsi controller from pci bus {}",
+                    device_cfg.cntlr
+                )
+            })?;
+        let locked_pcidev = pci_dev.lock().unwrap();
+        let virtio_pcidev = locked_pcidev
+            .as_any()
+            .downcast_ref::<VirtioPciDevice>()
+            .unwrap();
+        let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
+        let cntlr = virtio_device
+            .as_any()
+            .downcast_ref::<ScsiCntlr::ScsiCntlr>()
+            .unwrap();
 
-        let cntlr = cntlr_list_lock
-            .get(&device_cfg.bus)
-            .ok_or_else(|| anyhow!("Wrong! Bus {} not found in list", &device_cfg.bus))?;
-
-        if let Some(bus) = &cntlr.lock().unwrap().bus {
-            if bus
-                .lock()
-                .unwrap()
-                .devices
-                .contains_key(&(device_cfg.target, device_cfg.lun))
-            {
-                bail!("Wrong! Two scsi devices have the same scsi-id and lun");
-            }
-            bus.lock()
-                .unwrap()
-                .devices
-                .insert((device_cfg.target, device_cfg.lun), device.clone());
-            device.lock().unwrap().parent_bus = Arc::downgrade(bus);
-        } else {
-            bail!("Wrong! Controller has no bus {} !", &device_cfg.bus);
+        let bus = cntlr.bus.as_ref().unwrap();
+        if bus
+            .lock()
+            .unwrap()
+            .devices
+            .contains_key(&(device_cfg.target, device_cfg.lun))
+        {
+            bail!("Wrong! Two scsi devices have the same scsi-id and lun");
         }
+        bus.lock()
+            .unwrap()
+            .devices
+            .insert((device_cfg.target, device_cfg.lun), device.clone());
+        device.lock().unwrap().parent_bus = Arc::downgrade(bus);
 
         device.lock().unwrap().realize()?;
 
         if let Some(bootindex) = device_cfg.boot_index {
-            let mut cntlr_locked = cntlr.lock().unwrap();
             // Eg: OpenFirmware device path(virtio-scsi disk):
             // /pci@i0cf8/scsi@7[,3]/channel@0/disk@2,3
             //   |             |  |      |          | |
@@ -750,10 +743,10 @@ pub trait MachineOps {
             //   |             |  |   channel(unused, fixed 0).
             //   |         PCI slot,[function] holding SCSI controller.
             //  PCI root as system bus port.
-            let dev_path = cntlr_locked.config.boot_prefix.as_mut().unwrap();
-            let str = format! {"/channel@0/disk@{:x},{:x}", device_cfg.target, device_cfg.lun};
-            dev_path.push_str(&str);
-            self.add_bootindex_devices(bootindex, dev_path, &device_cfg.id);
+            let prefix = cntlr.config.boot_prefix.as_ref().unwrap();
+            let dev_path =
+                format! {"{}/channel@0/disk@{:x},{:x}", prefix, device_cfg.target, device_cfg.lun};
+            self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
         }
         Ok(())
     }
@@ -1117,29 +1110,39 @@ pub trait MachineOps {
             .with_context(|| "Failed to realize scream device")
     }
 
-    /// Get the corresponding device from the PCI bus based on the device name.
+    /// Get the corresponding device from the PCI bus based on the device id and device type name.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
-    /// * `name` - Device Name.
-    fn get_pci_dev_by_name(
+    /// * `id` - Device id.
+    /// * `dev_type` - Device type name.
+    fn get_pci_dev_by_id_and_type(
         &mut self,
         vm_config: &mut VmConfig,
-        name: &str,
+        id: Option<&str>,
+        dev_type: &str,
     ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+        let (id_check, id_str) = if id.is_some() {
+            (true, format! {"id={}", id.unwrap()})
+        } else {
+            (false, "".to_string())
+        };
+
         for dev in &vm_config.devices {
-            if dev.0.as_str() == name {
-                let cfg_args = dev.1.as_str();
-                let bdf = get_pci_bdf(cfg_args).ok()?;
-                let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
-                let pci_host = self.get_pci_host().ok()?;
-                let root_bus = pci_host.lock().unwrap().root_bus.clone();
-                if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
-                    return pci_bus.lock().unwrap().get_device(0, devfn);
-                } else {
-                    return None;
-                }
+            if dev.0.as_str() != dev_type || id_check && !dev.1.contains(&id_str) {
+                continue;
+            }
+
+            let cfg_args = dev.1.as_str();
+            let bdf = get_pci_bdf(cfg_args).ok()?;
+            let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
+            let pci_host = self.get_pci_host().ok()?;
+            let root_bus = pci_host.lock().unwrap().root_bus.clone();
+            if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
+                return pci_bus.lock().unwrap().get_device(0, devfn);
+            } else {
+                return None;
             }
         }
         None
@@ -1157,7 +1160,7 @@ pub trait MachineOps {
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
-        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
+        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
         if parent_dev_op.is_none() {
             bail!("Can not find parent device from pci bus");
         }
@@ -1185,7 +1188,7 @@ pub trait MachineOps {
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
-        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
+        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
         if parent_dev_op.is_none() {
             bail!("Can not find parent device from pci bus");
         }
