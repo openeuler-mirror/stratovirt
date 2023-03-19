@@ -14,14 +14,17 @@ mod pulseaudio;
 
 use std::{
     mem,
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        atomic::{fence, Ordering},
+        Arc, Mutex, Weak,
+    },
     thread,
 };
 
 use address_space::{GuestAddress, HostMemMapping, Region};
 use anyhow::{bail, Context, Result};
 use core::time;
-use log::error;
+use log::{error, warn};
 
 use super::ivshmem::Ivshmem;
 use pci::{PciBus, PciDevOps};
@@ -62,7 +65,14 @@ struct ShmemStreamHeader {
 }
 
 impl ShmemStreamHeader {
-    pub fn check(&self, shmem_size: u64) -> bool {
+    pub fn check(&self, shmem_size: u64, last_end: u64) -> bool {
+        if (self.offset as u64) < last_end {
+            warn!(
+                "Guest set bad offset {} exceeds last stream buffer end {}",
+                self.offset, last_end
+            );
+        }
+
         let boundary = self.offset as u64 + self.chunk_size as u64 * self.max_chunks as u64;
         if boundary > shmem_size {
             error!(
@@ -182,7 +192,15 @@ impl StreamData {
                 continue;
             }
 
-            if !stream_header.check(shmem_size) {
+            let mut last_end = 0;
+            // The recording buffer is behind the playback buffer. Thereforce, the end position of
+            // the playback buffer must be calculted to determine whether the two buffers overlap.
+            if dir == ScreamDirection::Record && header.play.is_started != 0 {
+                last_end = header.play.offset as u64
+                    + header.play.chunk_size as u64 * header.play.max_chunks as u64;
+            }
+
+            if !stream_header.check(shmem_size, last_end) {
                 continue;
             }
 
@@ -211,9 +229,35 @@ impl StreamData {
             self.chunk_idx = (play.chunk_idx + play.max_chunks - 1) % play.max_chunks;
         }
 
-        self.audio_size = play.chunk_size;
-        self.audio_base =
-            hva + play.offset as u64 + (play.chunk_size as u64) * (self.chunk_idx as u64);
+        self.update_buffer_by_chunk_idx(hva, &play);
+    }
+
+    fn update_buffer_by_chunk_idx(&mut self, hva: u64, stream_header: &ShmemStreamHeader) {
+        self.audio_size = stream_header.chunk_size;
+        self.audio_base = hva
+            + stream_header.offset as u64
+            + (stream_header.chunk_size as u64) * (self.chunk_idx as u64);
+    }
+
+    fn update_capt_buffer(&mut self, hva: u64) {
+        // SAFETY: hva is the shared memory base address. It already verifies the validity
+        // of the address range during the header check.
+        let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
+
+        self.update_buffer_by_chunk_idx(hva, &header.capt);
+    }
+
+    fn update_capt_idx(&mut self, hva: u64) {
+        // SAFETY: hva is the shared memory base address. It already verifies the validity
+        // of the address range during the header check.
+        let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
+
+        self.chunk_idx = (self.chunk_idx + 1) % header.capt.max_chunks;
+
+        // Make sure chunk_idx write does not bypass audio chunk write.
+        fence(Ordering::SeqCst);
+
+        header.capt.chunk_idx = self.chunk_idx;
     }
 }
 
@@ -253,6 +297,33 @@ impl Scream {
         Ok(())
     }
 
+    fn start_record_thread_fn(&self) -> Result<()> {
+        let hva = self.hva;
+        let shmem_size = self.size;
+        thread::Builder::new()
+            .name("scream audio capt worker".to_string())
+            .spawn(move || {
+                let mut input = PulseStreamData::init("ScreamCapt", ScreamDirection::Record);
+                let mut capt_data = StreamData::default();
+
+                loop {
+                    capt_data.wait_for_ready(
+                        ScreamDirection::Record,
+                        POLL_DELAY_US,
+                        hva,
+                        shmem_size,
+                    );
+                    capt_data.update_capt_buffer(hva);
+
+                    if input.receive(&capt_data) {
+                        capt_data.update_capt_idx(hva);
+                    }
+                }
+            })
+            .with_context(|| "Failed to create thread scream")?;
+        Ok(())
+    }
+
     pub fn realize(mut self, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
         let header_size = mem::size_of::<ShmemHeader>() as u64;
         if self.size < header_size {
@@ -279,6 +350,7 @@ impl Scream {
         let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
         ivshmem.realize()?;
 
-        self.start_play_thread_fn()
+        self.start_play_thread_fn()?;
+        self.start_record_thread_fn()
     }
 }
