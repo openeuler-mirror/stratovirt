@@ -247,4 +247,29 @@ impl PulseStreamData {
             error!("PulseAudio write data failed: {}", e);
         }
     }
+
+    pub fn receive(&mut self, recv_data: &StreamData) -> bool {
+        self.check_fmt_update(recv_data);
+
+        if self.simple.is_none() {
+            return false;
+        }
+
+        // SAFETY: audio_base is the shared memory. It already verifies the validity
+        // of the address range during the header check.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(
+                recv_data.audio_base as *mut u8,
+                recv_data.audio_size as usize,
+            )
+        };
+
+        if let Err(e) = self.simple.as_ref().unwrap().read(data) {
+            error!("PulseAudio read data failed: {}", e);
+            self.ss.rate = 0;
+            return false;
+        }
+
+        true
+    }
 }
