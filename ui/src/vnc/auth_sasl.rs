@@ -11,12 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
-    VncError,
+    error::VncError,
+    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
 };
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};
-use log::{error, info};
+use log::info;
 use sasl2_sys::prelude::{
     sasl_conn_t, sasl_dispose, sasl_getprop, sasl_listmech, sasl_security_properties_t,
     sasl_server_init, sasl_server_new, sasl_server_start, sasl_server_step, sasl_setprop,
@@ -117,9 +117,10 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
         if !(MECHNAME_MIN_LEN..MECHNAME_MAX_LEN).contains(&len) {
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "SASL mechname too short or too long"
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "get_mechname_length".to_string(),
+                "SASL mechname too short or too long".to_string()
+            )));
         }
 
         self.update_event_handler(len as usize, ClientIoHandler::get_sasl_mechname);
@@ -156,6 +157,7 @@ impl ClientIoHandler {
         // Unsupported mechanism.
         if security.saslconfig.mech_name.is_empty() {
             return Err(anyhow!(VncError::AuthFailed(
+                "get_sasl_mechname".to_string(),
                 "Unsupported mechanism".to_string()
             )));
         }
@@ -172,8 +174,8 @@ impl ClientIoHandler {
         let len = u32::from_be_bytes(buf);
 
         if len > SASL_DATA_MAX_LEN {
-            error!("SASL start len too large");
             return Err(anyhow!(VncError::AuthFailed(
+                "get_authmessage_length".to_string(),
                 "SASL start len too large".to_string()
             )));
         }
@@ -233,13 +235,15 @@ impl ClientIoHandler {
             // SAFETY: sasl_dispose() is C function. All parameters passed of the
             // function have been checked.
             unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
-            error!("Auth failed!");
-            return Err(anyhow!(VncError::AuthFailed("Auth failed!".to_string())));
+            return Err(anyhow!(VncError::AuthFailed(
+                "client_sasl_auth".to_string(),
+                "Auth failed!".to_string()
+            )));
         }
         if serverout_len > SASL_DATA_MAX_LEN {
             unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
-            error!("SASL data too long");
             return Err(anyhow!(VncError::AuthFailed(
+                "client_sasl_auth".to_string(),
                 "SASL data too long".to_string()
             )));
         }
@@ -312,11 +316,10 @@ impl ClientIoHandler {
             err = sasl_server_init(ptr::null_mut(), appname.as_ptr());
         }
         if err != SASL_OK {
-            error!("SASL_FAIL error code {}", err);
-            return Err(anyhow!(VncError::AuthFailed(format!(
-                "SASL_FAIL error code {}",
-                err
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_server_init".to_string(),
+                format!("SASL_FAIL error code {}", err)
+            )));
         }
         let mut saslconfig = SaslConfig::default();
         unsafe {
@@ -332,11 +335,10 @@ impl ClientIoHandler {
             );
         }
         if err != SASL_OK {
-            error!("SASL_FAIL error code {}", err);
-            return Err(anyhow!(VncError::AuthFailed(format!(
-                "SASL_FAIL error code {}",
-                err
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_server_init".to_string(),
+                format!("SASL_FAIL error code {}", err)
+            )));
         }
         self.server.security_type.borrow_mut().saslconfig = saslconfig;
 
@@ -360,11 +362,10 @@ impl ClientIoHandler {
             );
         }
         if err != SASL_OK {
-            error!("SASL_FAIL error code {}", err);
-            return Err(anyhow!(VncError::AuthFailed(format!(
-                "SASL_FAIL error code {}",
-                err
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "set_ssf_for_sasl".to_string(),
+                format!("SASL_FAIL error code {}", err)
+            )));
         }
 
         // Already using tls, disable ssf in sasl.
@@ -390,11 +391,10 @@ impl ClientIoHandler {
             );
         }
         if err != SASL_OK {
-            error!("SASL_FAIL error code {}", err);
-            return Err(anyhow!(VncError::AuthFailed(format!(
-                "SASL_FAIL error code {}",
-                err
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "set_ssf_for_sasl".to_string(),
+                format!("SASL_FAIL error code {}", err)
+            )));
         }
 
         Ok(())
@@ -425,8 +425,8 @@ impl ClientIoHandler {
             );
         }
         if err != SASL_OK || mechlist.is_null() {
-            error!("SASL_FAIL: no support sasl mechlist");
             return Err(anyhow!(VncError::AuthFailed(
+                "send_mech_list".to_string(),
                 "SASL_FAIL: no support sasl mechlist".to_string()
             )));
         }
@@ -457,19 +457,19 @@ impl ClientIoHandler {
         // that security.saslconfig.sasl_conn is not null.
         unsafe { err = sasl_getprop(security.saslconfig.sasl_conn, SASL_SSF as c_int, &mut val) }
         if err != SASL_OK {
-            error!("sasl_getprop: internal error");
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "sasl_getprop: internal error"
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_check_ssf".to_string(),
+                "sasl_getprop: internal error".to_string()
+            )));
         }
 
         // SAFETY: It can be ensure that the ptr of val is not null.
         let ssf: usize = unsafe { *(val as *const usize) };
         if ssf < MIN_SSF_LENGTH {
-            error!("SASL SSF too weak");
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "SASL SSF too weak"
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_check_ssf".to_string(),
+                "SASL SSF too weak".to_string()
+            )));
         }
 
         security.saslconfig.run_ssf = 1;
@@ -492,14 +492,16 @@ impl ClientIoHandler {
         };
         drop(security);
         if err != SASL_OK {
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "Cannot fetch SASL username"
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_check_authz".to_string(),
+                "Cannot fetch SASL username".to_string()
+            )));
         }
         if val.is_null() {
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "No SASL username set"
-            ))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "sasl_check_authz".to_string(),
+                "No SASL username set".to_string()
+            )));
         }
         // SAFETY: It can ensure that the pointer val is not null.
         let username = unsafe { CStr::from_ptr(val as *const c_char) };
@@ -507,20 +509,13 @@ impl ClientIoHandler {
 
         let server = self.server.clone();
         let security = server.security_type.borrow_mut();
-        if let Some(saslauth) = &security.saslauth {
-            if saslauth.identity != username {
-                return Err(anyhow!(VncError::AuthFailed(String::from(
-                    "No SASL username set"
-                ))));
-            }
-        } else {
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "No SASL username set"
-            ))));
+        match &security.saslauth {
+            Some(saslauth) if saslauth.identity == username => Ok(()),
+            _ => Err(anyhow!(VncError::AuthFailed(
+                "sasl_check_authz".to_string(),
+                "No SASL username set".to_string()
+            ))),
         }
-        drop(security);
-
-        Ok(())
     }
 }
 

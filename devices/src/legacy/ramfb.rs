@@ -20,11 +20,11 @@ use log::error;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
-use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
-use vnc::console::{
+use ui::console::{
     console_init, display_graphic_update, display_replace_surface, DisplayConsole, DisplaySurface,
     HardWareOperations,
 };
+use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;

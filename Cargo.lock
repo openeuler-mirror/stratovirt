@@ -220,9 +220,9 @@ dependencies = [
  "serial_test",
  "sysbus",
  "thiserror",
+ "ui",
  "util",
  "vmm-sys-util",
- "vnc",
 ]
 
 [[package]]
@@ -428,13 +428,13 @@ dependencies = [
  "serde_json",
  "sysbus",
  "thiserror",
+ "ui",
  "usb",
  "util",
  "vfio",
  "vfio-bindings",
  "virtio",
  "vmm-sys-util",
- "vnc",
 ]
 
 [[package]]
@@ -597,9 +597,9 @@ dependencies = [
  "once_cell",
  "sysbus",
  "thiserror",
+ "ui",
  "util",
  "vmm-sys-util",
- "vnc",
 ]
 
 [[package]]
@@ -938,6 +938,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui"
+version = "2.2.0"
+dependencies = [
+ "anyhow",
+ "bitintr",
+ "libc",
+ "log",
+ "machine_manager",
+ "once_cell",
+ "rustls",
+ "rustls-pemfile",
+ "sasl2-sys",
+ "serde_json",
+ "sscanf",
+ "thiserror",
+ "util",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -974,8 +994,8 @@ dependencies = [
  "once_cell",
  "pci",
  "thiserror",
+ "ui",
  "util",
- "vnc",
 ]
 
 [[package]]
@@ -1075,9 +1095,9 @@ dependencies = [
  "serde_json",
  "sysbus",
  "thiserror",
+ "ui",
  "util",
  "vmm-sys-util",
- "vnc",
 ]
 
 [[package]]
@@ -1088,26 +1108,6 @@ checksum = "cc06a16ee8ebf0d9269aed304030b0d20a866b8b3dd3d4ce532596ac567a0d24"
 dependencies = [
  "bitflags",
  "libc",
-]
-
-[[package]]
-name = "vnc"
-version = "2.2.0"
-dependencies = [
- "anyhow",
- "bitintr",
- "libc",
- "log",
- "machine_manager",
- "once_cell",
- "rustls",
- "rustls-pemfile",
- "sasl2-sys",
- "serde_json",
- "sscanf",
- "thiserror",
- "util",
- "vmm-sys-util",
 ]
 
 [[package]]

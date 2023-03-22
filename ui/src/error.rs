@@ -21,8 +21,8 @@ pub enum VncError {
     },
     #[error("Unsupported RFB Protocol Version!")]
     UnsupportRFBProtocolVersion,
-    #[error("Invalid Image Size!")]
-    InvalidImageSize,
+    #[error("Invalid Image Size: width: {0}, height: {0}")]
+    InvalidImageSize(i32, i32),
     #[error("Tcp bind failed: {0}")]
     TcpBindFailed(String),
     #[error("Make connection failed: {0}")]
@@ -33,8 +33,8 @@ pub enum VncError {
     ProtocolMessageFailed(String),
     #[error("Read buf form tcpstream failed: {0}")]
     ReadMessageFailed(String),
-    #[error("Authentication failed: {0}")]
-    AuthFailed(String),
+    #[error("Authentication failed: func: {0} reason: {0}")]
+    AuthFailed(String, String),
     #[error("ParseKeyBoardFailed: {0}")]
     ParseKeyBoardFailed(String),
     #[error("Disconnection")]
