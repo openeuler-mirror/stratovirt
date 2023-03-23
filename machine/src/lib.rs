@@ -25,8 +25,10 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
+#[cfg(not(target_env = "musl"))]
 use devices::misc::scream::Scream;
 use log::warn;
+#[cfg(not(target_env = "musl"))]
 use machine_manager::config::scream::parse_scream;
 use util::file::{lock_file, unlock_file};
 
@@ -1086,6 +1088,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - scream configuration.
+    #[cfg(not(target_env = "musl"))]
     fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
@@ -1297,6 +1300,7 @@ pub trait MachineOps {
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
                 }
+                #[cfg(not(target_env = "musl"))]
                 "ivshmem-scream" => {
                     self.add_ivshmem_scream(vm_config, cfg_args)?;
                 }

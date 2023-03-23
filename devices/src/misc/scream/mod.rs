@@ -10,17 +10,212 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod pulseaudio;
+
 use std::{
+    mem,
     sync::{Arc, Mutex, Weak},
     thread,
 };
 
 use address_space::{GuestAddress, HostMemMapping, Region};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use core::time;
+use log::error;
 
 use super::ivshmem::Ivshmem;
 use pci::{PciBus, PciDevOps};
+use pulseaudio::{PulseStreamData, TAGET_LATENCY_MS};
+
+// A frame of back-end audio data is 50ms, and the next frame of audio data needs
+// to be trained in polling within 50ms. Theoretically, the shorter the polling time,
+// the better. However, if the value is too small, the overhead is high. So take a
+// compromise: 50 * 1000 / 8 us.
+const POLL_DELAY_US: u64 = (TAGET_LATENCY_MS as u64) * 1000 / 8;
+
+const SCREAM_MAGIC: u64 = 0x02032023;
+
+/// The scream device defines the audio directions.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ScreamDirection {
+    Playback,
+    Record,
+}
+
+/// Audio stream header information in the shared memory.
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct ShmemStreamHeader {
+    /// Whether audio is started.
+    pub is_started: u32,
+    /// Current audio chunk position.
+    pub chunk_idx: u16,
+    /// Maximum number of audio chunk.
+    max_chunks: u16,
+    /// Size of a single audio chunk.
+    chunk_size: u32,
+    /// Offset of the first audio data based on shared memory.
+    offset: u32,
+    start_time_ns: i64,
+    /// Audio stream format.
+    fmt: ShmemStreamFmt,
+}
+
+impl ShmemStreamHeader {
+    pub fn check(&self, shmem_size: u64) -> bool {
+        let boundary = self.offset as u64 + self.chunk_size as u64 * self.max_chunks as u64;
+        if boundary > shmem_size {
+            error!(
+                "Guest set bad stream params: offset {:x} max chunk num is {}, chunk size is {}",
+                self.offset, self.max_chunks, self.chunk_size
+            );
+            return false;
+        }
+
+        if self.chunk_idx > self.max_chunks {
+            error!(
+                "The chunk index of stream {} exceeds the maximum number of chunks {}",
+                self.chunk_idx, self.max_chunks
+            );
+            return false;
+        }
+        if self.fmt.channels == 0 || self.fmt.channel_map == 0 {
+            error!(
+                "The fmt channels {} or channel_map {} is invalid",
+                self.fmt.channels, self.fmt.channel_map
+            );
+            return false;
+        }
+        true
+    }
+}
+
+/// First Header data in the shared memory.
+#[repr(C)]
+#[derive(Default)]
+struct ShmemHeader {
+    magic: u64,
+    /// PlayBack audio stream header.
+    play: ShmemStreamHeader,
+    /// Record audio stream header.
+    capt: ShmemStreamHeader,
+}
+
+/// Audio stream format in the shared memory.
+#[repr(C)]
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct ShmemStreamFmt {
+    /// Indicates whether the audio format is changed.
+    pub fmt_generation: u32,
+    /// Audio sampling rate.
+    pub rate: u8,
+    /// Numner of audio sampling bits.
+    pub size: u8,
+    //// Number of audio channel.
+    pub channels: u8,
+    pad: u8,
+    /// Mapping of audio channel.
+    pub channel_map: u32,
+    pad2: u32,
+}
+
+impl Default for ShmemStreamFmt {
+    fn default() -> Self {
+        Self {
+            fmt_generation: 0,
+            rate: 0,
+            size: 0,
+            channels: 2,
+            pad: 0,
+            channel_map: 0x03,
+            pad2: 0,
+        }
+    }
+}
+
+/// Audio stream data structure.
+#[derive(Default)]
+pub struct StreamData {
+    pub fmt: ShmemStreamFmt,
+    chunk_idx: u16,
+    /// Size of the data to be played or recorded.
+    pub audio_size: u32,
+    /// Location of the played or recorded audio data in the shared memory.
+    pub audio_base: u64,
+}
+
+impl StreamData {
+    fn init(&mut self, header: &ShmemStreamHeader) {
+        self.fmt = header.fmt;
+        self.chunk_idx = header.chunk_idx;
+    }
+
+    fn wait_for_ready(
+        &mut self,
+        dir: ScreamDirection,
+        poll_delay_us: u64,
+        hva: u64,
+        shmem_size: u64,
+    ) {
+        // SAFETY: hva is the shared memory base address. It already verifies the validity
+        // of the address range during the scream realize.
+        let mut header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
+
+        let stream_header = match dir {
+            ScreamDirection::Playback => &header.play,
+            ScreamDirection::Record => &header.capt,
+        };
+
+        loop {
+            if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+                while header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+                    thread::sleep(time::Duration::from_millis(10));
+                    header =
+                        &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
+                }
+                self.init(stream_header);
+            }
+
+            // Audio playback requires waiting for the guest to play audio data.
+            if dir == ScreamDirection::Playback && self.chunk_idx == stream_header.chunk_idx {
+                thread::sleep(time::Duration::from_micros(poll_delay_us));
+                continue;
+            }
+
+            if !stream_header.check(shmem_size) {
+                continue;
+            }
+
+            // Guest reformats the audio, and the scream device also needs to be init.
+            if self.fmt != stream_header.fmt {
+                self.init(stream_header);
+                continue;
+            }
+
+            return;
+        }
+    }
+
+    fn update_play_buffer(&mut self, hva: u64) {
+        // SAFETY: hva is the shared memory base address. It already verifies the validity
+        // of the address range during the header check.
+        let header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
+        let play = header.play;
+
+        self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
+
+        // If the difference between the currently processed chunk_idx and the chunk_idx in
+        // the shared memory is greater than 3, the processing of the backend device is too
+        // slow and the backward data is skipped.
+        if (play.chunk_idx + play.max_chunks - self.chunk_idx) % play.max_chunks > 3 {
+            self.chunk_idx = (play.chunk_idx + play.max_chunks - 1) % play.max_chunks;
+        }
+
+        self.audio_size = play.chunk_size;
+        self.audio_base =
+            hva + play.offset as u64 + (play.chunk_size as u64) * (self.chunk_idx as u64);
+    }
+}
 
 /// Scream sound card device structure.
 pub struct Scream {
@@ -33,17 +228,41 @@ impl Scream {
         Self { hva: 0, size }
     }
 
-    fn start(&self) -> Result<()> {
+    fn start_play_thread_fn(&self) -> Result<()> {
+        let hva = self.hva;
+        let shmem_size = self.size;
         thread::Builder::new()
-            .name("scream audio worker".to_string())
-            .spawn(move || loop {
-                thread::sleep(time::Duration::from_millis(50));
+            .name("scream audio play worker".to_string())
+            .spawn(move || {
+                let mut output = PulseStreamData::init("Scream", ScreamDirection::Playback);
+                let mut play_data = StreamData::default();
+
+                loop {
+                    play_data.wait_for_ready(
+                        ScreamDirection::Playback,
+                        POLL_DELAY_US,
+                        hva,
+                        shmem_size,
+                    );
+                    play_data.update_play_buffer(hva);
+
+                    output.send(&play_data);
+                }
             })
             .with_context(|| "Failed to create thread scream")?;
         Ok(())
     }
 
     pub fn realize(mut self, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
+        let header_size = mem::size_of::<ShmemHeader>() as u64;
+        if self.size < header_size {
+            bail!(
+                "The size {} of the shared memory is smaller then audio header {}",
+                self.size,
+                header_size
+            );
+        }
+
         let host_mmap = Arc::new(HostMemMapping::new(
             GuestAddress(0),
             None,
@@ -60,6 +279,6 @@ impl Scream {
         let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
         ivshmem.realize()?;
 
-        self.start()
+        self.start_play_thread_fn()
     }
 }

@@ -212,6 +212,8 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
+ "libpulse-binding",
+ "libpulse-simple-binding",
  "log",
  "machine_manager",
  "migration",
@@ -390,6 +392,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f80d65747a3e43d1596c7c5492d95d5edddaabd45a7fcdb02b95f644164966"
 
 [[package]]
+name = "libpulse-binding"
+version = "2.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1745b20bfc194ac12ef828f144f0ec2d4a7fe993281fa3567a0bd4969aee6890"
+dependencies = [
+ "bitflags",
+ "libc",
+ "libpulse-sys",
+ "num-derive",
+ "num-traits",
+ "winapi",
+]
+
+[[package]]
+name = "libpulse-simple-binding"
+version = "2.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ced94199e6e44133431374e4043f34e1f0697ebfb7b7d6c244a65bfaedf0e31"
+dependencies = [
+ "libpulse-binding",
+ "libpulse-simple-sys",
+ "libpulse-sys",
+]
+
+[[package]]
+name = "libpulse-simple-sys"
+version = "1.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84e423d9c619c908ce9b4916080e65ab586ca55b8c4939379f15e6e72fb43842"
+dependencies = [
+ "libpulse-sys",
+ "pkg-config",
+]
+
+[[package]]
+name = "libpulse-sys"
+version = "1.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2191e6880818d1df4cf72eac8e91dce7a5a52ba0da4b2a5cdafabc22b937eadb"
+dependencies = [
+ "libc",
+ "num-derive",
+ "num-traits",
+ "pkg-config",
+ "winapi",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -516,6 +566,26 @@ dependencies = [
  "util",
  "virtio",
  "vmm-sys-util",
+]
+
+[[package]]
+name = "num-derive"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
