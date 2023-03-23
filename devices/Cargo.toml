@@ -31,6 +31,8 @@ acpi = { path = "../acpi" }
 [target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }
 pci = { path = "../pci" }
+pulse = { version = "2.0", package = "libpulse-binding" }
+psimple = { version = "2.0", package = "libpulse-simple-binding" }
 
 [dev-dependencies]
 serial_test = "0.5.1"
