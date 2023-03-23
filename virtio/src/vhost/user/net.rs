@@ -239,7 +239,9 @@ impl VirtioDevice for Net {
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
-        if ((driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
+        let has_control_queue =
+            (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0);
+        if has_control_queue {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
@@ -268,7 +270,11 @@ impl VirtioDevice for Net {
 
         let features = driver_features & !(1 << VIRTIO_NET_F_MAC);
         client.features = features;
-        client.set_queues(queues);
+        if has_control_queue {
+            client.set_queues(&queues[..(queue_num - 1)]);
+        } else {
+            client.set_queues(queues);
+        }
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
         self.broken.store(false, Ordering::SeqCst);
