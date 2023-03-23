@@ -51,8 +51,6 @@ pub struct Net {
     mem_space: Arc<AddressSpace>,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    /// The notifier events from host.
-    call_events: Vec<Arc<EventFd>>,
     /// EventFd for deactivate control Queue.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -66,7 +64,6 @@ impl Net {
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             mem_space: mem_space.clone(),
             client: None,
-            call_events: Vec::<Arc<EventFd>>::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
@@ -281,11 +278,6 @@ impl VirtioDevice for Net {
 
     /// Set guest notifiers for notifying the guest.
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
-        for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.clone();
-            self.call_events.push(cloned_evt_fd);
-        }
-
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
             None => return Err(anyhow!("Failed to get client for vhost-user net")),
@@ -295,7 +287,6 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.call_events.clear();
         self.clean_up()?;
         self.realize()
     }
@@ -307,7 +298,6 @@ impl VirtioDevice for Net {
 
     fn unrealize(&mut self) -> Result<()> {
         self.delete_event()?;
-        self.call_events.clear();
         self.client = None;
 
         Ok(())
