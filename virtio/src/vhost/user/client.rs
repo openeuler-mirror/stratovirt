@@ -35,7 +35,7 @@ use super::message::{
     VhostUserMsgReq, VhostUserVringAddr, VhostUserVringState,
 };
 use super::sock::VhostUserSock;
-use crate::block::VirtioBlkConfig;
+use crate::device::block::VirtioBlkConfig;
 use crate::virtio_has_feature;
 use crate::VhostUser::message::VhostUserConfig;
 use anyhow::{anyhow, bail, Context, Result};

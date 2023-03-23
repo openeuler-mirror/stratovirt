@@ -21,10 +21,10 @@ use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, wri
 
 use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 
-use crate::xhci::xhci_controller::dma_write_bytes;
-use crate::xhci::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
-use crate::xhci::xhci_ring::XhciTRB;
-use crate::{config::*, UsbError};
+use super::xhci_controller::dma_write_bytes;
+use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
+use super::xhci_ring::XhciTRB;
+use crate::usb::{config::*, UsbError};
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;

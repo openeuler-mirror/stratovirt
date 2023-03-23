@@ -28,13 +28,12 @@ use super::{
 };
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
 use crate::libtest::{test_init, TestState};
-use usb::{
+use devices::usb::{
     config::*,
     hid::{
         HID_GET_IDLE, HID_GET_PROTOCOL, HID_GET_REPORT, HID_SET_IDLE, HID_SET_PROTOCOL,
         HID_SET_REPORT,
     },
-    usb::UsbDeviceRequest,
     xhci::{
         xhci_controller::{
             DwordOrder, XhciEpCtx, XhciInputCtrlCtx, XhciSlotCtx, EP_RUNNING, SLOT_DEFAULT,
@@ -46,6 +45,7 @@ use usb::{
         },
         TRBCCode, TRBType, TRB_SIZE,
     },
+    UsbDeviceRequest,
 };
 
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
