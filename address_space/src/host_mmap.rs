@@ -81,6 +81,10 @@ impl FileBackend {
 
             let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
             if raw_fd < 0 {
+                // SAFETY: fs_cstr obtained by calling CString::into_raw.
+                unsafe {
+                    drop(std::ffi::CString::from_raw(fs_cstr));
+                }
                 return Err(std::io::Error::last_os_error()).with_context(|| {
                     format!("Failed to create file in directory: {} ", file_path)
                 });
@@ -93,9 +97,13 @@ impl FileBackend {
                     std::io::Error::last_os_error()
                 );
             }
+            // SAFETY: fs_cstr obtained by calling CString::into_raw.
+            unsafe {
+                drop(std::ffi::CString::from_raw(fs_cstr));
+            }
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
-            let existed = !path.exists();
+            let not_existed = !path.exists();
             // Open the file, if not exist, create it.
             let file_ret = std::fs::OpenOptions::new()
                 .read(true)
@@ -104,15 +112,20 @@ impl FileBackend {
                 .open(path)
                 .with_context(|| format!("Failed to open file: {}", file_path))?;
 
-            if existed
-                && unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) }
-                    != 0
-            {
-                error!(
-                    "Failed to unlink file \"{}\", error: {}",
-                    file_path,
-                    std::io::Error::last_os_error()
-                );
+            if not_existed {
+                let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
+
+                if unsafe { libc::unlink(fs_cstr) } != 0 {
+                    error!(
+                        "Failed to unlink file \"{}\", error: {}",
+                        file_path,
+                        std::io::Error::last_os_error()
+                    );
+                }
+                // SAFETY: fs_cstr obtained by calling CString::into_raw.
+                unsafe {
+                    drop(std::ffi::CString::from_raw(fs_cstr));
+                }
             }
 
             file_ret
