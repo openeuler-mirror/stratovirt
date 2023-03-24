@@ -673,7 +673,7 @@ impl TestXhciPciDevice {
 
     pub fn init_pci_device(&mut self, pci_slot: u8, pci_fn: u8) {
         let devfn = pci_slot << 3 | pci_fn;
-        assert!(self.find_pci_device(devfn));
+        assert!(self.pci_dev.find_pci_device(devfn));
 
         self.pci_dev.enable();
         self.bar_addr = self.pci_dev.io_map(self.bar_idx);
@@ -1367,18 +1367,6 @@ impl TestXhciPciDevice {
         evt_seg.size = LittleEndian::read_u32(&evt_seg_buf[8..]);
         evt_seg.reserved = LittleEndian::read_u32(&evt_seg_buf[12..]);
         evt_seg
-    }
-
-    fn set_devfn(&mut self, devfn: u8) {
-        self.pci_dev.devfn = devfn;
-    }
-
-    fn find_pci_device(&mut self, devfn: u8) -> bool {
-        self.set_devfn(devfn);
-        if self.pci_dev.config_readw(PCI_VENDOR_ID) == 0xFFFF {
-            return false;
-        }
-        true
     }
 
     fn set_device_context_address(&mut self, slot_id: u32, addr: u64) {

@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod fwcfg;
+pub mod ivshmem;
 pub mod machine;
 pub mod malloc;
 pub mod pci;

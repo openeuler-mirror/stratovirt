@@ -114,7 +114,7 @@ impl TestVirtioPciDev {
 
     pub fn init(&mut self, pci_slot: u8, pci_fn: u8) {
         let devfn = pci_slot << 3 | pci_fn;
-        assert!(self.find_pci_device(devfn));
+        assert!(self.pci_dev.find_pci_device(devfn));
 
         let device_type = self.pci_device_type_probe().unwrap_or(0);
         self.virtio_dev.device_type = device_type;
@@ -125,11 +125,6 @@ impl TestVirtioPciDev {
     fn enable(&mut self) {
         self.pci_dev.enable();
         self.bar = self.pci_dev.io_map(self.bar_idx);
-    }
-
-    fn find_pci_device(&mut self, devfn: u8) -> bool {
-        self.pci_dev.devfn = devfn;
-        self.pci_dev.config_readw(PCI_VENDOR_ID) != 0xFFFF
     }
 
     fn find_structure(
