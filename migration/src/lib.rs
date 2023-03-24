@@ -83,7 +83,7 @@ pub fn migration_unix_mode(path: String) -> Response {
                 error!("Failed to send migration: {:?}", e);
                 let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
-                    .map_err(|e| error!("{}", e));
+                    .map_err(|e| error!("{:?}", e));
             }
         })
     {
@@ -108,10 +108,10 @@ pub fn migration_tcp_mode(path: String) -> Response {
             let time_out = Some(Duration::from_secs(30));
             _sock
                 .set_read_timeout(time_out)
-                .unwrap_or_else(|e| error!("{}", e));
+                .unwrap_or_else(|e| error!("{:?}", e));
             _sock
                 .set_write_timeout(time_out)
-                .unwrap_or_else(|e| error!("{}", e));
+                .unwrap_or_else(|e| error!("{:?}", e));
             _sock
         }
         Err(e) => {
@@ -129,7 +129,7 @@ pub fn migration_tcp_mode(path: String) -> Response {
                 error!("Failed to send migration: {:?}", e);
                 let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
-                    .map_err(|e| error!("{}", e));
+                    .map_err(|e| error!("{:?}", e));
             }
         })
     {

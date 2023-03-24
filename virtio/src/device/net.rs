@@ -283,7 +283,7 @@ impl CtrlInfo {
                 let mut mac = [0; MAC_ADDR_LEN];
                 *data_iovec =
                     get_buf_and_discard(mem_space, data_iovec, &mut mac).unwrap_or_else(|e| {
-                        error!("Failed to get MAC address, error is {}", e);
+                        error!("Failed to get MAC address, error is {:?}", e);
                         ack = VIRTIO_NET_ERR;
                         Vec::new()
                     });
@@ -301,7 +301,7 @@ impl CtrlInfo {
                 ack = self
                     .set_mac_table(mem_space, data_iovec)
                     .unwrap_or_else(|e| {
-                        error!("Failed to get Unicast Mac address, error is {}", e);
+                        error!("Failed to get Unicast Mac address, error is {:?}", e);
                         VIRTIO_NET_ERR
                     });
             }
@@ -325,7 +325,7 @@ impl CtrlInfo {
 
         *data_iovec = get_buf_and_discard(mem_space, data_iovec, vid.as_mut_bytes())
             .unwrap_or_else(|e| {
-                error!("Failed to get vlan id, error is {}", e);
+                error!("Failed to get vlan id, error is {:?}", e);
                 ack = VIRTIO_NET_ERR;
                 Vec::new()
             });
@@ -368,7 +368,7 @@ impl CtrlInfo {
             let mut queue_pairs: u16 = 0;
             *data_iovec = get_buf_and_discard(mem_space, data_iovec, queue_pairs.as_mut_bytes())
                 .unwrap_or_else(|e| {
-                    error!("Failed to get queue pairs {}", e);
+                    error!("Failed to get queue pairs {:?}", e);
                     ack = VIRTIO_NET_ERR;
                     Vec::new()
                 });
@@ -564,7 +564,7 @@ impl NetCtrlHandler {
                         .unwrap()
                         .handle_rx_mode(&self.mem_space, ctrl_hdr.cmd, &mut data_iovec)
                         .unwrap_or_else(|e| {
-                            error!("Failed to handle rx mode, error is {}", e);
+                            error!("Failed to handle rx mode, error is {:?}", e);
                             VIRTIO_NET_ERR
                         });
                 }
@@ -638,7 +638,7 @@ impl EventNotifierHelper for NetCtrlHandler {
                 return None;
             }
             locked_net_io.handle_ctrl().unwrap_or_else(|e| {
-                error!("Failed to handle ctrl queue, error is {}.", e);
+                error!("Failed to handle ctrl queue, error is {:?}.", e);
                 report_virtio_error(
                     locked_net_io.interrupt_cb.clone(),
                     locked_net_io.driver_features,
@@ -725,10 +725,10 @@ impl NetIoHandler {
                 Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
                 Err(e) => {
                     // When the backend tap device is abnormally removed, read return EBADFD.
-                    error!("Failed to read tap: {}", e);
+                    error!("Failed to read tap: {:?}", e);
                 }
             }
-            error!("Failed to call readv for net handle_rx: {}", e);
+            error!("Failed to call readv for net handle_rx: {:?}", e);
         }
 
         size
@@ -862,7 +862,7 @@ impl NetIoHandler {
                     ErrorKind::Interrupted => continue,
                     ErrorKind::WouldBlock => return -1_i8,
                     // Ignore other errors which can not be handled.
-                    _ => error!("Failed to call writev for net handle_tx: {}", e),
+                    _ => error!("Failed to call writev for net handle_tx: {:?}", e),
                 }
             }
             break;
@@ -937,7 +937,7 @@ impl NetIoHandler {
         locked_net_io.tap = match locked_net_io.receiver.recv() {
             Ok(tap) => tap,
             Err(e) => {
-                error!("Failed to receive the tap {}", e);
+                error!("Failed to receive the tap {:?}", e);
                 None
             }
         };

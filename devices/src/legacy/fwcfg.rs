@@ -870,10 +870,7 @@ fn read_bytes(
         0..=7 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
             Ok(val) => val,
             Err(e) => {
-                error!(
-                    "{}",
-                    format!("Failed to read from FwCfg data register, error is {:?}", e)
-                );
+                error!("Failed to read from FwCfg data register, error is {:?}", e);
                 return false;
             }
         },
@@ -896,10 +893,7 @@ fn read_bytes(
             {
                 Ok(val) => val,
                 Err(e) => {
-                    error!(
-                        "{}",
-                        format!("Failed to handle FwCfg DMA-read, error is {:?}", e)
-                    );
+                    error!("Failed to handle FwCfg DMA-read, error is {:?}", e);
                     return false;
                 }
             }
@@ -1052,10 +1046,7 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
             }
             match fwcfg_arch.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
                 Err(e) => {
-                    error!(
-                        "{}",
-                        format!("Failed to handle FwCfg DMA-read, error is {:?}", e)
-                    );
+                    error!("Failed to handle FwCfg DMA-read, error is {:?}", e);
                     return false;
                 }
                 Ok(val) => val,
@@ -1122,10 +1113,7 @@ impl SysBusDevOps for FwCfgIO {
                     _ => 0,
                 };
                 if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {
-                    error!(
-                        "{}",
-                        format!("Failed to handle FwCfg DMA-write, error is {:?}", e)
-                    );
+                    error!("Failed to handle FwCfg DMA-write, error is {:?}", e);
                     return false;
                 }
             }

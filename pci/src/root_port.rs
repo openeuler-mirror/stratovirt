@@ -414,7 +414,7 @@ impl PciDevOps for RootPort {
         if (!old_br_ctl & new_br_ctl & BRIDGE_CTL_SEC_BUS_RESET) != 0 {
             if let Err(e) = self.reset(true) {
                 error!(
-                    "Failed to reset child devices under root port {}: {}",
+                    "Failed to reset child devices under root port {}: {:?}",
                     self.name, e
                 )
             }

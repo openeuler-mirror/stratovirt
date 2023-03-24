@@ -141,7 +141,7 @@ impl InputReceiver for ConsoleHandler {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
         {
             error!(
-                "Failed to trigger interrupt for console, int-type {:?} {:?} ",
+                "Failed to trigger interrupt for console, int-type {:?} {:?}",
                 VirtioInterruptType::Vring,
                 e
             )

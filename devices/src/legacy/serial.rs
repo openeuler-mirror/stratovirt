@@ -191,7 +191,7 @@ impl Serial {
         if iir != UART_IIR_NO_INT {
             if let Some(evt) = self.interrupt_evt() {
                 if let Err(e) = evt.write(1) {
-                    error!("serial: failed to write interrupt eventfd ({}).", e);
+                    error!("serial: failed to write interrupt eventfd ({:?}).", e);
                 }
                 return;
             }

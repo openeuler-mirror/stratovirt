@@ -114,7 +114,7 @@ impl Ged {
         if let Some(evt_fd) = self.interrupt_evt() {
             evt_fd
                 .write(1)
-                .unwrap_or_else(|e| error!("ged: failed to write interrupt eventfd ({}).", e));
+                .unwrap_or_else(|e| error!("ged: failed to write interrupt eventfd ({:?}).", e));
         }
     }
 }

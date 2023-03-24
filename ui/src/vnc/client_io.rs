@@ -658,11 +658,11 @@ impl ClientIoHandler {
             }
             ClientMsg::KeyEvent => {
                 self.key_envent()
-                    .unwrap_or_else(|e| error!("Key event error: {}", e));
+                    .unwrap_or_else(|e| error!("Key event error: {:?}", e));
             }
             ClientMsg::PointerEvent => {
                 self.point_event()
-                    .unwrap_or_else(|e| error!("Point event error: {}", e));
+                    .unwrap_or_else(|e| error!("Point event error: {:?}", e));
             }
             ClientMsg::ClientCutText => {
                 self.client_cut_event();
@@ -1063,7 +1063,7 @@ impl EventNotifierHelper for ClientIoHandler {
                 client.conn_state.lock().unwrap().dis_conn = true;
             } else if event & EventSet::IN == EventSet::IN {
                 if let Err(e) = locked_client_io.client_handle_read() {
-                    error!("{}", e);
+                    error!("{:?}", e);
                     client.conn_state.lock().unwrap().dis_conn = true;
                 }
             }
@@ -1123,7 +1123,7 @@ impl EventNotifierHelper for ClientIoHandler {
             let notifiers = locked_client_io.disconn_evt_handler();
             // Shutdown stream.
             if let Err(e) = locked_client_io.stream.shutdown(Shutdown::Both) {
-                error!("Shutdown stream failed: {}", e);
+                error!("Shutdown stream failed: {:?}", e);
             }
             drop(locked_client_io);
             server.client_handlers.lock().unwrap().remove(&addr);

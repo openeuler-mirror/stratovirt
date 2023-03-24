@@ -146,7 +146,7 @@ impl PL011 {
         if flag & irq_mask != 0 {
             if let Err(e) = self.interrupt_evt.write(1) {
                 error!(
-                    "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {}",
+                    "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {:?}",
                     flag, e,
                 )
             }
@@ -318,10 +318,10 @@ impl SysBusDevOps for PL011 {
                 if let Some(output) = &mut self.chardev.lock().unwrap().output {
                     let mut locked_output = output.lock().unwrap();
                     if let Err(e) = locked_output.write_all(&[ch]) {
-                        error!("Failed to write to pl011 output fd, error is {}", e);
+                        error!("Failed to write to pl011 output fd, error is {:?}", e);
                     }
                     if let Err(e) = locked_output.flush() {
-                        error!("Failed to flush pl011, error is {}", e);
+                        error!("Failed to flush pl011, error is {:?}", e);
                     }
                 } else {
                     debug!("Failed to get output fd");

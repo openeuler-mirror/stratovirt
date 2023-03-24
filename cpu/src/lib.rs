@@ -336,11 +336,8 @@ impl CPUInterface for CPU {
             .spawn(move || {
                 if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
                     error!(
-                        "{}",
-                        format!(
-                            "Some error occurred in cpu{} thread: {:?}",
-                            cpu_thread_worker.thread_cpu.id, e
-                        )
+                        "Some error occurred in cpu{} thread: {:?}",
+                        cpu_thread_worker.thread_cpu.id, e
                     );
                 }
             })
@@ -632,7 +629,7 @@ impl CPUThreadWorker {
                             #[cfg(target_arch = "x86_64")]
                             &vcpu.caps,
                         ) {
-                            error!("Failed to reset vcpu state: {}", e.to_string())
+                            error!("Failed to reset vcpu state: {:?}", e)
                         }
                     });
                 }
@@ -682,10 +679,7 @@ impl CPUThreadWorker {
     fn handle(&self, thread_barrier: Arc<Barrier>) -> Result<()> {
         self.init_local_thread_vcpu();
         if let Err(e) = Self::init_signals() {
-            error!(
-                "{}",
-                format!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e)
-            );
+            error!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e);
         }
 
         self.thread_cpu.set_tid();

@@ -195,7 +195,7 @@ impl UsbDeviceOps for UsbTablet {
                 }
             }
             Err(e) => {
-                error!("Tablet descriptor error {}", e);
+                error!("Tablet descriptor error {:?}", e);
                 packet.status = UsbPacketStatus::Stall;
                 return;
             }

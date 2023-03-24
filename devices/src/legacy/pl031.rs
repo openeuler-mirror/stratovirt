@@ -127,7 +127,7 @@ impl PL031 {
     fn inject_interrupt(&self) {
         if let Some(evt_fd) = self.interrupt_evt() {
             if let Err(e) = evt_fd.write(1) {
-                error!("pl031: failed to write interrupt eventfd ({}).", e);
+                error!("pl031: failed to write interrupt eventfd ({:?}).", e);
             }
             return;
         }

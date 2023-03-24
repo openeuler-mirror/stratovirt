@@ -1303,7 +1303,7 @@ impl XhciDevice {
         let epctx = match self.get_endpoint_ctx(slot_id, ep_id) {
             Ok(epctx) => epctx,
             Err(e) => {
-                error!("Kick endpoint error: {}", e);
+                error!("Kick endpoint error: {:?}", e);
                 // No need to return the error, just ignore it.
                 return Ok(());
             }
@@ -1443,7 +1443,7 @@ impl XhciDevice {
     /// Control Transfer, TRBs include Setup, Data(option), Status.
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if let Err(e) = self.check_ctrl_transfer(xfer) {
-            error!("Failed to check control transfer {}", e);
+            error!("Failed to check control transfer {:?}", e);
             xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }
@@ -1452,7 +1452,7 @@ impl XhciDevice {
         xfer.in_xfer =
             bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
         if let Err(e) = self.setup_usb_packet(xfer) {
-            error!("Failed to setup packet when transfer control {}", e);
+            error!("Failed to setup packet when transfer control {:?}", e);
             xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }
@@ -1500,7 +1500,7 @@ impl XhciDevice {
             warn!("Unhandled ep_type {:?}", epctx.ep_type);
         }
         if let Err(e) = self.setup_usb_packet(xfer) {
-            error!("Failed to setup packet when transfer data {}", e);
+            error!("Failed to setup packet when transfer data {:?}", e);
             xfer.status = TRBCCode::TrbError;
             return self.report_transfer_error(xfer);
         }

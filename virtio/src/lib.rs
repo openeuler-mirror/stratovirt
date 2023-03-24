@@ -445,7 +445,7 @@ pub fn report_virtio_error(
     if virtio_has_feature(features, VIRTIO_F_VERSION_1) {
         interrupt_cb(&VirtioInterruptType::Config, None, true).unwrap_or_else(|e| {
             error!(
-                "Failed to trigger interrupt for virtio error, error is {}",
+                "Failed to trigger interrupt for virtio error, error is {:?}",
                 e
             )
         });
