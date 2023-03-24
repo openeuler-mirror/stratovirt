@@ -272,49 +272,41 @@ impl VirtioDevice for ScsiCntlr {
         }
 
         let ctrl_queue = queues[0].clone();
-        if ctrl_queue.lock().unwrap().is_enabled() {
-            let ctrl_queue_evt = queue_evts[0].clone();
-            let ctrl_handler = ScsiCtrlHandler {
-                queue: ctrl_queue,
-                queue_evt: ctrl_queue_evt,
-                mem_space: mem_space.clone(),
-                interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
-                device_broken: self.broken.clone(),
-            };
-            let notifiers =
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
-            register_event_helper(
-                notifiers,
-                self.config.iothread.as_ref(),
-                &mut self.deactivate_evts,
-            )?;
-        }
+        let ctrl_queue_evt = queue_evts[0].clone();
+        let ctrl_handler = ScsiCtrlHandler {
+            queue: ctrl_queue,
+            queue_evt: ctrl_queue_evt,
+            mem_space: mem_space.clone(),
+            interrupt_cb: interrupt_cb.clone(),
+            driver_features: self.state.driver_features,
+            device_broken: self.broken.clone(),
+        };
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+        register_event_helper(
+            notifiers,
+            self.config.iothread.as_ref(),
+            &mut self.deactivate_evts,
+        )?;
 
         let event_queue = queues[1].clone();
-        if event_queue.lock().unwrap().is_enabled() {
-            let event_queue_evt = queue_evts[1].clone();
-            let event_handler = ScsiEventHandler {
-                _queue: event_queue,
-                queue_evt: event_queue_evt,
-                _mem_space: mem_space.clone(),
-                _interrupt_cb: interrupt_cb.clone(),
-                _driver_features: self.state.driver_features,
-                device_broken: self.broken.clone(),
-            };
-            let notifiers =
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
-            register_event_helper(
-                notifiers,
-                self.config.iothread.as_ref(),
-                &mut self.deactivate_evts,
-            )?;
-        }
+        let event_queue_evt = queue_evts[1].clone();
+        let event_handler = ScsiEventHandler {
+            _queue: event_queue,
+            queue_evt: event_queue_evt,
+            _mem_space: mem_space.clone(),
+            _interrupt_cb: interrupt_cb.clone(),
+            _driver_features: self.state.driver_features,
+            device_broken: self.broken.clone(),
+        };
+        let notifiers =
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
+        register_event_helper(
+            notifiers,
+            self.config.iothread.as_ref(),
+            &mut self.deactivate_evts,
+        )?;
 
         for (index, cmd_queue) in queues[2..].iter().enumerate() {
-            if !cmd_queue.lock().unwrap().is_enabled() {
-                continue;
-            }
             let bus = self.bus.as_ref().unwrap();
             let cmd_handler = ScsiCmdHandler {
                 scsibus: bus.clone(),

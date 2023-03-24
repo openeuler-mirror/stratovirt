@@ -30,14 +30,13 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
-use crate::{check_queue_enabled, virtio_has_feature};
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
-    CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM,
-    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt,
+    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -257,7 +256,6 @@ impl VirtioDevice for Net {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
-            check_queue_enabled("vhost kernel net", queues, queue_num)?;
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
@@ -281,11 +279,6 @@ impl VirtioDevice for Net {
 
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
-            if !queues[index * 2].lock().unwrap().is_enabled()
-                || !queues[index * 2 + 1].lock().unwrap().is_enabled()
-            {
-                continue;
-            }
             let mut host_notifies = Vec::new();
             let backend = match &self.backends {
                 None => return Err(anyhow!("Failed to get backend for vhost net")),
