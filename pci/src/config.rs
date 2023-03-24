@@ -561,7 +561,7 @@ impl PciConfig {
 
         let mut bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
         if self.config[HEADER_TYPE as usize] == HEADER_TYPE_BRIDGE {
-            bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
+            bar_num = BAR_NUM_MAX_FOR_BRIDGE;
         }
         if ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(
