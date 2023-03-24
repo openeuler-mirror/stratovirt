@@ -22,6 +22,7 @@ use pulse::{
     time::MicroSeconds,
 };
 
+use super::AudioInterface;
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData};
 
 const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
@@ -223,8 +224,10 @@ impl PulseStreamData {
             );
         }
     }
+}
 
-    pub fn send(&mut self, recv_data: &StreamData) {
+impl AudioInterface for PulseStreamData {
+    fn send(&mut self, recv_data: &StreamData) {
         self.check_fmt_update(recv_data);
 
         if self.ss.rate == 0 || self.simple.is_none() {
@@ -248,7 +251,7 @@ impl PulseStreamData {
         }
     }
 
-    pub fn receive(&mut self, recv_data: &StreamData) -> bool {
+    fn receive(&mut self, recv_data: &StreamData) -> bool {
         self.check_fmt_update(recv_data);
 
         if self.simple.is_none() {
