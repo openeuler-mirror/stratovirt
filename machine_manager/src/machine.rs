@@ -19,8 +19,9 @@ use strum::VariantNames;
 use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
-    DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
-    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists, UpdateRegionArgument,
+    DeviceProps, Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
+    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
+    TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -435,6 +436,13 @@ pub trait DeviceInterface {
     // Send event to input device for testing only.
     fn input_event(&self, _k: String, _v: String) -> Response {
         Response::create_empty_response()
+    }
+
+    fn human_monitor_command(&self, _args: HumanMonitorCmdArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("human-monitor-command is not supported yet".to_string()),
+            None,
+        )
     }
 }
 

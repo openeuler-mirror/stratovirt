@@ -399,6 +399,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "human-monitor-command")]
+    human_monitor_command {
+        arguments: human_monitor_command,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -2141,6 +2147,28 @@ impl Command for input_event {
     }
 }
 
+/// human-monitor-command
+///
+/// # Arguments
+///
+/// * `command_line` - the command line will be executed.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "human-monitor-command",
+///      "arguments": { "command-line": "drive_add dummy
+///      file=/path/to/file,format=raw,if=none,id=drive-id" }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct human_monitor_command {
+    #[serde(rename = "command-line")]
+    pub command_line: String,
+}
+pub type HumanMonitorCmdArgument = human_monitor_command;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2684,6 +2712,41 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_human_monitor_command() {
+        // Normal test.
+        let json_msg = r#"
+        {
+            "execute": "human-monitor-command" ,
+            "arguments": {
+                "command-line": "drive_add dummy file=/path/to/file,format=raw,if=none,id=drive-id"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+
+        // Abnormal test with invalid arguments.
+        let json_msg = r#"
+        {
+            "execute": "human-monitor-command" ,
+            "arguments": {
+                "invalid_key": "invalid_value"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown field `invalid_key`, expected `command-line`"#;
         assert!(err_msg.contains(part_msg));
     }
 }

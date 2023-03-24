@@ -1602,6 +1602,73 @@ impl DeviceInterface for StdMachine {
             ),
         }
     }
+
+    fn human_monitor_command(&self, args: qmp_schema::HumanMonitorCmdArgument) -> Response {
+        let cmd_args: Vec<&str> = args.command_line.split(' ').collect();
+        match cmd_args[0] {
+            "drive_add" => {
+                // The drive_add command has three arguments splited by space:
+                // "drive_add dummy file=/path/to/file,format=raw,if=none,id=drive-id..."
+                // The 'dummy' here is a placeholder for pci address which is not needed for drive.
+                if cmd_args.len() != 3 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                let drive_cfg = match self
+                    .get_vm_config()
+                    .lock()
+                    .unwrap()
+                    .add_block_drive(cmd_args[2])
+                {
+                    Ok(cfg) => cfg,
+                    Err(ref e) => {
+                        return Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                            None,
+                        );
+                    }
+                };
+                if let Err(e) = self.register_drive_file(
+                    &drive_cfg.path_on_host,
+                    drive_cfg.read_only,
+                    drive_cfg.direct,
+                ) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+            }
+            "drive_del" => {
+                // The drive_del command has two arguments splited by space:
+                // "drive_del drive-id"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                return self.blockdev_del(cmd_args[1].to_string());
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Unsupported command: {}",
+                        cmd_args[0]
+                    )),
+                    None,
+                );
+            }
+        }
+        Response::create_empty_response()
+    }
 }
 
 #[cfg(not(target_env = "musl"))]
