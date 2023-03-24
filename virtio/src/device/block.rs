@@ -542,10 +542,6 @@ impl BlockIoHandler {
         let mut done = false;
         let start_time = Instant::now();
 
-        if !self.queue.lock().unwrap().is_enabled() {
-            done = true;
-            return Ok(done);
-        }
         while self
             .queue
             .lock()

@@ -22,12 +22,10 @@ use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
 
 use crate::{
-    iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
-    Element, VirtioError,
-};
-use crate::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
+    check_queue_enabled, iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error,
+    virtio_has_feature, ElemIovec, Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VirtioNetHdr, VirtioTrace, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
     VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
@@ -888,6 +886,7 @@ impl NetIoHandler {
         if !queue.is_enabled() {
             return Ok(());
         }
+
         let mut tx_packets = 0;
         loop {
             let elem = queue
@@ -1552,6 +1551,7 @@ impl VirtioDevice for Net {
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+            check_queue_enabled("net", queues, queue_num)?;
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 

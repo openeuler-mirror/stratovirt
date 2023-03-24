@@ -537,13 +537,15 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, _) in self.queues.iter().enumerate() {
-            self.set_vring_enable(queue_index, true).with_context(|| {
-                format!(
-                    "Failed to set vring enable for vhost-user, index: {}",
-                    queue_index,
-                )
-            })?;
+        for (queue_index, queue) in self.queues.iter().enumerate() {
+            let enabled = queue.lock().unwrap().is_enabled();
+            self.set_vring_enable(queue_index, enabled)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring enable for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
         }
 
         Ok(())
