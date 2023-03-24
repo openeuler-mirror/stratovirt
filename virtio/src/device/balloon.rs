@@ -20,7 +20,6 @@ use std::{
     time::Duration,
 };
 
-use crate::report_virtio_error;
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
@@ -47,8 +46,9 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
-    error::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    check_queue_enabled, error::*, report_virtio_error, virtio_has_feature, Element, Queue,
+    VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -1104,58 +1104,40 @@ impl VirtioDevice for Balloon {
     ) -> Result<()> {
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
-                QUEUE_NUM_BALLOON,
+                self.queue_num(),
                 queues.len()
             )));
         }
 
+        check_queue_enabled("balloon", queues, 0)?;
+        check_queue_enabled("balloon", queues, 1)?;
         let inf_queue = queues[0].clone();
         let inf_evt = queue_evts[0].clone();
         let def_queue = queues[1].clone();
         let def_evt = queue_evts[1].clone();
 
-        let mut current_queue_index = 1;
-        let (report_queue, report_evt) =
-            if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING)
-                && current_queue_index + 1 < self.queue_num()
-                && !queue_evts.is_empty()
-            {
-                current_queue_index += 1;
-                (
-                    Some(queues[current_queue_index].clone()),
-                    Some(queue_evts[current_queue_index].clone()),
-                )
-            } else {
-                if current_queue_index + 1 >= self.queue_num() {
-                    error!(
-                        "Queue index: {} is invalid, correct index is from 0 to {}!",
-                        current_queue_index + 1,
-                        self.queue_num()
-                    )
-                }
-                (None, None)
-            };
+        // Get report queue and eventfd.
+        let mut queue_index = 2;
+        let mut report_queue = None;
+        let mut report_evt = None;
+        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
+            if queues[queue_index].lock().unwrap().is_enabled() {
+                report_queue = Some(queues[queue_index].clone());
+                report_evt = Some(queue_evts[queue_index].clone());
+            }
+            queue_index += 1;
+        }
 
-        let (msg_queue, msg_evt) =
-            if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ)
-                && current_queue_index + 1 < self.queue_num()
-                && !queue_evts.is_empty()
-            {
-                current_queue_index += 1;
-                (
-                    Some(queues[current_queue_index].clone()),
-                    Some(queue_evts[current_queue_index].clone()),
-                )
-            } else {
-                if current_queue_index + 1 >= self.queue_num() {
-                    error!(
-                        "Queue index: {} is invalid, correct index is from 0 to {}!",
-                        current_queue_index + 1,
-                        self.queue_num()
-                    )
-                }
-                (None, None)
-            };
+        // Get msg queue and eventfd.
+        let mut msg_queue = None;
+        let mut msg_evt = None;
+        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ)
+            && queues[queue_index].lock().unwrap().is_enabled()
+        {
+            msg_queue = Some(queues[queue_index].clone());
+            msg_evt = Some(queue_evts[queue_index].clone());
+        }
+
         self.interrupt_cb = Some(interrupt_cb.clone());
         let handler = BalloonIoHandler {
             driver_features: self.driver_features,

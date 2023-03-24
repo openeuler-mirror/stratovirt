@@ -25,11 +25,10 @@ use crate::ScsiBus::{
     virtio_scsi_get_lun, ScsiBus, ScsiRequest, ScsiSense, CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD,
     SCSI_SENSE_INVALID_OPCODE,
 };
-use crate::VirtioError;
 use crate::{
-    report_virtio_error, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_SCSI_F_CHANGE,
-    VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
+    report_virtio_error, Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use log::{debug, error, info};
@@ -277,41 +276,49 @@ impl VirtioDevice for ScsiCntlr {
         }
 
         let ctrl_queue = queues[0].clone();
-        let ctrl_queue_evt = queue_evts[0].clone();
-        let ctrl_handler = ScsiCtrlHandler {
-            queue: ctrl_queue,
-            queue_evt: ctrl_queue_evt,
-            mem_space: mem_space.clone(),
-            interrupt_cb: interrupt_cb.clone(),
-            driver_features: self.state.driver_features,
-            device_broken: self.broken.clone(),
-        };
-        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
-        register_event_helper(
-            notifiers,
-            self.config.iothread.as_ref(),
-            &mut self.deactivate_evts,
-        )?;
+        if ctrl_queue.lock().unwrap().is_enabled() {
+            let ctrl_queue_evt = queue_evts[0].clone();
+            let ctrl_handler = ScsiCtrlHandler {
+                queue: ctrl_queue,
+                queue_evt: ctrl_queue_evt,
+                mem_space: mem_space.clone(),
+                interrupt_cb: interrupt_cb.clone(),
+                driver_features: self.state.driver_features,
+                device_broken: self.broken.clone(),
+            };
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+            register_event_helper(
+                notifiers,
+                self.config.iothread.as_ref(),
+                &mut self.deactivate_evts,
+            )?;
+        }
 
         let event_queue = queues[1].clone();
-        let event_queue_evt = queue_evts[1].clone();
-        let event_handler = ScsiEventHandler {
-            _queue: event_queue,
-            queue_evt: event_queue_evt,
-            _mem_space: mem_space.clone(),
-            _interrupt_cb: interrupt_cb.clone(),
-            _driver_features: self.state.driver_features,
-            device_broken: self.broken.clone(),
-        };
-        let notifiers =
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
-        register_event_helper(
-            notifiers,
-            self.config.iothread.as_ref(),
-            &mut self.deactivate_evts,
-        )?;
+        if event_queue.lock().unwrap().is_enabled() {
+            let event_queue_evt = queue_evts[1].clone();
+            let event_handler = ScsiEventHandler {
+                _queue: event_queue,
+                queue_evt: event_queue_evt,
+                _mem_space: mem_space.clone(),
+                _interrupt_cb: interrupt_cb.clone(),
+                _driver_features: self.state.driver_features,
+                device_broken: self.broken.clone(),
+            };
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
+            register_event_helper(
+                notifiers,
+                self.config.iothread.as_ref(),
+                &mut self.deactivate_evts,
+            )?;
+        }
 
         for (index, cmd_queue) in queues[2..].iter().enumerate() {
+            if !cmd_queue.lock().unwrap().is_enabled() {
+                continue;
+            }
             let bus = self.bus.as_ref().unwrap();
             let cmd_handler = ScsiCmdHandler {
                 scsibus: bus.clone(),
@@ -649,10 +656,6 @@ impl ScsiCtrlHandler {
     }
 
     fn handle_ctrl_request(&mut self) -> Result<()> {
-        if !self.queue.lock().unwrap().is_enabled() {
-            return Ok(());
-        }
-
         loop {
             let mut queue = self.queue.lock().unwrap();
             let elem = queue
@@ -894,10 +897,6 @@ impl ScsiCmdHandler {
     }
 
     fn handle_cmd_request(&mut self) -> Result<()> {
-        if !self.queue.lock().unwrap().is_enabled() {
-            return Ok(());
-        }
-
         loop {
             let mut queue = self.queue.lock().unwrap();
             let elem = queue

@@ -62,6 +62,8 @@ use util::aio::mem_to_buf;
 use util::num_ops::write_u32;
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::VirtioError::VirtQueueNotEnabled;
+
 /// Check if the bit of features is configured.
 pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {
     feature & (1 << fbit) != 0
@@ -433,6 +435,17 @@ pub trait VirtioTrace {
             device
         );
     }
+}
+
+pub fn check_queue_enabled(
+    dev_name: &str,
+    queues: &[Arc<Mutex<Queue>>],
+    index: usize,
+) -> Result<()> {
+    if !queues[index].lock().unwrap().is_enabled() {
+        return Err(anyhow!(VirtQueueNotEnabled(dev_name.to_string(), index)));
+    }
+    Ok(())
 }
 
 /// The function used to inject interrupt to guest when encounter an virtio error.

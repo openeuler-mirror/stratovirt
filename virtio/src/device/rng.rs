@@ -39,8 +39,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
 use crate::{
-    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
+    check_queue_enabled, ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -85,10 +85,6 @@ impl RngHandler {
         self.trace_request("Rng".to_string(), "to IO".to_string());
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
-
-        if !queue_lock.is_enabled() {
-            return Ok(());
-        }
 
         while let Ok(elem) = queue_lock
             .vring
@@ -323,6 +319,7 @@ impl VirtioDevice for Rng {
         queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        check_queue_enabled("rng", queues, 0)?;
         let handler = RngHandler {
             queue: queues[0].clone(),
             queue_evt: queue_evts[0].clone(),
