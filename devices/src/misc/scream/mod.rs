@@ -39,7 +39,7 @@ use pulseaudio::{PulseStreamData, TAGET_LATENCY_MS};
 // compromise: 50 * 1000 / 8 us.
 const POLL_DELAY_US: u64 = (TAGET_LATENCY_MS as u64) * 1000 / 8;
 
-const SCREAM_MAGIC: u64 = 0x02032023;
+pub const SCREAM_MAGIC: u64 = 0x02032023;
 
 /// The scream device defines the audio directions.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -51,20 +51,20 @@ pub enum ScreamDirection {
 /// Audio stream header information in the shared memory.
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-struct ShmemStreamHeader {
+pub struct ShmemStreamHeader {
     /// Whether audio is started.
     pub is_started: u32,
     /// Current audio chunk position.
     pub chunk_idx: u16,
     /// Maximum number of audio chunk.
-    max_chunks: u16,
+    pub max_chunks: u16,
     /// Size of a single audio chunk.
-    chunk_size: u32,
+    pub chunk_size: u32,
     /// Offset of the first audio data based on shared memory.
-    offset: u32,
+    pub offset: u32,
     start_time_ns: i64,
     /// Audio stream format.
-    fmt: ShmemStreamFmt,
+    pub fmt: ShmemStreamFmt,
 }
 
 impl ShmemStreamHeader {
@@ -106,7 +106,7 @@ impl ShmemStreamHeader {
 /// First Header data in the shared memory.
 #[repr(C)]
 #[derive(Default)]
-struct ShmemHeader {
+pub struct ShmemHeader {
     magic: u64,
     /// PlayBack audio stream header.
     play: ShmemStreamHeader,
