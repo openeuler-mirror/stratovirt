@@ -1093,19 +1093,25 @@ pub trait MachineOps {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
-        let memdev =
+        let dev_cfg =
             parse_scream(cfg_args).with_context(|| "Failed to parse cmdline for ivshmem")?;
 
-        let mem_cfg =
-            vm_config.object.mem_object.remove(&memdev).ok_or_else(|| {
-                anyhow!("Object for memory-backend-ram {} config not found", memdev)
+        let mem_cfg = vm_config
+            .object
+            .mem_object
+            .remove(&dev_cfg.memdev)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Object for memory-backend-ram {} config not found",
+                    dev_cfg.memdev
+                )
             })?;
 
         if !mem_cfg.share {
             bail!("Object for share config is not on");
         }
 
-        let scream = Scream::new(mem_cfg.size);
+        let scream = Scream::new(mem_cfg.size, &dev_cfg);
         scream
             .realize(devfn, parent_bus)
             .with_context(|| "Failed to realize scream device")

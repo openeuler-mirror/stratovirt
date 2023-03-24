@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod audio_demo;
 mod pulseaudio;
 
 use std::{
@@ -26,7 +27,9 @@ use anyhow::{bail, Context, Result};
 use core::time;
 use log::{error, warn};
 
+use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
+use machine_manager::config::scream::ScreamConfig;
 use pci::{PciBus, PciDevOps};
 use pulseaudio::{PulseStreamData, TAGET_LATENCY_MS};
 
@@ -265,20 +268,48 @@ impl StreamData {
 pub struct Scream {
     hva: u64,
     size: u64,
+    interface: String,
+    playback: String,
+    record: String,
 }
 
 impl Scream {
-    pub fn new(size: u64) -> Self {
-        Self { hva: 0, size }
+    pub fn new(size: u64, dev_cfg: &ScreamConfig) -> Self {
+        Self {
+            hva: 0,
+            size,
+            interface: dev_cfg.interface.clone(),
+            playback: dev_cfg.playback.clone(),
+            record: dev_cfg.record.clone(),
+        }
+    }
+
+    fn interface_init(&self, name: &str, dir: ScreamDirection) -> Arc<Mutex<dyn AudioInterface>> {
+        match self.interface.as_str() {
+            "PulseAudio" => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
+            "Demo" => Arc::new(Mutex::new(AudioDemo::init(
+                dir,
+                self.playback.clone(),
+                self.record.clone(),
+            ))),
+            _ => {
+                error!(
+                    "Unsupported audio interface {}, falling back to Pulseaudio",
+                    self.interface
+                );
+                Arc::new(Mutex::new(PulseStreamData::init(name, dir)))
+            }
+        }
     }
 
     fn start_play_thread_fn(&self) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
+        let interface = self.interface_init("Scream", ScreamDirection::Playback);
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
-                let mut output = PulseStreamData::init("Scream", ScreamDirection::Playback);
+                let mut interface_locked = interface.lock().unwrap();
                 let mut play_data = StreamData::default();
 
                 loop {
@@ -290,7 +321,7 @@ impl Scream {
                     );
                     play_data.update_play_buffer(hva);
 
-                    output.send(&play_data);
+                    interface_locked.send(&play_data);
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
@@ -300,10 +331,11 @@ impl Scream {
     fn start_record_thread_fn(&self) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
+        let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
-                let mut input = PulseStreamData::init("ScreamCapt", ScreamDirection::Record);
+                let mut interface_locked = interface.lock().unwrap();
                 let mut capt_data = StreamData::default();
 
                 loop {
@@ -315,7 +347,7 @@ impl Scream {
                     );
                     capt_data.update_capt_buffer(hva);
 
-                    if input.receive(&capt_data) {
+                    if interface_locked.receive(&capt_data) {
                         capt_data.update_capt_idx(hva);
                     }
                 }
@@ -353,4 +385,9 @@ impl Scream {
         self.start_play_thread_fn()?;
         self.start_record_thread_fn()
     }
+}
+
+pub trait AudioInterface: Send {
+    fn send(&mut self, recv_data: &StreamData);
+    fn receive(&mut self, recv_data: &StreamData) -> bool;
 }

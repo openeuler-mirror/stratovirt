@@ -934,9 +934,12 @@ Note:
 
 ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
 
-Six properties are supported for ivshmem-scream device.
+Nine properties are supported for ivshmem-scream device.
 * id: unique device id.
 * memdev: configuration of the back-end memory device used by the ivshmem.
+* interface: configuring audio playback and recording interfaces, currently can be set to `PulseAudio` or `Demo`.
+* playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
+* record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * share: the shared memory must be set to `on`.
@@ -945,7 +948,7 @@ Six properties are supported for ivshmem-scream device.
 Sample Configuration:
 
 ```shell
--device ivshmem-scream,id=<scream_id>,memdev=<object_id>,bus=pcie.0,addr=0x2.0x0
+-device ivshmem-scream,id=<scream_id>,memdev=<object_id>[,interface=<interfaces>][,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
 -object memory-backend-ram,id=<object_id>,share=on,size=2M
 ```
 
