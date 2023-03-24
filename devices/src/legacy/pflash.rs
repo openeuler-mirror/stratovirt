@@ -264,7 +264,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -296,7 +296,7 @@ impl PFlash {
             // Repeat data for PFlash device which supports x16-mode but works in x8-mode.
             for i in 1..self.max_device_width {
                 resp = deposit_u32(resp, 8 * i, 8, self.cfi_table[index as usize] as u32)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
             }
         }
         // Responses are repeated for every device in bank.
@@ -304,7 +304,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -328,7 +328,7 @@ impl PFlash {
 
         let addr: u64 = mr
             .get_host_address()
-            .ok_or_else(|| anyhow!("Failed to get host address."))?;
+            .with_context(|| "Failed to get host address.")?;
         let ret = unsafe {
             // Safe as addr and size are valid.
             libc::msync(

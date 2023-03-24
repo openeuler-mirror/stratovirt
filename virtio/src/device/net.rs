@@ -616,10 +616,7 @@ impl NetCtrlHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "ctrl",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("ctrl", VirtioInterruptType::Vring)
                     })?;
             }
         }
@@ -831,10 +828,7 @@ impl NetIoHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "net",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
                 self.trace_send_interrupt("Net".to_string());
             }
@@ -921,10 +915,7 @@ impl NetIoHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "net",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
                 self.trace_send_interrupt("Net".to_string());
             }
@@ -979,7 +970,7 @@ fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
     for elem in iovec {
         end = start
             .checked_add(elem.iov_len)
-            .ok_or_else(|| anyhow!("Overflow when getting the net header"))?;
+            .with_context(|| "Overflow when getting the net header")?;
         end = cmp::min(end, buf.len());
         mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
         if end >= buf.len() {
@@ -1650,9 +1641,9 @@ impl VirtioDevice for Net {
                             .get(index)
                             .cloned()
                             .with_context(|| format!("Failed to get index {} tap", index))?;
-                        sender.send(Some(tap)).with_context(|| {
-                            anyhow!(VirtioError::ChannelSend("tap fd".to_string()))
-                        })?;
+                        sender
+                            .send(Some(tap))
+                            .with_context(|| VirtioError::ChannelSend("tap fd".to_string()))?;
                     }
                     None => sender
                         .send(None)
@@ -1663,7 +1654,7 @@ impl VirtioDevice for Net {
             for update_evt in &self.update_evts {
                 update_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                    .with_context(|| VirtioError::EventFdWrite)?;
             }
         }
 

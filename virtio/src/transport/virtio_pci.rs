@@ -205,7 +205,7 @@ impl VirtioPciCommonConfig {
             return self
                 .queues_config
                 .get_mut(self.queue_select as usize)
-                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"));
+                .with_context(|| "pci-reg queue_select overflows");
         }
         if self.check_device_status(
             CONFIG_STATUS_FEATURES_OK,
@@ -213,7 +213,7 @@ impl VirtioPciCommonConfig {
         ) {
             self.queues_config
                 .get_mut(self.queue_select as usize)
-                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
+                .with_context(|| "pci-reg queue_select overflows")
         } else {
             Err(anyhow!(PciError::DeviceStatus(self.device_status)))
         }
@@ -222,7 +222,7 @@ impl VirtioPciCommonConfig {
     fn get_queue_config(&self) -> PciResult<&QueueConfig> {
         self.queues_config
             .get(self.queue_select as usize)
-            .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
+            .with_context(|| "pci-reg queue_select overflows")
     }
 
     fn revise_queue_vector(&self, vector_nr: u32, virtio_pci_dev: &VirtioPciDevice) -> u32 {
@@ -1323,11 +1323,8 @@ impl StateTransfer for VirtioPciDevice {
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        let mut pci_state = *VirtioPciState::from_bytes(state).ok_or_else(|| {
-            anyhow!(migration::error::MigrationError::FromBytesError(
-                "PCI_DEVICE"
-            ),)
-        })?;
+        let mut pci_state = *VirtioPciState::from_bytes(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
         // Set virtio pci config state.
         let config_length = self.config.config.len();

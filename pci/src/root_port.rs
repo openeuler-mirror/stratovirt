@@ -590,7 +590,7 @@ impl StateTransfer for RootPort {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("ROOT_PORT")))?;
+            .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
         let length = self.config.config.len();
         self.config.config = root_port_state.config_space[..length].to_vec();

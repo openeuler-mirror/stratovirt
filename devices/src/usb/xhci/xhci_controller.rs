@@ -17,7 +17,7 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
@@ -964,12 +964,7 @@ impl XhciDevice {
         self.oper
             .dcbaap
             .checked_add((8 * slot_id) as u64)
-            .ok_or_else(|| {
-                anyhow!(UsbError::MemoryAccessOverflow(
-                    self.oper.dcbaap,
-                    (8 * slot_id) as u64
-                ))
-            })
+            .with_context(|| UsbError::MemoryAccessOverflow(self.oper.dcbaap, (8 * slot_id) as u64))
     }
 
     fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {

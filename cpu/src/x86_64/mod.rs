@@ -15,7 +15,7 @@ mod cpuid;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use kvm_bindings::{
     kvm_cpuid_entry2, kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry,
     kvm_regs, kvm_segment, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, CpuId, Msrs,
@@ -592,7 +592,7 @@ impl StateTransfer for CPU {
 
     fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let cpu_state = *X86CPUState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("CPU")))?;
+            .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;

@@ -42,7 +42,7 @@ use crate::{
     ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
 
@@ -136,10 +136,7 @@ impl RngHandler {
         if need_interrupt {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "rng",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("rng", VirtioInterruptType::Vring)
                 })?;
             self.trace_send_interrupt("Rng".to_string());
         }
@@ -355,7 +352,7 @@ impl StateTransfer for Rng {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *RngState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("RNG")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("RNG"))?;
 
         Ok(())
     }
@@ -548,7 +545,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 
@@ -631,7 +628,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 

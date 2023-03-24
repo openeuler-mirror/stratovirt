@@ -175,8 +175,8 @@ impl VirtioMmioCommonConfig {
             let queue_select = self.queue_select;
             self.queues_config
                 .get_mut(queue_select as usize)
-                .ok_or_else(|| {
-                    anyhow!(
+                .with_context(|| {
+                    format!(
                         "Mmio-reg queue_select {} overflows for mutable queue config",
                         queue_select,
                     )
@@ -191,8 +191,8 @@ impl VirtioMmioCommonConfig {
         let queue_select = self.queue_select;
         self.queues_config
             .get(queue_select as usize)
-            .ok_or_else(|| {
-                anyhow!(
+            .with_context(|| {
+                format!(
                     "Mmio-reg queue_select overflows {} for immutable queue config",
                     queue_select,
                 )
@@ -478,7 +478,7 @@ impl VirtioMmioDevice {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                    .with_context(|| VirtioError::EventFdWrite)?;
 
                 Ok(())
             },

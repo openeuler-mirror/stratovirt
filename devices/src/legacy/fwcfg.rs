@@ -509,7 +509,7 @@ impl FwCfgCommon {
             .files
             .iter()
             .position(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
-            .ok_or_else(|| anyhow!(LegacyError::EntryNotFound(filename.to_owned())))?;
+            .with_context(|| LegacyError::EntryNotFound(filename.to_owned()))?;
         self.files[index].size = data.len() as u32;
 
         // Update FileDir entry
@@ -700,7 +700,7 @@ impl FwCfgCommon {
             ((8 - addr - size as u64) * 8) as u32,
             size * 8,
         )
-        .ok_or_else(|| anyhow!("Failed to extract bits from u64"))
+        .with_context(|| "Failed to extract bits from u64")
     }
 
     /// Read data register

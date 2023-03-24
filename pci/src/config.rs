@@ -845,7 +845,7 @@ impl PciConfig {
                                 .lock()
                                 .unwrap()
                                 .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                                .with_context(|| anyhow!(PciError::UnregMemBar(id)))?
+                                .with_context(|| PciError::UnregMemBar(id))?
                         }
                     }
                 }
@@ -876,7 +876,7 @@ impl PciConfig {
                         mem_region
                             .unwrap()
                             .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
-                            .with_context(|| anyhow!(PciError::UnregMemBar(id)))?;
+                            .with_context(|| PciError::UnregMemBar(id))?;
                         self.bars[id].parent_mem_region =
                             Some(Arc::new(Mutex::new(mem_region.unwrap().clone())));
                     }

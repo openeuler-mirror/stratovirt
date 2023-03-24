@@ -354,7 +354,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_RESET_SIGNAL)
-                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to reset vcpu".to_string()))),
+                .with_context(|| CpuError::KickVcpu("Fail to reset vcpu".to_string())),
             None => {
                 warn!("VCPU thread not started, no need to reset");
                 Ok(())
@@ -367,7 +367,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_TASK_SIGNAL)
-                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to kick vcpu".to_string()))),
+                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
             None => {
                 warn!("VCPU thread not started, no need to kick");
                 Ok(())

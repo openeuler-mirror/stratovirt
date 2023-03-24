@@ -30,7 +30,21 @@ pub mod error;
 mod queue;
 mod transport;
 pub mod vhost;
-pub use anyhow::Result;
+
+use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::eventfd::EventFd;
+
+use address_space::AddressSpace;
+use machine_manager::config::ConfigCheck;
+use util::aio::mem_to_buf;
+use util::num_ops::write_u32;
+use util::AsAny;
+
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState};
 pub use device::console::{Console, VirtioConsoleState};
@@ -43,25 +57,11 @@ pub use device::scsi::controller as ScsiCntlr;
 pub use device::scsi::disk as ScsiDisk;
 pub use error::VirtioError;
 pub use error::*;
-use log::{error, warn};
 pub use queue::*;
 pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use transport::virtio_pci::VirtioPciDevice;
 pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
-
-use std::cmp;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
-use address_space::AddressSpace;
-use anyhow::anyhow;
-use anyhow::bail;
-use machine_manager::config::ConfigCheck;
-use util::aio::mem_to_buf;
-use util::num_ops::write_u32;
-use util::AsAny;
-use vmm_sys_util::eventfd::EventFd;
 
 /// Check if the bit of features is configured.
 pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {
@@ -464,7 +464,7 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
         end = cmp::min(start + iov.len as usize, buf.len());
         hva = mem_space
             .get_host_address(iov.addr)
-            .ok_or_else(|| anyhow!("Map iov base failed"))?;
+            .with_context(|| "Map iov base failed")?;
         mem_to_buf(&mut buf[start..end], hva)?;
         if end >= buf.len() {
             break;

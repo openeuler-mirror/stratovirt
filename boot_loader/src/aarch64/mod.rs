@@ -54,7 +54,7 @@ fn load_kernel(
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<u64> {
     let mut kernel_image =
-        File::open(kernel_path).with_context(|| anyhow!(BootLoaderError::BootLoaderOpenKernel))?;
+        File::open(kernel_path).with_context(|| BootLoaderError::BootLoaderOpenKernel)?;
     let kernel_size = kernel_image.metadata().unwrap().len();
     let kernel_end = kernel_start + kernel_size;
 
@@ -67,10 +67,10 @@ fn load_kernel(
                 FwCfgEntryType::KernelSize,
                 (kernel_size as u32).as_bytes().to_vec(),
             )
-            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("KernelSize".to_string())))?;
+            .with_context(|| FwcfgErrorKind::AddEntryErr("KernelSize".to_string()))?;
         lock_dev
             .add_data_entry(FwCfgEntryType::KernelData, kernel_data)
-            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("KernelData".to_string())))?;
+            .with_context(|| FwcfgErrorKind::AddEntryErr("KernelData".to_string()))?;
     } else {
         if sys_mem
             .memory_end_address()
@@ -97,7 +97,7 @@ fn load_initrd(
     kernel_end: u64,
 ) -> Result<(u64, u64)> {
     let mut initrd_image =
-        File::open(initrd_path).with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
+        File::open(initrd_path).with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
 
     let initrd_start = if let Some(addr) = sys_mem
@@ -123,16 +123,16 @@ fn load_initrd(
                 FwCfgEntryType::InitrdAddr,
                 (initrd_start as u32).as_bytes().to_vec(),
             )
-            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string())))?;
+            .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string()))?;
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::InitrdSize,
                 (initrd_size as u32).as_bytes().to_vec(),
             )
-            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdSize".to_string())))?;
+            .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdSize".to_string()))?;
         lock_dev
             .add_data_entry(FwCfgEntryType::InitrdData, initrd_data)
-            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdData".to_string())))?;
+            .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdData".to_string()))?;
     } else {
         sys_mem
             .write(&mut initrd_image, GuestAddress(initrd_start), initrd_size)
