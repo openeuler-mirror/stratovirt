@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 
 use super::{pci_args_check, CmdParser};
 
@@ -57,7 +57,7 @@ pub fn parse_scream(cfg_args: &str) -> Result<ScreamConfig> {
 
     dev_cfg.memdev = cmd_parser
         .get_value::<String>("memdev")?
-        .ok_or_else(|| anyhow!("No memdev configured for scream device"))?;
+        .with_context(|| "No memdev configured for scream device")?;
 
     if let Some(interface) = cmd_parser.get_value::<String>("interface")? {
         dev_cfg.interface = interface;
@@ -66,10 +66,10 @@ pub fn parse_scream(cfg_args: &str) -> Result<ScreamConfig> {
     if dev_cfg.interface.eq(&"Demo".to_string()) {
         dev_cfg.playback = cmd_parser
             .get_value::<String>("playback")?
-            .ok_or_else(|| anyhow!("No playback configured for interface"))?;
+            .with_context(|| "No playback configured for interface")?;
         dev_cfg.record = cmd_parser
             .get_value::<String>("record")?
-            .ok_or_else(|| anyhow!("No record configured for interface"))?;
+            .with_context(|| "No record configured for interface")?;
     }
 
     Ok(dev_cfg)

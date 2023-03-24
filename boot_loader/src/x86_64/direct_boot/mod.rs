@@ -30,7 +30,8 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
+
 /// Load bzImage linux kernel to Guest Memory.
 ///
 /// # Notes
@@ -101,7 +102,7 @@ fn load_kernel_image(
     boot_layout: &mut X86BootLoader,
 ) -> Result<RealModeKernelHeader> {
     let mut kernel_image =
-        File::open(kernel_path).with_context(|| anyhow!(BootLoaderError::BootLoaderOpenKernel))?;
+        File::open(kernel_path).with_context(|| BootLoaderError::BootLoaderOpenKernel)?;
 
     let (boot_hdr, kernel_start, vmlinux_start) = if let Ok(hdr) = load_bzimage(&mut kernel_image) {
         (
@@ -141,7 +142,7 @@ fn load_initrd(
     };
 
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
-        .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
+        .with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 

@@ -392,12 +392,12 @@ impl VfioPciDevice {
                         Region::init_io_region(table_size, table_ops.clone()),
                         table_offset,
                     )
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
 
                 if table_offset > 0 {
                     region
                         .add_subregion(Region::init_io_region(table_offset, bar_ops.clone()), 0)
-                        .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                        .with_context(|| VfioError::AddRegBar(i as usize))?;
                 }
 
                 if table_offset + table_size < size {
@@ -409,13 +409,13 @@ impl VfioPciDevice {
                             ),
                             table_offset + table_size,
                         )
-                        .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                        .with_context(|| VfioError::AddRegBar(i as usize))?;
                 }
                 region
             } else {
                 region
                     .add_subregion(Region::init_io_region(size, bar_ops.clone()), 0)
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
                 region
             };
 
@@ -705,7 +705,7 @@ impl VfioPciDevice {
                     .as_ref()
                     .unwrap()
                     .add_subregion(ram_device, mmap.offset)
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
             }
         }
         Ok(())

@@ -149,7 +149,7 @@ pub trait MachineOps {
                 sys_mem
                     .root()
                     .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                    .with_context(|| anyhow!(MachineError::RegMemRegionErr(base, size)))?;
+                    .with_context(|| MachineError::RegMemRegionErr(base, size))?;
             }
         }
 
@@ -266,7 +266,7 @@ pub trait MachineOps {
             MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
-                    .with_context(|| anyhow!(MachineError::RlzVirtioMmioErr))?,
+                    .with_context(|| MachineError::RlzVirtioMmioErr)?,
                 &device_cfg.id,
             );
         } else {
@@ -365,7 +365,7 @@ pub trait MachineOps {
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
                     self.realize_virtio_mmio_device(device)
-                        .with_context(|| anyhow!(MachineError::RlzVirtioMmioErr))?,
+                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
                     &device_cfg.id,
                 );
             } else {
@@ -1093,8 +1093,8 @@ pub trait MachineOps {
             .object
             .mem_object
             .remove(&dev_cfg.memdev)
-            .ok_or_else(|| {
-                anyhow!(
+            .with_context(|| {
+                format!(
                     "Object for memory-backend-ram {} config not found",
                     dev_cfg.memdev
                 )
@@ -1214,21 +1214,21 @@ pub trait MachineOps {
             #[cfg(target_arch = "x86_64")]
             vm_config.machine_config.mem_config.mem_size,
         )
-        .with_context(|| anyhow!(MachineError::AddDevErr("RTC".to_string())))?;
+        .with_context(|| MachineError::AddDevErr("RTC".to_string()))?;
 
         #[cfg(target_arch = "aarch64")]
         self.add_ged_device()
-            .with_context(|| anyhow!(MachineError::AddDevErr("Ged".to_string())))?;
+            .with_context(|| MachineError::AddDevErr("Ged".to_string()))?;
 
         let cloned_vm_config = vm_config.clone();
         if let Some(serial) = cloned_vm_config.serial.as_ref() {
             self.add_serial_device(serial)
-                .with_context(|| anyhow!(MachineError::AddDevErr("serial".to_string())))?;
+                .with_context(|| MachineError::AddDevErr("serial".to_string()))?;
         }
 
         if let Some(pflashs) = cloned_vm_config.pflashs.as_ref() {
             self.add_pflash_device(pflashs)
-                .with_context(|| anyhow!(MachineError::AddDevErr("pflash".to_string())))?;
+                .with_context(|| MachineError::AddDevErr("pflash".to_string()))?;
         }
 
         for dev in &cloned_vm_config.devices {

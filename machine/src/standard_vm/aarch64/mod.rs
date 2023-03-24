@@ -74,7 +74,7 @@ use util::set_termi_canon_mode;
 
 use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
 use crate::MachineOps;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -163,7 +163,7 @@ impl StdMachine {
             vm_config.machine_config.max_cpus,
         );
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
+            .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_mem,
             (IRQ_BASE, IRQ_MAX),
@@ -189,14 +189,14 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
-            power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?),
+            power_button: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
+            ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             reset_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                    anyhow!(MachineError::InitEventFdErr("reset_req".to_string()))
-                })?,
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),
             numa_nodes: None,
@@ -336,7 +336,7 @@ impl StdMachineOps for StdMachine {
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("NbCpus".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
 
         let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
         fwcfg
@@ -344,20 +344,20 @@ impl StdMachineOps for StdMachine {
                 FwCfgEntryType::CmdlineSize,
                 (cmdline.len() + 1).as_bytes().to_vec(),
             )
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("CmdlineSize".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
         fwcfg
             .add_string_entry(FwCfgEntryType::CmdlineData, cmdline.as_str())
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("CmdlineData".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("CmdlineData".to_string()))?;
 
         let boot_order = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bootorder", boot_order)
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bootorder".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let bios_geometry = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bios-geometry", bios_geometry)
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bios-geometry".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
         let fwcfg_dev = FwCfgMem::realize(
             fwcfg,
@@ -429,7 +429,7 @@ impl MachineOps for StdMachine {
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
+            .with_context(|| MachineError::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -508,7 +508,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| anyhow!(StdErrorKind::InitPCIeHostErr))?;
+            .with_context(|| StdErrorKind::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
         #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
@@ -547,7 +547,7 @@ impl MachineOps for StdMachine {
             let mut fdt_helper = FdtBuilder::new();
             locked_vm
                 .generate_fdt_node(&mut fdt_helper)
-                .with_context(|| anyhow!(MachineError::GenFdtErr))?;
+                .with_context(|| MachineError::GenFdtErr)?;
             let fdt_vec = fdt_helper.finish()?;
             locked_vm.dtb_vec = fdt_vec.clone();
             locked_vm
@@ -557,9 +557,7 @@ impl MachineOps for StdMachine {
                     GuestAddress(boot_cfg.fdt_addr as u64),
                     fdt_vec.len() as u64,
                 )
-                .with_context(|| {
-                    anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
-                })?;
+                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
         }
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
@@ -599,9 +597,9 @@ impl MachineOps for StdMachine {
             };
 
             let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
-                .with_context(|| anyhow!(StdErrorKind::InitPflashErr))?;
+                .with_context(|| StdErrorKind::InitPflashErr)?;
             PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size, fd)
-                .with_context(|| anyhow!(StdErrorKind::RlzPflashErr))?;
+                .with_context(|| StdErrorKind::RlzPflashErr)?;
             flash_base += flash_size;
         }
 

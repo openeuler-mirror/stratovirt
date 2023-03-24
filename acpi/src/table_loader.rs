@@ -268,7 +268,7 @@ impl TableLoader {
         let file = file.to_string();
         let file_entry = self
             .find_matched_file(&file)
-            .with_context(|| anyhow!(AcpiError::NoMatchedFile(file.clone())))?;
+            .with_context(|| AcpiError::NoMatchedFile(file.clone()))?;
 
         let file_entry_len = file_entry.file_blob.lock().unwrap().len();
 
@@ -327,10 +327,10 @@ impl TableLoader {
         let src_file = src_file.to_string();
         let dst_file_entry = self
             .find_matched_file(&dst_file)
-            .with_context(|| anyhow!(AcpiError::NoMatchedFile(dst_file.clone())))?;
+            .with_context(|| AcpiError::NoMatchedFile(dst_file.clone()))?;
         let src_file_entry = self
             .find_matched_file(&src_file)
-            .with_context(|| anyhow!(AcpiError::NoMatchedFile(src_file.clone())))?;
+            .with_context(|| AcpiError::NoMatchedFile(src_file.clone()))?;
 
         let dst_file_len = dst_file_entry.file_blob.lock().unwrap().len();
         let src_file_len = src_file_entry.file_blob.lock().unwrap().len();

@@ -387,7 +387,7 @@ impl StateTransfer for Console {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioConsoleState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("CONSOLE")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("CONSOLE"))?;
 
         Ok(())
     }

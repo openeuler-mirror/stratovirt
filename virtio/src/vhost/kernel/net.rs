@@ -336,7 +336,7 @@ impl VirtioDevice for Net {
                 let host_notify = VhostNotify {
                     notify_evt: Arc::new(
                         EventFd::new(libc::EFD_NONBLOCK)
-                            .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                            .with_context(|| VirtioError::EventFdCreate)?,
                     ),
                     queue: queue_mutex.clone(),
                 };

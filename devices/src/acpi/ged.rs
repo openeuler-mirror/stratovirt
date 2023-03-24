@@ -12,7 +12,7 @@
 
 use acpi::{AcpiError, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUpdateRule};
 use address_space::GuestAddress;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use log::error;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -73,7 +73,7 @@ impl Ged {
     ) -> Result<()> {
         self.interrupt_evt = Arc::new(Some(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| anyhow!(AcpiError::Alignment(region_size.try_into().unwrap())))?;
+            .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;

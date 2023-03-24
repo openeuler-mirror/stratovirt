@@ -15,7 +15,8 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+
 use migration::{
     error::MigrationError, DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
 };
@@ -101,7 +102,7 @@ impl MigrationHook for AddressSpace {
     fn restore_memory(&self, memory: Option<&File>, state: &[u8]) -> Result<()> {
         let address_space_state: &AddressSpaceState =
             AddressSpaceState::from_bytes(&state[0..size_of::<AddressSpaceState>()])
-                .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MEMORY")))?;
+                .with_context(|| MigrationError::FromBytesError("MEMORY"))?;
         let memfile_arc = Arc::new(memory.unwrap().try_clone().unwrap());
 
         for ram_state in address_space_state.ram_region_state

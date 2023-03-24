@@ -64,7 +64,7 @@ impl MigrationManager {
         fd.read_exact(&mut place_holder)?;
 
         Ok(*MigrationHeader::from_bytes(&header_bytes)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("HEADER")))?)
+            .with_context(|| MigrationError::FromBytesError("HEADER"))?)
     }
 
     /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.

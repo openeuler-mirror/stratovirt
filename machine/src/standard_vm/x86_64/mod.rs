@@ -61,7 +61,7 @@ use self::ich9_lpc::SLEEP_CTRL_OFFSET;
 use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineOps};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 #[cfg(not(target_env = "musl"))]
 use ui::vnc;
 
@@ -138,9 +138,9 @@ impl StdMachine {
             vm_config.machine_config.max_cpus,
         );
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .with_context(|| anyhow!(MachineError::CrtMemSpaceErr))?;
+            .with_context(|| MachineError::CrtMemSpaceErr)?;
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
+            .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
@@ -167,9 +167,10 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                anyhow!(MachineError::InitEventFdErr("reset request".to_string()))
-            })?),
+            reset_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("reset request".to_string()))?,
+            ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -230,12 +231,12 @@ impl StdMachine {
 
         vm_fd
             .set_identity_map_address(identity_addr)
-            .with_context(|| anyhow!(MachineError::SetIdentityMapAddr))?;
+            .with_context(|| MachineError::SetIdentityMapAddr)?;
 
         // Page table takes 1 page, TSS takes the following 3 pages.
         vm_fd
             .set_tss_address((identity_addr + 0x1000) as usize)
-            .with_context(|| anyhow!(MachineError::SetTssErr))?;
+            .with_context(|| MachineError::SetTssErr)?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -243,7 +244,7 @@ impl StdMachine {
         };
         vm_fd
             .create_pit2(pit_config)
-            .with_context(|| anyhow!(MachineError::CrtPitErr))?;
+            .with_context(|| MachineError::CrtPitErr)?;
         Ok(())
     }
 
@@ -303,7 +304,7 @@ impl StdMachineOps for StdMachine {
         let boot_order = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bootorder", boot_order)
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bootorder".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .with_context(|| "Failed to realize fwcfg device")?;
@@ -345,7 +346,7 @@ impl MachineOps for StdMachine {
             .as_ref()
             .unwrap()
             .create_irq_chip()
-            .with_context(|| anyhow!(MachineError::CrtIrqchipErr))?;
+            .with_context(|| MachineError::CrtIrqchipErr)?;
         KVM_FDS
             .load()
             .irq_route_table
@@ -375,7 +376,7 @@ impl MachineOps for StdMachine {
             prot64_mode: false,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
+            .with_context(|| MachineError::LoadKernErr)?;
 
         Ok(CPUBootConfig {
             prot64_mode: false,
@@ -434,7 +435,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| anyhow!(StandardVmError::InitPCIeHostErr))?;
+            .with_context(|| StandardVmError::InitPCIeHostErr)?;
         locked_vm
             .init_ich9_lpc(clone_vm)
             .with_context(|| "Fail to init LPC bridge")?;
@@ -530,7 +531,7 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.read_only,
             )
-            .with_context(|| anyhow!(StandardVmError::InitPflashErr))?;
+            .with_context(|| StandardVmError::InitPflashErr)?;
             PFlash::realize(
                 pflash,
                 &mut self.sysbus,
@@ -538,7 +539,7 @@ impl MachineOps for StdMachine {
                 pfl_size,
                 backend,
             )
-            .with_context(|| anyhow!(StandardVmError::RlzPflashErr))?;
+            .with_context(|| StandardVmError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 

@@ -20,15 +20,15 @@ use acpi::{
     AmlScopeBuilder, AmlString, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::GuestAddress;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use log::{debug, error};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
 };
 use migration::{
-    snapshot::PL011_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+    snapshot::PL011_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
+    MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
@@ -36,6 +36,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_data_u32;
 use vmm_sys_util::eventfd::EventFd;
+
 const PL011_FLAG_TXFE: u8 = 0x80;
 const PL011_FLAG_RXFF: u8 = 0x40;
 const PL011_FLAG_RXFE: u8 = 0x10;
@@ -187,7 +188,7 @@ impl PL011 {
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
         )
-        .with_context(|| anyhow!(LegacyError::RegNotifierErr))?;
+        .with_context(|| LegacyError::RegNotifierErr)?;
         Ok(())
     }
 }
@@ -403,7 +404,7 @@ impl StateTransfer for PL011 {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *PL011State::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("PL011")))?;
+            .with_context(|| MigrationError::FromBytesError("PL011"))?;
 
         Ok(())
     }

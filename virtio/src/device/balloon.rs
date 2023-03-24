@@ -590,10 +590,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "balloon",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("balloon", VirtioInterruptType::Vring)
                 })?
         }
 
@@ -627,10 +624,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "balloon",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("balloon", VirtioInterruptType::Vring)
                 })?;
         }
 
@@ -678,10 +672,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "balloon",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("balloon", VirtioInterruptType::Vring)
                 })?;
         }
 
@@ -916,10 +907,7 @@ impl Balloon {
     fn signal_config_change(&self) -> Result<()> {
         if let Some(interrupt_cb) = &self.interrupt_cb {
             interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "balloon",
-                    VirtioInterruptType::Config
-                ))
+                VirtioError::InterruptTrigger("balloon", VirtioInterruptType::Config)
             })
         } else {
             Err(anyhow!(VirtioError::DeviceNotActivated(
@@ -1417,7 +1405,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 
@@ -1556,7 +1544,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 

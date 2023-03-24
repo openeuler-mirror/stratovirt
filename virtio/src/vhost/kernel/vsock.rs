@@ -156,7 +156,7 @@ impl Vsock {
                     Some(&*event_queue_locked),
                     false,
                 )
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                .with_context(|| VirtioError::EventFdWrite)?;
             }
         }
 
@@ -301,8 +301,7 @@ impl VirtioDevice for Vsock {
 
             let host_notify = VhostNotify {
                 notify_evt: Arc::new(
-                    EventFd::new(libc::EFD_NONBLOCK)
-                        .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                    EventFd::new(libc::EFD_NONBLOCK).with_context(|| VirtioError::EventFdCreate)?,
                 ),
                 queue: queue_mutex.clone(),
             };
@@ -360,7 +359,7 @@ impl StateTransfer for Vsock {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VsockState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("VSOCK")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("VSOCK"))?;
         self.broken.store(self.state.broken, Ordering::SeqCst);
         Ok(())
     }

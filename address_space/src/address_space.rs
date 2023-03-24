@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
@@ -234,11 +234,11 @@ impl AddressSpace {
                     if !is_add {
                         self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)
                             .with_context(|| {
-                                anyhow!(AddressSpaceError::UpdateTopology(
+                                AddressSpaceError::UpdateTopology(
                                     old_r.addr_range.base.raw_value(),
                                     old_r.addr_range.size,
                                     old_r.owner.region_type(),
-                                ))
+                                )
                             })?;
                     }
                     old_idx += 1;
@@ -250,11 +250,11 @@ impl AddressSpace {
             if is_add && new_range.is_some() {
                 self.call_listeners(new_range, None, ListenerReqType::AddRegion)
                     .with_context(|| {
-                        anyhow!(AddressSpaceError::UpdateTopology(
+                        AddressSpaceError::UpdateTopology(
                             new_range.unwrap().addr_range.base.raw_value(),
                             new_range.unwrap().addr_range.size,
                             new_range.unwrap().owner.region_type(),
-                        ))
+                        )
                     })?;
             }
             new_idx += 1;
@@ -286,11 +286,11 @@ impl AddressSpace {
             if old_fd.is_some() && (new_fd.is_none() || !old_fd.unwrap().after(new_fd.unwrap())) {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
                     .with_context(|| {
-                        anyhow!(AddressSpaceError::UpdateTopology(
+                        AddressSpaceError::UpdateTopology(
                             old_fd.unwrap().addr_range.base.raw_value(),
                             old_fd.unwrap().addr_range.size,
                             RegionType::IO,
-                        ))
+                        )
                     })?;
                 old_idx += 1;
             }
@@ -298,11 +298,11 @@ impl AddressSpace {
             if new_fd.is_some() && (old_fd.is_none() || !new_fd.unwrap().after(old_fd.unwrap())) {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
                     .with_context(|| {
-                        anyhow!(AddressSpaceError::UpdateTopology(
+                        AddressSpaceError::UpdateTopology(
                             new_fd.unwrap().addr_range.base.raw_value(),
                             new_fd.unwrap().addr_range.size,
                             RegionType::IO,
-                        ))
+                        )
                     })?;
                 new_idx += 1;
             }
@@ -438,7 +438,7 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| anyhow!(AddressSpaceError::RegionNotFound(addr.raw_value())))?;
+            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;
@@ -470,7 +470,7 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| anyhow!(AddressSpaceError::RegionNotFound(addr.raw_value())))?;
+            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;

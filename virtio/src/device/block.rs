@@ -155,10 +155,7 @@ impl AioCompleteCb {
         {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "blk io completion",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("blk io completion", VirtioInterruptType::Vring)
                 })?;
             self.trace_send_interrupt("Block".to_string());
         }
@@ -1173,12 +1170,12 @@ impl VirtioDevice for Block {
                     self.blk_cfg.direct,
                     self.blk_cfg.aio,
                 ))
-                .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
+                .with_context(|| VirtioError::ChannelSend("image fd".to_string()))?;
         }
         for update_evt in &self.update_evts {
             update_evt
                 .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                .with_context(|| VirtioError::EventFdWrite)?;
         }
 
         Ok(())
@@ -1199,7 +1196,7 @@ impl StateTransfer for Block {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *BlockState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("BLOCK")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("BLOCK"))?;
         self.broken.store(self.state.broken, Ordering::SeqCst);
         Ok(())
     }
@@ -1455,7 +1452,7 @@ mod tests {
                 interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                    .with_context(|| VirtioError::EventFdWrite)?;
 
                 Ok(())
             },

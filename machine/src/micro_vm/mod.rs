@@ -196,10 +196,10 @@ impl LightMachine {
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| anyhow!(MachineError::CrtMemSpaceErr))?;
+            .with_context(|| MachineError::CrtMemSpaceErr)?;
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
+            .with_context(|| MachineError::CrtIoSpaceErr)?;
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (
             MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
@@ -249,7 +249,7 @@ impl LightMachine {
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         vm_fd
             .set_tss_address(0xfffb_d000_usize)
-            .with_context(|| anyhow!(MachineError::SetTssErr))?;
+            .with_context(|| MachineError::SetTssErr)?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -257,7 +257,7 @@ impl LightMachine {
         };
         vm_fd
             .create_pit2(pit_config)
-            .with_context(|| anyhow!(MachineError::CrtPitErr))?;
+            .with_context(|| MachineError::CrtPitErr)?;
 
         Ok(())
     }
@@ -313,7 +313,7 @@ impl LightMachine {
                     #[cfg(target_arch = "x86_64")]
                     &self.boot_source,
                 )
-                .with_context(|| anyhow!(MicroVmError::RlzVirtioMmioErr))?,
+                .with_context(|| MicroVmError::RlzVirtioMmioErr)?,
                 &id.to_string(),
             );
             region_base += region_size;
@@ -341,7 +341,7 @@ impl LightMachine {
                 .lock()
                 .unwrap()
                 .update_config(Some(dev_config.clone()))
-                .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
+                .with_context(|| MicroVmError::UpdCfgErr(id.to_string()))?;
         }
 
         self.add_replaceable_config(id, dev_config)?;
@@ -426,7 +426,7 @@ impl LightMachine {
                 .lock()
                 .unwrap()
                 .update_config(dev_config)
-                .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
+                .with_context(|| MicroVmError::UpdCfgErr(id.to_string()))?;
         }
         Ok(())
     }
@@ -457,7 +457,7 @@ impl LightMachine {
                     .lock()
                     .unwrap()
                     .update_config(None)
-                    .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
+                    .with_context(|| MicroVmError::UpdCfgErr(id.to_string()))?;
             }
         }
 
@@ -511,7 +511,7 @@ impl MachineOps for LightMachine {
             .as_ref()
             .unwrap()
             .create_irq_chip()
-            .with_context(|| anyhow!(MachineError::CrtIrqchipErr))?;
+            .with_context(|| MachineError::CrtIrqchipErr)?;
         Ok(())
     }
 
@@ -570,7 +570,7 @@ impl MachineOps for LightMachine {
             prot64_mode: true,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
+            .with_context(|| MachineError::LoadKernErr)?;
 
         Ok(CPUBootConfig {
             prot64_mode: true,
@@ -602,7 +602,7 @@ impl MachineOps for LightMachine {
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
+            .with_context(|| MachineError::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -628,7 +628,7 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
         )
-        .with_context(|| anyhow!(MicroVmError::RlzVirtioMmioErr))?;
+        .with_context(|| MicroVmError::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(realized_virtio_mmio_device)
     }
@@ -838,7 +838,7 @@ impl MachineOps for LightMachine {
                 let mut fdt_helper = FdtBuilder::new();
                 locked_vm
                     .generate_fdt_node(&mut fdt_helper)
-                    .with_context(|| anyhow!(MachineError::GenFdtErr))?;
+                    .with_context(|| MachineError::GenFdtErr)?;
                 let fdt_vec = fdt_helper.finish()?;
                 locked_vm
                     .sys_mem
@@ -847,9 +847,7 @@ impl MachineOps for LightMachine {
                         GuestAddress(boot_cfg.fdt_addr as u64),
                         fdt_vec.len() as u64,
                     )
-                    .with_context(|| {
-                        anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
-                    })?;
+                    .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
             }
         }
 
