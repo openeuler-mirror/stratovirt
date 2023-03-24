@@ -1545,7 +1545,7 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
@@ -1553,7 +1553,7 @@ impl VirtioDevice for Net {
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
-            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
+            let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 
             let ctrl_handler = NetCtrlHandler {
                 ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, ctrl_info.clone()),
@@ -1580,9 +1580,9 @@ impl VirtioDevice for Net {
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
             let rx_queue = queues[index * 2].clone();
-            let rx_queue_evt = queue_evts.remove(0);
+            let rx_queue_evt = queue_evts[index * 2].clone();
             let tx_queue = queues[index * 2 + 1].clone();
-            let tx_queue_evt = queue_evts.remove(0);
+            let tx_queue_evt = queue_evts[index * 2 + 1].clone();
 
             let (sender, receiver) = channel();
             senders.push(sender);

@@ -265,7 +265,7 @@ impl VirtioDevice for ScsiCntlr {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         if queue_num < SCSI_MIN_QUEUE_NUM {
@@ -273,7 +273,7 @@ impl VirtioDevice for ScsiCntlr {
         }
 
         let ctrl_queue = queues[0].clone();
-        let ctrl_queue_evt = queue_evts.remove(0);
+        let ctrl_queue_evt = queue_evts[0].clone();
         let ctrl_handler = ScsiCtrlHandler {
             queue: ctrl_queue,
             queue_evt: ctrl_queue_evt,
@@ -290,7 +290,7 @@ impl VirtioDevice for ScsiCntlr {
         )?;
 
         let event_queue = queues[1].clone();
-        let event_queue_evt = queue_evts.remove(0);
+        let event_queue_evt = queue_evts[1].clone();
         let event_handler = ScsiEventHandler {
             _queue: event_queue,
             queue_evt: event_queue_evt,
@@ -307,13 +307,12 @@ impl VirtioDevice for ScsiCntlr {
             &mut self.deactivate_evts,
         )?;
 
-        let queues_num = queues.len();
-        for cmd_queue in queues.iter().take(queues_num).skip(2) {
+        for (index, cmd_queue) in queues[2..].iter().enumerate() {
             let bus = self.bus.as_ref().unwrap();
             let cmd_handler = ScsiCmdHandler {
                 scsibus: bus.clone(),
                 queue: cmd_queue.clone(),
-                queue_evt: queue_evts.remove(0),
+                queue_evt: queue_evts[index + 2].clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.state.driver_features,

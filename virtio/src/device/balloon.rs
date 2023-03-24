@@ -1100,7 +1100,7 @@ impl VirtioDevice for Balloon {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
@@ -1110,9 +1110,9 @@ impl VirtioDevice for Balloon {
         }
 
         let inf_queue = queues[0].clone();
-        let inf_evt = queue_evts.remove(0);
+        let inf_evt = queue_evts[0].clone();
         let def_queue = queues[1].clone();
-        let def_evt = queue_evts.remove(0);
+        let def_evt = queue_evts[1].clone();
 
         let mut current_queue_index = 1;
         let (report_queue, report_evt) =
@@ -1123,7 +1123,7 @@ impl VirtioDevice for Balloon {
                 current_queue_index += 1;
                 (
                     Some(queues[current_queue_index].clone()),
-                    Some(queue_evts.remove(0)),
+                    Some(queue_evts[current_queue_index].clone()),
                 )
             } else {
                 if current_queue_index + 1 >= self.queue_num() {
@@ -1144,7 +1144,7 @@ impl VirtioDevice for Balloon {
                 current_queue_index += 1;
                 (
                     Some(queues[current_queue_index].clone()),
-                    Some(queue_evts.remove(0)),
+                    Some(queue_evts[current_queue_index].clone()),
                 )
             } else {
                 if current_queue_index + 1 >= self.queue_num() {
