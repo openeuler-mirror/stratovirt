@@ -452,11 +452,8 @@ impl VmConfig {
     fn get_mem_zone_host_nodes(&self, cmd_parser: &CmdParser) -> Result<Option<Vec<u32>>> {
         if let Some(mut host_nodes) = cmd_parser
             .get_value::<IntegerList>("host-nodes")
-            .map_err(|_| {
-                anyhow!(ConfigError::ConvertValueFailed(
-                    String::from("u32"),
-                    "host-nodes".to_string()
-                ))
+            .with_context(|| {
+                ConfigError::ConvertValueFailed(String::from("u32"), "host-nodes".to_string())
             })?
             .map(|v| v.0.iter().map(|e| *e as u32).collect::<Vec<u32>>())
         {
@@ -617,11 +614,8 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
         get_inner(
             value
                 .parse::<u64>()
-                .map_err(|_| {
-                    anyhow!(ConfigError::ConvertValueFailed(
-                        origin_value.to_string(),
-                        String::from("u64")
-                    ))
+                .with_context(|| {
+                    ConfigError::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
                 })?
                 .checked_mul(M),
         )
@@ -633,20 +627,14 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
         get_inner(
             value
                 .parse::<u64>()
-                .map_err(|_| {
-                    anyhow!(ConfigError::ConvertValueFailed(
-                        origin_value.to_string(),
-                        String::from("u64")
-                    ))
+                .with_context(|| {
+                    ConfigError::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
                 })?
                 .checked_mul(G),
         )
     } else {
-        let size = origin_value.parse::<u64>().map_err(|_| {
-            anyhow!(ConfigError::ConvertValueFailed(
-                origin_value.to_string(),
-                String::from("u64")
-            ))
+        let size = origin_value.parse::<u64>().with_context(|| {
+            ConfigError::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
         })?;
 
         let memory_size = size.checked_mul(M);
