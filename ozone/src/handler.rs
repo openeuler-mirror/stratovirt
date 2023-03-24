@@ -81,7 +81,7 @@ impl OzoneHandler {
         if let Some(uid) = args.value_of("uid") {
             let user_id = (uid)
                 .parse::<u32>()
-                .map_err(|_| anyhow!(OzoneError::DigitalParseError("uid", uid)))?;
+                .with_context(|| OzoneError::DigitalParseError("uid", uid))?;
             if user_id > MAX_ID_NUMBER {
                 bail!("Input uid should be no more than 65535");
             }
@@ -90,7 +90,7 @@ impl OzoneHandler {
         if let Some(gid) = args.value_of("gid") {
             let group_id = (gid)
                 .parse::<u32>()
-                .map_err(|_| anyhow!(OzoneError::DigitalParseError("gid", gid)))?;
+                .with_context(|| OzoneError::DigitalParseError("gid", gid))?;
             if group_id > MAX_ID_NUMBER {
                 bail!("Input gid should be no more than 65535");
             }
@@ -113,7 +113,7 @@ impl OzoneHandler {
             handler.node = Some(
                 (node)
                     .parse::<String>()
-                    .map_err(|_| anyhow!(OzoneError::DigitalParseError("numa", node)))?,
+                    .with_context(|| OzoneError::DigitalParseError("numa", node))?,
             );
         }
         if let Some(config) = args.values_of("cgroup") {

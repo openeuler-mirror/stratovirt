@@ -188,7 +188,7 @@ fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
             raw_fds.push(
                 (*fd)
                     .parse::<i32>()
-                    .map_err(|_| anyhow!("Failed to parse fds"))?,
+                    .with_context(|| "Failed to parse fds")?,
             );
         }
         Ok(Some(raw_fds))

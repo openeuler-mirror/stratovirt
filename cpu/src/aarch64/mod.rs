@@ -338,7 +338,7 @@ impl StateTransfer for CPU {
 
         if cpu_state.features.pmu {
             self.init_pmu()
-                .map_err(|_| MigrationError::FromBytesError("failed to init pmu."))?;
+                .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
         }
         Ok(())
     }

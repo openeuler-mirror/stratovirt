@@ -14,6 +14,7 @@
 //!
 //! Offer snapshot and migration interface for VM.
 
+pub mod error;
 pub mod general;
 pub mod manager;
 pub mod migration;
@@ -23,14 +24,13 @@ pub mod snapshot;
 use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
-use anyhow::anyhow;
 pub use anyhow::Result;
 use log::error;
+
+pub use error::MigrationError;
 use machine_manager::qmp::{qmp_schema, Response};
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
-pub mod error;
-pub use error::MigrationError;
 
 /// Start to snapshot VM.
 ///
@@ -40,7 +40,7 @@ pub use error::MigrationError;
 pub fn snapshot(path: String) -> Response {
     if let Err(e) = MigrationManager::save_snapshot(&path) {
         error!("Failed to migrate to path \'{:?}\': {:?}", path, e);
-        let _ = MigrationManager::set_status(MigrationStatus::Failed).map_err(|e| anyhow!("{}", e));
+        let _ = MigrationManager::set_status(MigrationStatus::Failed);
         return Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(e.to_string()),
             None,
