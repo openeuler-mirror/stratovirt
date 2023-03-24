@@ -252,7 +252,7 @@ impl AudioInterface for PulseStreamData {
         };
 
         if let Err(e) = self.simple.as_ref().unwrap().write(data) {
-            error!("PulseAudio write data failed: {}", e);
+            error!("PulseAudio write data failed: {:?}", e);
         }
     }
 
@@ -273,7 +273,7 @@ impl AudioInterface for PulseStreamData {
         };
 
         if let Err(e) = self.simple.as_ref().unwrap().read(data) {
-            error!("PulseAudio read data failed: {}", e);
+            error!("PulseAudio read data failed: {:?}", e);
             self.ss.rate = 0;
             return false;
         }

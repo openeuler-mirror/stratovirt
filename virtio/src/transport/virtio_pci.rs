@@ -1405,7 +1405,7 @@ impl MigrationHook for VirtioPciDevice {
                     &self.queues.lock().unwrap(),
                     queue_evts,
                 ) {
-                    error!("Failed to resume device, error is {}", e);
+                    error!("Failed to resume device, error is {:?}", e);
                 }
             } else {
                 error!("Failed to resume device: No interrupt callback");

@@ -208,7 +208,7 @@ impl UsbDeviceOps for UsbKeyboard {
                 }
             }
             Err(e) => {
-                error!("Keyboard descriptor error {}", e);
+                error!("Keyboard descriptor error {:?}", e);
                 packet.status = UsbPacketStatus::Stall;
                 return;
             }

@@ -110,7 +110,7 @@ impl KVMFds {
                 let vm_fd = match fd.create_vm() {
                     Ok(vm_fd) => vm_fd,
                     Err(e) => {
-                        error!("Failed to create VM in KVM: {}", e);
+                        error!("Failed to create VM in KVM: {:?}", e);
                         return KVMFds::default();
                     }
                 };
@@ -123,7 +123,7 @@ impl KVMFds {
                 }
             }
             Err(e) => {
-                error!("Failed to open /dev/kvm: {}", e);
+                error!("Failed to open /dev/kvm: {:?}", e);
                 KVMFds::default()
             }
         }

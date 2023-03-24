@@ -314,7 +314,7 @@ pub trait UsbDeviceOps: Send + Sync {
         debug!("handle packet endpointer number {}", ep_nr);
         if ep_nr == 0 {
             if let Err(e) = self.do_parameter(packet) {
-                error!("Failed to handle control packet {}", e);
+                error!("Failed to handle control packet {:?}", e);
             }
         } else {
             self.handle_data(packet);
@@ -409,7 +409,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
         }
     }
     if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
-        error!("Failed to wakeup endpoint {}", e);
+        error!("Failed to wakeup endpoint {:?}", e);
     }
     Ok(())
 }
@@ -480,7 +480,7 @@ impl UsbPacket {
                 let cnt = min(iov.iov_len, len - copyed);
                 let tmp = &vec[copyed..(copyed + cnt)];
                 if let Err(e) = mem_from_buf(tmp, iov.iov_base) {
-                    error!("Failed to write mem: {}", e);
+                    error!("Failed to write mem: {:?}", e);
                 }
                 copyed += cnt;
                 if len == copyed {
@@ -492,7 +492,7 @@ impl UsbPacket {
                 let cnt = min(iov.iov_len, len - copyed);
                 let tmp = &mut vec[copyed..(copyed + cnt)];
                 if let Err(e) = mem_to_buf(tmp, iov.iov_base) {
-                    error!("Failed to read mem {}", e);
+                    error!("Failed to read mem {:?}", e);
                 }
                 copyed += cnt;
                 if len == copyed {

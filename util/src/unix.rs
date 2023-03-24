@@ -131,7 +131,7 @@ fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
     let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
     if ret < 0 {
         error!(
-            "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
+            "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {:?}",
             std::io::Error::last_os_error()
         );
     }

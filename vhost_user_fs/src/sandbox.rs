@@ -197,7 +197,7 @@ impl Sandbox {
     pub fn parent_process_wait_child(&self, fork_ans: i32) -> Result<()> {
         capng::clear(capng::Set::BOTH);
         if let Err(err) = capng::apply(capng::Set::BOTH) {
-            error!("apply fail {}", err);
+            error!("apply fail {:?}", err);
         }
 
         let mut wstatus = 0;
