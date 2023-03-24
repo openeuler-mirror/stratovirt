@@ -495,7 +495,8 @@ impl VmConfig {
         Ok(())
     }
 
-    fn add_block_drive(&mut self, block_config: &str) -> Result<()> {
+    /// Add block drive config to vm and return the added drive config.
+    pub fn add_block_drive(&mut self, block_config: &str) -> Result<DriveConfig> {
         let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")
@@ -509,7 +510,8 @@ impl VmConfig {
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
-        self.add_drive_with_config(drive_cfg)
+        self.add_drive_with_config(drive_cfg.clone())?;
+        Ok(drive_cfg)
     }
 
     /// Add drive config to vm config.
