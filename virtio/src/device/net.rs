@@ -22,12 +22,11 @@ use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
 
 use crate::{
-    check_queue_enabled, iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error,
-    virtio_has_feature, ElemIovec, Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VirtioNetHdr, VirtioTrace, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
-    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
+    Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
+    VirtioTrace, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET,
+    VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
     VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
     VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
@@ -761,9 +760,6 @@ impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
-        if !queue.is_enabled() {
-            return Ok(());
-        }
 
         let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
@@ -883,9 +879,6 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-        if !queue.is_enabled() {
-            return Ok(());
-        }
 
         let mut tx_packets = 0;
         loop {
@@ -1551,7 +1544,6 @@ impl VirtioDevice for Net {
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
-            check_queue_enabled("net", queues, queue_num)?;
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 

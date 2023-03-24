@@ -14,6 +14,10 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
+use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::ioctl::ioctl_with_ref;
+
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
 use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
@@ -23,17 +27,12 @@ use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
-use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use crate::{check_queue_enabled, VirtioError};
-use anyhow::{anyhow, bail, Context, Result};
-
-use super::super::super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
-};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
+use crate::{
+    Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
+};
 
 /// Number of virtqueues.
 const QUEUE_NUM_VSOCK: usize = 3;
@@ -256,11 +255,8 @@ impl VirtioDevice for Vsock {
         let cid = self.vsock_cfg.guest_cid;
         let mut host_notifies = Vec::new();
         // The receive queue and transmit queue will be handled in vhost.
-        check_queue_enabled("vhost kernel vsock", queues, 0)?;
-        check_queue_enabled("vhost kernel vsock", queues, 1)?;
         let vhost_queues = queues[..2].to_vec();
         // This event queue will be handled.
-        check_queue_enabled("vhost kernel vsock", queues, 2)?;
         self.event_queue = Some(queues[2].clone());
         self.interrupt_cb = Some(interrupt_cb.clone());
 

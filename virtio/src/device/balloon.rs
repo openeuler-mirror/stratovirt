@@ -46,9 +46,8 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
-    check_queue_enabled, error::*, report_virtio_error, virtio_has_feature, Element, Queue,
-    VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BALLOON,
+    error::*, report_virtio_error, virtio_has_feature, Element, Queue, VirtioDevice,
+    VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -1109,8 +1108,6 @@ impl VirtioDevice for Balloon {
             )));
         }
 
-        check_queue_enabled("balloon", queues, 0)?;
-        check_queue_enabled("balloon", queues, 1)?;
         let inf_queue = queues[0].clone();
         let inf_evt = queue_evts[0].clone();
         let def_queue = queues[1].clone();
@@ -1121,19 +1118,15 @@ impl VirtioDevice for Balloon {
         let mut report_queue = None;
         let mut report_evt = None;
         if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
-            if queues[queue_index].lock().unwrap().is_enabled() {
-                report_queue = Some(queues[queue_index].clone());
-                report_evt = Some(queue_evts[queue_index].clone());
-            }
+            report_queue = Some(queues[queue_index].clone());
+            report_evt = Some(queue_evts[queue_index].clone());
             queue_index += 1;
         }
 
         // Get msg queue and eventfd.
         let mut msg_queue = None;
         let mut msg_evt = None;
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ)
-            && queues[queue_index].lock().unwrap().is_enabled()
-        {
+        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
             msg_queue = Some(queues[queue_index].clone());
             msg_evt = Some(queue_evts[queue_index].clone());
         }
