@@ -1636,7 +1636,7 @@ impl VirtioDevice for Gpu {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         if queues.len() != QUEUE_NUM_GPU {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
@@ -1659,8 +1659,8 @@ impl VirtioDevice for Gpu {
             ctrl_queue: queues[0].clone(),
             cursor_queue: queues[1].clone(),
             mem_space,
-            ctrl_queue_evt: queue_evts.remove(0),
-            cursor_queue_evt: queue_evts.remove(0),
+            ctrl_queue_evt: queue_evts[0].clone(),
+            cursor_queue_evt: queue_evts[1].clone(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             resources_list: Vec::new(),
