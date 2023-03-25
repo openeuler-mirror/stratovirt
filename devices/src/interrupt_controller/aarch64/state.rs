@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::mem::size_of;
-
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use libc::c_uint;
+use std::mem::size_of;
 
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
@@ -578,48 +577,33 @@ impl StateTransfer for GICv3 {
         let mut state = GICv3State::default();
 
         self.access_gic_redistributor(GICR_TYPER, 0, &mut state.redist_typer_l, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::GetGicRegsError(
-                    "redist_typer_l",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::GetGicRegsError("redist_typer_l", e.to_string()))?;
         self.access_gic_redistributor(GICR_TYPER + 4, 0, &mut state.redist_typer_h, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::GetGicRegsError(
-                    "redist_typer_h",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::GetGicRegsError("redist_typer_h", e.to_string()))?;
         self.access_gic_distributor(GICD_CTLR, &mut state.gicd_ctlr, false)
-            .map_err(|e| anyhow!(MigrationError::GetGicRegsError("gicd_ctlr", e.to_string())))?;
+            .map_err(|e| MigrationError::GetGicRegsError("gicd_ctlr", e.to_string()))?;
 
         let plpis = (state.redist_typer_l & 1) != 0;
         for cpu in 0..self.vcpu_count {
             state.vcpu_redist[state.redist_len] = self
                 .get_redist(cpu as usize, plpis)
-                .map_err(|e| anyhow!(MigrationError::GetGicRegsError("redist", e.to_string())))?;
+                .map_err(|e| MigrationError::GetGicRegsError("redist", e.to_string()))?;
             state.redist_len += 1;
         }
 
         self.access_gic_distributor(GICD_STATUSR, &mut state.gicd_statusr, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::GetGicRegsError(
-                    "gicd_statusr",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::GetGicRegsError("gicd_statusr", e.to_string()))?;
         for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
             state.irq_dist[state.dist_len] = self
                 .get_dist(irq as u64)
-                .map_err(|e| anyhow!(MigrationError::GetGicRegsError("dist", e.to_string())))?;
+                .map_err(|e| MigrationError::GetGicRegsError("dist", e.to_string()))?;
             state.dist_len += 1;
         }
 
         for cpu in 0..self.vcpu_count {
             state.vcpu_iccr[state.iccr_len] = self
                 .get_cpu(cpu as usize)
-                .map_err(|e| anyhow!(MigrationError::GetGicRegsError("cpu", e.to_string())))?;
+                .map_err(|e| MigrationError::GetGicRegsError("cpu", e.to_string()))?;
             state.iccr_len += 1;
         }
 
@@ -633,48 +617,33 @@ impl StateTransfer for GICv3 {
 
         let mut regu32 = state.redist_typer_l;
         self.access_gic_redistributor(GICR_TYPER, 0, &mut regu32, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::SetGicRegsError(
-                    "gicr_typer_l",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::SetGicRegsError("gicr_typer_l", e.to_string()))?;
         let plpis: bool = regu32 & 1 != 0;
         regu32 = state.redist_typer_h;
         self.access_gic_redistributor(GICR_TYPER + 4, 0, &mut regu32, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::SetGicRegsError(
-                    "gicr_typer_h",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::SetGicRegsError("gicr_typer_h", e.to_string()))?;
 
         regu32 = state.gicd_ctlr;
         self.access_gic_distributor(GICD_CTLR, &mut regu32, true)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("gicd_ctlr", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("gicd_ctlr", e.to_string()))?;
 
         for gicv3_redist in state.vcpu_redist[0..state.redist_len].iter() {
             self.set_redist(*gicv3_redist, plpis)
-                .map_err(|e| anyhow!(MigrationError::SetGicRegsError("redist", e.to_string())))?;
+                .map_err(|e| MigrationError::SetGicRegsError("redist", e.to_string()))?;
         }
 
         regu32 = state.gicd_statusr;
         self.access_gic_distributor(GICD_STATUSR, &mut regu32, true)
-            .map_err(|e| {
-                anyhow!(MigrationError::SetGicRegsError(
-                    "gicd_statusr",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::SetGicRegsError("gicd_statusr", e.to_string()))?;
 
         for gicv3_dist in state.irq_dist[0..state.dist_len].iter() {
             self.set_dist(*gicv3_dist)
-                .map_err(|e| anyhow!(MigrationError::SetGicRegsError("dist", e.to_string())))?
+                .map_err(|e| MigrationError::SetGicRegsError("dist", e.to_string()))?
         }
 
         for gicv3_iccr in state.vcpu_iccr[0..state.iccr_len].iter() {
             self.set_cpu(*gicv3_iccr)
-                .map_err(|e| anyhow!(MigrationError::SetGicRegsError("cpu", e.to_string())))?;
+                .map_err(|e| MigrationError::SetGicRegsError("cpu", e.to_string()))?;
         }
 
         Ok(())
@@ -711,25 +680,18 @@ impl StateTransfer for GICv3Its {
         let mut state = GICv3ItsState::default();
         for i in 0..8 {
             self.access_gic_its(GITS_BASER + 8 * i as u32, &mut state.baser[i], false)
-                .map_err(|e| {
-                    anyhow!(MigrationError::GetGicRegsError("Its baser", e.to_string()))
-                })?;
+                .map_err(|e| MigrationError::GetGicRegsError("Its baser", e.to_string()))?;
         }
         self.access_gic_its(GITS_CTLR, &mut state.ctlr, false)
-            .map_err(|e| anyhow!(MigrationError::GetGicRegsError("Its ctlr", e.to_string())))?;
+            .map_err(|e| MigrationError::GetGicRegsError("Its ctlr", e.to_string()))?;
         self.access_gic_its(GITS_CBASER, &mut state.cbaser, false)
-            .map_err(|e| anyhow!(MigrationError::GetGicRegsError("Its cbaser", e.to_string())))?;
+            .map_err(|e| MigrationError::GetGicRegsError("Its cbaser", e.to_string()))?;
         self.access_gic_its(GITS_CREADR, &mut state.creadr, false)
-            .map_err(|e| anyhow!(MigrationError::GetGicRegsError("Its creadr", e.to_string())))?;
+            .map_err(|e| MigrationError::GetGicRegsError("Its creadr", e.to_string()))?;
         self.access_gic_its(GITS_CWRITER, &mut state.cwriter, false)
-            .map_err(|e| {
-                anyhow!(MigrationError::GetGicRegsError(
-                    "Its cwriter",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::GetGicRegsError("Its cwriter", e.to_string()))?;
         self.access_gic_its(GITS_IIDR, &mut state.iidr, false)
-            .map_err(|e| anyhow!(MigrationError::GetGicRegsError("Its iidr", e.to_string())))?;
+            .map_err(|e| MigrationError::GetGicRegsError("Its iidr", e.to_string()))?;
 
         Ok(state.as_bytes().to_vec())
     }
@@ -741,31 +703,24 @@ impl StateTransfer for GICv3Its {
             .with_context(|| MigrationError::FromBytesError("GICv3Its"))?;
 
         self.access_gic_its(GITS_IIDR, &mut its_state.iidr, true)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("Its iidr", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its iidr", e.to_string()))?;
         // It must be written before GITS_CREADR, because GITS_CBASER write access will reset
         // GITS_CREADR.
         self.access_gic_its(GITS_CBASER, &mut its_state.cbaser, true)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("Its cbaser", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its cbaser", e.to_string()))?;
         self.access_gic_its(GITS_CREADR, &mut its_state.creadr, true)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("Its readr", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its readr", e.to_string()))?;
         self.access_gic_its(GITS_CWRITER, &mut its_state.cwriter, true)
-            .map_err(|e| {
-                anyhow!(MigrationError::SetGicRegsError(
-                    "Its cwriter",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its cwriter", e.to_string()))?;
 
         for i in 0..8 {
             self.access_gic_its(GITS_BASER + 8 * i as u32, &mut its_state.baser[i], true)
-                .map_err(|e| {
-                    anyhow!(MigrationError::SetGicRegsError("Its baser", e.to_string()))
-                })?;
+                .map_err(|e| MigrationError::SetGicRegsError("Its baser", e.to_string()))?;
         }
         self.access_gic_its_tables(false)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("Its table", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its table", e.to_string()))?;
         self.access_gic_its(GITS_CTLR, &mut its_state.ctlr, true)
-            .map_err(|e| anyhow!(MigrationError::SetGicRegsError("Its ctlr", e.to_string())))?;
+            .map_err(|e| MigrationError::SetGicRegsError("Its ctlr", e.to_string()))?;
 
         Ok(())
     }
