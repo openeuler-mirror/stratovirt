@@ -112,6 +112,7 @@ const XHCI_PORTLI: u64 = 0x8;
 const XHCI_PORTHLPMC: u64 = 0xc;
 
 /// XHCI Operation Registers
+#[derive(Default)]
 pub struct XhciOperReg {
     /// USB Command
     pub usb_cmd: Arc<AtomicU32>,
@@ -128,17 +129,6 @@ pub struct XhciOperReg {
 }
 
 impl XhciOperReg {
-    pub fn new() -> Self {
-        Self {
-            usb_cmd: Arc::new(AtomicU32::new(0)),
-            usb_status: Arc::new(AtomicU32::new(0)),
-            dev_notify_ctrl: 0,
-            cmd_ring_ctrl: 0,
-            dcbaap: 0,
-            config: 0,
-        }
-    }
-
     pub fn reset(&mut self) {
         self.set_usb_cmd(0);
         self.set_usb_status(USB_STS_HCH);
@@ -179,9 +169,10 @@ impl XhciOperReg {
 }
 
 /// XHCI Interrupter
-#[derive(Clone)]
 pub struct XhciInterrupter {
     mem: Arc<AddressSpace>,
+    oper_usb_cmd: Arc<AtomicU32>,
+    oper_usb_status: Arc<AtomicU32>,
     /// Interrupter Management
     pub iman: u32,
     /// Interrupter Morderation
@@ -200,9 +191,15 @@ pub struct XhciInterrupter {
 }
 
 impl XhciInterrupter {
-    pub fn new(mem: &Arc<AddressSpace>) -> Self {
+    pub fn new(
+        mem: &Arc<AddressSpace>,
+        oper_usb_cmd: &Arc<AtomicU32>,
+        oper_usb_status: &Arc<AtomicU32>,
+    ) -> Self {
         Self {
             mem: mem.clone(),
+            oper_usb_cmd: oper_usb_cmd.clone(),
+            oper_usb_status: oper_usb_status.clone(),
             iman: 0,
             imod: 0,
             erstsz: 0,
