@@ -26,7 +26,7 @@ use machine_manager::config::XhciConfig;
 use util::aio::Iovec;
 use util::num_ops::{read_u32, write_u64_low};
 
-use super::xhci_regs::{XchiOperReg, XhciInterrupter};
+use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use crate::usb::config::*;
 use crate::usb::UsbError;
 use crate::usb::{UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
@@ -542,7 +542,7 @@ pub trait DwordOrder: Default + Copy + Send + Sync {
 pub struct XhciDevice {
     pub numports_2: u8,
     pub numports_3: u8,
-    pub oper: XchiOperReg,
+    pub oper: XhciOperReg,
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
     pub slots: Vec<XhciSlot>,
     pub intrs: Vec<XhciInterrupter>,
@@ -568,7 +568,7 @@ impl XhciDevice {
             }
         }
         let xhci = XhciDevice {
-            oper: XchiOperReg::new(),
+            oper: XhciOperReg::new(),
             send_interrupt_ops: None,
             usb_ports: Vec::new(),
             numports_3: p3,
@@ -581,7 +581,7 @@ impl XhciDevice {
         let xhci = Arc::new(Mutex::new(xhci));
         let clone_xhci = xhci.clone();
         let mut locked_xhci = clone_xhci.lock().unwrap();
-        locked_xhci.oper.usb_status = USB_STS_HCH;
+        locked_xhci.oper.set_usb_status(USB_STS_HCH);
         for i in 0..locked_xhci.numports_2 {
             let usb_port = Arc::new(Mutex::new(UsbPort::new(
                 &Arc::downgrade(&clone_xhci),
@@ -602,21 +602,21 @@ impl XhciDevice {
     }
 
     pub fn run(&mut self) {
-        self.oper.usb_status &= !USB_STS_HCH;
+        self.oper.unset_usb_status_flag(USB_STS_HCH);
     }
 
     pub fn stop(&mut self) {
-        self.oper.usb_status |= USB_STS_HCH;
+        self.oper.set_usb_status_flag(USB_STS_HCH);
         self.oper.cmd_ring_ctrl &= !(CMD_RING_CTRL_CRR as u64);
     }
 
     pub fn running(&self) -> bool {
-        self.oper.usb_status & USB_STS_HCH != USB_STS_HCH
+        self.oper.get_usb_status() & USB_STS_HCH != USB_STS_HCH
     }
 
     pub fn host_controller_error(&mut self) {
         error!("Xhci host controller error!");
-        self.oper.usb_status |= USB_STS_HCE;
+        self.oper.set_usb_status_flag(USB_STS_HCE)
     }
 
     pub fn reset(&mut self) {
@@ -714,7 +714,7 @@ impl XhciDevice {
             locked_port.portsc, pls
         );
         drop(locked_port);
-        self.oper.usb_status |= USB_STS_PCD;
+        self.oper.set_usb_status_flag(USB_STS_PCD);
         self.port_notify(port, PORTSC_CSC)?;
         Ok(())
     }
@@ -1808,14 +1808,14 @@ impl XhciDevice {
         erdp_low |= ERDP_EHB;
         self.intrs[idx as usize].erdp = write_u64_low(self.intrs[idx as usize].erdp, erdp_low);
         self.intrs[idx as usize].iman |= IMAN_IP;
-        self.oper.usb_status |= USB_STS_EINT;
+        self.oper.set_usb_status_flag(USB_STS_EINT);
         if pending {
             return;
         }
         if self.intrs[idx as usize].iman & IMAN_IE != IMAN_IE {
             return;
         }
-        if self.oper.usb_cmd & USB_CMD_INTE != USB_CMD_INTE {
+        if self.oper.get_usb_cmd() & USB_CMD_INTE != USB_CMD_INTE {
             return;
         }
 
@@ -1831,7 +1831,7 @@ impl XhciDevice {
         if v == 0 {
             if self.intrs[0].iman & IMAN_IP == IMAN_IP
                 && self.intrs[0].iman & IMAN_IE == IMAN_IE
-                && self.oper.usb_cmd & USB_CMD_INTE == USB_CMD_INTE
+                && self.oper.get_usb_cmd() & USB_CMD_INTE == USB_CMD_INTE
             {
                 level = 1;
             }

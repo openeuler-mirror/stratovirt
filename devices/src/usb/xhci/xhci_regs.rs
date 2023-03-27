@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -111,12 +112,11 @@ const XHCI_PORTLI: u64 = 0x8;
 const XHCI_PORTHLPMC: u64 = 0xc;
 
 /// XHCI Operation Registers
-#[derive(Default, Copy, Clone)]
-pub struct XchiOperReg {
+pub struct XhciOperReg {
     /// USB Command
-    pub usb_cmd: u32,
+    pub usb_cmd: Arc<AtomicU32>,
     /// USB Status
-    pub usb_status: u32,
+    pub usb_status: Arc<AtomicU32>,
     /// Device Notify Control
     pub dev_notify_ctrl: u32,
     /// Command Ring Control
@@ -127,11 +127,11 @@ pub struct XchiOperReg {
     pub config: u32,
 }
 
-impl XchiOperReg {
+impl XhciOperReg {
     pub fn new() -> Self {
         Self {
-            usb_cmd: 0,
-            usb_status: 0,
+            usb_cmd: Arc::new(AtomicU32::new(0)),
+            usb_status: Arc::new(AtomicU32::new(0)),
             dev_notify_ctrl: 0,
             cmd_ring_ctrl: 0,
             dcbaap: 0,
@@ -140,8 +140,8 @@ impl XchiOperReg {
     }
 
     pub fn reset(&mut self) {
-        self.usb_cmd = 0;
-        self.usb_status = USB_STS_HCH;
+        self.set_usb_cmd(0);
+        self.set_usb_status(USB_STS_HCH);
         self.dev_notify_ctrl = 0;
         self.cmd_ring_ctrl = 0;
         self.dcbaap = 0;
@@ -151,6 +151,30 @@ impl XchiOperReg {
     /// Run the command ring.
     pub fn start_cmd_ring(&mut self) {
         self.cmd_ring_ctrl |= CMD_RING_CTRL_CRR as u64;
+    }
+
+    pub fn set_usb_cmd(&mut self, value: u32) {
+        self.usb_cmd.store(value, Ordering::SeqCst)
+    }
+
+    pub fn get_usb_cmd(&self) -> u32 {
+        self.usb_cmd.load(Ordering::Acquire)
+    }
+
+    pub fn set_usb_status(&mut self, value: u32) {
+        self.usb_status.store(value, Ordering::SeqCst)
+    }
+
+    pub fn get_usb_status(&self) -> u32 {
+        self.usb_status.load(Ordering::Acquire)
+    }
+
+    pub fn set_usb_status_flag(&mut self, value: u32) {
+        self.usb_status.fetch_or(value, Ordering::SeqCst);
+    }
+
+    pub fn unset_usb_status_flag(&mut self, value: u32) {
+        self.usb_status.fetch_and(!value, Ordering::SeqCst);
     }
 }
 
@@ -311,8 +335,8 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         debug!("oper read {:x} {:x}", addr.0, offset);
         let locked_xhci = xhci.lock().unwrap();
         let value = match offset {
-            XHCI_OPER_REG_USBCMD => locked_xhci.oper.usb_cmd,
-            XHCI_OPER_REG_USBSTS => locked_xhci.oper.usb_status,
+            XHCI_OPER_REG_USBCMD => locked_xhci.oper.get_usb_cmd(),
+            XHCI_OPER_REG_USBSTS => locked_xhci.oper.get_usb_status(),
             XHCI_OPER_REG_PAGESIZE => XHCI_OPER_PAGESIZE,
             XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl,
             XHCI_OPER_REG_CMD_RING_CTRL_LO => {
@@ -350,23 +374,23 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         match offset {
             XHCI_OPER_REG_USBCMD => {
                 if (value & USB_CMD_RUN) == USB_CMD_RUN
-                    && (locked_xhci.oper.usb_cmd & USB_CMD_RUN) != USB_CMD_RUN
+                    && (locked_xhci.oper.get_usb_cmd() & USB_CMD_RUN) != USB_CMD_RUN
                 {
                     locked_xhci.run();
                 } else if (value & USB_CMD_RUN) != USB_CMD_RUN
-                    && (locked_xhci.oper.usb_cmd & USB_CMD_RUN) == USB_CMD_RUN
+                    && (locked_xhci.oper.get_usb_cmd() & USB_CMD_RUN) == USB_CMD_RUN
                 {
                     locked_xhci.stop();
                 }
                 if value & USB_CMD_CSS == USB_CMD_CSS {
-                    locked_xhci.oper.usb_status &= !USB_STS_SRE;
+                    locked_xhci.oper.unset_usb_status_flag(USB_STS_SRE);
                 }
                 // When the restore command is issued, an error is reported and then
                 // guest OS performs a complete initialization.
                 if value & USB_CMD_CRS == USB_CMD_CRS {
-                    locked_xhci.oper.usb_status |= USB_STS_SRE;
+                    locked_xhci.oper.set_usb_status_flag(USB_STS_SRE);
                 }
-                locked_xhci.oper.usb_cmd = value & 0xc0f;
+                locked_xhci.oper.set_usb_cmd(value & 0xc0f);
                 if value & USB_CMD_HCRST == USB_CMD_HCRST {
                     locked_xhci.reset();
                 }
@@ -374,9 +398,9 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_OPER_REG_USBSTS => {
                 // Write 1 to clear.
-                locked_xhci.oper.usb_status &=
-                    !(value & (USB_STS_HSE | USB_STS_EINT | USB_STS_PCD | USB_STS_SRE));
-                locked_xhci.update_intr(0);
+                locked_xhci.oper.unset_usb_status_flag(
+                    value & (USB_STS_HSE | USB_STS_EINT | USB_STS_PCD | USB_STS_SRE),
+                )
             }
             XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl = value & XHCI_OPER_NE_MASK,
             XHCI_OPER_REG_CMD_RING_CTRL_LO => {
