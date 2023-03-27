@@ -567,14 +567,30 @@ impl XhciDevice {
                 p3 = XHCI_MAX_PORT3;
             }
         }
+        let oper = XhciOperReg::default();
+
+        let mut intrs = Vec::new();
+        for _ in 0..MAX_INTRS {
+            intrs.push(XhciInterrupter::new(
+                mem_space,
+                &oper.usb_cmd,
+                &oper.usb_status,
+            ));
+        }
+
+        let mut slots = Vec::new();
+        for _ in 0..MAX_SLOTS {
+            slots.push(XhciSlot::new(mem_space));
+        }
+
         let xhci = XhciDevice {
-            oper: XhciOperReg::new(),
+            oper: oper,
             send_interrupt_ops: None,
             usb_ports: Vec::new(),
             numports_3: p3,
             numports_2: p2,
-            slots: vec![XhciSlot::new(mem_space); MAX_SLOTS as usize],
-            intrs: vec![XhciInterrupter::new(mem_space); MAX_INTRS as usize],
+            slots,
+            intrs,
             cmd_ring: XhciRing::new(mem_space),
             mem_space: mem_space.clone(),
         };
