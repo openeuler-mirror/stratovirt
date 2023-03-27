@@ -355,6 +355,12 @@ impl UsbPort {
         self.portsc &= !(PORTSC_PLS_MASK << PORTSC_PLS_SHIFT);
         self.portsc |= (pls & PORTSC_PLS_MASK) << PORTSC_PLS_SHIFT;
     }
+
+    /// Check the speed is supported by the usb port.
+    pub fn speed_supported(&self, speed: u32) -> bool {
+        let speed_mask = 1 << speed;
+        self.speed_mask & speed_mask == speed_mask
+    }
 }
 
 /// Event usually send to drivers.
@@ -583,14 +589,14 @@ impl XhciDevice {
             )));
             locked_xhci.usb_ports.push(usb_port.clone());
             let mut locked_port = usb_port.lock().unwrap();
-            locked_port.speed_mask = USB_SPEED_LOW | USB_SPEED_HIGH | USB_SPEED_FULL;
+            locked_port.speed_mask = USB_SPEED_MASK_LOW | USB_SPEED_MASK_HIGH | USB_SPEED_MASK_FULL;
         }
         for i in 0..locked_xhci.numports_3 {
             let idx = i + locked_xhci.numports_2 + 1;
             let usb_port = Arc::new(Mutex::new(UsbPort::new(&Arc::downgrade(&clone_xhci), idx)));
             locked_xhci.usb_ports.push(usb_port.clone());
             let mut locked_port = usb_port.lock().unwrap();
-            locked_port.speed_mask = USB_SPEED_SUPER;
+            locked_port.speed_mask = USB_SPEED_MASK_SUPER;
         }
         xhci
     }
@@ -1842,9 +1848,10 @@ impl XhciDevice {
         &mut self,
         dev: &Arc<Mutex<dyn UsbDeviceOps>>,
     ) -> Option<Arc<Mutex<UsbPort>>> {
+        let speed = dev.lock().unwrap().speed();
         for port in &self.usb_ports {
             let mut locked_port = port.lock().unwrap();
-            if !locked_port.used {
+            if locked_port.speed_supported(speed) && !locked_port.used {
                 locked_port.used = true;
                 locked_port.dev = Some(dev.clone());
                 let mut locked_dev = dev.lock().unwrap();
