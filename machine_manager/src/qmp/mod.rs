@@ -466,7 +466,8 @@ fn qmp_command_exec(
         (blockdev_add, blockdev_add),
         (netdev_add, netdev_add),
         (chardev_add, chardev_add),
-        (update_region, update_region)
+        (update_region, update_region),
+        (human_monitor_command, human_monitor_command)
     );
 
     // Handle the Qmp command which macro can't cover
