@@ -14,7 +14,7 @@ use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
@@ -27,16 +27,14 @@ use util::aio::Iovec;
 use util::num_ops::{read_u32, write_u64_low};
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
-use crate::usb::config::*;
-use crate::usb::UsbError;
-use crate::usb::{UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
-
-use super::xhci_ring::XhciEventRingSeg;
-use super::xhci_ring::XhciRing;
-use super::xhci_ring::XhciTRB;
+use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::{
     TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_SIZE, TRB_TR_DIR, TRB_TR_IDT, TRB_TR_IOC,
     TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TYPE_SHIFT,
+};
+use crate::usb::config::*;
+use crate::usb::{
+    UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
 };
 
 pub const MAX_INTRS: u16 = 16;
@@ -158,9 +156,9 @@ impl XhciTransfer {
 pub struct XhciEpContext {
     epid: u32,
     enabled: bool,
-    ring: XhciRing,
+    ring: Arc<XhciTransferRing>,
     ep_type: EpType,
-    output_ctx_addr: DmaAddr,
+    output_ctx_addr: Arc<AtomicU64>,
     state: u32,
     interval: u32,
     transfers: LinkedList<XhciTransfer>,
@@ -169,12 +167,13 @@ pub struct XhciEpContext {
 
 impl XhciEpContext {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
+        let addr = Arc::new(AtomicU64::new(0));
         Self {
             epid: 0,
             enabled: false,
-            ring: XhciRing::new(mem),
+            ring: Arc::new(XhciTransferRing::new(mem, &addr)),
             ep_type: EpType::Invalid,
-            output_ctx_addr: 0,
+            output_ctx_addr: addr,
             state: 0,
             interval: 0,
             transfers: LinkedList::new(),
@@ -186,25 +185,21 @@ impl XhciEpContext {
     fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
-        self.output_ctx_addr = output_ctx;
+        self.output_ctx_addr.store(output_ctx, Ordering::SeqCst);
         self.ring.init(dequeue);
-        self.ring.ccs = (ctx.deq_lo & 1) == 1;
+        self.ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
     }
 
     /// Update the endpoint state and write the state to memory.
     fn set_state(&mut self, mem: &Arc<AddressSpace>, state: u32) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        dma_read_u32(
-            mem,
-            GuestAddress(self.output_ctx_addr),
-            ep_ctx.as_mut_dwords(),
-        )?;
+        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
+        dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= state;
-        ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
-        ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
-        dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
+        self.ring.update_dequeue_to_ctx(&mut ep_ctx);
+        dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
         self.state = state;
         Ok(())
     }
@@ -213,18 +208,15 @@ impl XhciEpContext {
     /// If dequeue is None, only flush the dequeue pointer to memory.
     fn update_dequeue(&mut self, mem: &Arc<AddressSpace>, dequeue: Option<u64>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        dma_read_u32(
-            mem,
-            GuestAddress(self.output_ctx_addr),
-            ep_ctx.as_mut_dwords(),
-        )?;
+        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
+        dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
         if let Some(dequeue) = dequeue {
             self.ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
-            self.ring.ccs = (dequeue & EP_CTX_DCS) == EP_CTX_DCS;
+            self.ring
+                .set_cycle_bit((dequeue & EP_CTX_DCS) == EP_CTX_DCS);
         }
-        ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
-        ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
-        dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
+        self.ring.update_dequeue_to_ctx(&mut ep_ctx);
+        dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
         Ok(())
     }
 
@@ -546,7 +538,7 @@ pub struct XhciDevice {
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
     pub slots: Vec<XhciSlot>,
     pub intrs: Vec<XhciInterrupter>,
-    pub cmd_ring: XhciRing,
+    pub cmd_ring: XhciCommandRing,
     mem_space: Arc<AddressSpace>,
     pub send_interrupt_ops: Option<Box<dyn Fn(u32, u8) -> bool + Send + Sync>>,
 }
@@ -591,7 +583,7 @@ impl XhciDevice {
             numports_2: p2,
             slots,
             intrs,
-            cmd_ring: XhciRing::new(mem_space),
+            cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
         };
         let xhci = Arc::new(Mutex::new(xhci));
@@ -1330,7 +1322,9 @@ impl XhciDevice {
         };
         debug!(
             "kick_endpoint slotid {} epid {} dequeue {:x}",
-            slot_id, ep_id, epctx.ring.dequeue
+            slot_id,
+            ep_id,
+            epctx.ring.get_dequeue_ptr(),
         );
         if self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
             .retry
@@ -1917,7 +1911,11 @@ fn dma_read_u64(addr_space: &Arc<AddressSpace>, addr: GuestAddress, data: &mut u
     Ok(())
 }
 
-fn dma_read_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &mut [u32]) -> Result<()> {
+pub fn dma_read_u32(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    buf: &mut [u32],
+) -> Result<()> {
     let vec_len = size_of::<u32>() * buf.len();
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
@@ -1928,7 +1926,11 @@ fn dma_read_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &mut [u
     Ok(())
 }
 
-fn dma_write_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u32]) -> Result<()> {
+pub fn dma_write_u32(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    buf: &[u32],
+) -> Result<()> {
     let vec_len = size_of::<u32>() * buf.len();
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
