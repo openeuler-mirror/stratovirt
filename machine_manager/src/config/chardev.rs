@@ -15,7 +15,9 @@ use log::error;
 use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, get_pci_bdf, pci_args_check, PciBdf};
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
+use crate::config::{
+    check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
+};
 use crate::qmp::qmp_schema;
 
 const MAX_GUEST_CID: u64 = 4_294_967_295;
@@ -50,12 +52,7 @@ pub struct ChardevConfig {
 
 impl ConfigCheck for ChardevConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "chardev id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "chardev id")?;
 
         let len = match &self.backend {
             ChardevType::Socket { path, .. } => path.len(),
@@ -386,12 +383,7 @@ pub struct VsockConfig {
 
 impl ConfigCheck for VsockConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "vsock id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
+        check_arg_too_long(&self.id, "vsock id")?;
 
         if self.guest_cid < MIN_GUEST_CID || self.guest_cid >= MAX_GUEST_CID {
             return Err(anyhow!(ConfigError::IllegalValue(
@@ -449,14 +441,7 @@ pub struct VirtioSerialInfo {
 
 impl ConfigCheck for VirtioSerialInfo {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "virtio-serial id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
-        Ok(())
+        check_arg_too_long(&self.id, "virtio-serial id")
     }
 }
 

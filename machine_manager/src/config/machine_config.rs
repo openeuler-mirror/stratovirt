@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES, MAX_STRING_LENGTH,
+    check_arg_too_long, CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES,
 };
 
 const DEFAULT_CPUS: u8 = 1;
@@ -422,12 +422,7 @@ impl VmConfig {
 impl VmConfig {
     fn get_mem_zone_id(&self, cmd_parser: &CmdParser) -> Result<String> {
         if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            if id.len() > MAX_STRING_LENGTH {
-                return Err(anyhow!(ConfigError::StringLengthTooLong(
-                    "id".to_string(),
-                    MAX_STRING_LENGTH
-                )));
-            }
+            check_arg_too_long(&id, "id")?;
             Ok(id)
         } else {
             Err(anyhow!(ConfigError::FieldIsMissing(

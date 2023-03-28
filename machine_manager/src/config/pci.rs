@@ -14,8 +14,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
-use crate::config::ExBool;
+use super::{CmdParser, ConfigCheck};
+use crate::config::{check_arg_too_long, ExBool};
 use util::num_ops::str_to_usize;
 
 /// Basic information of pci devices such as bus number,
@@ -53,14 +53,7 @@ pub struct RootPortConfig {
 
 impl ConfigCheck for RootPortConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "root_port id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
-        Ok(())
+        check_arg_too_long(&self.id, "root_port id")
     }
 }
 

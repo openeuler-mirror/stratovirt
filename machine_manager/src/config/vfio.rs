@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::error::ConfigError;
-use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
+use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 use anyhow::{anyhow, Result};
 #[derive(Default, Debug)]
 pub struct VfioConfig {
@@ -22,19 +22,8 @@ pub struct VfioConfig {
 
 impl ConfigCheck for VfioConfig {
     fn check(&self) -> Result<()> {
-        if self.host.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "host".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
-
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
+        check_arg_too_long(&self.host, "host")?;
+        check_arg_too_long(&self.id, "id")?;
 
         Ok(())
     }
