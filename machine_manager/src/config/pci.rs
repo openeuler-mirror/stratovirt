@@ -146,7 +146,10 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     let mut root_port = RootPortConfig::default();
     let port = cmd_parser.get_value::<String>("port")?;
     if port.is_none() {
-        return Err(anyhow!(ConfigError::FieldIsMissing("port", "rootport")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "port".to_string(),
+            "rootport".to_string()
+        )));
     }
     // Safety: as port is validated non-none at the previous line, it's safe to unwrap() it
     root_port.port = str_to_usize(port.unwrap())? as u8;
@@ -156,7 +159,10 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         root_port.id = id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rootport")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "rootport".to_string()
+        )));
     }
     root_port.multifunction =
         if let Some(multi_func) = cmd_parser.get_value::<ExBool>("multifunction")? {

@@ -11,14 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use super::error::ConfigError;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
-use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
+use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck};
 
 /// XHCI contoller configuration.
 #[derive(Debug)]
 pub struct XhciConfig {
-    pub id: String,
+    pub id: Option<String>,
     // number of usb2.0 ports
     pub p2: Option<u8>,
     // number of usb3.0 ports
@@ -28,7 +28,7 @@ pub struct XhciConfig {
 impl XhciConfig {
     fn new() -> Self {
         XhciConfig {
-            id: String::new(),
+            id: None,
             p2: None,
             p3: None,
         }
@@ -59,7 +59,7 @@ impl XhciConfig {
 
 impl ConfigCheck for XhciConfig {
     fn check(&self) -> Result<()> {
-        check_id(&self.id)?;
+        check_id(self.id.clone(), "xhci controller")?;
         self.check_ports()
     }
 }
@@ -75,11 +75,7 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
         .push("p3");
     cmd_parser.parse(conf)?;
     let mut dev = XhciConfig::new();
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        dev.id = id;
-    } else {
-        bail!("id is none for usb xhci");
-    }
+    dev.id = cmd_parser.get_value::<String>("id")?;
 
     if let Some(p2) = cmd_parser.get_value::<u8>("p2")? {
         dev.p2 = Some(p2);
@@ -95,18 +91,18 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
 
 #[derive(Debug)]
 pub struct UsbKeyboardConfig {
-    pub id: String,
+    pub id: Option<String>,
 }
 
 impl UsbKeyboardConfig {
     fn new() -> Self {
-        UsbKeyboardConfig { id: String::new() }
+        UsbKeyboardConfig { id: None }
     }
 }
 
 impl ConfigCheck for UsbKeyboardConfig {
     fn check(&self) -> Result<()> {
-        check_id(&self.id)
+        check_id(self.id.clone(), "usb-keyboard")
     }
 }
 
@@ -115,29 +111,26 @@ pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
     cmd_parser.push("").push("id").push("bus").push("port");
     cmd_parser.parse(conf)?;
     let mut dev = UsbKeyboardConfig::new();
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        dev.id = id;
-    } else {
-        bail!("id is none for usb keyboard");
-    }
+    dev.id = cmd_parser.get_value::<String>("id")?;
+
     dev.check()?;
     Ok(dev)
 }
 
 #[derive(Debug)]
 pub struct UsbTabletConfig {
-    pub id: String,
+    pub id: Option<String>,
 }
 
 impl UsbTabletConfig {
     fn new() -> Self {
-        UsbTabletConfig { id: String::new() }
+        UsbTabletConfig { id: None }
     }
 }
 
 impl ConfigCheck for UsbTabletConfig {
     fn check(&self) -> Result<()> {
-        check_id(&self.id)
+        check_id(self.id.clone(), "usb-tablet")
     }
 }
 
@@ -146,15 +139,13 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     cmd_parser.push("").push("id").push("bus").push("port");
     cmd_parser.parse(conf)?;
     let mut dev = UsbTabletConfig::new();
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        dev.id = id;
-    } else {
-        bail!("id is none for usb tablet");
-    }
+    dev.id = cmd_parser.get_value::<String>("id")?;
+
     dev.check()?;
     Ok(dev)
 }
 
-fn check_id(id: &str) -> Result<()> {
-    check_arg_too_long(id, "id")
+fn check_id(id: Option<String>, device: &str) -> Result<()> {
+    check_arg_nonexist(id.clone(), "id", device)?;
+    check_arg_too_long(&id.unwrap(), "id")
 }

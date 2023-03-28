@@ -52,8 +52,8 @@ pub fn parse_vfio(vfio_config: &str) -> Result<VfioConfig> {
 
     if vfio.host.is_empty() && vfio.sysfsdev.is_empty() {
         return Err(anyhow!(ConfigError::FieldIsMissing(
-            "host nor sysfsdev",
-            "vfio"
+            "host nor sysfsdev".to_string(),
+            "vfio".to_string()
         )));
     }
 

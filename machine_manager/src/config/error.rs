@@ -41,7 +41,7 @@ pub enum ConfigError {
     #[error("Unknown device type: {0}!")]
     UnknownDeviceType(String),
     #[error("\'{0}\' is missing for \'{1}\' device.")]
-    FieldIsMissing(&'static str, &'static str),
+    FieldIsMissing(String, String),
     #[error("{0} must >{} {1} and <{} {3}.", if *.2 {"="} else {""}, if *.4 {"="} else {""})]
     IllegalValue(String, u64, bool, u64, bool),
     #[error("{0} must {}{} {3}.", if *.1 {">"} else {"<"}, if *.2 {"="} else {""})]

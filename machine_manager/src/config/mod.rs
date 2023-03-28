@@ -626,6 +626,12 @@ pub fn check_arg_too_long(arg: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Result<()> {
+    arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
