@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Result};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use util::aio::AioEngine;
 
@@ -63,18 +63,10 @@ impl Default for ScsiCntlrConfig {
 
 impl ConfigCheck for ScsiCntlrConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "virtio-scsi-pci device id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "virtio-scsi-pci device id")?;
 
-        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
         }
 
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u32 {

@@ -13,7 +13,7 @@
 use super::error::ConfigError;
 use anyhow::{anyhow, bail, Result};
 
-use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
+use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 
 /// XHCI contoller configuration.
 #[derive(Debug)]
@@ -156,11 +156,5 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
 }
 
 fn check_id(id: &str) -> Result<()> {
-    if id.len() > MAX_STRING_LENGTH {
-        return Err(anyhow!(ConfigError::StringLengthTooLong(
-            "id".to_string(),
-            MAX_STRING_LENGTH
-        )));
-    }
-    Ok(())
+    check_arg_too_long(id, "id")
 }

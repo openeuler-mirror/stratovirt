@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
-    MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig,
+    DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
 use util::aio::{aio_probe, AioEngine};
@@ -165,12 +165,8 @@ impl DriveConfig {
 
 impl ConfigCheck for DriveConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "Drive id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
+        check_arg_too_long(&self.id, "Drive id")?;
+
         if self.path_on_host.len() > MAX_PATH_LENGTH {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "Drive device path".to_string(),
@@ -206,13 +202,7 @@ impl ConfigCheck for DriveConfig {
 
 impl ConfigCheck for BlkDevConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "drive device id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
+        check_arg_too_long(&self.id, "drive device id")?;
         if self.serial_num.is_some() && self.serial_num.as_ref().unwrap().len() > MAX_SERIAL_NUM {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive serial number".to_string(),

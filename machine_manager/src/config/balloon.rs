@@ -13,8 +13,8 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check, ConfigCheck, MAX_STRING_LENGTH};
-use crate::config::{CmdParser, ExBool, VmConfig};
+use super::{pci_args_check, ConfigCheck};
+use crate::config::{check_arg_too_long, CmdParser, ConfigError, ExBool, VmConfig};
 
 const MEM_BUFFER_PERCENT_MIN: u32 = 20;
 const MEM_BUFFER_PERCENT_MAX: u32 = 80;
@@ -35,12 +35,8 @@ pub struct BalloonConfig {
 
 impl ConfigCheck for BalloonConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "balloon id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "balloon id")?;
+
         if !self.auto_balloon {
             return Ok(());
         }
