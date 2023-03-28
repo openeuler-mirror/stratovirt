@@ -98,20 +98,25 @@ impl PulseStreamData {
 
         let pa_dir = dir.transform();
 
-        let simple = Simple::new(
-            None,
-            name,
-            pa_dir,
-            None,
-            STREAM_NAME,
-            &ss,
-            Some(&channel_map),
-            Some(&buffer_attr),
-        )
-        .unwrap_or_else(|e| panic!("PulseAudio init failed : {}", e));
+        #[cfg(not(test))]
+        let simple = Some(
+            Simple::new(
+                None,
+                name,
+                pa_dir,
+                None,
+                STREAM_NAME,
+                &ss,
+                Some(&channel_map),
+                Some(&buffer_attr),
+            )
+            .unwrap_or_else(|e| panic!("PulseAudio init failed : {}", e)),
+        );
+        #[cfg(test)]
+        let simple = None;
 
         Self {
-            simple: Some(simple),
+            simple,
             ss,
             channel_map,
             buffer_attr,
@@ -274,5 +279,74 @@ impl AudioInterface for PulseStreamData {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pulse::{channelmap::Position, sample::Format};
+
+    use super::{
+        PulseStreamData, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
+    };
+    use crate::misc::scream::{ScreamDirection, StreamData};
+
+    #[test]
+    fn test_channel_map_transfer() {
+        let mut pulse = PulseStreamData::init("test", ScreamDirection::Playback);
+        let mut test_data = StreamData::default();
+
+        // set 8: BC, 6: FLC, 4: BL, 2: FC, 0: FL
+        test_data.fmt.channels = 5;
+        test_data.fmt.channel_map = 0b1_0101_0101;
+        pulse.transfer_channel_map(&test_data.fmt);
+
+        assert_eq!(pulse.channel_map.len(), 5);
+        let map = pulse.channel_map.get_mut();
+        assert_eq!(map[0], Position::FrontLeft);
+        assert_eq!(map[1], Position::FrontCenter);
+        assert_eq!(map[2], Position::RearLeft);
+        assert_eq!(map[3], Position::FrontLeftOfCenter);
+        assert_eq!(map[4], Position::RearCenter);
+
+        // The first 12 bits are set to 1.
+        test_data.fmt.channels = 12;
+        test_data.fmt.channel_map = 0b1111_1111_1111;
+        pulse.transfer_channel_map(&test_data.fmt);
+
+        assert_eq!(pulse.channel_map.len(), 12);
+        let map = pulse.channel_map.get_mut();
+        assert_eq!(map[11], Position::FrontCenter);
+    }
+
+    #[test]
+    fn test_pulseaudio_fmt_update() {
+        let mut pulse = PulseStreamData::init("test", ScreamDirection::Playback);
+        let mut test_data = StreamData::default();
+
+        // Setting sample rate to AUDIO_SAMPLE_RATE_44KHZ, sample size to 16.
+        test_data.fmt.rate = WINDOWS_SAMPLE_BASE_RATE + 1;
+        test_data.fmt.size = 16;
+
+        pulse.check_fmt_update(&test_data);
+
+        assert_eq!(pulse.ss.rate, AUDIO_SAMPLE_RATE_44KHZ);
+        assert_eq!(pulse.ss.format, Format::S16le);
+
+        // Setting sample rate to AUDIO_SAMPLE_RATE_48KHZ, sample size to 24.
+        test_data.fmt.rate = 1;
+        test_data.fmt.size = 24;
+
+        pulse.check_fmt_update(&test_data);
+
+        assert_eq!(pulse.ss.rate, AUDIO_SAMPLE_RATE_48KHZ);
+        assert_eq!(pulse.ss.format, Format::S24le);
+
+        // Settint invalid sample size to 100.
+        test_data.fmt.size = 100;
+
+        pulse.check_fmt_update(&test_data);
+
+        assert_eq!(pulse.ss.rate, 0);
     }
 }
