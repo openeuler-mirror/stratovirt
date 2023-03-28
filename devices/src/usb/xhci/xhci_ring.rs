@@ -128,7 +128,7 @@ impl XhciCommandRing {
 
 /// XHCI Transfer Ring
 pub struct XhciTransferRing {
-    mem: Arc<AddressSpace>,
+    pub mem: Arc<AddressSpace>,
     pub dequeue: AtomicU64,
     /// Consumer Cycle State
     pub ccs: AtomicBool,
