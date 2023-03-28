@@ -270,13 +270,19 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         drive.id = id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "blk")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "blk".to_string()
+        )));
     }
 
     if let Some(file) = cmd_parser.get_value::<String>("file")? {
         drive.path_on_host = file;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("file", "blk")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "file".to_string(),
+            "blk".to_string()
+        )));
     }
 
     if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
@@ -330,7 +336,10 @@ pub fn parse_blk(
     let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
         drive
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "blk")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "drive".to_string(),
+            "blk".to_string()
+        )));
     };
 
     if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
@@ -400,8 +409,8 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.chardev = Some(chardev);
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev",
-            "vhost-user-blk-pci"
+            "chardev".to_string(),
+            "vhost-user-blk-pci".to_string()
         )));
     };
 
@@ -619,7 +628,10 @@ impl VmConfig {
         if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
             pflash.path_on_host = drive_path;
         } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("file", "pflash")));
+            return Err(anyhow!(ConfigError::FieldIsMissing(
+                "file".to_string(),
+                "pflash".to_string()
+            )));
         }
 
         if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
@@ -629,7 +641,10 @@ impl VmConfig {
         if let Some(unit_id) = cmd_parser.get_value::<u64>("unit")? {
             pflash.unit = unit_id as usize;
         } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("unit", "pflash")));
+            return Err(anyhow!(ConfigError::FieldIsMissing(
+                "unit".to_string(),
+                "pflash".to_string()
+            )));
         }
 
         pflash.check()?;

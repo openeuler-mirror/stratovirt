@@ -84,7 +84,10 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     let rng = if let Some(rng_id) = cmd_parser.get_value::<String>("rng")? {
         rng_id
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("rng", "rng")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "rng".to_string(),
+            "rng".to_string()
+        )));
     };
 
     rng_cfg.id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
@@ -131,14 +134,17 @@ pub fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
     let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
         obj_id
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "rng-object".to_string()
+        )));
     };
     let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
         name
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing(
-            "filename",
-            "rng-object"
+            "filename".to_string(),
+            "rng-object".to_string()
         )));
     };
     let rng_obj_cfg = RngObjConfig { id, filename };

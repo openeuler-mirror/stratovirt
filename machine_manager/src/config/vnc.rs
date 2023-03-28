@@ -51,7 +51,10 @@ impl VmConfig {
         if let Some(addr) = cmd_parser.get_value::<String>("")? {
             parse_port(&mut vnc_config, addr)?;
         } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
+            return Err(anyhow!(ConfigError::FieldIsMissing(
+                "ip".to_string(),
+                "port".to_string()
+            )));
         }
 
         // VNC Security Type.
@@ -76,7 +79,10 @@ impl VmConfig {
 fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
     let v: Vec<&str> = addr.split(':').collect();
     if v.len() != 2 {
-        return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "ip".to_string(),
+            "port".to_string()
+        )));
     }
     let ip = v[0]
         .parse::<Ipv4Addr>()

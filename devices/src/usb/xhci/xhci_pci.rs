@@ -84,7 +84,7 @@ impl XhciPciDevice {
             devfn,
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
-            name: config.id.to_string(),
+            name: config.id.clone().unwrap(),
             parent_bus,
             mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
         }

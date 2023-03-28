@@ -1184,7 +1184,8 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
-        let keyboard = UsbKeyboard::new(device_cfg.id);
+        // SAFETY: id is already checked not none in parse_usb_keyboard().
+        let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
@@ -1201,7 +1202,8 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
-        let tablet = UsbTablet::new(device_cfg.id);
+        // SAFETY: id is already checked not none in parse_usb_tablet().
+        let tablet = UsbTablet::new(device_cfg.id.unwrap());
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;

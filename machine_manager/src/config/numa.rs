@@ -135,7 +135,10 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
         }
         config.numa_id = node_id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("nodeid", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "nodeid".to_string(),
+            "numa".to_string()
+        )));
     }
     if let Some(mut cpus) = cmd_parser
         .get_value::<IntegerList>("cpus")
@@ -150,12 +153,18 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
         cpus.sort_unstable();
         config.cpus = cpus;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("cpus", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "cpus".to_string(),
+            "numa".to_string()
+        )));
     }
     if let Some(mem_dev) = cmd_parser.get_value::<String>("memdev")? {
         config.mem_dev = mem_dev;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("memdev", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "memdev".to_string(),
+            "numa".to_string()
+        )));
     }
 
     Ok(config)
@@ -184,7 +193,10 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
         }
         src
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("src", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "src".to_string(),
+            "numa".to_string()
+        )));
     };
     if let Some(dst) = cmd_parser.get_value::<u32>("dst")? {
         if dst >= MAX_NODES {
@@ -198,7 +210,10 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
         }
         dist.destination = dst;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("dst", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "dst".to_string(),
+            "numa".to_string()
+        )));
     }
     if let Some(val) = cmd_parser.get_value::<u8>("val")? {
         if val < MIN_NUMA_DISTANCE {
@@ -216,7 +231,10 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
 
         dist.distance = val;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("val", "numa")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "val".to_string(),
+            "numa".to_string()
+        )));
     }
 
     Ok((numa_id, dist))

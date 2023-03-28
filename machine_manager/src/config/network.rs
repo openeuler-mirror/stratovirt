@@ -185,7 +185,10 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
         net.id = net_id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "netdev")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "netdev".to_string()
+        )));
     }
     if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
         net.ifname = ifname;
@@ -280,7 +283,10 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     let netdev = if let Some(devname) = cmd_parser.get_value::<String>("netdev")? {
         devname
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("netdev", "net")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "netdev".to_string(),
+            "net".to_string()
+        )));
     };
     let netid = if let Some(id) = cmd_parser.get_value::<String>("id")? {
         id

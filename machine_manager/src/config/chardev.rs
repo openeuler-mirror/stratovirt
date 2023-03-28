@@ -112,7 +112,10 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
     let chardev_id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
         chardev_id
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "chardev")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "chardev".to_string()
+        )));
     };
     let backend = cmd_parser.get_value::<String>("")?;
     let path = cmd_parser.get_value::<String>("path")?;
@@ -146,8 +149,8 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
                     }
                 } else {
                     return Err(anyhow!(ConfigError::FieldIsMissing(
-                        "path",
-                        "socket-type chardev"
+                        "path".to_string(),
+                        "socket-type chardev".to_string()
                     )));
                 }
             }
@@ -156,8 +159,8 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
                     ChardevType::File(path)
                 } else {
                     return Err(anyhow!(ConfigError::FieldIsMissing(
-                        "path",
-                        "file-type chardev"
+                        "path".to_string(),
+                        "file-type chardev".to_string()
                     )));
                 }
             }
@@ -169,7 +172,10 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
             }
         }
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("backend", "chardev")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "backend".to_string(),
+            "chardev".to_string()
+        )));
     };
 
     Ok(ChardevConfig {
@@ -260,15 +266,18 @@ pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<
         chardev
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev",
-            "virtconsole"
+            "chardev".to_string(),
+            "virtconsole".to_string()
         )));
     };
 
     let id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
         chardev_id
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "virtconsole")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "virtconsole".to_string()
+        )));
     };
 
     if let Some(char_dev) = vm_config.chardev.remove(&chardev_name) {
@@ -414,13 +423,19 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
         vsock_id
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "vsock")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "vsock".to_string()
+        )));
     };
 
     let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
         cid
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("guest-cid", "vsock")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "guest-cid".to_string(),
+            "vsock".to_string()
+        )));
     };
 
     let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
