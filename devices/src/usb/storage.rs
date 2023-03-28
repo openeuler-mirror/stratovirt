@@ -543,41 +543,43 @@ impl UsbDeviceOps for UsbStorage {
         self.state = UsbStorageState::new();
     }
 
-    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         debug!("Storage device handle_control request {:?}, ", device_req);
+        let mut locked_packet = packet.lock().unwrap();
         match self
             .usb_device
-            .handle_control_for_descriptor(packet, device_req)
+            .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
                 if handled {
                     debug!("Storage control handled by descriptor, return directly.");
                     return;
                 }
-                self.handle_control_packet(packet, device_req)
+                self.handle_control_packet(&mut locked_packet, device_req)
             }
             Err(e) => {
                 error!("Storage descriptor error {:?}", e);
-                packet.status = UsbPacketStatus::Stall;
+                locked_packet.status = UsbPacketStatus::Stall;
             }
         }
     }
 
-    fn handle_data(&mut self, packet: &mut UsbPacket) {
+    fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        let mut locked_packet = packet.lock().unwrap();
         debug!(
             "Storage device handle_data endpoint {}, mode {:?}",
-            packet.ep_number, self.state.mode
+            locked_packet.ep_number, self.state.mode
         );
 
-        let result = match packet.pid as u8 {
-            USB_TOKEN_OUT => self.handle_token_out(packet),
-            USB_TOKEN_IN => self.handle_token_in(packet),
+        let result = match locked_packet.pid as u8 {
+            USB_TOKEN_OUT => self.handle_token_out(&mut locked_packet),
+            USB_TOKEN_IN => self.handle_token_in(&mut locked_packet),
             _ => Err(anyhow!("Bad token!")),
         };
 
         if let Err(e) = result {
             warn!("USB-storage {}: handle data error: {:?}", self.id, e);
-            packet.status = UsbPacketStatus::Stall;
+            locked_packet.status = UsbPacketStatus::Stall;
         }
     }
 

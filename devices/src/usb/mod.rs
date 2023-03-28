@@ -52,7 +52,6 @@ pub enum UsbPacketStatus {
     Stall,
     Babble,
     IoError,
-    Async,
 }
 
 /// USB request used to transfer to USB device.
@@ -311,9 +310,11 @@ pub trait UsbDeviceOps: Send + Sync {
     }
 
     /// Handle usb packet, used for controller to deliever packet to device.
-    fn handle_packet(&mut self, packet: &mut UsbPacket) {
-        packet.status = UsbPacketStatus::Success;
-        let ep_nr = packet.ep_number;
+    fn handle_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        let mut locked_packet = packet.lock().unwrap();
+        locked_packet.status = UsbPacketStatus::Success;
+        let ep_nr = locked_packet.ep_number;
+        drop(locked_packet);
         debug!("handle packet endpointer number {}", ep_nr);
         if ep_nr == 0 {
             if let Err(e) = self.do_parameter(packet) {
@@ -325,10 +326,10 @@ pub trait UsbDeviceOps: Send + Sync {
     }
 
     /// Handle control pakcet.
-    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest);
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest);
 
     /// Handle data pakcet.
-    fn handle_data(&mut self, packet: &mut UsbPacket);
+    fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
     fn device_id(&self) -> String;
@@ -345,34 +346,37 @@ pub trait UsbDeviceOps: Send + Sync {
         usb_dev.speed
     }
 
-    fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
+    fn do_parameter(&mut self, packet: &Arc<Mutex<UsbPacket>>) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
+        let mut locked_p = packet.lock().unwrap();
         let device_req = UsbDeviceRequest {
-            request_type: p.parameter as u8,
-            request: (p.parameter >> 8) as u8,
-            value: (p.parameter >> 16) as u16,
-            index: (p.parameter >> 32) as u16,
-            length: (p.parameter >> 48) as u16,
+            request_type: locked_p.parameter as u8,
+            request: (locked_p.parameter >> 8) as u8,
+            value: (locked_p.parameter >> 16) as u16,
+            index: (locked_p.parameter >> 32) as u16,
+            length: (locked_p.parameter >> 48) as u16,
         };
         if device_req.length as usize > usb_dev.data_buf.len() {
-            p.status = UsbPacketStatus::Stall;
+            locked_p.status = UsbPacketStatus::Stall;
             bail!("data buffer small len {}", device_req.length);
         }
-        if p.pid as u8 == USB_TOKEN_OUT {
-            p.transfer_packet(&mut usb_dev.data_buf, device_req.length as usize);
+        if locked_p.pid as u8 == USB_TOKEN_OUT {
+            locked_p.transfer_packet(&mut usb_dev.data_buf, device_req.length as usize);
         }
-        self.handle_control(p, &device_req);
+        drop(locked_p);
+        self.handle_control(packet, &device_req);
+        let mut locked_p = packet.lock().unwrap();
         let usb_dev = self.get_mut_usb_device();
-        if p.status == UsbPacketStatus::Async {
+        if locked_p.is_async {
             return Ok(());
         }
         let mut len = device_req.length;
-        if len > p.actual_length as u16 {
-            len = p.actual_length as u16;
+        if len > locked_p.actual_length as u16 {
+            len = locked_p.actual_length as u16;
         }
-        if p.pid as u8 == USB_TOKEN_IN {
-            p.actual_length = 0;
-            p.transfer_packet(&mut usb_dev.data_buf, len as usize);
+        if locked_p.pid as u8 == USB_TOKEN_IN {
+            locked_p.actual_length = 0;
+            locked_p.transfer_packet(&mut usb_dev.data_buf, len as usize);
         }
         Ok(())
     }
@@ -418,10 +422,10 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
 }
 
 /// Usb packet used for device transfer data.
-#[derive(Clone)]
 pub struct UsbPacket {
     /// USB packet id.
     pub pid: u32,
+    pub is_async: bool,
     pub iovecs: Vec<Iovec>,
     /// control transfer parameter.
     pub parameter: u64,
@@ -446,6 +450,7 @@ impl std::fmt::Display for UsbPacket {
 impl UsbPacket {
     pub fn init(&mut self, pid: u32, ep_number: u8) {
         self.pid = pid;
+        self.is_async = false;
         self.status = UsbPacketStatus::Success;
         self.actual_length = 0;
         self.parameter = 0;
@@ -504,6 +509,7 @@ impl Default for UsbPacket {
     fn default() -> UsbPacket {
         UsbPacket {
             pid: 0,
+            is_async: false,
             iovecs: Vec::new(),
             parameter: 0,
             status: UsbPacketStatus::NoDev,

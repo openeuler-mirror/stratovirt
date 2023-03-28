@@ -114,7 +114,7 @@ type DmaAddr = u64;
 /// Transfer data between controller and device.
 #[derive(Clone)]
 pub struct XhciTransfer {
-    pub packet: UsbPacket,
+    pub packet: Arc<Mutex<UsbPacket>>,
     status: TRBCCode,
     td: Vec<XhciTRB>,
     complete: Arc<AtomicBool>,
@@ -135,7 +135,7 @@ impl XhciTransfer {
         ep_state: &Arc<AtomicU32>,
     ) -> Self {
         XhciTransfer {
-            packet: UsbPacket::default(),
+            packet: Arc::new(Mutex::new(UsbPacket::default())),
             status: TRBCCode::Invalid,
             td: Vec::new(),
             complete: Arc::new(AtomicBool::new(false)),
@@ -154,15 +154,15 @@ impl XhciTransfer {
         self.complete.load(Ordering::Acquire)
     }
 
-    fn set_comleted(&mut self, v: bool) {
+    fn set_completed(&mut self, v: bool) {
         self.complete.store(v, Ordering::SeqCst)
     }
 
     pub fn complete_transfer(&mut self) -> Result<()> {
         // NOTE: When entry this function, the transfer must be completed.
-        self.set_comleted(true);
+        self.set_completed(true);
 
-        self.status = usb_packet_status_to_trb_code(self.packet.status)?;
+        self.status = usb_packet_status_to_trb_code(self.packet.lock().unwrap().status)?;
         if self.status == TRBCCode::Success {
             self.submit_transfer()?;
             self.ep_ring.refresh_dequeue_ptr()?;
@@ -179,7 +179,7 @@ impl XhciTransfer {
     pub fn submit_transfer(&mut self) -> Result<()> {
         // Event Data Transfer Length Accumulator.
         let mut edtla: u32 = 0;
-        let mut left = self.packet.actual_length;
+        let mut left = self.packet.lock().unwrap().actual_length;
         for i in 0..self.td.len() {
             let trb = &self.td[i];
             let trb_type = trb.get_type();
@@ -232,7 +232,7 @@ impl XhciTransfer {
 
     fn report_transfer_error(&mut self) -> Result<()> {
         // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
-        self.set_comleted(true);
+        self.set_completed(true);
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
         evt.slot_id = self.slotid as u8;
         evt.ep_id = self.epid as u8;
@@ -1093,7 +1093,8 @@ impl XhciDevice {
             index: 0,
             length: 0,
         };
-        locked_dev.handle_control(&mut p, &device_req);
+        let p = Arc::new(Mutex::new(p));
+        locked_dev.handle_control(&p, &device_req);
     }
 
     fn get_device_context_addr(&self, slot_id: u32) -> Result<u64> {
@@ -1548,7 +1549,7 @@ impl XhciDevice {
             .unwrap()
             .clone();
         self.device_handle_packet(xfer);
-        if xfer.packet.status == UsbPacketStatus::Nak {
+        if xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak {
             debug!("USB packet status is NAK");
             // NAK need to retry again.
             return Ok(false);
@@ -1566,9 +1567,9 @@ impl XhciDevice {
     fn device_handle_packet(&mut self, xfer: &mut XhciTransfer) {
         if let Ok(usb_dev) = self.get_usb_dev(xfer.slotid, xfer.epid) {
             let mut locked_dev = usb_dev.lock().unwrap();
-            locked_dev.handle_packet(&mut xfer.packet);
+            locked_dev.handle_packet(&xfer.packet);
         } else {
-            xfer.packet.status = UsbPacketStatus::NoDev;
+            xfer.packet.lock().unwrap().status = UsbPacketStatus::NoDev;
             error!("Failed to handle packet, No endpoint found");
         }
     }
@@ -1598,7 +1599,7 @@ impl XhciDevice {
             xfer.status = TRBCCode::TrbError;
             return xfer.report_transfer_error();
         }
-        xfer.packet.parameter = trb_setup.parameter;
+        xfer.packet.lock().unwrap().parameter = trb_setup.parameter;
         self.device_handle_packet(xfer);
         self.complete_packet(xfer)?;
         Ok(())
@@ -1685,8 +1686,9 @@ impl XhciDevice {
             }
         }
         let (_, ep_number) = endpoint_id_to_number(xfer.epid as u8);
-        xfer.packet.init(dir as u32, ep_number);
-        xfer.packet.iovecs = vec;
+        let mut locked_packet = xfer.packet.lock().unwrap();
+        locked_packet.init(dir as u32, ep_number);
+        locked_packet.iovecs = vec;
         Ok(())
     }
 
@@ -1705,17 +1707,17 @@ impl XhciDevice {
 
     /// Update packet status and then submit transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
-        if xfer.packet.status == UsbPacketStatus::Async {
-            xfer.set_comleted(false);
+        if xfer.packet.lock().unwrap().is_async {
             xfer.running_retry = false;
             xfer.running_async = true;
             return Ok(());
-        } else if xfer.packet.status == UsbPacketStatus::Nak {
-            xfer.set_comleted(false);
+        }
+        if xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak {
+            xfer.set_completed(false);
             xfer.running_retry = true;
             return Ok(());
         } else {
-            xfer.set_comleted(true);
+            xfer.set_completed(true);
             xfer.running_retry = false;
         }
 
