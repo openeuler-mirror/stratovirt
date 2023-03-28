@@ -1148,6 +1148,34 @@ pub trait MachineOps {
         None
     }
 
+    /// Attach usb device to xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `usb_dev` - Usb device.
+    #[cfg(not(target_env = "musl"))]
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        vm_config: &mut VmConfig,
+        usb_dev: Arc<Mutex<dyn UsbDeviceOps>>,
+    ) -> Result<()> {
+        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
+        if parent_dev_op.is_none() {
+            bail!("Can not find parent device from pci bus");
+        }
+        let parent_dev = parent_dev_op.unwrap();
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
+        if xhci_pci.is_none() {
+            bail!("PciDevOps can not downcast to XhciPciDevice");
+        }
+
+        xhci_pci.unwrap().attach_device(&(usb_dev))?;
+
+        Ok(())
+    }
+
     /// Add usb keyboard.
     ///
     /// # Arguments
@@ -1160,19 +1188,8 @@ pub trait MachineOps {
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
-        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))?;
+
+        self.attach_usb_to_xhci_controller(vm_config, kbd as Arc<Mutex<dyn UsbDeviceOps>>)?;
         Ok(())
     }
 
@@ -1188,19 +1205,9 @@ pub trait MachineOps {
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
-        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))?;
+
+        self.attach_usb_to_xhci_controller(vm_config, tbt as Arc<Mutex<dyn UsbDeviceOps>>)?;
+
         Ok(())
     }
 
