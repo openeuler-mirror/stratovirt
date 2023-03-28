@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
@@ -173,6 +173,8 @@ pub struct XhciInterrupter {
     mem: Arc<AddressSpace>,
     oper_usb_cmd: Arc<AtomicU32>,
     oper_usb_status: Arc<AtomicU32>,
+    id: u32,
+    interrupt_cb: Option<Arc<dyn Fn(u32, u8) -> bool + Send + Sync>>,
     /// Interrupter Management
     pub iman: u32,
     /// Interrupter Morderation
@@ -195,11 +197,14 @@ impl XhciInterrupter {
         mem: &Arc<AddressSpace>,
         oper_usb_cmd: &Arc<AtomicU32>,
         oper_usb_status: &Arc<AtomicU32>,
+        id: u32,
     ) -> Self {
         Self {
             mem: mem.clone(),
             oper_usb_cmd: oper_usb_cmd.clone(),
             oper_usb_status: oper_usb_status.clone(),
+            id,
+            interrupt_cb: None,
             iman: 0,
             imod: 0,
             erstsz: 0,
@@ -212,6 +217,19 @@ impl XhciInterrupter {
         }
     }
 
+    pub fn set_interrupter(&mut self, cb: Arc<dyn Fn(u32, u8) -> bool + Send + Sync>) {
+        self.interrupt_cb = Some(cb);
+    }
+
+    pub fn oper_intr_enabled(&self) -> bool {
+        self.oper_usb_cmd.load(Ordering::Acquire) & USB_CMD_INTE == USB_CMD_INTE
+    }
+
+    pub fn enable_intr(&mut self) {
+        self.oper_usb_status
+            .fetch_or(USB_STS_EINT, Ordering::SeqCst);
+    }
+
     pub fn reset(&mut self) {
         self.iman = 0;
         self.imod = 0;
@@ -222,6 +240,78 @@ impl XhciInterrupter {
         self.er_start = 0;
         self.er_size = 0;
         self.er_ep_idx = 0;
+    }
+
+    /// Send event TRB to driver, first write TRB and then send interrupt.
+    pub fn send_event(&mut self, evt: &XhciEvent) -> Result<()> {
+        let er_end = self
+            .er_start
+            .checked_add((TRB_SIZE * self.er_size) as u64)
+            .ok_or(UsbError::MemoryAccessOverflow(
+                self.er_start,
+                (TRB_SIZE * self.er_size) as u64,
+            ))?;
+        if self.erdp < self.er_start || self.erdp >= er_end {
+            bail!(
+                "DMA out of range, erdp {} er_start {:x} er_size {}",
+                self.erdp,
+                self.er_start,
+                self.er_size
+            );
+        }
+        let dp_idx = (self.erdp - self.er_start) / TRB_SIZE as u64;
+        if ((self.er_ep_idx + 2) % self.er_size) as u64 == dp_idx {
+            error!("Event ring full error, idx {}", dp_idx);
+            let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
+            self.write_event(&event)?;
+        } else if ((self.er_ep_idx + 1) % self.er_size) as u64 == dp_idx {
+            bail!("Event Ring full, drop Event.");
+        } else {
+            self.write_event(evt)?;
+        }
+        self.send_intr();
+        Ok(())
+    }
+
+    fn send_intr(&mut self) {
+        let pending = read_u32(self.erdp, 0) & ERDP_EHB == ERDP_EHB;
+        let mut erdp_low = read_u32(self.erdp, 0);
+        erdp_low |= ERDP_EHB;
+        self.erdp = write_u64_low(self.erdp, erdp_low);
+        self.iman |= IMAN_IP;
+        self.enable_intr();
+        if pending {
+            return;
+        }
+        if self.iman & IMAN_IE != IMAN_IE {
+            return;
+        }
+        if !self.oper_intr_enabled() {
+            return;
+        }
+
+        if let Some(intr_ops) = self.interrupt_cb.as_ref() {
+            if intr_ops(self.id, 1) {
+                self.iman &= !IMAN_IP;
+            }
+        }
+    }
+
+    fn update_intr(&mut self) {
+        if self.id == 0 {
+            let mut level = 0;
+            if self.iman & IMAN_IP == IMAN_IP
+                && self.iman & IMAN_IE == IMAN_IE
+                && self.oper_intr_enabled()
+            {
+                level = 1;
+            }
+            if let Some(intr_ops) = &self.interrupt_cb {
+                if intr_ops(0, level) {
+                    self.iman &= !IMAN_IP;
+                }
+            }
+        }
     }
 
     /// Write event to the ring and update index.
@@ -391,13 +481,14 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 if value & USB_CMD_HCRST == USB_CMD_HCRST {
                     locked_xhci.reset();
                 }
-                locked_xhci.update_intr(0);
+                locked_xhci.intrs[0].lock().unwrap().update_intr();
             }
             XHCI_OPER_REG_USBSTS => {
                 // Write 1 to clear.
                 locked_xhci.oper.unset_usb_status_flag(
                     value & (USB_STS_HSE | USB_STS_EINT | USB_STS_PCD | USB_STS_SRE),
-                )
+                );
+                locked_xhci.intrs[0].lock().unwrap().update_intr();
             }
             XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl = value & XHCI_OPER_NE_MASK,
             XHCI_OPER_REG_CMD_RING_CTRL_LO => {
@@ -415,7 +506,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     let event =
                         XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::CommandRingStopped);
                     crc_lo &= !CMD_RING_CTRL_CRR;
-                    if let Err(e) = locked_xhci.send_event(&event, 0) {
+                    if let Err(e) = locked_xhci.intrs[0].lock().unwrap().send_event(&event) {
                         error!("Failed to send event: {:?}", e);
                     }
                 } else {
@@ -463,20 +554,20 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
         } else {
             let idx = ((offset - XHCI_INTR_REG_SIZE) >> XHCI_INTR_REG_SHIFT) as usize;
-            let mut xhci = xhci.lock().unwrap();
+            let xhci = xhci.lock().unwrap();
             if idx >= xhci.intrs.len() {
                 error!("Invalid interrupter index: {} idx {}", offset, idx);
                 return false;
             }
-            let intr = &mut xhci.intrs[idx];
+            let locked_intr = xhci.intrs[idx].lock().unwrap();
             value = match offset & 0x1f {
-                XHCI_INTR_REG_IMAN => intr.iman,
-                XHCI_INTR_REG_IMOD => intr.imod,
-                XHCI_INTR_REG_ERSTSZ => intr.erstsz,
-                XHCI_INTR_REG_ERSTBA_LO => read_u32(intr.erstba, 0),
-                XHCI_INTR_REG_ERSTBA_HI => read_u32(intr.erstba, 1),
-                XHCI_INTR_REG_ERDP_LO => read_u32(intr.erdp, 0),
-                XHCI_INTR_REG_ERDP_HI => read_u32(intr.erdp, 1),
+                XHCI_INTR_REG_IMAN => locked_intr.iman,
+                XHCI_INTR_REG_IMOD => locked_intr.imod,
+                XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz,
+                XHCI_INTR_REG_ERSTBA_LO => read_u32(locked_intr.erstba, 0),
+                XHCI_INTR_REG_ERSTBA_HI => read_u32(locked_intr.erstba, 1),
+                XHCI_INTR_REG_ERDP_LO => read_u32(locked_intr.erdp, 0),
+                XHCI_INTR_REG_ERDP_HI => read_u32(locked_intr.erdp, 1),
                 _ => {
                     error!(
                         "Invalid offset {:x} for reading interrupter registers.",
@@ -506,23 +597,24 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             error!("Invalid interrupter index: {} idx {}", offset, idx);
             return false;
         }
-        let intr = &mut xhci.intrs[idx as usize];
+        let mut locked_intr = xhci.intrs[idx as usize].lock().unwrap();
         match offset & 0x1f {
             XHCI_INTR_REG_IMAN => {
                 if value & IMAN_IP == IMAN_IP {
-                    intr.iman &= !IMAN_IP;
+                    locked_intr.iman &= !IMAN_IP;
                 }
-                intr.iman &= !IMAN_IE;
-                intr.iman |= value & IMAN_IE;
-                xhci.update_intr(idx);
+                locked_intr.iman &= !IMAN_IE;
+                locked_intr.iman |= value & IMAN_IE;
+                locked_intr.update_intr();
             }
-            XHCI_INTR_REG_IMOD => intr.imod = value,
-            XHCI_INTR_REG_ERSTSZ => intr.erstsz = value & 0xffff,
+            XHCI_INTR_REG_IMOD => locked_intr.imod = value,
+            XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz = value & 0xffff,
             XHCI_INTR_REG_ERSTBA_LO => {
-                intr.erstba = write_u64_low(intr.erstba, value & 0xffffffc0);
+                locked_intr.erstba = write_u64_low(locked_intr.erstba, value & 0xffffffc0);
             }
             XHCI_INTR_REG_ERSTBA_HI => {
-                intr.erstba = write_u64_high(intr.erstba, value);
+                locked_intr.erstba = write_u64_high(locked_intr.erstba, value);
+                drop(locked_intr);
                 if let Err(e) = xhci.reset_event_ring(idx) {
                     error!("Failed to reset event ring: {:?}", e);
                 }
@@ -531,34 +623,37 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 // ERDP_EHB is write 1 clear.
                 let mut erdp_lo = value & !ERDP_EHB;
                 if value & ERDP_EHB != ERDP_EHB {
-                    let erdp_old = read_u32(intr.erdp, 0);
+                    let erdp_old = read_u32(locked_intr.erdp, 0);
                     erdp_lo |= erdp_old & ERDP_EHB;
                 }
-                intr.erdp = write_u64_low(intr.erdp, erdp_lo);
+                locked_intr.erdp = write_u64_low(locked_intr.erdp, erdp_lo);
                 if value & ERDP_EHB == ERDP_EHB {
-                    let erdp = intr.erdp;
-                    let er_end = if let Some(addr) =
-                        intr.er_start.checked_add((TRB_SIZE * intr.er_size) as u64)
+                    let erdp = locked_intr.erdp;
+                    let er_end = if let Some(addr) = locked_intr
+                        .er_start
+                        .checked_add((TRB_SIZE * locked_intr.er_size) as u64)
                     {
                         addr
                     } else {
                         error!(
                             "Memory access overflow, addr {:x} offset {:x}",
-                            intr.er_start,
-                            (TRB_SIZE * intr.er_size) as u64
+                            locked_intr.er_start,
+                            (TRB_SIZE * locked_intr.er_size) as u64
                         );
                         return false;
                     };
-                    if erdp >= intr.er_start
+                    if erdp >= locked_intr.er_start
                         && erdp < er_end
-                        && (erdp - intr.er_start) / TRB_SIZE as u64 != intr.er_ep_idx as u64
+                        && (erdp - locked_intr.er_start) / TRB_SIZE as u64
+                            != locked_intr.er_ep_idx as u64
                     {
-                        xhci.send_intr(idx);
+                        drop(locked_intr);
+                        xhci.intrs[idx as usize].lock().unwrap().send_intr();
                     }
                 }
             }
             XHCI_INTR_REG_ERDP_HI => {
-                intr.erdp = write_u64_high(intr.erdp, value);
+                locked_intr.erdp = write_u64_high(locked_intr.erdp, value);
             }
             _ => {
                 error!(
