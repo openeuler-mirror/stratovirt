@@ -18,26 +18,25 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-
-use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
+
+use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::XhciConfig;
 use util::aio::Iovec;
-use util::num_ops::{read_u32, write_u64_low};
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::{
-    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_SIZE, TRB_TR_DIR, TRB_TR_IDT, TRB_TR_IOC,
-    TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TYPE_SHIFT,
+    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_TR_DIR, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP,
+    TRB_TR_LEN_MASK, TRB_TYPE_SHIFT,
 };
 use crate::usb::config::*;
 use crate::usb::{
     UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
 };
 
-pub const MAX_INTRS: u16 = 16;
+pub const MAX_INTRS: u32 = 16;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
 pub const EP_STATE_MASK: u32 = 0x7;
@@ -62,8 +61,6 @@ pub const SLOT_CONFIGURED: u32 = 3;
 const TRB_CR_BSR: u32 = 1 << 9;
 const TRB_CR_EPID_SHIFT: u32 = 16;
 const TRB_CR_EPID_MASK: u32 = 0x1f;
-const TRB_INTR_SHIFT: u32 = 22;
-const TRB_INTR_MASK: u32 = 0x3ff;
 const TRB_CR_DC: u32 = 1 << 9;
 const TRB_CR_SLOTID_SHIFT: u32 = 24;
 const TRB_CR_SLOTID_MASK: u32 = 0xff;
@@ -118,7 +115,7 @@ type DmaAddr = u64;
 /// Transfer data between controller and device.
 #[derive(Clone)]
 pub struct XhciTransfer {
-    packet: UsbPacket,
+    pub packet: UsbPacket,
     status: TRBCCode,
     td: Vec<XhciTRB>,
     complete: Arc<AtomicBool>,
@@ -126,10 +123,12 @@ pub struct XhciTransfer {
     epid: u32,
     in_xfer: bool,
     running_retry: bool,
+    interrupter: Arc<Mutex<XhciInterrupter>>,
+    ep_ring: Arc<XhciTransferRing>,
 }
 
 impl XhciTransfer {
-    fn new() -> Self {
+    fn new(intr: &Arc<Mutex<XhciInterrupter>>, ring: &Arc<XhciTransferRing>) -> Self {
         XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
@@ -139,6 +138,8 @@ impl XhciTransfer {
             epid: 0,
             in_xfer: false,
             running_retry: false,
+            interrupter: intr.clone(),
+            ep_ring: ring.clone(),
         }
     }
 
@@ -149,10 +150,81 @@ impl XhciTransfer {
     fn set_comleted(&mut self, v: bool) {
         self.complete.store(v, Ordering::SeqCst)
     }
+
+    /// Submit the succeed transfer TRBs.
+    pub fn submit_transfer(&mut self) -> Result<()> {
+        // Event Data Transfer Length Accumulator.
+        let mut edtla: u32 = 0;
+        let mut left = self.packet.actual_length;
+        for i in 0..self.td.len() {
+            let trb = &self.td[i];
+            let trb_type = trb.get_type();
+            let mut chunk = trb.status & TRB_TR_LEN_MASK;
+            match trb_type {
+                TRBType::TrSetup => {}
+                TRBType::TrData | TRBType::TrNormal | TRBType::TrIsoch => {
+                    if chunk > left {
+                        chunk = left;
+                        self.status = TRBCCode::ShortPacket;
+                    }
+                    left -= chunk;
+                    edtla = edtla.checked_add(chunk).with_context(||
+                        format!("Event Data Transfer Length Accumulator overflow, edtla {:x} offset {:x}", edtla, chunk)
+                    )?;
+                }
+                TRBType::TrStatus => {}
+                _ => {
+                    debug!("Ignore the TRB, unhandled trb type {:?}", trb.get_type());
+                }
+            }
+            if (trb.control & TRB_TR_IOC == TRB_TR_IOC)
+                || (self.status == TRBCCode::ShortPacket
+                    && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
+            {
+                self.send_transfer_event(trb, chunk, &mut edtla)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn send_transfer_event(&self, trb: &XhciTRB, transferred: u32, edtla: &mut u32) -> Result<()> {
+        let trb_type = trb.get_type();
+        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
+        evt.slot_id = self.slotid as u8;
+        evt.ep_id = self.epid as u8;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - transferred;
+        evt.flags = 0;
+        evt.ptr = trb.addr;
+        evt.ccode = self.status;
+        if trb_type == TRBType::TrEvdata {
+            evt.ptr = trb.parameter;
+            evt.flags |= TRB_EV_ED;
+            evt.length = *edtla & TRANSFER_LEN_MASK;
+            *edtla = 0;
+        }
+        self.interrupter.lock().unwrap().send_event(&evt)?;
+        Ok(())
+    }
+
+    fn report_transfer_error(&mut self) -> Result<()> {
+        // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
+        self.set_comleted(true);
+        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
+        evt.slot_id = self.slotid as u8;
+        evt.ep_id = self.epid as u8;
+        evt.ccode = self.status;
+        // According to 4.10.1 Transfer TRBs, the TRB pointer field in a Transfer TRB not
+        // only references the TRB that generated the event, but it also provides system software
+        // with the latest value of the xHC Dequeue Pointer for the Transfer Ring.
+        if let Some(trb) = self.td.last() {
+            evt.ptr = trb.addr;
+        }
+        self.interrupter.lock().unwrap().send_event(&evt)?;
+        Ok(())
+    }
 }
 
 /// Endpoint context which use the ring to transfer data.
-#[derive(Clone)]
 pub struct XhciEpContext {
     epid: u32,
     enabled: bool,
@@ -262,7 +334,6 @@ impl From<u32> for EpType {
 }
 
 /// Device slot, mainly including some endpoint.
-#[derive(Clone)]
 pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
@@ -273,12 +344,17 @@ pub struct XhciSlot {
 
 impl XhciSlot {
     fn new(mem: &Arc<AddressSpace>) -> Self {
+        let mut eps = Vec::new();
+        for _ in 0..MAX_ENDPOINTS {
+            eps.push(XhciEpContext::new(mem));
+        }
+
         XhciSlot {
             enabled: false,
             addressed: false,
             slot_ctx_addr: 0,
             usb_port: None,
-            endpoints: vec![XhciEpContext::new(mem); MAX_ENDPOINTS as usize],
+            endpoints: eps,
         }
     }
 
@@ -537,10 +613,9 @@ pub struct XhciDevice {
     pub oper: XhciOperReg,
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
     pub slots: Vec<XhciSlot>,
-    pub intrs: Vec<XhciInterrupter>,
+    pub intrs: Vec<Arc<Mutex<XhciInterrupter>>>,
     pub cmd_ring: XhciCommandRing,
     mem_space: Arc<AddressSpace>,
-    pub send_interrupt_ops: Option<Box<dyn Fn(u32, u8) -> bool + Send + Sync>>,
 }
 
 impl XhciDevice {
@@ -562,12 +637,13 @@ impl XhciDevice {
         let oper = XhciOperReg::default();
 
         let mut intrs = Vec::new();
-        for _ in 0..MAX_INTRS {
-            intrs.push(XhciInterrupter::new(
+        for i in 0..MAX_INTRS {
+            intrs.push(Arc::new(Mutex::new(XhciInterrupter::new(
                 mem_space,
                 &oper.usb_cmd,
                 &oper.usb_status,
-            ));
+                i,
+            ))));
         }
 
         let mut slots = Vec::new();
@@ -576,8 +652,7 @@ impl XhciDevice {
         }
 
         let xhci = XhciDevice {
-            oper: oper,
-            send_interrupt_ops: None,
+            oper,
             usb_ports: Vec::new(),
             numports_3: p3,
             numports_2: p2,
@@ -607,6 +682,12 @@ impl XhciDevice {
             locked_port.speed_mask = USB_SPEED_MASK_SUPER;
         }
         xhci
+    }
+
+    pub fn set_interrupt_ops(&mut self, cb: Arc<dyn Fn(u32, u8) -> bool + Send + Sync>) {
+        for intr in &self.intrs {
+            intr.lock().unwrap().set_interrupter(cb.clone());
+        }
     }
 
     pub fn run(&mut self) {
@@ -642,7 +723,7 @@ impl XhciDevice {
             }
         }
         for i in 0..self.intrs.len() {
-            self.intrs[i].reset();
+            self.intrs[i].lock().unwrap().reset();
         }
         self.cmd_ring.init(0);
     }
@@ -689,7 +770,7 @@ impl XhciDevice {
         }
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
         evt.ptr = ((locked_port.port_id as u32) << PORT_EVENT_ID_SHIFT) as u64;
-        self.send_event(&evt, 0)?;
+        self.intrs[0].lock().unwrap().send_event(&evt)?;
         Ok(())
     }
 
@@ -843,7 +924,7 @@ impl XhciDevice {
                         }
                     }
                     event.slot_id = slot_id as u8;
-                    self.send_event(&event, 0)?;
+                    self.intrs[0].lock().unwrap().send_event(&event)?;
                 }
                 None => {
                     debug!("No TRB in the cmd ring.");
@@ -1343,8 +1424,10 @@ impl XhciDevice {
         epctx.set_state(&self.mem_space, EP_RUNNING)?;
         const KICK_LIMIT: u32 = 32;
         let mut count = 0;
+        let ring = epctx.ring.clone();
         loop {
-            let mut xfer: XhciTransfer = XhciTransfer::new();
+            // NOTE: Only support primary interrupter now.
+            let mut xfer: XhciTransfer = XhciTransfer::new(&self.intrs[0], &ring);
             xfer.slotid = slot_id;
             xfer.epid = ep_id;
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
@@ -1352,7 +1435,8 @@ impl XhciDevice {
                 Some(td) => {
                     debug!(
                         "fetch transfer trb {:?} ring dequeue {:?}",
-                        td, epctx.ring.dequeue,
+                        td,
+                        epctx.ring.get_dequeue_ptr(),
                     );
                     xfer.td = td;
                 }
@@ -1459,7 +1543,7 @@ impl XhciDevice {
         if let Err(e) = self.check_ctrl_transfer(xfer) {
             error!("Failed to check control transfer {:?}", e);
             xfer.status = TRBCCode::TrbError;
-            return self.report_transfer_error(xfer);
+            return xfer.report_transfer_error();
         }
         let trb_setup = xfer.td[0];
         let bm_request_type = trb_setup.parameter as u8;
@@ -1468,7 +1552,7 @@ impl XhciDevice {
         if let Err(e) = self.setup_usb_packet(xfer) {
             error!("Failed to setup packet when transfer control {:?}", e);
             xfer.status = TRBCCode::TrbError;
-            return self.report_transfer_error(xfer);
+            return xfer.report_transfer_error();
         }
         xfer.packet.parameter = trb_setup.parameter;
         self.device_handle_packet(xfer);
@@ -1476,7 +1560,7 @@ impl XhciDevice {
         Ok(())
     }
 
-    fn check_ctrl_transfer(&self, xfer: &mut XhciTransfer) -> Result<()> {
+    fn check_ctrl_transfer(&self, xfer: &XhciTransfer) -> Result<()> {
         let trb_setup = xfer.td[0];
         let mut trb_status = xfer.td[xfer.td.len() - 1];
         let status_type = trb_status.get_type();
@@ -1513,7 +1597,7 @@ impl XhciDevice {
         if let Err(e) = self.setup_usb_packet(xfer) {
             error!("Failed to setup packet when transfer data {:?}", e);
             xfer.status = TRBCCode::TrbError;
-            return self.report_transfer_error(xfer);
+            return xfer.report_transfer_error();
         }
         self.device_handle_packet(xfer);
         self.complete_packet(xfer)?;
@@ -1592,7 +1676,7 @@ impl XhciDevice {
         }
         if xfer.packet.status == UsbPacketStatus::Success {
             xfer.status = TRBCCode::Success;
-            self.submit_transfer(xfer)?;
+            xfer.submit_transfer()?;
             return Ok(());
         }
         // Handle packet error status
@@ -1610,90 +1694,10 @@ impl XhciDevice {
                 error!("Unhandle status {:?}", xfer.packet.status);
             }
         }
-        self.report_transfer_error(xfer)?;
+        xfer.report_transfer_error()?;
         // Set the endpoint state to halted if an error occurs in the packet.
         let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
         epctx.set_state(&self.mem_space, EP_HALTED)?;
-        Ok(())
-    }
-
-    /// Submit the succeed transfer TRBs.
-    fn submit_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
-        // Event Data Transfer Length Accumulator
-        let mut edtla: u32 = 0;
-        let mut left = xfer.packet.actual_length;
-        for i in 0..xfer.td.len() {
-            let trb = &xfer.td[i];
-            let trb_type = trb.get_type();
-            let mut chunk = trb.status & TRB_TR_LEN_MASK;
-            match trb_type {
-                TRBType::TrSetup => {}
-                TRBType::TrData | TRBType::TrNormal | TRBType::TrIsoch => {
-                    if chunk > left {
-                        chunk = left;
-                        xfer.status = TRBCCode::ShortPacket;
-                    }
-                    left -= chunk;
-                    edtla = edtla.checked_add(chunk).with_context(||
-                        format!("Event Data Transfer Length Accumulator overflow, edtla {:x} offset {:x}", edtla, chunk)
-                    )?;
-                }
-                TRBType::TrStatus => {}
-                _ => {
-                    debug!("Ignore the TRB, unhandled trb type {:?}", trb.get_type());
-                }
-            }
-            if (trb.control & TRB_TR_IOC == TRB_TR_IOC)
-                || (xfer.status == TRBCCode::ShortPacket
-                    && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
-            {
-                self.send_transfer_event(xfer, trb, chunk, &mut edtla)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn report_transfer_error(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
-        // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
-        xfer.set_comleted(true);
-        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
-        evt.slot_id = xfer.slotid as u8;
-        evt.ep_id = xfer.epid as u8;
-        evt.ccode = xfer.status;
-        let mut idx = 0;
-        // According to 4.10.1 Transfer TRBs, the TRB pointer field in a Transfer TRB not
-        // only references the TRB that generated the event, but it also provides system software
-        // with the latest value of the xHC Dequeue Pointer for the Transfer Ring.
-        if let Some(trb) = xfer.td.last() {
-            evt.ptr = trb.addr;
-            idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
-        }
-        self.send_event(&evt, idx)
-    }
-
-    fn send_transfer_event(
-        &mut self,
-        xfer: &XhciTransfer,
-        trb: &XhciTRB,
-        transferred: u32,
-        edtla: &mut u32,
-    ) -> Result<()> {
-        let trb_type = trb.get_type();
-        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
-        evt.slot_id = xfer.slotid as u8;
-        evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & TRB_TR_LEN_MASK) - transferred;
-        evt.flags = 0;
-        evt.ptr = trb.addr;
-        evt.ccode = xfer.status;
-        if trb_type == TRBType::TrEvdata {
-            evt.ptr = trb.parameter;
-            evt.flags |= TRB_EV_ED;
-            evt.length = *edtla & TRANSFER_LEN_MASK;
-            *edtla = 0;
-        }
-        let idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
-        self.send_event(&evt, idx)?;
         Ok(())
     }
 
@@ -1729,7 +1733,7 @@ impl XhciDevice {
         if xfer.running_retry {
             if report != TRBCCode::Invalid {
                 xfer.status = report;
-                self.submit_transfer(xfer)?;
+                xfer.submit_transfer()?;
             }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
             epctx.retry = None;
@@ -1753,104 +1757,22 @@ impl XhciDevice {
     }
 
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
-        let intr = &mut self.intrs[idx as usize];
-        if intr.erstsz == 0 || intr.erstba == 0 {
-            intr.er_start = 0;
-            intr.er_size = 0;
+        let mut locked_intr = self.intrs[idx as usize].lock().unwrap();
+        if locked_intr.erstsz == 0 || locked_intr.erstba == 0 {
+            locked_intr.er_start = 0;
+            locked_intr.er_size = 0;
             return Ok(());
         }
         let mut seg = XhciEventRingSeg::new(&self.mem_space);
-        seg.fetch_event_ring_seg(intr.erstba)?;
+        seg.fetch_event_ring_seg(locked_intr.erstba)?;
         if seg.size < 16 || seg.size > 4096 {
             bail!("Invalid segment size {}", seg.size);
         }
-        intr.er_start = addr64_from_u32(seg.addr_lo, seg.addr_hi);
-        intr.er_size = seg.size;
-        intr.er_ep_idx = 0;
-        intr.er_pcs = true;
+        locked_intr.er_start = addr64_from_u32(seg.addr_lo, seg.addr_hi);
+        locked_intr.er_size = seg.size;
+        locked_intr.er_ep_idx = 0;
+        locked_intr.er_pcs = true;
         Ok(())
-    }
-
-    /// Send event TRB to driver, first write TRB and then send interrupt.
-    pub fn send_event(&mut self, evt: &XhciEvent, idx: u32) -> Result<()> {
-        if idx > self.intrs.len() as u32 {
-            bail!("Invalid index, out of range {}", idx);
-        }
-        let intr = &self.intrs[idx as usize];
-        let er_end = intr
-            .er_start
-            .checked_add((TRB_SIZE * intr.er_size) as u64)
-            .ok_or(UsbError::MemoryAccessOverflow(
-                intr.er_start,
-                (TRB_SIZE * intr.er_size) as u64,
-            ))?;
-        if intr.erdp < intr.er_start || intr.erdp >= er_end {
-            bail!(
-                "DMA out of range, erdp {} er_start {:x} er_size {}",
-                intr.erdp,
-                intr.er_start,
-                intr.er_size
-            );
-        }
-        let dp_idx = (intr.erdp - intr.er_start) / TRB_SIZE as u64;
-        if ((intr.er_ep_idx + 2) % intr.er_size) as u64 == dp_idx {
-            error!("Event ring full error, idx {}", idx);
-            let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
-            self.write_event(&event, idx)?;
-        } else if ((intr.er_ep_idx + 1) % intr.er_size) as u64 == dp_idx {
-            bail!("Event Ring full, drop Event.");
-        } else {
-            self.write_event(evt, idx)?;
-        }
-        self.send_intr(idx);
-        Ok(())
-    }
-
-    fn write_event(&mut self, evt: &XhciEvent, idx: u32) -> Result<()> {
-        let intr = &mut self.intrs[idx as usize];
-        intr.write_event(evt)?;
-        Ok(())
-    }
-
-    pub fn send_intr(&mut self, idx: u32) {
-        let pending = read_u32(self.intrs[idx as usize].erdp, 0) & ERDP_EHB == ERDP_EHB;
-        let mut erdp_low = read_u32(self.intrs[idx as usize].erdp, 0);
-        erdp_low |= ERDP_EHB;
-        self.intrs[idx as usize].erdp = write_u64_low(self.intrs[idx as usize].erdp, erdp_low);
-        self.intrs[idx as usize].iman |= IMAN_IP;
-        self.oper.set_usb_status_flag(USB_STS_EINT);
-        if pending {
-            return;
-        }
-        if self.intrs[idx as usize].iman & IMAN_IE != IMAN_IE {
-            return;
-        }
-        if self.oper.get_usb_cmd() & USB_CMD_INTE != USB_CMD_INTE {
-            return;
-        }
-
-        if let Some(intr_ops) = self.send_interrupt_ops.as_ref() {
-            if intr_ops(idx, 1) {
-                self.intrs[idx as usize].iman &= !IMAN_IP;
-            }
-        }
-    }
-
-    pub fn update_intr(&mut self, v: u32) {
-        let mut level = 0;
-        if v == 0 {
-            if self.intrs[0].iman & IMAN_IP == IMAN_IP
-                && self.intrs[0].iman & IMAN_IE == IMAN_IE
-                && self.oper.get_usb_cmd() & USB_CMD_INTE == USB_CMD_INTE
-            {
-                level = 1;
-            }
-            if let Some(intr_ops) = &self.send_interrupt_ops {
-                if intr_ops(0, level) {
-                    self.intrs[0].iman &= !IMAN_IP;
-                }
-            }
-        }
     }
 
     /// Assign USB port and attach the device.

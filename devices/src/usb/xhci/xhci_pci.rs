@@ -234,8 +234,10 @@ impl PciDevOps for XhciPciDevice {
         let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
-        self.xhci.lock().unwrap().send_interrupt_ops =
-            Some(Box::new(move |n: u32, level: u8| -> bool {
+        self.xhci
+            .lock()
+            .unwrap()
+            .set_interrupt_ops(Arc::new(move |n: u32, level: u8| -> bool {
                 let mut locked_msix = cloned_msix.lock().unwrap();
                 if locked_msix.enabled && level != 0 {
                     locked_msix.notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
