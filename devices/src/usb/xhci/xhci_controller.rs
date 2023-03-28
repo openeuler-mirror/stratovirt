@@ -12,9 +12,8 @@
 
 use std::collections::LinkedList;
 use std::mem::size_of;
-use std::slice::from_raw_parts;
-use std::slice::from_raw_parts_mut;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
@@ -36,7 +35,7 @@ use crate::usb::{
     UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
 };
 
-pub const MAX_INTRS: u32 = 16;
+pub const MAX_INTRS: u32 = 1;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
 pub const EP_STATE_MASK: u32 = 0x7;
@@ -125,10 +124,15 @@ pub struct XhciTransfer {
     running_retry: bool,
     interrupter: Arc<Mutex<XhciInterrupter>>,
     ep_ring: Arc<XhciTransferRing>,
+    ep_state: Arc<AtomicU32>,
 }
 
 impl XhciTransfer {
-    fn new(intr: &Arc<Mutex<XhciInterrupter>>, ring: &Arc<XhciTransferRing>) -> Self {
+    fn new(
+        intr: &Arc<Mutex<XhciInterrupter>>,
+        ring: &Arc<XhciTransferRing>,
+        ep_state: &Arc<AtomicU32>,
+    ) -> Self {
         XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
@@ -140,6 +144,7 @@ impl XhciTransfer {
             running_retry: false,
             interrupter: intr.clone(),
             ep_ring: ring.clone(),
+            ep_state: ep_state.clone(),
         }
     }
 
@@ -149,6 +154,23 @@ impl XhciTransfer {
 
     fn set_comleted(&mut self, v: bool) {
         self.complete.store(v, Ordering::SeqCst)
+    }
+
+    pub fn complete_transfer(&mut self) -> Result<()> {
+        // NOTE: When entry this function, the transfer must be completed.
+        self.set_comleted(true);
+
+        self.status = usb_packet_status_to_trb_code(self.packet.status)?;
+        if self.status == TRBCCode::Success {
+            self.submit_transfer()?;
+            self.ep_ring.refresh_dequeue_ptr()?;
+            return Ok(());
+        }
+
+        // Set the endpoint state to halted if an error occurs in the packet.
+        set_ep_state_helper(&self.ep_ring, &self.ep_state, EP_HALTED)?;
+        self.report_transfer_error()?;
+        Ok(())
     }
 
     /// Submit the succeed transfer TRBs.
@@ -231,7 +253,7 @@ pub struct XhciEpContext {
     ring: Arc<XhciTransferRing>,
     ep_type: EpType,
     output_ctx_addr: Arc<AtomicU64>,
-    state: u32,
+    state: Arc<AtomicU32>,
     interval: u32,
     transfers: LinkedList<XhciTransfer>,
     retry: Option<XhciTransfer>,
@@ -246,7 +268,7 @@ impl XhciEpContext {
             ring: Arc::new(XhciTransferRing::new(mem, &addr)),
             ep_type: EpType::Invalid,
             output_ctx_addr: addr,
-            state: 0,
+            state: Arc::new(AtomicU32::new(0)),
             interval: 0,
             transfers: LinkedList::new(),
             retry: None,
@@ -263,17 +285,17 @@ impl XhciEpContext {
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
     }
 
+    fn get_ep_state(&self) -> u32 {
+        self.state.load(Ordering::Acquire)
+    }
+
+    fn set_ep_state(&self, state: u32) {
+        self.state.store(state, Ordering::SeqCst);
+    }
+
     /// Update the endpoint state and write the state to memory.
-    fn set_state(&mut self, mem: &Arc<AddressSpace>, state: u32) -> Result<()> {
-        let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
-        ep_ctx.ep_info &= !EP_STATE_MASK;
-        ep_ctx.ep_info |= state;
-        self.ring.update_dequeue_to_ctx(&mut ep_ctx);
-        dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
-        self.state = state;
-        Ok(())
+    fn set_state(&mut self, state: u32) -> Result<()> {
+        set_ep_state_helper(&self.ring, &self.state, state)
     }
 
     /// Update the dequeue pointer in endpoint context.
@@ -302,6 +324,23 @@ impl XhciEpContext {
         }
         self.transfers = undo;
     }
+}
+
+fn set_ep_state_helper(
+    ring: &Arc<XhciTransferRing>,
+    ep_state: &Arc<AtomicU32>,
+    state: u32,
+) -> Result<()> {
+    let mem = &ring.mem;
+    let mut ep_ctx = XhciEpCtx::default();
+    let output_addr = ring.output_ctx_addr.load(Ordering::Acquire);
+    dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+    ep_ctx.ep_info &= !EP_STATE_MASK;
+    ep_ctx.ep_info |= state;
+    ring.update_dequeue_to_ctx(&mut ep_ctx);
+    dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+    ep_state.store(state, Ordering::SeqCst);
+    Ok(())
 }
 
 /// Endpoint type, including control, bulk, interrupt and isochronous.
@@ -1267,7 +1306,7 @@ impl XhciDevice {
         epctx.enabled = true;
         // It is safe to use plus here becuase we previously verify the address on the outer layer.
         epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx);
-        epctx.state = EP_RUNNING;
+        epctx.set_ep_state(EP_RUNNING);
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= EP_RUNNING;
         dma_write_u32(
@@ -1288,7 +1327,7 @@ impl XhciDevice {
         self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if self.oper.dcbaap != 0 {
-            epctx.set_state(&self.mem_space, EP_DISABLED)?;
+            epctx.set_state(EP_DISABLED)?;
         }
         epctx.enabled = false;
         Ok(TRBCCode::Success)
@@ -1308,18 +1347,19 @@ impl XhciDevice {
             error!(" Endpoint is disabled, slotid {} epid {}", slot_id, ep_id);
             return Ok(TRBCCode::EpNotEnabledError);
         }
-        if epctx.state != EP_RUNNING {
+        if epctx.get_ep_state() != EP_RUNNING {
             error!(
                 "Endpoint invalid state, slotid {} epid {} state {}",
-                slot_id, ep_id, epctx.state
+                slot_id,
+                ep_id,
+                epctx.get_ep_state()
             );
             return Ok(TRBCCode::ContextStateError);
         }
         if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
             warn!("endpoint stop when xfers running!");
         }
-        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
-            .set_state(&self.mem_space, EP_STOPPED)?;
+        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].set_state(EP_STOPPED)?;
         Ok(TRBCCode::Success)
     }
 
@@ -1338,7 +1378,7 @@ impl XhciDevice {
             error!("reset_endpoint ep is disabled");
             return Ok(TRBCCode::EpNotEnabledError);
         }
-        if epctx.state != EP_HALTED {
+        if epctx.get_ep_state() != EP_HALTED {
             error!("Endpoint is not halted");
             return Ok(TRBCCode::ContextStateError);
         }
@@ -1349,7 +1389,7 @@ impl XhciDevice {
         let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
         if let Some(port) = &slot.usb_port {
             if port.lock().unwrap().dev.is_some() {
-                epctx.set_state(&self.mem_space, EP_STOPPED)?;
+                epctx.set_state(EP_STOPPED)?;
             } else {
                 error!("Failed to found usb device");
                 return Ok(TRBCCode::UsbTransactionError);
@@ -1380,10 +1420,11 @@ impl XhciDevice {
             error!("Endpoint is disabled, slotid {} epid {}", slotid, epid);
             return Ok(TRBCCode::EpNotEnabledError);
         }
-        if epctx.state != EP_STOPPED && epctx.state != EP_ERROR {
+        let ep_state = epctx.get_ep_state();
+        if ep_state != EP_STOPPED && ep_state != EP_ERROR {
             error!(
                 "Endpoint invalid state, slotid {} epid {} state {}",
-                slotid, epid, epctx.state
+                slotid, epid, ep_state
             );
             return Ok(TRBCCode::ContextStateError);
         }
@@ -1417,17 +1458,18 @@ impl XhciDevice {
         }
 
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-        if epctx.state == EP_HALTED {
+        if epctx.get_ep_state() == EP_HALTED {
             info!("xhci: endpoint halted");
             return Ok(());
         }
-        epctx.set_state(&self.mem_space, EP_RUNNING)?;
+        epctx.set_state(EP_RUNNING)?;
+        let ep_state = epctx.state.clone();
         const KICK_LIMIT: u32 = 32;
         let mut count = 0;
         let ring = epctx.ring.clone();
         loop {
             // NOTE: Only support primary interrupter now.
-            let mut xfer: XhciTransfer = XhciTransfer::new(&self.intrs[0], &ring);
+            let mut xfer: XhciTransfer = XhciTransfer::new(&self.intrs[0], &ring, &ep_state);
             xfer.slotid = slot_id;
             xfer.epid = ep_id;
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
@@ -1453,7 +1495,7 @@ impl XhciDevice {
             } else {
                 epctx.transfers.push_back(xfer.clone());
             }
-            if epctx.state == EP_HALTED {
+            if epctx.get_ep_state() == EP_HALTED {
                 break;
             }
             // retry
@@ -1674,31 +1716,8 @@ impl XhciDevice {
             xfer.set_comleted(true);
             xfer.running_retry = false;
         }
-        if xfer.packet.status == UsbPacketStatus::Success {
-            xfer.status = TRBCCode::Success;
-            xfer.submit_transfer()?;
-            return Ok(());
-        }
-        // Handle packet error status
-        match xfer.packet.status {
-            v if v == UsbPacketStatus::NoDev || v == UsbPacketStatus::IoError => {
-                xfer.status = TRBCCode::UsbTransactionError;
-            }
-            UsbPacketStatus::Stall => {
-                xfer.status = TRBCCode::StallError;
-            }
-            UsbPacketStatus::Babble => {
-                xfer.status = TRBCCode::BabbleDetected;
-            }
-            _ => {
-                error!("Unhandle status {:?}", xfer.packet.status);
-            }
-        }
-        xfer.report_transfer_error()?;
-        // Set the endpoint state to halted if an error occurs in the packet.
-        let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
-        epctx.set_state(&self.mem_space, EP_HALTED)?;
-        Ok(())
+
+        xfer.complete_transfer()
     }
 
     /// Flush transfer in endpoint in some case such as stop endpoint.
@@ -1793,6 +1812,19 @@ impl XhciDevice {
         }
         None
     }
+}
+
+fn usb_packet_status_to_trb_code(status: UsbPacketStatus) -> Result<TRBCCode> {
+    let code = match status {
+        UsbPacketStatus::Success => TRBCCode::Success,
+        UsbPacketStatus::NoDev | UsbPacketStatus::IoError => TRBCCode::UsbTransactionError,
+        UsbPacketStatus::Stall => TRBCCode::StallError,
+        UsbPacketStatus::Babble => TRBCCode::BabbleDetected,
+        _ => {
+            bail!("Unhandle packet status {:?}", status);
+        }
+    };
+    Ok(code)
 }
 
 // DMA read/write helpers.
