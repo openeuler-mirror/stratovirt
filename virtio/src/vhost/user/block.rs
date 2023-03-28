@@ -44,8 +44,6 @@ pub struct Block {
     state: BlockState,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    /// The notifier events from host.
-    call_events: Vec<Arc<EventFd>>,
 }
 
 impl Block {
@@ -55,7 +53,6 @@ impl Block {
             state: BlockState::default(),
             mem_space: mem_space.clone(),
             client: None,
-            call_events: Vec::<Arc<EventFd>>::new(),
         }
     }
 
@@ -281,25 +278,18 @@ impl VirtioDevice for Block {
             .lock()
             .unwrap()
             .reset_vhost_user()?;
-        self.call_events.clear();
         self.delete_event()
     }
 
     /// Unrealize device.
     fn unrealize(&mut self) -> Result<()> {
         self.delete_event()?;
-        self.call_events.clear();
         self.client = None;
         Ok(())
     }
 
     /// Set guest notifiers for notifying the guest.
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
-        for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.clone();
-            self.call_events.push(cloned_evt_fd);
-        }
-
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),

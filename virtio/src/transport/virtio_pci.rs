@@ -171,11 +171,6 @@ struct VirtioPciCommonConfig {
 
 impl VirtioPciCommonConfig {
     fn new(queue_size: u16, queue_num: usize) -> Self {
-        let mut queues_config = Vec::new();
-        for _ in 0..queue_num {
-            queues_config.push(QueueConfig::new(queue_size))
-        }
-
         VirtioPciCommonConfig {
             features_select: 0,
             acked_features_select: 0,
@@ -184,7 +179,7 @@ impl VirtioPciCommonConfig {
             config_generation: 0,
             queue_select: 0,
             msix_config: INVALID_VECTOR_NUM,
-            queues_config,
+            queues_config: vec![QueueConfig::new(queue_size); queue_num],
             queue_type: QUEUE_TYPE_SPLIT_VRING,
         }
     }
@@ -396,11 +391,9 @@ impl VirtioPciCommonConfig {
                         | CONFIG_STATUS_FEATURES_OK,
                     CONFIG_STATUS_FAILED,
                 ) {
-                    // FIXME: handle activation failure.
                     virtio_pci_dev.activate_device(self);
                 } else if old_status != 0 && self.device_status == 0 {
                     self.reset();
-                    // FIXME: handle deactivation failure.
                     virtio_pci_dev.deactivate_device();
                 }
             }
@@ -752,65 +745,53 @@ impl VirtioPciDevice {
             let arc_queue = Arc::new(Mutex::new(queue));
             locked_queues.push(arc_queue.clone());
         }
-
-        let mut queue_num = self.device.lock().unwrap().queue_num();
-        // No need to create call event for control queue.
-        // It will be polled in StratoVirt when activating the device.
-        if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
-            queue_num -= 1;
-        }
-        let call_evts = NotifyEventFds::new(queue_num);
-        let queue_evts = (*self.notify_eventfds).clone().events;
-        if let Some(cb) = self.interrupt_cb.clone() {
-            if self.need_irqfd {
-                if let Err(e) = self
-                    .device
-                    .lock()
-                    .unwrap()
-                    .set_guest_notifiers(&call_evts.events)
-                {
-                    error!("Failed to set guest notifiers, error is {:?}", e);
-                    return false;
-                }
-            }
-            if let Err(e) = self.device.lock().unwrap().activate(
-                self.sys_mem.clone(),
-                cb,
-                &locked_queues,
-                queue_evts,
-            ) {
-                error!("Failed to activate device, error is {:?}", e);
-                return false;
-            }
-        } else {
-            error!("Failed to activate device: No interrupt callback");
-            return false;
-        }
         drop(locked_queues);
-        self.device_activated.store(true, Ordering::Release);
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
+        if self.need_irqfd {
+            let mut queue_num = self.device.lock().unwrap().queue_num();
+            // No need to create call event for control queue.
+            // It will be polled in StratoVirt when activating the device.
+            if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
+                queue_num -= 1;
+            }
+            let call_evts = NotifyEventFds::new(queue_num);
+            if let Err(e) = self
+                .device
+                .lock()
+                .unwrap()
+                .set_guest_notifiers(&call_evts.events)
+            {
+                error!("Failed to set guest notifiers, error is {:?}", e);
+                return false;
+            }
+            if !self.queues_register_irqfd(&call_evts.events) {
+                error!("Failed to register queues irqfd.");
+                return false;
+            }
+        }
 
-        if self.need_irqfd && !self.queues_register_irqfd(&call_evts.events) {
+        let queue_evts = (*self.notify_eventfds).clone().events;
+        if let Err(e) = self.device.lock().unwrap().activate(
+            self.sys_mem.clone(),
+            self.interrupt_cb.clone().unwrap(),
+            &self.queues.lock().unwrap(),
+            queue_evts,
+        ) {
+            error!("Failed to activate device, error is {:?}", e);
             return false;
         }
+
+        self.device_activated.store(true, Ordering::Release);
         true
     }
 
     fn deactivate_device(&self) -> bool {
-        if self.need_irqfd
-            && self.config.msix.is_some()
-            && self
-                .config
-                .msix
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .unregister_irqfd()
-                .is_err()
-        {
-            return false;
+        if self.need_irqfd && self.config.msix.is_some() {
+            let msix = self.config.msix.as_ref().unwrap();
+            if msix.lock().unwrap().unregister_irqfd().is_err() {
+                return false;
+            }
         }
 
         self.queues.lock().unwrap().clear();
