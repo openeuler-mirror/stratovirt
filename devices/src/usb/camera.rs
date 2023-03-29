@@ -12,11 +12,13 @@
 
 //! Emulated camera device that based on UVC(USB video class) protocol.
 
-use anyhow::Result;
-use std::sync::{Mutex, Weak};
+use anyhow::{bail, Result};
+use machine_manager::config::{CamBackendType, UsbCameraConfig};
+use std::sync::{Arc, Mutex, Weak};
 
+use super::config::USB_SPEED_HIGH;
 use super::xhci::xhci_controller::XhciDevice;
-use crate::camera_backend::CameraHostdevOps;
+use crate::camera_backend::{v4l2::V4l2HostDev, CameraHostdevOps};
 use crate::usb::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket};
 
 #[allow(dead_code)]
@@ -26,23 +28,49 @@ pub struct UsbCamera {
     frame: Vec<u64>,                            // video frame data
     max_pkt_size: u32,                          // the max size of the packet that can be seperated
     vs_eps: Vec<u8>,                            // the endpoints that the VS uses
+    backend_type: CamBackendType,               // backend interface, eg. v4l2
+    backend_path: String,                       // backend interface file, eg. /dev/video0
     hostdev: Option<Box<dyn CameraHostdevOps>>, // backend device, eg. v4l2, demo, etc.
 }
 
 #[allow(dead_code)]
 impl UsbCamera {
-    pub fn new() -> Self {
+    pub fn new(config: UsbCameraConfig) -> Self {
         UsbCamera {
-            id: "".to_string(),
+            id: config.id.unwrap(),
             usb_device: UsbDevice::new(),
             frame: Vec::new(),
             max_pkt_size: 0,
             vs_eps: Vec::new(),
+            backend_type: config.backend,
+            backend_path: config.path.unwrap(),
             hostdev: None,
         }
     }
 
-    pub fn realize(&mut self) -> Result<()> {
+    pub fn realize(mut self) -> Result<Arc<Mutex<UsbCamera>>> {
+        self.set_hostdev()?;
+
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.speed = USB_SPEED_HIGH;
+        //TODO: init descriptor.
+        let camera = Arc::new(Mutex::new(self));
+
+        Ok(camera)
+    }
+
+    fn set_hostdev(&mut self) -> Result<()> {
+        match self.backend_type {
+            CamBackendType::V4l2 => {
+                let mut hostdev = V4l2HostDev::new(self.backend_path.clone());
+                hostdev.realize()?;
+                self.hostdev = Some(Box::new(hostdev));
+            }
+            _ => {
+                bail!("Unsupported backend yet.");
+            }
+        }
+
         Ok(())
     }
 
@@ -61,7 +89,7 @@ impl UsbCamera {
 
 impl Default for UsbCamera {
     fn default() -> Self {
-        Self::new()
+        Self::new(UsbCameraConfig::new())
     }
 }
 

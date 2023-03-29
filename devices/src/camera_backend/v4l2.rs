@@ -12,8 +12,9 @@
 
 //! V4L2 backend for vCamera device. /dev/videoX and VIDIOC_XX ioctls are used.
 
-use anyhow::Result;
-use std::os::unix::io::RawFd;
+use anyhow::{anyhow, Context, Result};
+use std::fs::File;
+use std::os::unix::io::{IntoRawFd, RawFd};
 
 use super::CamFmt;
 use super::CameraHostdevOps;
@@ -45,7 +46,12 @@ impl V4l2HostDev {
         }
     }
 
-    pub fn realize(self) -> Result<()> {
+    pub fn realize(&mut self) -> Result<()> {
+        // open /dev/videoX
+        self.fd = File::open(self.device.clone())
+            .with_context(|| anyhow!("failed to open video device"))?
+            .into_raw_fd();
+
         Ok(())
     }
 

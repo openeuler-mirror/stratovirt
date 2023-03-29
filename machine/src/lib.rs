@@ -50,7 +50,8 @@ use devices::InterruptController;
 
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
-    keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+    camera::UsbCamera, keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
+    UsbDeviceOps,
 };
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
@@ -63,7 +64,9 @@ use machine_manager::config::{
     MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
-use machine_manager::config::{parse_gpu, parse_usb_keyboard, parse_usb_tablet, parse_xhci};
+use machine_manager::config::{
+    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_tablet, parse_xhci,
+};
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
@@ -1213,6 +1216,22 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Add usb camera.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Camera Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_camera(cfg_args)?;
+        let camera = UsbCamera::new(device_cfg);
+        let camera = camera.realize()?;
+
+        self.attach_usb_to_xhci_controller(vm_config, camera as Arc<Mutex<dyn UsbDeviceOps>>)?;
+
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -1306,6 +1325,10 @@ pub trait MachineOps {
                 #[cfg(not(target_env = "musl"))]
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "usb-camera" => {
+                    self.add_usb_camera(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {

@@ -19,6 +19,7 @@ pub mod camera;
 pub mod config;
 mod descriptor;
 pub mod hid;
+
 #[cfg(not(target_env = "musl"))]
 pub mod keyboard;
 #[cfg(not(target_env = "musl"))]
