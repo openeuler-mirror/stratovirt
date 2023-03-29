@@ -122,6 +122,7 @@ pub struct XhciTransfer {
     epid: u32,
     in_xfer: bool,
     running_retry: bool,
+    running_async: bool,
     interrupter: Arc<Mutex<XhciInterrupter>>,
     ep_ring: Arc<XhciTransferRing>,
     ep_state: Arc<AtomicU32>,
@@ -142,6 +143,7 @@ impl XhciTransfer {
             epid: 0,
             in_xfer: false,
             running_retry: false,
+            running_async: false,
             interrupter: intr.clone(),
             ep_ring: ring.clone(),
             ep_state: ep_state.clone(),
@@ -1653,13 +1655,12 @@ impl XhciDevice {
         } else {
             USB_TOKEN_OUT
         };
-        let in_xfer = dir == USB_TOKEN_IN;
 
         // Map dma address to iovec.
         let mut vec = Vec::new();
         for trb in &xfer.td {
             let trb_type = trb.get_type();
-            if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == in_xfer {
+            if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == xfer.in_xfer {
                 bail!("Direction of data transfer is mismatch");
             }
 
@@ -1669,7 +1670,7 @@ impl XhciDevice {
             {
                 let chunk = trb.status & TRB_TR_LEN_MASK;
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
-                    if chunk > 8 && in_xfer {
+                    if chunk > 8 && xfer.in_xfer {
                         bail!("Invalid immediate data TRB");
                     }
                     trb.addr
@@ -1707,6 +1708,7 @@ impl XhciDevice {
         if xfer.packet.status == UsbPacketStatus::Async {
             xfer.set_comleted(false);
             xfer.running_retry = false;
+            xfer.running_async = true;
             return Ok(());
         } else if xfer.packet.status == UsbPacketStatus::Nak {
             xfer.set_comleted(false);
@@ -1729,6 +1731,9 @@ impl XhciDevice {
             .transfers
             .pop_front()
         {
+            if xfer.is_completed() {
+                continue;
+            }
             cnt += self.do_ep_transfer(slotid, epid, &mut xfer, report)?;
             if cnt != 0 {
                 // Only report once.
@@ -1749,6 +1754,16 @@ impl XhciDevice {
         report: TRBCCode,
     ) -> Result<u32> {
         let mut killed = 0;
+
+        if xfer.running_async {
+            if report != TRBCCode::Invalid {
+                xfer.status = report;
+                xfer.submit_transfer()?;
+            }
+            xfer.running_async = false;
+            killed = 1;
+        }
+
         if xfer.running_retry {
             if report != TRBCCode::Invalid {
                 xfer.status = report;
