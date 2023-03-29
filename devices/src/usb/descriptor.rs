@@ -197,20 +197,26 @@ impl UsbDescriptor {
             bail!("Config descriptor index {} is invalid", index);
         };
         let mut config_desc = conf.config_desc;
-        let mut total = config_desc.bLength as u16;
-        let mut ifs = Vec::new();
-        for i in 0..conf.interfaces.len() {
-            let mut iface = self.get_interface_descriptor(conf.interfaces[i].as_ref())?;
-            total += iface.len() as u16;
-            ifs.append(&mut iface);
-        }
-        config_desc.wTotalLength = total;
+        let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
+
+        config_desc.wTotalLength = config_desc.bLength as u16 + ifs.len() as u16;
+
         let mut buf = config_desc.as_bytes().to_vec();
         buf.append(&mut ifs);
         Ok(buf)
     }
 
-    fn get_interface_descriptor(&self, iface: &UsbDescIface) -> Result<Vec<u8>> {
+    fn get_interfaces_descriptor(&self, ifaces: &[Arc<UsbDescIface>]) -> Result<Vec<u8>> {
+        let mut ifs = Vec::new();
+        for iface in ifaces {
+            let mut buf = self.get_single_interface_descriptor(iface.as_ref())?;
+            ifs.append(&mut buf);
+        }
+
+        Ok(ifs)
+    }
+
+    fn get_single_interface_descriptor(&self, iface: &UsbDescIface) -> Result<Vec<u8>> {
         let desc = iface.interface_desc;
         let mut buf = desc.as_bytes().to_vec();
         for i in 0..iface.other_desc.len() {
