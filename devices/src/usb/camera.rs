@@ -110,6 +110,7 @@ static DESC_DEVICE_CAMERA: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bMaxPower: 50,
             },
             // TODO: Add IAD descriptor, including VC&VS
+            iad_desc: vec![],
             interfaces: vec![],
         })],
     })

@@ -134,8 +134,31 @@ pub struct UsbDescDevice {
 /// USB config descriptor.
 pub struct UsbDescConfig {
     pub config_desc: UsbConfigDescriptor,
+    pub iad_desc: Vec<Arc<UsbDescIAD>>,
     pub interfaces: Vec<Arc<UsbDescIface>>,
 }
+
+/// USB Interface Association Descriptor, and related interfaces
+pub struct UsbDescIAD {
+    pub iad_desc: UsbIadDescriptor,
+    pub itfs: Vec<Arc<UsbDescIface>>,
+}
+
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct UsbIadDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bFirstInterface: u8,
+    pub bInterfaceCount: u8,
+    pub bFunctionClass: u8,
+    pub bFunctionSubClass: u8,
+    pub bFunctionProtocol: u8,
+    pub iFunction: u8,
+}
+
+impl ByteCode for UsbIadDescriptor {}
 
 /// USB interface descriptor.
 pub struct UsbDescIface {
@@ -197,12 +220,33 @@ impl UsbDescriptor {
             bail!("Config descriptor index {} is invalid", index);
         };
         let mut config_desc = conf.config_desc;
+        let mut iads = self.get_iads_descriptor(conf.iad_desc.as_ref())?;
         let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
 
-        config_desc.wTotalLength = config_desc.bLength as u16 + ifs.len() as u16;
+        config_desc.wTotalLength =
+            config_desc.bLength as u16 + iads.len() as u16 + ifs.len() as u16;
 
         let mut buf = config_desc.as_bytes().to_vec();
+        buf.append(&mut iads);
         buf.append(&mut ifs);
+        Ok(buf)
+    }
+
+    fn get_iads_descriptor(&self, iad_desc: &[Arc<UsbDescIAD>]) -> Result<Vec<u8>> {
+        let mut iads = Vec::new();
+        for iad in iad_desc {
+            let mut buf = self.get_single_iad_descriptor(iad.as_ref())?;
+            iads.append(&mut buf);
+        }
+        Ok(iads)
+    }
+
+    fn get_single_iad_descriptor(&self, iad: &UsbDescIAD) -> Result<Vec<u8>> {
+        let mut buf = iad.iad_desc.as_bytes().to_vec();
+
+        let mut ifs = self.get_interfaces_descriptor(iad.itfs.as_ref())?;
+        buf.append(&mut ifs);
+
         Ok(buf)
     }
 
@@ -264,6 +308,17 @@ impl UsbDescriptor {
 
     fn find_interface(&self, nif: u32, alt: u32) -> Option<Arc<UsbDescIface>> {
         let conf = self.configuration_selected.as_ref()?;
+
+        for i in 0..conf.iad_desc.len() {
+            let ifaces = &conf.iad_desc[i].as_ref().itfs;
+            for iface in ifaces {
+                if iface.interface_desc.bInterfaceNumber == nif as u8
+                    && iface.interface_desc.bAlternateSetting == alt as u8
+                {
+                    return Some(iface.clone());
+                }
+            }
+        }
         for i in 0..conf.interfaces.len() {
             let iface = conf.interfaces[i].as_ref();
             if iface.interface_desc.bInterfaceNumber == nif as u8
