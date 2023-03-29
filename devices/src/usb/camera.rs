@@ -35,6 +35,11 @@ const UVC_VENDOR_ID: u16 = 0xB74C;
 // The first 4 chars of "VIDEO", 5 substitutes V.
 const UVC_PRODUCT_ID: u16 = 0x51DE;
 
+const INTERFACE_ID_CONTROL: u8 = 0;
+
+const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
+const PC_PROTOCOL_UNDEFINED: u8 = 0x0;
+
 #[allow(dead_code)]
 pub struct UsbCamera {
     id: String,                                 // uniq device id
@@ -78,6 +83,22 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "Video Streaming",
 ];
 
+static DESC_IAD_CAMERA: Lazy<Arc<UsbDescIAD>> = Lazy::new(|| {
+    Arc::new(UsbDescIAD {
+        iad_desc: UsbIadDescriptor {
+            bLength: 0x8,
+            bDescriptorType: USB_DT_INTERFACE_ASSOCIATION,
+            bFirstInterface: INTERFACE_ID_CONTROL,
+            bInterfaceCount: 2,
+            bFunctionClass: USB_CLASS_VIDEO,
+            bFunctionSubClass: SC_VIDEO_INTERFACE_COLLECTION,
+            bFunctionProtocol: PC_PROTOCOL_UNDEFINED,
+            iFunction: UsbCameraStringIDs::Iad as u8,
+        },
+        itfs: vec![],
+    })
+});
+
 /// UVC Camera device descriptor
 static DESC_DEVICE_CAMERA: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     Arc::new(UsbDescDevice {
@@ -109,8 +130,7 @@ static DESC_DEVICE_CAMERA: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
                 bMaxPower: 50,
             },
-            // TODO: Add IAD descriptor, including VC&VS
-            iad_desc: vec![],
+            iad_desc: vec![DESC_IAD_CAMERA.clone()],
             interfaces: vec![],
         })],
     })
