@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::mem::{align_of, size_of};
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -23,9 +24,9 @@ use vmm_sys_util::{
     eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 pub use interrupt::MsiVector;
-use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
+use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
 
 mod interrupt;
 
@@ -132,19 +133,31 @@ impl KVMFds {
     pub fn commit_irq_routing(&self) -> Result<()> {
         let routes = self.irq_route_table.lock().unwrap().irq_routes.clone();
 
+        let layout = std::alloc::Layout::from_size_align(
+            size_of::<IrqRoute>() + routes.len() * size_of::<IrqRouteEntry>(),
+            std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
+        )?;
+
         // Safe because data in `routes` is reliable.
         unsafe {
-            let mut irq_routing = refact_vec_with_field::<IrqRoute, IrqRouteEntry>(routes.len());
+            let mut irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            if irq_routing.is_null() {
+                bail!("Failed to alloc irq routing");
+            }
             (*irq_routing).nr = routes.len() as u32;
             (*irq_routing).flags = 0;
             let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
             entries.copy_from_slice(&routes);
 
-            self.vm_fd
+            let ret = self
+                .vm_fd
                 .as_ref()
                 .unwrap()
                 .set_gsi_routing(&*irq_routing)
-                .with_context(|| "Failed to set gsi routing")
+                .with_context(|| "Failed to set gsi routing");
+
+            std::alloc::dealloc(irq_routing as *mut u8, layout);
+            ret
         }
     }
 
