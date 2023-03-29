@@ -50,6 +50,7 @@ mod numa;
 mod pci;
 mod rng;
 mod sasl_auth;
+pub mod scream;
 mod scsi;
 mod tls_creds;
 mod usb;
@@ -204,10 +205,10 @@ impl VmConfig {
                 }
             }
             "memory-backend-ram" => {
-                let zone_config = self.add_mem_zone(object_args)?;
-                let id = zone_config.id.clone();
+                let config = self.add_mem_zone(object_args)?;
+                let id = config.id.clone();
                 if self.object.mem_object.get(&id).is_none() {
-                    self.object.mem_object.insert(id, zone_config);
+                    self.object.mem_object.insert(id, config);
                 } else {
                     bail!("Object: {} has been added", id);
                 }

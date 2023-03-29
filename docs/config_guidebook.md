@@ -134,7 +134,7 @@ Each NUMA node is given a list of command lines option, there will be described 
 1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
-   The optional policies are default, preferred, bind and interleave.
+   The optional policies are default, preferred, bind and interleave. If it is not configured, `default` is used.
 2. -numa node,cpus=0-1,memdev=mem0
    It describes id and cpu set of the NUMA node, and the id belongs to which memory zone.
 3. -numa dist,src=0,dst=0,val=10
@@ -929,6 +929,28 @@ In addition to the required slot information, five optional properties are suppo
 Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
+
+### 2.21 ivshmem-scream
+
+ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
+
+Nine properties are supported for ivshmem-scream device.
+* id: unique device id.
+* memdev: configuration of the back-end memory device used by the ivshmem.
+* interface: configuring audio playback and recording interfaces, currently can be set to `PulseAudio` or `Demo`.
+* playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
+* record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
+* bus: bus number of the device.
+* addr: including slot number and function number.
+* share: the shared memory must be set to `on`.
+* size: size of th shared memory, 2M is suggested.
+
+Sample Configuration:
+
+```shell
+-device ivshmem-scream,id=<scream_id>,memdev=<object_id>[,interface=<interfaces>][,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
+-object memory-backend-ram,id=<object_id>,share=on,size=2M
+```
 
 ## 3. Trace
 

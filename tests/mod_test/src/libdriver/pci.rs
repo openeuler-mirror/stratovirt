@@ -260,6 +260,11 @@ impl TestPciDev {
         pci_bus.memwrite((bar_addr + offset) as u32, &value_buf);
     }
 
+    pub fn find_pci_device(&mut self, devfn: u8) -> bool {
+        self.devfn = devfn;
+        self.config_readw(PCI_VENDOR_ID) != 0xFFFF
+    }
+
     pub fn io_map(&self, barnum: u8) -> u64 {
         let addr: u32;
         let size: u64;
