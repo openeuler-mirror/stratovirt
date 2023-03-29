@@ -59,6 +59,7 @@ static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_REMOTE_WAKEUP,
                 bMaxPower: 50,
             },
+            iad_desc: vec![],
             interfaces: vec![DESC_IFACE_KEYBOARD.clone()],
         })],
     })
