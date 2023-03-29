@@ -62,4 +62,6 @@ pub enum ConfigError {
     UnitIdError(String, usize, usize),
     #[error("Directory {0} does not exist")]
     DirNotExist(String),
+    #[error("File {0} does not exist")]
+    FileNotExist(String),
 }

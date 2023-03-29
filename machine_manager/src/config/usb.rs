@@ -10,8 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{path::Path, str::FromStr};
+
 use super::error::ConfigError;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
+use strum::{EnumCount, IntoEnumIterator};
+use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck};
 
@@ -145,7 +149,85 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     Ok(dev)
 }
 
+#[derive(Clone, Copy, Debug, EnumCountMacro, EnumIter)]
+pub enum CamBackendType {
+    V4l2,
+    Demo,
+}
+
+impl FromStr for CamBackendType {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        for i in CamBackendType::iter() {
+            if s == CAM_OPT_STR_BACKEND_TYPES[i as usize] {
+                return Ok(i);
+            }
+        }
+
+        Err(())
+    }
+}
+
+pub const CAM_OPT_STR_BACKEND_TYPES: [&str; CamBackendType::COUNT] = ["v4l2", "demo"];
+
+pub fn parse_usb_camera(conf: &str) -> Result<UsbCameraConfig> {
+    let mut cmd_parser = CmdParser::new("usb-camera");
+    cmd_parser.push("").push("id").push("backend").push("path");
+    cmd_parser.parse(conf)?;
+
+    let mut dev = UsbCameraConfig::new();
+    dev.id = cmd_parser.get_value::<String>("id")?;
+    dev.backend = cmd_parser.get_value::<CamBackendType>("backend")?.unwrap();
+    dev.path = cmd_parser.get_value::<String>("path")?;
+
+    dev.check()?;
+    Ok(dev)
+}
+
 fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
     check_arg_too_long(&id.unwrap(), "id")
+}
+
+#[derive(Clone, Debug)]
+pub struct UsbCameraConfig {
+    pub id: Option<String>,
+    pub backend: CamBackendType,
+    pub path: Option<String>,
+}
+
+impl UsbCameraConfig {
+    pub fn new() -> Self {
+        UsbCameraConfig {
+            id: None,
+            backend: CamBackendType::Demo,
+            path: None,
+        }
+    }
+}
+
+impl Default for UsbCameraConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConfigCheck for UsbCameraConfig {
+    fn check(&self) -> Result<()> {
+        // Note: backend has already been checked during args parsing.
+        check_id(self.id.clone(), "usb-camera")?;
+        check_camera_path(self.path.clone())
+    }
+}
+
+fn check_camera_path(path: Option<String>) -> Result<()> {
+    check_arg_nonexist(path.clone(), "path", "usb-camera")?;
+
+    let path = path.unwrap();
+    if !Path::new(&path).exists() {
+        bail!(ConfigError::FileNotExist(path));
+    }
+
+    Ok(())
 }
