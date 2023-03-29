@@ -10,14 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::mem::{align_of, size_of};
-
+use anyhow::{Context, Result};
 use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
 use kvm_ioctls::{Cap, Kvm};
-use util::bitmap::Bitmap;
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
-use anyhow::{Context, Result};
+use util::bitmap::Bitmap;
 
 pub(crate) type IrqRoute = kvm_bindings::kvm_irq_routing;
 pub(crate) type IrqRouteEntry = kvm_bindings::kvm_irq_routing_entry;
@@ -218,16 +216,6 @@ pub struct MsiVector {
     pub masked: bool,
     #[cfg(target_arch = "aarch64")]
     pub dev_id: u32,
-}
-
-pub(crate) unsafe fn refact_vec_with_field<T: Default + Sized, F: Sized>(count: usize) -> *mut T {
-    let layout = std::alloc::Layout::from_size_align(
-        size_of::<T>() + count * size_of::<F>(),
-        std::cmp::max(align_of::<T>(), align_of::<F>()),
-    )
-    .unwrap();
-
-    std::alloc::alloc(layout) as *mut T
 }
 
 #[cfg(test)]
