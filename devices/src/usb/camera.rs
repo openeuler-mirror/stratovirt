@@ -36,9 +36,37 @@ const UVC_VENDOR_ID: u16 = 0xB74C;
 const UVC_PRODUCT_ID: u16 = 0x51DE;
 
 const INTERFACE_ID_CONTROL: u8 = 0;
+const INTERFACE_ID_STREAMING: u8 = 1;
 
+const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
+const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 3;
+const UNIT_ID_SELECTOR_UNIT: u8 = 4;
+const UNIT_ID_PROCESSING_UNIT: u8 = 5;
+
+const ENDPOINT_ID_CONTROL: u8 = 0x1;
+const ENDPOINT_ID_STREAMING: u8 = 0x2;
+
+// According to UVC specification 1.5
+// A.2. Video Interface Subclass Codes
+const SC_VIDEOCONTROL: u8 = 0x01;
+const SC_VIDEOSTREAMING: u8 = 0x02;
 const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
+// A.3. Video Interface Protocol Codes
 const PC_PROTOCOL_UNDEFINED: u8 = 0x0;
+const PC_PROTOCOL_15: u8 = 0x1;
+// A.4. Video Class-Specific Descriptor Types
+const CS_INTERFACE: u8 = 0x24;
+// A.5. Video Class-Specific VC Interface Descriptor Subtypes
+const VC_HEADER: u8 = 0x01;
+const VC_INPUT_TERMINAL: u8 = 0x02;
+const VC_OUTPUT_TERMINAL: u8 = 0x03;
+const VC_SELECTOR_UNIT: u8 = 0x04;
+const VC_PROCESSING_UNIT: u8 = 0x05;
+// A.6 Video Class-Specific VS Interface Descriptor Subtypes
+const VS_INPUT_HEADER: u8 = 0x01;
+const VS_FORMAT_UNCOMPRESSED: u8 = 0x04;
+const VS_FRAME_UNCOMPRESSED: u8 = 0x05;
+const VS_COLORFORMAT: u8 = 0x0D;
 
 #[allow(dead_code)]
 pub struct UsbCamera {
@@ -83,6 +111,248 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "Video Streaming",
 ];
 
+static DESC_INTERFACE_CAMERA_VC: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+    // VideoControl Interface Descriptor
+    Arc::new(UsbDescIface {
+        interface_desc: UsbInterfaceDescriptor {
+            bLength: 0x9,
+            bDescriptorType: USB_DT_INTERFACE,
+            bInterfaceNumber: INTERFACE_ID_CONTROL,
+            bAlternateSetting: 0,
+            bNumEndpoints: 1,
+            bInterfaceClass: USB_CLASS_VIDEO,
+            bInterfaceSubClass: SC_VIDEOCONTROL,
+            bInterfaceProtocol: PC_PROTOCOL_15,
+            iInterface: UsbCameraStringIDs::VideoControl as u8,
+        },
+        other_desc: vec![
+            Arc::new(UsbDescOther {
+                // Class-specific VS Interface Input Header Descriptor
+                data: vec![
+                    0xd,          // bLength
+                    CS_INTERFACE, // bDescriptorType
+                    VC_HEADER,    // bDescriptorSubtype
+                    0x10,         // bcdADC
+                    0x01,
+                    0x3b, //wTotalLength
+                    0x00,
+                    0x80, //dwClockFrequency, 6MHz
+                    0x8D,
+                    0x5B,
+                    0x00,
+                    0x01, // bInCollection
+                    0x01, // baInterfaceNr
+                ],
+            }),
+            // Input Terminal Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x11,                       // bLength
+                    CS_INTERFACE,               // bDescriptorType
+                    VC_INPUT_TERMINAL,          // bDescriptorSubtype
+                    TERMINAL_ID_INPUT_TERMINAL, // bTerminalID
+                    0x01,                       // Fixme, wTerminalType, ITT_CAMERA, 0x0201
+                    0x02,
+                    0x00, // bAssocTerminal
+                    UsbCameraStringIDs::InputTerminal as u8,
+                    0x00, // wObjectiveFocalLengthMin
+                    0x00,
+                    0x00, // wObjectiveFocalLengthMax
+                    0x00,
+                    0x00, // wOcularFocalLength
+                    0x00,
+                    0x02, // bControlSize
+                    0x00, // bmControls
+                    0x00,
+                ],
+            }),
+            // Output Terminal Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x09,                        // bLength
+                    CS_INTERFACE,                // bDescriptorType
+                    VC_OUTPUT_TERMINAL,          // bDescriptorSubtype
+                    TERMINAL_ID_OUTPUT_TERMINAL, // bTerminalID
+                    0x01,                        // wTerminalType, TT_STREAMING, 0x0101
+                    0x01,
+                    0x00,                                     // bAssocTerminal
+                    UNIT_ID_PROCESSING_UNIT,                  // bSourceID
+                    UsbCameraStringIDs::OutputTerminal as u8, // iTerminal
+                ],
+            }),
+            // Selector Unit Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x07,                                 // bLength
+                    CS_INTERFACE,                         //bDescriptorType
+                    VC_SELECTOR_UNIT,                     //bDescriptorSubtype
+                    UNIT_ID_SELECTOR_UNIT,                // bUnitID
+                    0x01,                                 // bNrInPins
+                    TERMINAL_ID_INPUT_TERMINAL,           // baSourceID(1)
+                    UsbCameraStringIDs::SelectUnit as u8, // iSelector
+                ],
+            }),
+            // Processing Unit Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x0d,                    // bLength
+                    CS_INTERFACE,            // bDescriptorType
+                    VC_PROCESSING_UNIT,      // bDescriptorSubtype
+                    UNIT_ID_PROCESSING_UNIT, // bUnitID
+                    UNIT_ID_SELECTOR_UNIT,   // bSourceID
+                    0x00,                    // u16  wMaxMultiplier
+                    0x00,
+                    0x03, // bControlSize
+                    0x00, // u24  bmControls
+                    0x00,
+                    0x00,
+                    UsbCameraStringIDs::ProcessingUnit as u8, // iProcessing
+                    0x00,                                     // bmVideoStandards
+                ],
+            }),
+        ],
+        endpoints: vec![Arc::new(UsbDescEndpoint {
+            endpoint_desc: UsbEndpointDescriptor {
+                bLength: USB_DT_ENDPOINT_SIZE,
+                bDescriptorType: USB_DT_ENDPOINT,
+                bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | ENDPOINT_ID_CONTROL,
+                bmAttributes: USB_ENDPOINT_ATTR_INT,
+                wMaxPacketSize: 0x40,
+                bInterval: 0x20,
+            },
+            extra: None,
+        })],
+    })
+});
+
+static DESC_INTERFACE_CAMERA_VS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+    // VideoStreaming Interface Descriptor
+    Arc::new(UsbDescIface {
+        interface_desc: UsbInterfaceDescriptor {
+            bLength: USB_DT_INTERFACE_SIZE,
+            bDescriptorType: USB_DT_INTERFACE,
+            bInterfaceNumber: INTERFACE_ID_STREAMING,
+            bAlternateSetting: 0,
+            bNumEndpoints: 1,
+            bInterfaceClass: USB_CLASS_VIDEO,
+            bInterfaceSubClass: SC_VIDEOSTREAMING,
+            bInterfaceProtocol: PC_PROTOCOL_15,
+            iInterface: UsbCameraStringIDs::VideoStreaming as u8,
+        },
+        other_desc: vec![
+            // VC-Specific VS Video Input Header Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0xf,             // bLength
+                    CS_INTERFACE,    // bDescriptorType
+                    VS_INPUT_HEADER, // bDescriptorSubtype
+                    0x1,             // bNumFormats
+                    0x4E,            //wTotalLength
+                    0x00,
+                    0x81,                                     // bEndpointAddress, EP 1 IN
+                    0x00,                                     // bmInfo
+                    UsbCameraStringIDs::OutputTerminal as u8, // bTerminalLink
+                    0x00,                                     // bStillCaptureMethod
+                    0x00,                                     // bTriggerSupport
+                    0x00,                                     // bTriggerUsage
+                    0x01,                                     // bControlSize
+                    0x00,                                     // bmaControls(0)
+                    0x00,                                     // bmaControls(1)
+                ],
+            }),
+            // VS Uncompressed Format Type Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x1B,                   // bLength
+                    CS_INTERFACE,           // bDescriptorType
+                    VS_FORMAT_UNCOMPRESSED, //bDescriptorSubtype
+                    0x01,                   // bFormatIndex
+                    0x01,                   // bNumFrameDescriptors
+                    0x59, // guidFormat  {32595559-0000-0010-8000-00AA00389B71} (YUY2)
+                    0x55,
+                    0x59,
+                    0x32,
+                    0x00,
+                    0x00,
+                    0x10,
+                    0x00,
+                    0x80,
+                    0x00,
+                    0x00,
+                    0xaa,
+                    0x00,
+                    0x38,
+                    0x9b,
+                    0x71,
+                    0x10, // bBitsPerPixel (16 bits per pixel)
+                    0x01, // bDefaultFrameIndex (Index 1)
+                    0x00, // bAspectRatioX
+                    0x00, // bAspectRatioY
+                    0x00, // bmInterlaceFlags
+                    0x00, // bCopyProtect
+                ],
+            }),
+            // VS Uncompressed Frame Type Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x1E,                  // bLength
+                    CS_INTERFACE,          // bDescriptorType
+                    VS_FRAME_UNCOMPRESSED, // bDescriptorSubtype
+                    0x01,                  // bFrameIndex
+                    0x00,                  // bmCapabilities (Still image unsupported)
+                    0x00,                  // wWidth, 1280
+                    0x05,                  //
+                    0xD0,                  // wHeight, 720
+                    0x02,                  //
+                    0x00,                  // dwMinBitRate, (147456000 bps -> 18.432 MB/s)
+                    0x00,                  //
+                    0xCA,                  //
+                    0x08,                  //
+                    0x00,                  // dwMaxBitRate, (147456000 bps -> 18.432 MB/s)
+                    0x00,                  //
+                    0xCA,                  //
+                    0x08,                  //
+                    0x00,                  // dwMaxVideoFrameBufferSize,  (1843200 bytes)
+                    0x20,                  //
+                    0x1C,                  //
+                    0x00,                  //
+                    0x40,                  // dwDefaultFrameInterval, (100.0000 ms -> 10.0000 fps)
+                    0x42,                  //
+                    0x0F,                  //
+                    0x00,                  //
+                    0x01, // bFrameIntervalType, (1 discrete frame interval supported)
+                    0x40, // adwFrameInterval，(100.0000 ms -> 10.0000 fps)
+                    0x42, //
+                    0x0F, //
+                    0x00, //
+                ],
+            }),
+            // VS Color Matching Descriptor Descriptor
+            Arc::new(UsbDescOther {
+                data: vec![
+                    0x06,           // bLength
+                    CS_INTERFACE,   // bDescriptorType
+                    VS_COLORFORMAT, // bDescriptorSubtype
+                    0x01,           // bColorPrimaries (BT.709,sRGB)
+                    0x01,           // bTransferCharacteristics (BT.709)
+                    0x04,           // bMatrixCoefficients (SMPTE 170M (BT.601))
+                ],
+            }),
+        ],
+        endpoints: vec![Arc::new(UsbDescEndpoint {
+            endpoint_desc: UsbEndpointDescriptor {
+                bLength: USB_DT_ENDPOINT_SIZE,
+                bDescriptorType: USB_DT_ENDPOINT,
+                bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | ENDPOINT_ID_STREAMING,
+                bmAttributes: USB_ENDPOINT_ATTR_BULK,
+                wMaxPacketSize: 0x400,
+                bInterval: 0x20,
+            },
+            extra: None,
+        })],
+    })
+});
+
 static DESC_IAD_CAMERA: Lazy<Arc<UsbDescIAD>> = Lazy::new(|| {
     Arc::new(UsbDescIAD {
         iad_desc: UsbIadDescriptor {
@@ -95,7 +365,10 @@ static DESC_IAD_CAMERA: Lazy<Arc<UsbDescIAD>> = Lazy::new(|| {
             bFunctionProtocol: PC_PROTOCOL_UNDEFINED,
             iFunction: UsbCameraStringIDs::Iad as u8,
         },
-        itfs: vec![],
+        itfs: vec![
+            DESC_INTERFACE_CAMERA_VC.clone(),
+            DESC_INTERFACE_CAMERA_VS.clone(),
+        ],
     })
 });
 
