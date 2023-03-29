@@ -222,6 +222,8 @@ dependencies = [
  "pci",
  "serde",
  "serial_test",
+ "strum",
+ "strum_macros",
  "sysbus",
  "thiserror",
  "ui",
