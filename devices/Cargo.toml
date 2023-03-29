@@ -17,6 +17,8 @@ vmm-sys-util = "0.11.0"
 byteorder = "1.4.3"
 drm-fourcc = ">=2.2.0"
 once_cell = "1.9.0"
+strum = "0.24.1"
+strum_macros = "0.24.3"
 kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }

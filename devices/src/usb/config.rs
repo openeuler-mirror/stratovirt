@@ -225,3 +225,5 @@ pub const USB_CONFIGURATION_ATTR_REMOTE_WAKEUP: u8 = 1 << 5;
 
 // USB Class
 pub const USB_CLASS_HID: u8 = 3;
+pub const USB_CLASS_VIDEO: u8 = 0xe;
+pub const USB_CLASS_MISCELLANEOUS: u8 = 0xef;
