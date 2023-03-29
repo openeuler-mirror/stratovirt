@@ -409,6 +409,22 @@ static DESC_DEVICE_CAMERA: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     })
 });
 
+static DESC_DEVICE_QUALIFIER_CAMERA: Lazy<Arc<UsbDescDeviceQualifier>> = Lazy::new(|| {
+    Arc::new(UsbDescDeviceQualifier {
+        qualifier_desc: UsbDeviceQualifierDescriptor {
+            bLength: 0xa,
+            bDescriptorType: USB_DT_DEVICE_QUALIFIER,
+            bcdUSB: DESC_DEVICE_CAMERA.device_desc.bcdUSB,
+            bDeviceClass: DESC_DEVICE_CAMERA.device_desc.bDeviceClass,
+            bDeviceSubClass: DESC_DEVICE_CAMERA.device_desc.bDeviceSubClass,
+            bDeviceProtocol: DESC_DEVICE_CAMERA.device_desc.bDeviceProtocol,
+            bMaxPacketSize0: DESC_DEVICE_CAMERA.device_desc.bMaxPacketSize0,
+            bNumConfigurations: DESC_DEVICE_CAMERA.device_desc.bNumConfigurations,
+            bReserved: 0,
+        },
+    })
+});
+
 #[allow(dead_code)]
 impl UsbCamera {
     pub fn new(config: UsbCameraConfig) -> Self {
@@ -432,7 +448,8 @@ impl UsbCamera {
         let s = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
             .init_descriptor(DESC_DEVICE_CAMERA.clone(), s)?;
-        // TODO: add device qualifier table.
+        self.usb_device
+            .init_device_qualifier_descriptor(DESC_DEVICE_QUALIFIER_CAMERA.clone())?;
         let camera = Arc::new(Mutex::new(self));
 
         Ok(camera)
