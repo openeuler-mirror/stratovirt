@@ -789,6 +789,20 @@ Video Camera Device that based on USB video class protocol. It should be attache
 
 Note: Only one camera can be configured.
 
+#### 2.13.5 USB Storage
+USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
+
+Three properties can be set for USB Storage.
+
+* id: unique device id.
+* file: the path of backend image file.
+* media: the media type of storage. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
+
+```shell
+-device usb-storage,drive=<drive_id>,id=<storage_id>
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}]
+```
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
