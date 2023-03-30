@@ -338,6 +338,11 @@ impl UsbDescriptor {
         }
     }
 
+    fn get_debug_descriptor(&self) -> Result<Vec<u8>> {
+        log::debug!("usb DEBUG descriptor");
+        Ok(vec![])
+    }
+
     fn find_interface(&self, nif: u32, alt: u32) -> Option<Arc<UsbDescIface>> {
         let conf = self.configuration_selected.as_ref()?;
 
@@ -402,6 +407,7 @@ impl UsbDescriptorOps for UsbDevice {
             USB_DT_CONFIGURATION => self.descriptor.get_config_descriptor(index)?,
             USB_DT_STRING => self.descriptor.get_string_descriptor(index)?,
             USB_DT_DEVICE_QUALIFIER => self.descriptor.get_device_qualifier_descriptor()?,
+            USB_DT_DEBUG => self.descriptor.get_debug_descriptor()?,
             _ => {
                 bail!("Unknown descriptor type {}", desc_type);
             }
