@@ -60,6 +60,7 @@ use anyhow::bail;
 use machine_manager::config::ConfigCheck;
 use util::aio::mem_to_buf;
 use util::num_ops::write_u32;
+use util::AsAny;
 use vmm_sys_util::eventfd::EventFd;
 
 /// Check if the bit of features is configured.
@@ -306,7 +307,7 @@ pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
 
 /// The trait for virtio device operations.
-pub trait VirtioDevice: Send {
+pub trait VirtioDevice: Send + AsAny {
     /// Realize low level device.
     fn realize(&mut self) -> Result<()>;
 

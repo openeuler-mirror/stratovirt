@@ -1026,6 +1026,10 @@ impl VirtioPciDevice {
 
         true
     }
+
+    pub fn get_virtio_device(&self) -> &Arc<Mutex<dyn VirtioDevice>> {
+        &self.device
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {

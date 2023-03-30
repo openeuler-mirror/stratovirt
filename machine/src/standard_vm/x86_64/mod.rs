@@ -64,7 +64,6 @@ use crate::{vm_state, MachineOps};
 use anyhow::{anyhow, bail, Context, Result};
 #[cfg(not(target_env = "musl"))]
 use ui::vnc;
-use virtio::ScsiCntlr::ScsiCntlrMap;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -123,8 +122,6 @@ pub struct StdMachine {
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
-    /// Scsi Controller List.
-    scsi_cntlr_list: ScsiCntlrMap,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
@@ -177,7 +174,6 @@ impl StdMachine {
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
-            scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
@@ -590,10 +586,6 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
-    }
-
-    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
-        Some(&self.scsi_cntlr_list)
     }
 }
 
