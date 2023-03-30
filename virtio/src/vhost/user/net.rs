@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::virtio_has_feature;
 use std::cmp;
 use std::io::Write;
 use std::os::unix::prelude::RawFd;
@@ -30,11 +29,12 @@ use super::{VhostBackendType, VhostUserClient};
 use crate::error::VirtioError;
 use crate::{
     device::net::{build_device_config_space, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
-    CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
 use anyhow::{anyhow, Context, Result};
 
@@ -235,13 +235,15 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
-        if ((driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
+        let has_control_queue =
+            (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0);
+        if has_control_queue {
             let ctrl_queue = queues[queue_num - 1].clone();
-            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
+            let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
 
             let ctrl_handler = NetCtrlHandler {
@@ -268,8 +270,13 @@ impl VirtioDevice for Net {
 
         let features = driver_features & !(1 << VIRTIO_NET_F_MAC);
         client.features = features;
-        client.set_queues(queues);
-        client.set_queue_evts(&queue_evts);
+        if has_control_queue {
+            client.set_queues(&queues[..(queue_num - 1)]);
+            client.set_queue_evts(&queue_evts[..(queue_num - 1)]);
+        } else {
+            client.set_queues(queues);
+            client.set_queue_evts(&queue_evts);
+        }
         client.activate_vhost_user()?;
         self.broken.store(false, Ordering::SeqCst);
 

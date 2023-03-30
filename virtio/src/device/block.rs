@@ -542,10 +542,6 @@ impl BlockIoHandler {
         let mut done = false;
         let start_time = Instant::now();
 
-        if !self.queue.lock().unwrap().is_enabled() {
-            done = true;
-            return Ok(done);
-        }
         while self
             .queue
             .lock()
@@ -1094,11 +1090,10 @@ impl VirtioDevice for Block {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
-        for queue in queues.iter() {
-            let queue_evt = queue_evts.remove(0);
+        for (index, queue) in queues.iter().enumerate() {
             if !queue.lock().unwrap().is_enabled() {
                 continue;
             }
@@ -1110,7 +1105,7 @@ impl VirtioDevice for Block {
             )?);
             let handler = BlockIoHandler {
                 queue: queue.clone(),
-                queue_evt,
+                queue_evt: queue_evts[index].clone(),
                 mem_space: mem_space.clone(),
                 disk_image: self.disk_image.clone(),
                 req_align: self.req_align,

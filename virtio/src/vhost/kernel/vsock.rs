@@ -26,7 +26,7 @@ use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use crate::VirtioError;
+use crate::{check_queue_enabled, VirtioError};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::super::{
@@ -256,8 +256,11 @@ impl VirtioDevice for Vsock {
         let cid = self.vsock_cfg.guest_cid;
         let mut host_notifies = Vec::new();
         // The receive queue and transmit queue will be handled in vhost.
+        check_queue_enabled("vhost kernel vsock", queues, 0)?;
+        check_queue_enabled("vhost kernel vsock", queues, 1)?;
         let vhost_queues = queues[..2].to_vec();
         // This event queue will be handled.
+        check_queue_enabled("vhost kernel vsock", queues, 2)?;
         self.event_queue = Some(queues[2].clone());
         self.interrupt_cb = Some(interrupt_cb.clone());
 

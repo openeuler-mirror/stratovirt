@@ -30,7 +30,7 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
-use crate::virtio_has_feature;
+use crate::{check_queue_enabled, virtio_has_feature};
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM,
@@ -252,13 +252,14 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+            check_queue_enabled("vhost kernel net", queues, queue_num)?;
             let ctrl_queue = queues[queue_num - 1].clone();
-            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
+            let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
 
             let ctrl_handler = NetCtrlHandler {
@@ -280,6 +281,11 @@ impl VirtioDevice for Net {
 
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
+            if !queues[index * 2].lock().unwrap().is_enabled()
+                || !queues[index * 2 + 1].lock().unwrap().is_enabled()
+            {
+                continue;
+            }
             let mut host_notifies = Vec::new();
             let backend = match &self.backends {
                 None => return Err(anyhow!("Failed to get backend for vhost net")),

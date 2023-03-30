@@ -17,6 +17,9 @@ use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
 use address_space::{
     AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
 };
@@ -26,9 +29,8 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::time::NANOSECONDS_PER_SECOND;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use util::unix::do_mmap;
 
-use super::super::super::{Queue, QueueConfig, VIRTIO_NET_F_CTRL_VQ};
 use super::super::VhostOps;
 use super::message::{
     RegionMemInfo, VhostUserHdrFlag, VhostUserMemContext, VhostUserMemHdr, VhostUserMsgHdr,
@@ -36,10 +38,8 @@ use super::message::{
 };
 use super::sock::VhostUserSock;
 use crate::device::block::VirtioBlkConfig;
-use crate::virtio_has_feature;
 use crate::VhostUser::message::VhostUserConfig;
-use anyhow::{anyhow, bail, Context, Result};
-use util::unix::do_mmap;
+use crate::{virtio_has_feature, Queue, QueueConfig};
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
@@ -406,8 +406,8 @@ impl VhostUserClient {
 
     /// Save queue info used for reconnection.
     pub fn set_queues(&mut self, queues: &[Arc<Mutex<Queue>>]) {
-        for (queue_index, _) in queues.iter().enumerate() {
-            self.queues.push(queues[queue_index].clone());
+        for queue in queues.iter() {
+            self.queues.push(queue.clone());
         }
     }
 
@@ -480,11 +480,6 @@ impl VhostUserClient {
         self.set_mem_table()
             .with_context(|| "Failed to set mem table for vhost-user")?;
 
-        let mut queue_num = self.queues.len();
-        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
-            queue_num -= 1;
-        }
-
         let queue_size = self
             .queues
             .first()
@@ -493,10 +488,10 @@ impl VhostUserClient {
             .unwrap()
             .vring
             .actual_size();
-        self.set_inflight(queue_num as u16, queue_size)?;
+        self.set_inflight(self.queues.len() as u16, queue_size)?;
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
-        for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             let actual_size = queue_mutex.lock().unwrap().vring.actual_size();
             self.set_vring_num(queue_index, actual_size)
                 .with_context(|| {
@@ -507,7 +502,7 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
             let queue_config = queue.vring.get_queue_config();
 
@@ -542,25 +537,22 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
-            self.set_vring_enable(queue_index, true).with_context(|| {
-                format!(
-                    "Failed to set vring enable for vhost-user, index: {}",
-                    queue_index,
-                )
-            })?;
+        for (queue_index, queue) in self.queues.iter().enumerate() {
+            let enabled = queue.lock().unwrap().is_enabled();
+            self.set_vring_enable(queue_index, enabled)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring enable for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
         }
 
         Ok(())
     }
 
     pub fn reset_vhost_user(&mut self) -> Result<()> {
-        let mut queue_num = self.queues.len();
-        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
-            queue_num -= 1;
-        }
-
-        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, _) in self.queues.iter().enumerate() {
             self.set_vring_enable(queue_index, false)
                 .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
             self.get_vring_base(queue_index)

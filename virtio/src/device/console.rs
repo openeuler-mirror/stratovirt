@@ -16,10 +16,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
-use crate::VirtioError;
 use crate::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+    check_queue_enabled, Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
@@ -353,14 +352,15 @@ impl VirtioDevice for Console {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        queue_evts.remove(0); // input_queue_evt never used
-
+        check_queue_enabled("console", queues, 0)?;
+        check_queue_enabled("console", queues, 1)?;
         let handler = ConsoleHandler {
             input_queue: queues[0].clone(),
             output_queue: queues[1].clone(),
-            output_queue_evt: queue_evts.remove(0),
+            // input_queue_evt never used
+            output_queue_evt: queue_evts[1].clone(),
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,

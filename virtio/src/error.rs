@@ -56,8 +56,10 @@ pub enum VirtioError {
     VhostIoctl(String),
     #[error("Failed to get iovec from element!")]
     ElementEmpty,
-    #[error("IVirt queue is none!o")]
+    #[error("Virt queue is none!")]
     VirtQueueIsNone,
+    #[error("Device {0} virt queue {1} is not enabled!")]
+    VirtQueueNotEnabled(String, usize),
     #[error("Cannot perform activate. Expected {0} queue(s), got {1}")]
     IncorrectQueueNum(usize, usize),
     #[error("Incorrect offset, expected {0}, got {1}")]
