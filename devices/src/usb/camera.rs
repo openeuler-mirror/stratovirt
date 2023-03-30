@@ -536,3 +536,35 @@ impl UsbDeviceOps for UsbCamera {
         &mut self.usb_device
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn test_interface_table_data_len(interface: Arc<UsbDescIface>, size_offset: usize) {
+        let descs = &interface.other_desc;
+        let mut total_len_exact: usize = 0;
+
+        let total_len_setted: usize = (descs[0].data[size_offset] as usize
+            + ((descs[0].data[size_offset + 1] as usize) << 8))
+            as usize; // field 'wTotalLength' in the 1st data desc
+
+        for desc in descs {
+            let sub_len_setted = desc.data[0] as usize; // field 'bLength'
+            let sub_len_exact = desc.data.len();
+            assert_eq!(sub_len_setted, sub_len_exact);
+
+            total_len_exact += sub_len_exact;
+        }
+
+        assert_eq!(total_len_setted, total_len_exact);
+    }
+
+    #[test]
+    fn test_interfaces_table_data_len() {
+        // VC and VS's header differents, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
+        // the rest datas follow the same principle that the 1st element is the very data vector's length.
+        test_interface_table_data_len(DESC_INTERFACE_CAMERA_VC.clone(), 5);
+        test_interface_table_data_len(DESC_INTERFACE_CAMERA_VS.clone(), 4);
+    }
+}

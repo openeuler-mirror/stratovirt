@@ -190,6 +190,7 @@ pub struct UsbDescIface {
 }
 
 /// USB other descriptor.
+#[derive(Debug)]
 pub struct UsbDescOther {
     pub data: Vec<u8>,
 }
