@@ -10,13 +10,118 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use log::info;
+use once_cell::sync::Lazy;
 
+use super::config::*;
+use super::descriptor::{
+    UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
+    UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
+};
 use super::xhci::xhci_controller::XhciDevice;
 use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket};
+
+// Storage device descriptor
+static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
+    Arc::new(UsbDescDevice {
+        device_desc: UsbDeviceDescriptor {
+            bLength: USB_DT_DEVICE_SIZE,
+            bDescriptorType: USB_DT_DEVICE,
+            idVendor: USB_STORAGE_VENDOR_ID,
+            idProduct: 0x0001,
+            bcdDevice: 0,
+            iManufacturer: STR_MANUFACTURER_INDEX,
+            iProduct: STR_PRODUCT_STORAGE_INDEX,
+            iSerialNumber: STR_SERIAL_STORAGE_INDEX,
+            bcdUSB: 0x0200,
+            bDeviceClass: 0,
+            bDeviceSubClass: 0,
+            bDeviceProtocol: 0,
+            bMaxPacketSize0: 64,
+            bNumConfigurations: 1,
+        },
+        configs: vec![Arc::new(UsbDescConfig {
+            config_desc: UsbConfigDescriptor {
+                bLength: USB_DT_CONFIG_SIZE,
+                bDescriptorType: USB_DT_CONFIGURATION,
+                wTotalLength: 0,
+                bNumInterfaces: 1,
+                bConfigurationValue: 1,
+                iConfiguration: STR_CONFIG_STORAGE_HIGH_INDEX,
+                bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
+                bMaxPower: 50,
+            },
+            iad_desc: vec![],
+            interfaces: vec![DESC_IFACE_STORAGE.clone()],
+        })],
+    })
+});
+
+// Storage interface descriptor
+static DESC_IFACE_STORAGE: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+    Arc::new(UsbDescIface {
+        interface_desc: UsbInterfaceDescriptor {
+            bLength: USB_DT_INTERFACE_SIZE,
+            bDescriptorType: USB_DT_INTERFACE,
+            bInterfaceNumber: 0,
+            bAlternateSetting: 0,
+            bNumEndpoints: 2,
+            bInterfaceClass: USB_CLASS_MASS_STORAGE,
+            bInterfaceSubClass: 0x06, // SCSI
+            bInterfaceProtocol: 0x50, // Bulk-only
+            iInterface: 0,
+        },
+        other_desc: vec![],
+        endpoints: vec![
+            Arc::new(UsbDescEndpoint {
+                endpoint_desc: UsbEndpointDescriptor {
+                    bLength: USB_DT_ENDPOINT_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT,
+                    bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | 0x01,
+                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
+                    wMaxPacketSize: 512,
+                    bInterval: 0,
+                },
+                extra: None,
+            }),
+            Arc::new(UsbDescEndpoint {
+                endpoint_desc: UsbEndpointDescriptor {
+                    bLength: USB_DT_ENDPOINT_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT,
+                    bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | 0x02,
+                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
+                    wMaxPacketSize: 512,
+                    bInterval: 0,
+                },
+                extra: None,
+            }),
+        ],
+    })
+});
+
+// CRC16 of "STRATOVIRT"
+const USB_STORAGE_VENDOR_ID: u16 = 0xB74C;
+
+// String descriptor index
+const STR_MANUFACTURER_INDEX: u8 = 1;
+const STR_PRODUCT_STORAGE_INDEX: u8 = 2;
+const STR_SERIAL_STORAGE_INDEX: u8 = 3;
+const STR_CONFIG_STORAGE_HIGH_INDEX: u8 = 5;
+
+// String descriptor
+const DESC_STRINGS: [&str; 7] = [
+    "",
+    "StratoVirt",
+    "StratoVirt USB Storage",
+    "1",
+    "Full speed config (usb 1.1)",
+    "High speed config (usb 2.0)",
+    "Super speed config (usb 3.0)",
+];
 
 pub const GET_MAX_LUN: u8 = 0xfe;
 pub const MASS_STORAGE_RESET: u8 = 0xff;
@@ -131,6 +236,17 @@ impl UsbStorage {
             state: UsbStorageState::new(),
             cntlr: None,
         }
+    }
+
+    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.speed = USB_SPEED_HIGH;
+        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+
+        let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
+        Ok(storage)
     }
 }
 
