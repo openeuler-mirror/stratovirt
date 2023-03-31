@@ -126,6 +126,8 @@ pub const TRANSFER_RING_LEN: u64 = 256;
 pub const TD_TRB_LIMIT: u64 = 0x20000 + 10;
 // The USB keyboard and tablet intr endpoint id.
 pub const HID_DEVICE_ENDPOINT_ID: u32 = 3;
+pub const STORAGE_DEVICE_IN_ENDPOINT_ID: u32 = 3;
+pub const STORAGE_DEVICE_OUT_ENDPOINT_ID: u32 = 4;
 // Primary Interrupter
 pub const PRIMARY_INTERRUPTER_ID: usize = 0;
 pub const XHCI_PCI_SLOT_NUM: u8 = 0x5;
@@ -134,6 +136,7 @@ pub const XHCI_PCI_FUN_NUM: u8 = 0;
 enum UsbDeviceType {
     Tablet,
     Keyboard,
+    Storage,
     Other,
 }
 
@@ -597,6 +600,9 @@ impl TestXhciPciDevice {
             UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
                 assert_eq!(buf, [2, 0]);
             }
+            UsbDeviceType::Storage => {
+                assert_eq!(buf, [3, 0]);
+            }
             _ => {}
         }
 
@@ -959,6 +965,14 @@ impl TestXhciPciDevice {
                 endpoint_id.push(HID_DEVICE_ENDPOINT_ID);
                 endpoint_type.push(7);
                 endpoint_offset.push(0x80);
+            }
+            UsbDeviceType::Storage => {
+                endpoint_id.push(STORAGE_DEVICE_IN_ENDPOINT_ID);
+                endpoint_type.push(6);
+                endpoint_offset.push(0x80);
+                endpoint_id.push(STORAGE_DEVICE_OUT_ENDPOINT_ID);
+                endpoint_type.push(2);
+                endpoint_offset.push(0xa0);
             }
             _ => {
                 endpoint_id.push(3);
@@ -1550,6 +1564,8 @@ impl TestXhciPciDevice {
             UsbDeviceType::Tablet
         } else if *self.device_config.get("keyboard").unwrap_or(&false) {
             UsbDeviceType::Keyboard
+        } else if *self.device_config.get("storage").unwrap_or(&false) {
+            UsbDeviceType::Storage
         } else {
             UsbDeviceType::Other
         };
@@ -1572,6 +1588,9 @@ impl TestXhciPciDevice {
         match usb_device_type {
             UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
                 assert_eq!(buf[2..4], [0, 1]);
+            }
+            UsbDeviceType::Storage => {
+                assert_eq!(buf[2..4], [0, 2]);
             }
             _ => {}
         }
@@ -1600,6 +1619,11 @@ impl TestXhciPciDevice {
         match usb_device_type {
             UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
                 assert_eq!(buf[5], USB_CLASS_HID);
+            }
+            UsbDeviceType::Storage => {
+                assert_eq!(buf[5], USB_CLASS_MASS_STORAGE);
+                assert_eq!(buf[6], 0x06);
+                assert_eq!(buf[7], 0x50);
             }
             _ => {}
         }
@@ -1635,6 +1659,23 @@ impl TestXhciPciDevice {
                 // endpoint address
                 assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x1);
             }
+            UsbDeviceType::Storage => {
+                // descriptor type
+                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
+                // endpoint address
+                assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x01);
+                offset += USB_DT_ENDPOINT_SIZE as u64;
+                // endpoint descriptor
+                let buf = self.get_transfer_data_indirect_with_offset(
+                    addr,
+                    USB_DT_ENDPOINT_SIZE as usize,
+                    offset,
+                );
+                // descriptor type
+                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
+                // endpoint address
+                assert_eq!(buf[2], USB_DIRECTION_HOST_TO_DEVICE | 0x02);
+            }
             _ => {}
         }
 
@@ -1662,6 +1703,18 @@ impl TestXhciPciDevice {
             }
             UsbDeviceType::Keyboard => {
                 let hid_str = "HID Keyboard";
+                let len = hid_str.len() * 2 + 2;
+                let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
+                for i in 0..hid_str.len() {
+                    assert_eq!(buf[2 * i + 2], hid_str.as_bytes()[i]);
+                }
+            }
+            UsbDeviceType::Storage => {
+                self.get_string_descriptor(slot_id, 2);
+                self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
+                let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+                assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
+                let hid_str = "StratoVirt USB Storage";
                 let len = hid_str.len() * 2 + 2;
                 let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
                 for i in 0..hid_str.len() {
@@ -2000,6 +2053,10 @@ impl TestUsbBuilder {
         let machine: Vec<&str> = "-machine virt".split(' ').collect();
         let mut arg = machine.into_iter().map(|s| s.to_string()).collect();
         args.append(&mut arg);
+
+        let machine: Vec<&str> = "-D /var/log/mst.log".split(' ').collect();
+        let mut arg = machine.into_iter().map(|s| s.to_string()).collect();
+        args.append(&mut arg);
         Self {
             args,
             config: HashMap::new(),
@@ -2042,6 +2099,24 @@ impl TestUsbBuilder {
         let mut args = args.into_iter().map(|s| s.to_string()).collect();
         self.args.append(&mut args);
         self.config.insert(String::from("tablet"), true);
+        self
+    }
+
+    pub fn with_usb_storage(mut self, image_path: &str) -> Self {
+        let args = format!("-device usb-storage,drive=drive0,id=storage0");
+        let args: Vec<&str> = args[..].split(' ').collect();
+        let mut args = args.into_iter().map(|s| s.to_string()).collect();
+        self.args.append(&mut args);
+
+        let args = format!(
+            "-drive if=none,id=drive0,format=raw,media=cdrom,aio=off,direct=false,file={}",
+            image_path
+        );
+        let args: Vec<&str> = args[..].split(' ').collect();
+        let mut args = args.into_iter().map(|s| s.to_string()).collect();
+        self.args.append(&mut args);
+
+        self.config.insert(String::from("storage"), true);
         self
     }
 
