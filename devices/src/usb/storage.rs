@@ -133,7 +133,6 @@ pub const CBW_FLAG_OUT: u8 = 0;
 pub const CBW_SIZE: u8 = 31;
 pub const CSW_SIZE: u8 = 13;
 
-#[allow(dead_code)]
 struct UsbStorageState {
     mode: UsbMsdMode,
     cbw: UsbMsdCbw,
@@ -159,7 +158,6 @@ pub struct UsbStorage {
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 enum UsbMsdMode {
     Cbw,
@@ -175,7 +173,6 @@ enum UsbMsdCswStatus {
     PhaseError,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 struct UsbMsdCbw {
     sig: u32,
@@ -187,7 +184,6 @@ struct UsbMsdCbw {
     cmd: [u8; 16],
 }
 
-#[allow(dead_code)]
 impl UsbMsdCbw {
     fn convert(&mut self, data: &[u8]) {
         self.sig = LittleEndian::read_u32(&data[0..4]);
@@ -200,7 +196,6 @@ impl UsbMsdCbw {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct UsbMsdCsw {
     sig: u32,
@@ -209,7 +204,6 @@ struct UsbMsdCsw {
     status: u8,
 }
 
-#[allow(dead_code)]
 impl UsbMsdCsw {
     fn new() -> Self {
         UsbMsdCsw {
@@ -277,6 +271,94 @@ impl UsbStorage {
         error!("Unhandled USB Storage request {}", device_req.request);
         packet.status = UsbPacketStatus::Stall;
     }
+
+    fn handle_token_out(&mut self, packet: &mut UsbPacket) {
+        if packet.ep_number != 2 {
+            packet.status = UsbPacketStatus::Stall;
+            return;
+        }
+
+        match self.state.mode {
+            UsbMsdMode::Cbw => {
+                if packet.get_iovecs_size() != CBW_SIZE as usize {
+                    error!("usb-storage: Bad CBW size {}", packet.get_iovecs_size());
+                    packet.status = UsbPacketStatus::Stall;
+                    return;
+                }
+                let mut cbw_buf = [0_u8; CBW_SIZE as usize];
+                packet.transfer_packet(&mut cbw_buf, CBW_SIZE as usize);
+                self.state.cbw.convert(&cbw_buf);
+                debug!("Storage cbw {:?}", self.state.cbw);
+
+                if self.state.cbw.sig != CBW_SIGNATURE {
+                    error!("usb-storage: Bad signature {:X}", self.state.cbw.sig);
+                    packet.status = UsbPacketStatus::Stall;
+                    return;
+                }
+
+                if self.state.cbw.data_len == 0 {
+                    self.state.mode = UsbMsdMode::Csw;
+                } else if self.state.cbw.flags & CBW_FLAG_IN == CBW_FLAG_IN {
+                    self.state.mode = UsbMsdMode::DataIn;
+                } else {
+                    self.state.mode = UsbMsdMode::DataOut;
+                }
+                // TODO: Convert CBW to SCSI CDB.
+                self.state.csw = UsbMsdCsw::new();
+            }
+            UsbMsdMode::DataOut => {
+                // TODO: SCSI data out processing.
+                if packet.get_iovecs_size() < self.state.cbw.data_len as usize {
+                    packet.status = UsbPacketStatus::Stall;
+                    return;
+                }
+
+                self.state.mode = UsbMsdMode::Csw;
+            }
+            _ => {
+                packet.status = UsbPacketStatus::Stall;
+            }
+        }
+    }
+
+    fn handle_token_in(&mut self, packet: &mut UsbPacket) {
+        if packet.ep_number != 1 {
+            packet.status = UsbPacketStatus::Stall;
+            return;
+        }
+
+        match self.state.mode {
+            UsbMsdMode::DataOut => {
+                if self.state.cbw.data_len != 0 || packet.get_iovecs_size() < CSW_SIZE as usize {
+                    packet.status = UsbPacketStatus::Stall;
+                    return;
+                }
+
+                packet.status = UsbPacketStatus::Async;
+            }
+            UsbMsdMode::Csw => {
+                if packet.get_iovecs_size() < CSW_SIZE as usize {
+                    packet.status = UsbPacketStatus::Stall;
+                    return;
+                }
+
+                // TODO: CSW after SCSI data processing.
+                let mut csw_buf = [0_u8; CSW_SIZE as usize];
+                self.state.csw.tag = self.state.cbw.tag;
+                self.state.csw.convert(&mut csw_buf);
+                packet.transfer_packet(&mut csw_buf, CSW_SIZE as usize);
+                self.state.mode = UsbMsdMode::Cbw;
+                self.state.csw = UsbMsdCsw::new();
+            }
+            UsbMsdMode::DataIn => {
+                // TODO: SCSI data in processing.
+                self.state.mode = UsbMsdMode::Csw;
+            }
+            _ => {
+                packet.status = UsbPacketStatus::Stall;
+            }
+        }
+    }
 }
 
 impl UsbDeviceOps for UsbStorage {
@@ -307,7 +389,24 @@ impl UsbDeviceOps for UsbStorage {
         }
     }
 
-    fn handle_data(&mut self, _packet: &mut UsbPacket) {}
+    fn handle_data(&mut self, packet: &mut UsbPacket) {
+        debug!(
+            "Storage device handle_data endpoint {}, mode {:?}",
+            packet.ep_number, self.state.mode
+        );
+
+        match packet.pid as u8 {
+            USB_TOKEN_OUT => {
+                self.handle_token_out(packet);
+            }
+            USB_TOKEN_IN => {
+                self.handle_token_in(packet);
+            }
+            _ => {
+                packet.status = UsbPacketStatus::Stall;
+            }
+        }
+    }
 
     fn device_id(&self) -> String {
         self.id.clone()
