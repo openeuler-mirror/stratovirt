@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -42,16 +41,6 @@ pub struct XhciTRB {
 }
 
 impl XhciTRB {
-    pub fn new() -> Self {
-        Self {
-            parameter: 0,
-            status: 0,
-            control: 0,
-            addr: 0,
-            ccs: true,
-        }
-    }
-
     /// Get TRB type
     pub fn get_type(&self) -> TRBType {
         ((self.control >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK).into()
@@ -185,30 +174,13 @@ impl XhciRing {
     }
 }
 
-impl Display for XhciRing {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "XhciRing dequeue {:x} ccs {}", self.dequeue, self.ccs)
-    }
-}
-
 /// Event Ring Segment Table Entry. See in the specs 6.5 Event Ring Segment Table.
-#[derive(Clone)]
 pub struct XhciEventRingSeg {
     mem: Arc<AddressSpace>,
     pub addr_lo: u32,
     pub addr_hi: u32,
     pub size: u32,
     pub rsvd: u32,
-}
-
-impl Display for XhciEventRingSeg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(
-            f,
-            "XhciEventRingSeg addr_lo {:x} addr_hi {:x} size {} rsvd {}",
-            self.addr_lo, self.addr_hi, self.size, self.rsvd
-        )
-    }
 }
 
 impl XhciEventRingSeg {

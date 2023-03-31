@@ -78,7 +78,7 @@ const CAP_EXT_USB_REVISION_3_0: u32 = 0x0300;
 pub const XHCI_OPER_REG_USBCMD: u64 = 0x00;
 pub const XHCI_OPER_REG_USBSTS: u64 = 0x04;
 pub const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
-const XHCI_OPER_REG_DNCTRL: u64 = 0x14;
+pub const XHCI_OPER_REG_DNCTRL: u64 = 0x14;
 const XHCI_OPER_REG_CMD_RING_CTRL_LO: u64 = 0x18;
 const XHCI_OPER_REG_CMD_RING_CTRL_HI: u64 = 0x1c;
 const XHCI_OPER_REG_DCBAAP_LO: u64 = 0x30;
@@ -90,7 +90,7 @@ const XHCI_CRCR_CTRL_LO_MASK: u32 = 0xffffffc7;
 /// Command Ring Pointer Mask.
 const XHCI_CRCR_CRP_MASK: u64 = !0x3f;
 /// Notification Enable.
-const XHCI_OPER_NE_MASK: u32 = 0xffff;
+pub const XHCI_OPER_NE_MASK: u32 = 0xffff;
 /// Interrupter Registers.
 pub const XHCI_INTR_REG_IMAN: u64 = 0x00;
 pub const XHCI_INTR_REG_IMOD: u64 = 0x04;
