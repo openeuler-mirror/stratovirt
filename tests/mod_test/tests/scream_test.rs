@@ -521,4 +521,6 @@ fn scream_exception_002() {
     };
 
     read_and_check_data(&mut file, &[0; AUDIO_CHUNK_SIZE as usize], 0);
+
+    scream_tmp_clear(playback_path, record_path);
 }
