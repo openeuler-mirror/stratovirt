@@ -23,6 +23,8 @@ pub mod hid;
 #[cfg(not(target_env = "musl"))]
 pub mod keyboard;
 #[cfg(not(target_env = "musl"))]
+pub mod storage;
+#[cfg(not(target_env = "musl"))]
 pub mod tablet;
 pub mod xhci;
 
