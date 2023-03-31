@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
-use log::info;
+use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
 use super::config::*;
@@ -23,7 +23,7 @@ use super::descriptor::{
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::xhci::xhci_controller::XhciDevice;
-use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket};
+use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -248,6 +248,35 @@ impl UsbStorage {
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)
     }
+
+    fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+        match device_req.request_type {
+            USB_ENDPOINT_OUT_REQUEST => {
+                if device_req.request == USB_REQUEST_CLEAR_FEATURE {
+                    return;
+                }
+            }
+            USB_INTERFACE_CLASS_OUT_REQUEST => {
+                if device_req.request == MASS_STORAGE_RESET {
+                    self.state.mode = UsbMsdMode::Cbw;
+                    return;
+                }
+            }
+            USB_INTERFACE_CLASS_IN_REQUEST => {
+                if device_req.request == GET_MAX_LUN {
+                    // TODO: Now only supports 1 LUN.
+                    let maxlun = 0;
+                    self.usb_device.data_buf[0] = maxlun;
+                    packet.actual_length = 1;
+                    return;
+                }
+            }
+            _ => {}
+        }
+
+        error!("Unhandled USB Storage request {}", device_req.request);
+        packet.status = UsbPacketStatus::Stall;
+    }
 }
 
 impl UsbDeviceOps for UsbStorage {
@@ -258,7 +287,25 @@ impl UsbDeviceOps for UsbStorage {
         self.state = UsbStorageState::new();
     }
 
-    fn handle_control(&mut self, _packet: &mut UsbPacket, _device_req: &UsbDeviceRequest) {}
+    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+        debug!("Storage device handle_control request {:?}, ", device_req);
+        match self
+            .usb_device
+            .handle_control_for_descriptor(packet, device_req)
+        {
+            Ok(handled) => {
+                if handled {
+                    debug!("Storage control handled by descriptor, return directly.");
+                    return;
+                }
+                self.handle_control_packet(packet, device_req)
+            }
+            Err(e) => {
+                error!("Storage descriptor error {:?}", e);
+                packet.status = UsbPacketStatus::Stall;
+            }
+        }
+    }
 
     fn handle_data(&mut self, _packet: &mut UsbPacket) {}
 
