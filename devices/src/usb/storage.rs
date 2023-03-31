@@ -10,12 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex, Weak};
+use std::{
+    collections::HashMap,
+    fs::File,
+    sync::{Arc, Mutex, Weak},
+};
 
 use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
+
+use machine_manager::config::{DriveFile, UsbStorageConfig, VmConfig};
 
 use super::config::*;
 use super::descriptor::{
@@ -156,6 +162,16 @@ pub struct UsbStorage {
     state: UsbStorageState,
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
+    /// Configuration of the USB storage device.
+    pub config: UsbStorageConfig,
+    /// Image file opened.
+    pub disk_image: Option<Arc<File>>,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 #[derive(Debug)]
@@ -223,12 +239,20 @@ impl UsbMsdCsw {
 }
 
 impl UsbStorage {
-    pub fn new() -> Self {
+    pub fn new(
+        config: UsbStorageConfig,
+        drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    ) -> Self {
         Self {
-            id: "".to_string(),
+            id: config.id.clone().unwrap(),
             usb_device: UsbDevice::new(),
             state: UsbStorageState::new(),
             cntlr: None,
+            config,
+            disk_image: None,
+            req_align: 1,
+            buf_align: 1,
+            drive_files,
         }
     }
 
@@ -238,6 +262,16 @@ impl UsbStorage {
         let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+
+        if !self.config.path_on_host.is_empty() {
+            let drive_files = self.drive_files.lock().unwrap();
+            let file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
+            self.disk_image = Some(Arc::new(file));
+
+            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
+            self.req_align = alignments.0;
+            self.buf_align = alignments.1;
+        }
 
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)
