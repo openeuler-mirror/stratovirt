@@ -50,8 +50,8 @@ use devices::InterruptController;
 
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
-    camera::UsbCamera, keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
-    UsbDeviceOps,
+    camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
+    xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
 };
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
@@ -65,7 +65,8 @@ use machine_manager::config::{
 };
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::{
-    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_tablet, parse_xhci,
+    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_storage, parse_usb_tablet,
+    parse_xhci,
 };
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
@@ -1232,6 +1233,24 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Add usb storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - USB Storage Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_storage(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
+        let storage = UsbStorage::new(device_cfg, self.get_drive_files());
+        let stg = storage
+            .realize()
+            .with_context(|| "Failed to realize usb storage device")?;
+
+        self.attach_usb_to_xhci_controller(vm_config, stg as Arc<Mutex<dyn UsbDeviceOps>>)?;
+
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -1329,6 +1348,10 @@ pub trait MachineOps {
                 #[cfg(not(target_env = "musl"))]
                 "usb-camera" => {
                     self.add_usb_camera(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "usb-storage" => {
+                    self.add_usb_storage(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {

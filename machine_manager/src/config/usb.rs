@@ -13,11 +13,11 @@
 use std::{path::Path, str::FromStr};
 
 use super::error::ConfigError;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck};
+use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, VmConfig};
 
 /// XHCI controller configuration.
 #[derive(Debug)]
@@ -230,4 +230,65 @@ fn check_camera_path(path: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct UsbStorageConfig {
+    /// USB Storage device id.
+    pub id: Option<String>,
+    /// The image file path.
+    pub path_on_host: String,
+    /// USB Storage device can not do write operation.
+    pub read_only: bool,
+}
+
+impl UsbStorageConfig {
+    fn new() -> Self {
+        UsbStorageConfig {
+            id: None,
+            path_on_host: "".to_string(),
+            read_only: false,
+        }
+    }
+}
+
+impl Default for UsbStorageConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConfigCheck for UsbStorageConfig {
+    fn check(&self) -> Result<()> {
+        check_id(self.id.clone(), "usb-storage")
+    }
+}
+
+pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result<UsbStorageConfig> {
+    let mut cmd_parser = CmdParser::new("usb-storage");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("port")
+        .push("drive");
+
+    cmd_parser.parse(drive_config)?;
+
+    let mut dev = UsbStorageConfig::new();
+    dev.id = cmd_parser.get_value::<String>("id")?;
+
+    let storage_drive = cmd_parser.get_value::<String>("drive")?.with_context(|| {
+        ConfigError::FieldIsMissing("drive".to_string(), "usb storage device".to_string())
+    })?;
+
+    let drive_arg = &vm_config
+        .drives
+        .remove(&storage_drive)
+        .with_context(|| "No drive configured matched for usb storage device")?;
+    dev.path_on_host = drive_arg.path_on_host.clone();
+    dev.read_only = drive_arg.read_only;
+
+    dev.check()?;
+    Ok(dev)
 }

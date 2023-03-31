@@ -1264,6 +1264,7 @@ impl DeviceInterface for StdMachine {
             } else {
                 AioEngine::Off
             },
+            media: "disk".to_string(),
         };
 
         if let Err(e) = config.check() {
