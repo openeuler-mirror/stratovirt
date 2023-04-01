@@ -94,11 +94,8 @@ fn run() -> Result<()> {
         set_test_enabled();
     }
 
-    if let Some(logfile_path) = cmd_args.value_of("display log") {
-        if logfile_path.is_empty() {
-            logger::init_logger_with_env(Some(Box::new(std::io::stdout())))
-                .with_context(|| "Failed to init logger.")?;
-        } else {
+    match cmd_args.value_of("display log") {
+        Some(ref logfile_path) if !logfile_path.is_empty() => {
             let logfile = std::fs::OpenOptions::new()
                 .read(false)
                 .write(true)
@@ -108,6 +105,10 @@ fn run() -> Result<()> {
                 .open(logfile_path)
                 .with_context(|| "Failed to open log file")?;
             logger::init_logger_with_env(Some(Box::new(logfile)))
+                .with_context(|| "Failed to init logger.")?;
+        }
+        _ => {
+            logger::init_logger_with_env(Some(Box::new(std::io::stderr())))
                 .with_context(|| "Failed to init logger.")?;
         }
     }
