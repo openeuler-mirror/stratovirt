@@ -159,6 +159,7 @@ pub struct StreamData {
 
 impl StreamData {
     fn init(&mut self, header: &ShmemStreamHeader) {
+        fence(Ordering::Acquire);
         self.fmt = header.fmt;
         self.chunk_idx = header.chunk_idx;
     }
