@@ -87,8 +87,6 @@ fn set_up(
 }
 
 fn stream_header_init(ivshmem: &mut TestIvshmemDev, base: u64, offset: u64) {
-    // set is_started
-    ivshmem.writel(base + offset_of!(ShmemStreamHeader, is_started) as u64, 1);
     // set chunk_idx
     ivshmem.writew(base + offset_of!(ShmemStreamHeader, chunk_idx) as u64, 0);
     // set max_chunks
@@ -121,6 +119,9 @@ fn stream_header_init(ivshmem: &mut TestIvshmemDev, base: u64, offset: u64) {
     ivshmem.writeb(fmt_base + offset_of!(ShmemStreamFmt, channels) as u64, 2);
     // set channel_map
     ivshmem.writel(fmt_base + offset_of!(ShmemStreamFmt, channel_map) as u64, 3);
+
+    // Setting is_started, it must be set at the end. Otherwise, the fmt data may not be updated in time.
+    ivshmem.writel(base + offset_of!(ShmemStreamHeader, is_started) as u64, 1);
 }
 
 fn play_header_init(ivshmem: &mut TestIvshmemDev) {
