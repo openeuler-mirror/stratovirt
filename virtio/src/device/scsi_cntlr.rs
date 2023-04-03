@@ -20,16 +20,16 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::ScsiBus::{
-    aio_complete_cb, ScsiBus, ScsiCompleteCb, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
-    CHECK_CONDITION, EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
-};
 use crate::{
     iov_to_buf, report_virtio_error, ElemIovec, Element, Queue, VirtioDevice, VirtioError,
     VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
+use devices::ScsiBus::{
+    aio_complete_cb, ScsiBus, ScsiCompleteCb, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+    CHECK_CONDITION, EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
+};
 use log::{debug, error, info, warn};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{

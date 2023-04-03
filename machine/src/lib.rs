@@ -53,6 +53,7 @@ use devices::usb::{
     camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
     xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
 };
+use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
@@ -84,7 +85,6 @@ use virtio::Gpu;
 use virtio::{
     balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
-    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
     VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice,
 };

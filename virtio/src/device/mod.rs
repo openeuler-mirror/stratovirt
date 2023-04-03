@@ -17,4 +17,4 @@ pub mod console;
 pub mod gpu;
 pub mod net;
 pub mod rng;
-pub mod scsi;
+pub mod scsi_cntlr;
