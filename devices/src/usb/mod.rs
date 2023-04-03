@@ -248,6 +248,16 @@ impl UsbDevice {
                         self.remote_wakeup = 1;
                     }
                 }
+                USB_REQUEST_SET_SEL => {
+                    if self.speed == USB_SPEED_SUPER {
+                        return Ok(true);
+                    }
+                }
+                USB_REQUEST_SET_ISOCH_DELAY => {
+                    if self.speed == USB_SPEED_SUPER {
+                        return Ok(true);
+                    }
+                }
                 _ => {
                     return Ok(false);
                 }

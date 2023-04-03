@@ -220,7 +220,7 @@ static DESC_INTERFACE_CAMERA_VC: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 0x40,
                 bInterval: 0x20,
             },
-            extra: None,
+            extra: Vec::new(),
         })],
     })
 });
@@ -348,7 +348,7 @@ static DESC_INTERFACE_CAMERA_VS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 0x400,
                 bInterval: 0x20,
             },
-            extra: None,
+            extra: Vec::new(),
         })],
     })
 });

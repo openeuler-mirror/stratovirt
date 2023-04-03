@@ -97,7 +97,7 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 8,
                 bInterval: 0xa,
             },
-            extra: None,
+            extra: Vec::new(),
         })],
     })
 });
