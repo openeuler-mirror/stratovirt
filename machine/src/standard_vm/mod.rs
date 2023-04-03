@@ -69,7 +69,7 @@ use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
-    qmp_balloon, qmp_query_balloon, Block, BlockState, ScsiBus, ScsiCntlr, VhostKern, VhostUser,
+    qmp_balloon, qmp_query_balloon, Block, BlockState, ScsiCntlr, VhostKern, VhostUser,
     VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
 
@@ -820,7 +820,7 @@ impl StdMachine {
         let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(dev_cfg.clone())));
 
         let bus_name = format!("{}.0", dev_cfg.id);
-        ScsiBus::create_scsi_bus(&bus_name, &device)?;
+        ScsiCntlr::create_scsi_bus(&bus_name, &device)?;
 
         let virtio_pci_dev = self
             .add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false)

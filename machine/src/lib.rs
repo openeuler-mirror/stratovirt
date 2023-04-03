@@ -82,8 +82,8 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiBus,
-    ScsiCntlr, ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiCntlr,
+    ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice,
 };
 use ScsiDisk::{SCSI_TYPE_DISK, SCSI_TYPE_ROM};
@@ -676,7 +676,7 @@ pub trait MachineOps {
         let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
 
         let bus_name = format!("{}.0", device_cfg.id);
-        ScsiBus::create_scsi_bus(&bus_name, &device)?;
+        ScsiCntlr::create_scsi_bus(&bus_name, &device)?;
 
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
