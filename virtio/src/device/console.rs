@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
 use crate::{
-    check_queue_enabled, Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+    Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
@@ -354,8 +354,6 @@ impl VirtioDevice for Console {
         queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        check_queue_enabled("console", queues, 0)?;
-        check_queue_enabled("console", queues, 1)?;
         let handler = ConsoleHandler {
             input_queue: queues[0].clone(),
             output_queue: queues[1].clone(),

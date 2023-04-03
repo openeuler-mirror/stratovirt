@@ -749,7 +749,7 @@ impl VringOps for SplitVring {
 
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
         let mut element = Element::new(0);
-        if self.avail_ring_len(sys_mem)? == 0 {
+        if !self.is_enabled() || self.avail_ring_len(sys_mem)? == 0 {
             return Ok(element);
         }
 
