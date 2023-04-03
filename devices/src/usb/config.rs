@@ -208,11 +208,18 @@ pub const USB_DT_BOS: u8 = 15;
 pub const USB_DT_DEVICE_CAPABILITY: u8 = 16;
 pub const USB_DT_ENDPOINT_COMPANION: u8 = 48;
 
+/// USB SuperSpeed Device Capability.
+pub const USB_SS_DEVICE_CAP: u8 = 0x3;
+pub const USB_SS_DEVICE_SPEED_SUPPORTED_SUPER: u16 = 1 << 3;
+pub const USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER: u8 = 3;
+
 /// USB Descriptor size
 pub const USB_DT_DEVICE_SIZE: u8 = 18;
 pub const USB_DT_CONFIG_SIZE: u8 = 9;
 pub const USB_DT_INTERFACE_SIZE: u8 = 9;
 pub const USB_DT_ENDPOINT_SIZE: u8 = 7;
+pub const USB_DT_BOS_SIZE: u8 = 5;
+pub const USB_DT_SS_CAP_SIZE: u8 = 10;
 
 /// USB Endpoint Descriptor
 pub const USB_ENDPOINT_ATTR_CONTROL: u8 = 0;
