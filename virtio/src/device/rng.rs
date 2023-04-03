@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -69,12 +70,20 @@ struct RngHandler {
 }
 
 impl RngHandler {
-    fn write_req_data(&self, in_iov: &[ElemIovec], buffer: &mut [u8]) -> Result<()> {
+    fn write_req_data(&self, in_iov: &[ElemIovec], buffer: &mut [u8], size: u32) -> Result<()> {
         let mut offset = 0_usize;
         for iov in in_iov {
+            if offset as u32 >= size {
+                break;
+            }
             self.mem_space
-                .write(&mut buffer[offset..].as_ref(), iov.addr, iov.len as u64)
+                .write(
+                    &mut buffer[offset..].as_ref(),
+                    iov.addr,
+                    min(size - offset as u32, iov.len) as u64,
+                )
                 .with_context(|| "Failed to write request data for virtio rng")?;
+
             offset += iov.len as usize;
         }
 
@@ -93,7 +102,7 @@ impl RngHandler {
             if elem.desc_num == 0 {
                 break;
             }
-            let size =
+            let mut size =
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
@@ -114,11 +123,12 @@ impl RngHandler {
                 size as usize,
                 0,
             );
-            if ret < 0 || ret as u32 != size {
+            if ret < 0 {
                 bail!("Failed to read random file, size: {}", size);
             }
+            size = ret as u32;
 
-            self.write_req_data(&elem.in_iovec, &mut buffer)?;
+            self.write_req_data(&elem.in_iovec, &mut buffer, size)?;
 
             queue_lock
                 .vring
