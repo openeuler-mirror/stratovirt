@@ -46,6 +46,7 @@ use crate::{
 use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
+const RNG_SIZE_MAX: u32 = 1 << 20;
 
 fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
     let mut size = 0_u32;
@@ -55,6 +56,8 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
             None => bail!("The size of request for virtio rng overflows"),
         };
     }
+
+    size = min(size, RNG_SIZE_MAX);
 
     Ok(size)
 }
