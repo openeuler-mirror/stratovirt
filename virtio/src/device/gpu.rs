@@ -734,7 +734,7 @@ impl GpuIoHandler {
         let pixman_format = match get_pixman_format(res.format) {
             Ok(f) => f,
             Err(e) => {
-                error!("GuestError: {:?}.", e);
+                error!("GuestError: {:?}", e);
                 return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
             }
         };

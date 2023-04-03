@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{
@@ -197,8 +197,8 @@ impl VhostUserMemInfo {
                 .region
                 .guest_phys_addr
                 .checked_add(reg_info.region.memory_size)
-                .ok_or_else(|| {
-                    anyhow!(
+                .with_context(|| {
+                    format!(
                         "Overflow when adding gpa with memory_size in region {:x?}",
                         reg_info.region
                     )
@@ -251,7 +251,7 @@ impl VhostUserMemInfo {
         let file_back = fr
             .owner
             .get_file_backend()
-            .ok_or_else(|| anyhow!("Failed to get file backend"))?;
+            .with_context(|| "Failed to get file backend")?;
         let mut mem_regions = self.regions.lock().unwrap();
         let host_address = match fr.owner.get_host_address() {
             Some(addr) => addr,
@@ -307,12 +307,12 @@ impl Listener for VhostUserMemInfo {
         match req_type {
             ListenerReqType::AddRegion => {
                 self.add_mem_range(
-                    range.ok_or_else(|| anyhow!("Flat range is None when adding region"))?,
+                    range.with_context(|| "Flat range is None when adding region")?,
                 )?;
             }
             ListenerReqType::DeleteRegion => {
                 self.delete_mem_range(
-                    range.ok_or_else(|| anyhow!("Flat range is None when deleting region"))?,
+                    range.with_context(|| "Flat range is None when deleting region")?,
                 )?;
             }
             _ => {}
@@ -830,26 +830,29 @@ impl VhostOps for VhostUserClient {
         let desc_user_addr = self
             .mem_info
             .addr_to_host(queue.desc_table)
-            .ok_or_else(|| {
-                anyhow!(format!(
+            .with_context(|| {
+                format!(
                     "Failed to transform desc-table address {}",
                     queue.desc_table.0
-                ))
+                )
             })?;
-        let used_user_addr = self.mem_info.addr_to_host(queue.used_ring).ok_or_else(|| {
-            anyhow!(format!(
-                "Failed to transform used ring address {}",
-                queue.used_ring.0
-            ))
-        })?;
+        let used_user_addr = self
+            .mem_info
+            .addr_to_host(queue.used_ring)
+            .with_context(|| {
+                format!(
+                    "Failed to transform used ring address {}",
+                    queue.used_ring.0
+                )
+            })?;
         let avail_user_addr = self
             .mem_info
             .addr_to_host(queue.avail_ring)
-            .ok_or_else(|| {
-                anyhow!(format!(
+            .with_context(|| {
+                format!(
                     "Failed to transform avail ring address {}",
                     queue.avail_ring.0
-                ))
+                )
             })?;
         let _vring_addr = VhostUserVringAddr {
             index: index as u32,

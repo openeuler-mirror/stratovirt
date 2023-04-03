@@ -188,7 +188,7 @@ fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
             raw_fds.push(
                 (*fd)
                     .parse::<i32>()
-                    .map_err(|_| anyhow!("Failed to parse fds"))?,
+                    .with_context(|| "Failed to parse fds")?,
             );
         }
         Ok(Some(raw_fds))
@@ -239,7 +239,7 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         let fds_num =
             fds.len()
                 .checked_mul(2)
-                .ok_or_else(|| anyhow!("Invalid fds number {}", fds.len()))? as u16;
+                .with_context(|| format!("Invalid fds number {}", fds.len()))? as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
         }
@@ -264,7 +264,7 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         let fds_num = fds
             .len()
             .checked_mul(2)
-            .ok_or_else(|| anyhow!("Invalid vhostfds number {}", fds.len()))?
+            .with_context(|| format!("Invalid vhostfds number {}", fds.len()))?
             as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
@@ -347,7 +347,7 @@ fn get_netdev_fd(fd_name: &str) -> Result<RawFd> {
         // try to convert string to RawFd
         let fd_num = fd_name
             .parse::<i32>()
-            .with_context(|| anyhow!("Failed to parse fd: {}", fd_name))?;
+            .with_context(|| format!("Failed to parse fd: {}", fd_name))?;
         Ok(fd_num)
     }
 }
@@ -373,7 +373,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         .queues
         .unwrap_or(1)
         .checked_mul(2)
-        .ok_or_else(|| anyhow!("Invalid 'queues' value"))?;
+        .with_context(|| "Invalid 'queues' value")?;
     if !is_netdev_queues_valid(queues) {
         bail!(
             "The 'queues' {} is bigger than max queue num {}",

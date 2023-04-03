@@ -399,7 +399,7 @@ pub fn handle_qmp(
         }
         (Err(e), _) => {
             let err_resp = schema::QmpErrorClass::GenericError(format!("{}", &e));
-            warn!("Qmp json parser made an error:{}", e);
+            warn!("Qmp json parser made an error: {:?}", e);
             qmp_service.send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
             ))?)?;

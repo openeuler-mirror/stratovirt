@@ -600,12 +600,12 @@ impl FromStr for IntegerList {
 
             let start = items[0]
                 .parse::<u64>()
-                .map_err(|_| error!("Invalid value {}", items[0]))?;
+                .map_err(|e| error!("Invalid value {}, error is {:?}", items[0], e))?;
             integer_list.push(start);
             if items.len() == 2 {
                 let end = items[1]
                     .parse::<u64>()
-                    .map_err(|_| error!("Invalid value {}", items[1]))?;
+                    .map_err(|e| error!("Invalid value {}, error is {:?}", items[1], e))?;
                 if start >= end {
                     return Err(());
                 }

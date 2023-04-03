@@ -141,7 +141,7 @@ impl InputReceiver for ConsoleHandler {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
         {
             error!(
-                "Failed to trigger interrupt for console, int-type {:?} {:?} ",
+                "Failed to trigger interrupt for console, int-type {:?} {:?}",
                 VirtioInterruptType::Vring,
                 e
             )
@@ -387,7 +387,7 @@ impl StateTransfer for Console {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioConsoleState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("CONSOLE")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("CONSOLE"))?;
 
         Ok(())
     }

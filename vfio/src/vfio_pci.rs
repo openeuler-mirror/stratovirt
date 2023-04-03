@@ -392,12 +392,12 @@ impl VfioPciDevice {
                         Region::init_io_region(table_size, table_ops.clone()),
                         table_offset,
                     )
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
 
                 if table_offset > 0 {
                     region
                         .add_subregion(Region::init_io_region(table_offset, bar_ops.clone()), 0)
-                        .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                        .with_context(|| VfioError::AddRegBar(i as usize))?;
                 }
 
                 if table_offset + table_size < size {
@@ -409,13 +409,13 @@ impl VfioPciDevice {
                             ),
                             table_offset + table_size,
                         )
-                        .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                        .with_context(|| VfioError::AddRegBar(i as usize))?;
                 }
                 region
             } else {
                 region
                     .add_subregion(Region::init_io_region(size, bar_ops.clone()), 0)
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
                 region
             };
 
@@ -517,7 +517,7 @@ impl VfioPciDevice {
                 {
                     Ok(g) => g as i32,
                     Err(e) => {
-                        error!("Failed to allocate gsi, error is {}", e);
+                        error!("Failed to allocate gsi, error is {:?}", e);
                         return true;
                     }
                 };
@@ -528,15 +528,15 @@ impl VfioPciDevice {
                     .lock()
                     .unwrap()
                     .add_msi_route(gsi_route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {:?}", e));
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("{}", e));
+                    .unwrap_or_else(|e| error!("{:?}", e));
                 KVM_FDS
                     .load()
                     .register_irqfd(gsi_route.irq_fd.as_ref().unwrap(), gsi_route.gsi as u32)
-                    .unwrap_or_else(|e| error!("{}", e));
+                    .unwrap_or_else(|e| error!("{:?}", e));
             } else {
                 KVM_FDS
                     .load()
@@ -544,25 +544,25 @@ impl VfioPciDevice {
                     .lock()
                     .unwrap()
                     .update_msi_route(gsi_route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {:?}", e));
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("{}", e));
+                    .unwrap_or_else(|e| error!("{:?}", e));
             }
 
             let mut locked_dev = cloned_dev.lock().unwrap();
             if (vector + 1) > (locked_dev.nr_vectors as u64) {
                 locked_dev
                     .disable_irqs()
-                    .unwrap_or_else(|e| error!("Failed to disable irq, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to disable irq, error is {:?}", e));
 
                 locked_dev
                     .enable_irqs(
                         get_irq_rawfds(&locked_gsi_routes, 0, (vector + 1) as u32),
                         0,
                     )
-                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {:?}", e));
                 locked_dev.nr_vectors = (vector + 1) as usize;
             } else {
                 locked_dev
@@ -570,7 +570,7 @@ impl VfioPciDevice {
                         get_irq_rawfds(&locked_gsi_routes, vector as u32, 1),
                         vector as u32,
                     )
-                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {:?}", e));
             }
             true
         };
@@ -603,7 +603,7 @@ impl VfioPciDevice {
                             .read_region(data, r.region_offset, offset)
                     {
                         error!(
-                            "Failed to read bar region, address is {}, offset is {}, error is {}",
+                            "Failed to read bar region, address is {}, offset is {}, error is {:?}",
                             addr.0, offset, e,
                         );
                     }
@@ -633,7 +633,7 @@ impl VfioPciDevice {
                             .write_region(data, r.region_offset, offset)
                     {
                         error!(
-                            "Failed to write bar region, address is {}, offset is {}, error is {}",
+                            "Failed to write bar region, address is {}, offset is {}, error is {:?}",
                             addr.0, offset, e,
                         );
                     }
@@ -705,7 +705,7 @@ impl VfioPciDevice {
                     .as_ref()
                     .unwrap()
                     .add_subregion(ram_device, mmap.offset)
-                    .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;
+                    .with_context(|| VfioError::AddRegBar(i as usize))?;
             }
         }
         Ok(())
@@ -877,7 +877,7 @@ impl PciDevOps for VfioPciDevice {
 
     fn unrealize(&mut self) -> pci::Result<()> {
         if let Err(e) = VfioPciDevice::unrealize(self) {
-            error!("{}", format!("{:?}", e));
+            error!("{:?}", e);
             bail!("Failed to unrealize vfio-pci.");
         }
         Ok(())
@@ -919,7 +919,7 @@ impl PciDevOps for VfioPciDevice {
                 .unwrap()
                 .read_region(data, self.config_offset, offset as u64)
         {
-            error!("Failed to read device pci config, error is {}", e);
+            error!("Failed to read device pci config, error is {:?}", e);
             return;
         }
         for (i, data) in data.iter_mut().enumerate().take(size) {
@@ -949,7 +949,7 @@ impl PciDevOps for VfioPciDevice {
                 .unwrap()
                 .write_region(data, self.config_offset, offset as u64)
         {
-            error!("Failed to write device pci config, error is {}", e);
+            error!("Failed to write device pci config, error is {:?}", e);
             return;
         }
 
@@ -975,7 +975,7 @@ impl PciDevOps for VfioPciDevice {
                 != 0
             {
                 if let Err(e) = self.setup_bars_mmap() {
-                    error!("Failed to map bar regions, error is {}", format!("{:?}", e));
+                    error!("Failed to map bar regions, error is {:?}", e);
                 }
             }
         } else if ranges_overlap(offset, end, cap_offset, cap_offset + MSIX_CAP_SIZE as usize) {
@@ -983,11 +983,11 @@ impl PciDevOps for VfioPciDevice {
 
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {
-                    error!("{}\nFailed to enable MSI-X.", format!("{:?}", e));
+                    error!("{:?}\nFailed to enable MSI-X.", e);
                 }
             } else if was_enable && !is_enable {
                 if let Err(e) = self.vfio_disable_msix() {
-                    error!("{}\nFailed to disable MSI-X.", format!("{:?}", e));
+                    error!("{:?}\nFailed to disable MSI-X.", e);
                 }
             }
         }

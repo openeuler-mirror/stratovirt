@@ -357,24 +357,24 @@ impl VhostOps for VhostBackend {
         let locked_mem_info = self.mem_info.lock().unwrap();
         let desc_user_addr = locked_mem_info
             .addr_to_host(queue_config.desc_table)
-            .ok_or_else(|| {
-                anyhow!(anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform desc-table address {}",
                     queue_config.desc_table.0
-                ))
+                )
             })?;
         let used_user_addr = locked_mem_info
             .addr_to_host(queue_config.used_ring)
-            .ok_or_else(|| {
-                anyhow!(anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform used ring address {}",
                     queue_config.used_ring.0
-                ))
+                )
             })?;
         let avail_user_addr = locked_mem_info
             .addr_to_host(queue_config.avail_ring)
-            .ok_or_else(|| {
-                anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform avail ring address {}",
                     queue_config.avail_ring.0
                 )

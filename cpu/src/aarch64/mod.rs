@@ -19,6 +19,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::{Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
     kvm_device_attr, kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList,
@@ -31,7 +32,6 @@ use self::caps::CpregListEntry;
 pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 use self::core_regs::{get_core_regs, set_core_regs};
 use crate::CPU;
-use anyhow::{anyhow, Context, Result};
 
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
@@ -329,7 +329,7 @@ impl StateTransfer for CPU {
 
     fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("CPU")))?;
+            .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;
@@ -338,7 +338,7 @@ impl StateTransfer for CPU {
 
         if cpu_state.features.pmu {
             self.init_pmu()
-                .map_err(|_| migration::MigrationError::FromBytesError("failed to init pmu."))?;
+                .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
         }
         Ok(())
     }

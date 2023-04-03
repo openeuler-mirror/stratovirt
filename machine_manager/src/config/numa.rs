@@ -13,7 +13,7 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, HashSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::error::ConfigError;
 use crate::config::{CmdParser, IntegerList, VmConfig, MAX_NODES};
@@ -139,12 +139,7 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
     }
     if let Some(mut cpus) = cmd_parser
         .get_value::<IntegerList>("cpus")
-        .map_err(|_| {
-            anyhow!(ConfigError::ConvertValueFailed(
-                String::from("u8"),
-                "cpus".to_string()
-            ))
-        })?
+        .with_context(|| ConfigError::ConvertValueFailed(String::from("u8"), "cpus".to_string()))?
         .map(|v| v.0.iter().map(|e| *e as u8).collect::<Vec<u8>>())
     {
         cpus.sort_unstable();

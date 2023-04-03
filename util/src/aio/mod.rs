@@ -161,7 +161,7 @@ impl<T: Clone + 'static> Aio<T> {
     pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
         if self.request_misaligned(&cb) {
             let max_len = round_down(cb.nbytes + cb.req_align as u64 * 2, cb.req_align as u64)
-                .ok_or_else(|| anyhow!("Failed to round down request length."))?;
+                .with_context(|| "Failed to round down request length.")?;
             // Set upper limit of buffer length to avoid OOM.
             let buff_len = cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
             // SAFETY: we allocate aligned memory and free it later. Alignment is set to
@@ -346,10 +346,10 @@ impl<T: Clone + 'static> Aio<T> {
         buffer_len: u64,
     ) -> Result<()> {
         let offset_align = round_down(cb.offset as u64, cb.req_align as u64)
-            .ok_or_else(|| anyhow!("Failed to round down request offset."))?;
+            .with_context(|| "Failed to round down request offset.")?;
         let high = cb.offset as u64 + cb.nbytes;
         let high_align = round_up(high, cb.req_align as u64)
-            .ok_or_else(|| anyhow!("Failed to round up request high edge."))?;
+            .with_context(|| "Failed to round up request high edge.")?;
 
         match cb.opcode {
             OpCode::Preadv => {
@@ -394,7 +394,7 @@ impl<T: Clone + 'static> Aio<T> {
                         break;
                     }
                     iovecs = iov_discard_front_direct(iovecs, real_nbytes)
-                        .ok_or_else(|| anyhow!("Failed to adjust iovec for misaligned read"))?;
+                        .with_context(|| "Failed to adjust iovec for misaligned read")?;
                 }
                 Ok(())
             }
@@ -469,7 +469,7 @@ impl<T: Clone + 'static> Aio<T> {
                         break;
                     }
                     iovecs = iov_discard_front_direct(iovecs, real_nbytes)
-                        .ok_or_else(|| anyhow!("Failed to adjust iovec for misaligned write"))?;
+                        .with_context(|| "Failed to adjust iovec for misaligned write")?;
                 }
                 Ok(())
             }

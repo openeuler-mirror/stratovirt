@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigError;
 use crate::config::{CmdParser, VmConfig};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::net::Ipv4Addr;
 
 /// Configuration of vnc.
@@ -80,10 +80,10 @@ fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
     }
     let ip = v[0]
         .parse::<Ipv4Addr>()
-        .map_err(|_| anyhow!("Invalid Ip param for vnc!"))?;
+        .with_context(|| "Invalid Ip param for vnc!")?;
     let base_port = v[1]
         .parse::<i32>()
-        .map_err(|_| anyhow!("Invalid Port param for vnc!"))?;
+        .with_context(|| "Invalid Port param for vnc!")?;
     // Prevent the base_port out of bounds.
     if !(0..=VNC_MAX_PORT_NUM - VNC_PORT_OFFSET).contains(&base_port) {
         return Err(anyhow!(ConfigError::InvalidParam(

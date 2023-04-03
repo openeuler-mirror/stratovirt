@@ -26,7 +26,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use log::error;
 
 use super::fs::FileSystem;
@@ -186,7 +186,7 @@ impl VirtioFsConfig {
     fn get_mut_queue_config(&mut self, queue_index: usize) -> Result<&mut QueueInfo> {
         self.queues_info
             .get_mut(queue_index)
-            .ok_or_else(|| anyhow!("The select index of queue {} overflows", queue_index))
+            .with_context(|| format!("The select index of queue {} overflows", queue_index))
     }
 }
 

@@ -235,7 +235,7 @@ pub fn display_refresh() {
     for dcl in &mut related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Err(e) = (*dcl_opts).dpy_refresh(dcl) {
-            error!("{}", e);
+            error!("{:?}", e);
             return;
         }
 

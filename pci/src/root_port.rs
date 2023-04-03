@@ -414,7 +414,7 @@ impl PciDevOps for RootPort {
         if (!old_br_ctl & new_br_ctl & BRIDGE_CTL_SEC_BUS_RESET) != 0 {
             if let Err(e) = self.reset(true) {
                 error!(
-                    "Failed to reset child devices under root port {}: {}",
+                    "Failed to reset child devices under root port {}: {:?}",
                     self.name, e
                 )
             }
@@ -590,7 +590,7 @@ impl StateTransfer for RootPort {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("ROOT_PORT")))?;
+            .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
         let length = self.config.config.len();
         self.config.config = root_port_state.config_space[..length].to_vec();

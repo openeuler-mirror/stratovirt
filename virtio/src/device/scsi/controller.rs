@@ -713,7 +713,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
             }
             h_lock
                 .handle_ctrl()
-                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {:?}", e));
             None
         });
         notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
@@ -751,7 +751,7 @@ impl EventNotifierHelper for ScsiEventHandler {
             }
             h_lock
                 .handle_event()
-                .unwrap_or_else(|e| error!("Failed to handle event queue, err is {}", e));
+                .unwrap_or_else(|e| error!("Failed to handle event queue, err is {:?}", e));
             None
         });
         notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
@@ -815,7 +815,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
             }
             h_lock
                 .handle_cmd()
-                .unwrap_or_else(|e| error!("Failed to handle cmd queue, err is {}", e));
+                .unwrap_or_else(|e| error!("Failed to handle cmd queue, err is {:?}", e));
 
             None
         });

@@ -15,9 +15,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::{bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::eventfd::EventFd;
+
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::{error, warn};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -27,14 +30,12 @@ use util::{
     num_ops::round_up,
     test_helper::{add_msix_msg, is_test_enabled},
 };
-use vmm_sys_util::eventfd::EventFd;
 
 use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
 };
-use anyhow::{anyhow, bail, Context, Result};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -503,7 +504,7 @@ impl StateTransfer for Msix {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let msix_state = *MsixState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MSIX_DEVICE")))?;
+            .with_context(|| MigrationError::FromBytesError("MSIX_DEVICE"))?;
 
         let table_length = self.table.len();
         let pba_length = self.pba.len();

@@ -265,10 +265,7 @@ impl MachineLifecycle for GICv3 {
         // The ITS tables need to be flushed into guest RAM before VM pause.
         if let Some(its_dev) = &self.its_dev {
             if let Err(e) = its_dev.access_gic_its_tables(true) {
-                error!(
-                    "{}",
-                    format!("Failed to access GIC ITS tables, error: {:?}", e)
-                );
+                error!("Failed to access GIC ITS tables, error: {:?}", e);
                 return false;
             }
         }
