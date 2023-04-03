@@ -82,11 +82,12 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiCntlr,
-    ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
-    VirtioMmioState, VirtioNetState, VirtioPciDevice,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState,
+    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
+    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
+    VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice,
 };
-use ScsiDisk::{SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -673,10 +674,10 @@ pub trait MachineOps {
             MAX_VIRTIO_QUEUE,
         ));
         let device_cfg = parse_scsi_controller(cfg_args, queues_auto)?;
-        let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
+        let device = Arc::new(Mutex::new(ScsiCntlr::new(device_cfg.clone())));
 
         let bus_name = format!("{}.0", device_cfg.id);
-        ScsiCntlr::create_scsi_bus(&bus_name, &device)?;
+        scsi_cntlr_create_scsi_bus(&bus_name, &device)?;
 
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
@@ -697,7 +698,7 @@ pub trait MachineOps {
             self.check_bootindex(bootindex)
                 .with_context(|| "Failed to add scsi device for invalid bootindex")?;
         }
-        let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
+        let device = Arc::new(Mutex::new(ScsiDevice::new(
             device_cfg.clone(),
             scsi_type,
             self.get_drive_files(),
@@ -717,10 +718,7 @@ pub trait MachineOps {
             .downcast_ref::<VirtioPciDevice>()
             .unwrap();
         let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
-        let cntlr = virtio_device
-            .as_any()
-            .downcast_ref::<ScsiCntlr::ScsiCntlr>()
-            .unwrap();
+        let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
 
         let bus = cntlr.bus.as_ref().unwrap();
         if bus
