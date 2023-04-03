@@ -27,7 +27,7 @@ use crate::ScsiBus::{
 use crate::{
     iov_to_buf, report_virtio_error, ElemIovec, Element, Queue, VirtioDevice, VirtioError,
     VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use log::{debug, error, info, warn};
@@ -60,11 +60,11 @@ const SCSI_SENSE_LEN: u32 = 18;
 
 /// Control type codes.
 /// Task Management Function.
-pub const VIRTIO_SCSI_T_TMF: u32 = 0;
+const VIRTIO_SCSI_T_TMF: u32 = 0;
 /// Asynchronous notification query.
-pub const VIRTIO_SCSI_T_AN_QUERY: u32 = 1;
+const VIRTIO_SCSI_T_AN_QUERY: u32 = 1;
 /// Asynchronous notification subscription.
-pub const VIRTIO_SCSI_T_AN_SUBSCRIBE: u32 = 2;
+const VIRTIO_SCSI_T_AN_SUBSCRIBE: u32 = 2;
 
 /// Valid TMF Subtypes.
 pub const VIRTIO_SCSI_T_TMF_ABORT_TASK: u32 = 0;
@@ -76,20 +76,17 @@ pub const VIRTIO_SCSI_T_TMF_LOGICAL_UNIT_RESET: u32 = 5;
 pub const VIRTIO_SCSI_T_TMF_QUERY_TASK: u32 = 6;
 pub const VIRTIO_SCSI_T_TMF_QUERY_TASK_SET: u32 = 7;
 
-/// Response codes.
-pub const VIRTIO_SCSI_S_OK: u8 = 0;
-pub const VIRTIO_SCSI_S_OVERRUN: u8 = 1;
-pub const VIRTIO_SCSI_S_ABORTED: u8 = 2;
-pub const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
-pub const VIRTIO_SCSI_S_RESET: u8 = 4;
-pub const VIRTIO_SCSI_S_BUSY: u8 = 5;
-pub const VIRTIO_SCSI_S_TRANSPORT_FAILURE: u8 = 6;
-pub const VIRTIO_SCSI_S_TARGET_FAILURE: u8 = 7;
-pub const VIRTIO_SCSI_S_NEXUS_FAILURE: u8 = 8;
-pub const VIRTIO_SCSI_S_FAILURE: u8 = 9;
-pub const VIRTIO_SCSI_S_FUNCTION_SUCCEEDED: u8 = 10;
-pub const VIRTIO_SCSI_S_FUNCTION_REJECTED: u8 = 11;
-pub const VIRTIO_SCSI_S_INCORRECT_LUN: u8 = 12;
+/// Command-specific response values.
+/// The request was completed and the status byte if filled with a SCSI status code.
+const VIRTIO_SCSI_S_OK: u8 = 0;
+/// If the content of the CDB(such as the allocation length, parameter length or transfer size) requires
+/// more data than is available in the datain and dataout buffers.
+const VIRTIO_SCSI_S_OVERRUN: u8 = 1;
+/// The request was never processed because the target indicated by lun does not exist.
+const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
+/// Other host or driver error. In particular, if neither dataout nor datain is empty, and the VIRTIO_SCSI_F_INOUT
+/// feature has not been negotiated, the request will be immediately returned with a response equal to VIRTIO_SCSI_S_FAILURE.
+const VIRTIO_SCSI_S_FAILURE: u8 = 9;
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -171,8 +168,6 @@ impl VirtioDevice for ScsiCntlr {
         self.state.config_space.num_queues = self.config.queues;
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
-            | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
-            | (1_u64 << VIRTIO_SCSI_F_CHANGE)
             | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
             | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC);
 
@@ -256,14 +251,14 @@ impl VirtioDevice for ScsiCntlr {
         queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        let queue_num = queues.len();
-        if queue_num < SCSI_MIN_QUEUE_NUM {
+        if queues.len() < SCSI_MIN_QUEUE_NUM {
             bail!("virtio scsi controller queues num can not be less than 3!");
         }
 
+        // Register event notifier for ctrl queue.
         let ctrl_queue = queues[0].clone();
         let ctrl_queue_evt = queue_evts[0].clone();
-        let ctrl_handler = ScsiCtrlHandler {
+        let ctrl_handler = ScsiCtrlQueueHandler {
             queue: ctrl_queue,
             queue_evt: ctrl_queue_evt,
             mem_space: mem_space.clone(),
@@ -278,9 +273,10 @@ impl VirtioDevice for ScsiCntlr {
             &mut self.deactivate_evts,
         )?;
 
+        // Register event notifier for event queue.
         let event_queue = queues[1].clone();
         let event_queue_evt = queue_evts[1].clone();
-        let event_handler = ScsiEventHandler {
+        let event_handler = ScsiEventQueueHandler {
             _queue: event_queue,
             queue_evt: event_queue_evt,
             _mem_space: mem_space.clone(),
@@ -296,9 +292,10 @@ impl VirtioDevice for ScsiCntlr {
             &mut self.deactivate_evts,
         )?;
 
+        // Register event notifier for command queues.
         for (index, cmd_queue) in queues[2..].iter().enumerate() {
             let bus = self.bus.as_ref().unwrap();
-            let cmd_handler = ScsiCmdHandler {
+            let cmd_handler = ScsiCmdQueueHandler {
                 scsibus: bus.clone(),
                 queue: cmd_queue.clone(),
                 queue_evt: queue_evts[index + 2].clone(),
@@ -311,7 +308,7 @@ impl VirtioDevice for ScsiCntlr {
             let notifiers =
                 EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler)));
             if notifiers.is_empty() {
-                bail!("Error in create scsi device aio!");
+                bail!("Error in creating scsi device aio!");
             }
 
             register_event_helper(
@@ -341,37 +338,41 @@ fn build_event_notifier(fd: RawFd, handler: Rc<NotifierCallback>) -> EventNotifi
 }
 
 /// Task Managememt Request.
+#[allow(unused)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct VirtioScsiCtrlTmfReq {
-    pub ctrltype: u32,
-    pub subtype: u32,
-    pub lun: [u8; 8],
-    pub tag: u64,
+struct VirtioScsiCtrlTmfReq {
+    ctrltype: u32,
+    subtype: u32,
+    lun: [u8; 8],
+    tag: u64,
 }
 
 impl ByteCode for VirtioScsiCtrlTmfReq {}
 
+#[allow(unused)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct VirtioScsiCtrlTmfResp {
-    pub response: u8,
+struct VirtioScsiCtrlTmfResp {
+    response: u8,
 }
 
 impl ByteCode for VirtioScsiCtrlTmfResp {}
 
 /// Asynchronous notification query/subscription.
+#[allow(unused)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct VirtioScsiCtrlAnReq {
-    pub ctrltype: u32,
-    pub lun: [u8; 8],
-    pub event_requested: u32,
+struct VirtioScsiCtrlAnReq {
+    ctrltype: u32,
+    lun: [u8; 8],
+    event_requested: u32,
 }
 
 impl ByteCode for VirtioScsiCtrlAnReq {}
 
+#[allow(unused)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct VirtioScsiCtrlAnResp {
-    pub event_actual: u32,
-    pub response: u8,
+struct VirtioScsiCtrlAnResp {
+    event_actual: u32,
+    response: u8,
 }
 
 impl ByteCode for VirtioScsiCtrlAnResp {}
@@ -404,7 +405,7 @@ pub struct VirtioScsiCmdResp {
     status_qualifier: u16,
     /// Command completion status.
     status: u8,
-    /// Respinse value.
+    /// Response value.
     response: u8,
     /// Sense buffer data.
     sense: [u8; VIRTIO_SCSI_SENSE_DEFAULT_SIZE],
@@ -627,7 +628,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
     }
 }
 
-pub struct ScsiCtrlHandler {
+pub struct ScsiCtrlQueueHandler {
     /// The ctrl virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the ctrl virtqueue.
@@ -642,9 +643,9 @@ pub struct ScsiCtrlHandler {
     device_broken: Arc<AtomicBool>,
 }
 
-impl ScsiCtrlHandler {
+impl ScsiCtrlQueueHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
-        let result = self.handle_ctrl_request();
+        let result = self.handle_ctrl_queue_requests();
         if result.is_err() {
             report_virtio_error(
                 self.interrupt_cb.clone(),
@@ -656,7 +657,7 @@ impl ScsiCtrlHandler {
         result
     }
 
-    fn handle_ctrl_request(&mut self) -> Result<()> {
+    fn handle_ctrl_queue_requests(&mut self) -> Result<()> {
         loop {
             let mut queue = self.queue.lock().unwrap();
             let elem = queue
@@ -667,7 +668,10 @@ impl ScsiCtrlHandler {
                 break;
             }
 
-            let ctrl_desc = elem.out_iovec.get(0).unwrap();
+            let ctrl_desc = elem
+                .out_iovec
+                .get(0)
+                .with_context(|| "Error request in ctrl queue. Empty dataout buf!")?;
             let ctrl_type = self
                 .mem_space
                 .read_object::<u32>(ctrl_desc.addr)
@@ -710,7 +714,7 @@ impl ScsiCtrlHandler {
     }
 }
 
-impl EventNotifierHelper for ScsiCtrlHandler {
+impl EventNotifierHelper for ScsiCtrlQueueHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
@@ -733,7 +737,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
     }
 }
 
-pub struct ScsiEventHandler {
+pub struct ScsiEventQueueHandler {
     /// The Event virtqueue.
     _queue: Arc<Mutex<Queue>>,
     /// EventFd for the Event virtqueue.
@@ -748,7 +752,7 @@ pub struct ScsiEventHandler {
     device_broken: Arc<AtomicBool>,
 }
 
-impl EventNotifierHelper for ScsiEventHandler {
+impl EventNotifierHelper for ScsiEventQueueHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
@@ -771,7 +775,7 @@ impl EventNotifierHelper for ScsiEventHandler {
     }
 }
 
-impl ScsiEventHandler {
+impl ScsiEventQueueHandler {
     fn handle_event(&mut self) -> Result<()> {
         Ok(())
     }
@@ -796,7 +800,8 @@ impl ScsiRequestOps for CmdQueueRequest {
 fn virtio_scsi_get_lun_id(lun: [u8; 8]) -> u16 {
     (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
 }
-pub struct ScsiCmdHandler {
+
+pub struct ScsiCmdQueueHandler {
     /// The scsi controller.
     scsibus: Arc<Mutex<ScsiBus>>,
     /// The Cmd virtqueue.
@@ -813,7 +818,7 @@ pub struct ScsiCmdHandler {
     device_broken: Arc<AtomicBool>,
 }
 
-impl EventNotifierHelper for ScsiCmdHandler {
+impl EventNotifierHelper for ScsiCmdQueueHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
@@ -872,7 +877,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
     }
 }
 
-impl ScsiCmdHandler {
+impl ScsiCmdQueueHandler {
     fn aio_complete_handler(&mut self, aio: &Arc<Mutex<Aio<ScsiCompleteCb>>>) -> Result<bool> {
         aio.lock().unwrap().handle_complete().map_err(|e| {
             report_virtio_error(
@@ -885,7 +890,7 @@ impl ScsiCmdHandler {
     }
 
     fn handle_cmd(&mut self) -> Result<()> {
-        let result = self.handle_cmd_request();
+        let result = self.handle_cmd_queue_requests();
         if result.is_err() {
             report_virtio_error(
                 self.interrupt_cb.clone(),
@@ -897,8 +902,9 @@ impl ScsiCmdHandler {
         result
     }
 
-    fn handle_cmd_request(&mut self) -> Result<()> {
+    fn handle_cmd_queue_requests(&mut self) -> Result<()> {
         let mut sreq_queue = Vec::new();
+
         loop {
             let mut queue = self.queue.lock().unwrap();
             let elem = queue
@@ -1023,7 +1029,10 @@ impl ScsiCmdHandler {
     }
 }
 
-pub fn create_scsi_bus(bus_name: &str, scsi_cntlr: &Arc<Mutex<ScsiCntlr>>) -> Result<()> {
+pub fn scsi_cntlr_create_scsi_bus(
+    bus_name: &str,
+    scsi_cntlr: &Arc<Mutex<ScsiCntlr>>,
+) -> Result<()> {
     let mut locked_scsi_cntlr = scsi_cntlr.lock().unwrap();
     let bus = ScsiBus::new(bus_name.to_string());
     locked_scsi_cntlr.bus = Some(Arc::new(Mutex::new(bus)));

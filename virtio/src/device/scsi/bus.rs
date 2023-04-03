@@ -593,8 +593,69 @@ impl ScsiRequest {
         Ok(0)
     }
 
+    fn emulate_target_execute(
+        &self,
+        not_supported_flag: &mut bool,
+        sense: &mut Option<ScsiSense>,
+    ) -> Result<Vec<u8>> {
+        match self.cmd.op {
+            REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
+            INQUIRY => scsi_command_emulate_target_inquiry(self.req_lun, &self.cmd),
+            REQUEST_SENSE => {
+                if self.req_lun != 0 {
+                    *sense = Some(SCSI_SENSE_LUN_NOT_SUPPORTED);
+                }
+                // Scsi Device does not realize sense buffer now, so just return.
+                Ok(Vec::new())
+            }
+            TEST_UNIT_READY => Ok(Vec::new()),
+            _ => {
+                *not_supported_flag = true;
+                *sense = Some(SCSI_SENSE_INVALID_OPCODE);
+                Err(anyhow!("Invalid emulation target scsi command"))
+            }
+        }
+    }
+
+    fn emulate_device_execute(
+        &self,
+        not_supported_flag: &mut bool,
+        sense: &mut Option<ScsiSense>,
+    ) -> Result<Vec<u8>> {
+        match self.cmd.op {
+            REQUEST_SENSE => {
+                *sense = Some(SCSI_SENSE_NO_SENSE);
+                Ok(Vec::new())
+            }
+            TEST_UNIT_READY => {
+                let dev_lock = self.dev.lock().unwrap();
+                if dev_lock.disk_image.is_none() {
+                    Err(anyhow!("No scsi backend!"))
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
+            READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
+            MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
+            SERVICE_ACTION_IN_16 => scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev),
+            READ_DISC_INFORMATION => {
+                scsi_command_emulate_read_disc_information(&self.cmd, &self.dev)
+            }
+            GET_EVENT_STATUS_NOTIFICATION => {
+                scsi_command_emulate_get_event_status_notification(&self.cmd, &self.dev)
+            }
+            READ_TOC => scsi_command_emulate_read_toc(&self.cmd, &self.dev),
+            GET_CONFIGURATION => scsi_command_emulate_get_configuration(&self.cmd, &self.dev),
+            _ => {
+                *not_supported_flag = true;
+                Err(anyhow!("Emulation scsi command is not supported now!"))
+            }
+        }
+    }
+
     pub fn emulate_execute(&mut self) -> Result<()> {
-        debug!("scsi command is {:#x}", self.cmd.op);
+        debug!("emulate scsi command is {:#x}", self.cmd.op);
         let mut not_supported_flag = false;
         let mut sense = None;
         let mut status = GOOD;
@@ -603,57 +664,10 @@ impl ScsiRequest {
         // Requested lun id is not equal to found device id means it may be a target request.
         // REPORT LUNS is also a target request command.
         let result = if self.req_lun != found_lun || self.cmd.op == REPORT_LUNS {
-            match self.cmd.op {
-                REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
-                INQUIRY => scsi_command_emulate_target_inquiry(self.req_lun, &self.cmd),
-                REQUEST_SENSE => {
-                    if self.req_lun != 0 {
-                        sense = Some(SCSI_SENSE_LUN_NOT_SUPPORTED);
-                    }
-                    // Scsi Device does not realize sense buffer now, so just return.
-                    Ok(Vec::new())
-                }
-                TEST_UNIT_READY => Ok(Vec::new()),
-                _ => {
-                    not_supported_flag = true;
-                    sense = Some(SCSI_SENSE_INVALID_OPCODE);
-                    Err(anyhow!("Invalid emulation target scsi command"))
-                }
-            }
+            self.emulate_target_execute(&mut not_supported_flag, &mut sense)
         } else {
             // It's not a target request.
-            match self.cmd.op {
-                REQUEST_SENSE => {
-                    sense = Some(SCSI_SENSE_NO_SENSE);
-                    Ok(Vec::new())
-                }
-                TEST_UNIT_READY => {
-                    let dev_lock = self.dev.lock().unwrap();
-                    if dev_lock.disk_image.is_none() {
-                        Err(anyhow!("No scsi backend!"))
-                    } else {
-                        Ok(Vec::new())
-                    }
-                }
-                INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
-                READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
-                MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
-                SERVICE_ACTION_IN_16 => {
-                    scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev)
-                }
-                READ_DISC_INFORMATION => {
-                    scsi_command_emulate_read_disc_information(&self.cmd, &self.dev)
-                }
-                GET_EVENT_STATUS_NOTIFICATION => {
-                    scsi_command_emulate_get_event_status_notification(&self.cmd, &self.dev)
-                }
-                READ_TOC => scsi_command_emulate_read_toc(&self.cmd, &self.dev),
-                GET_CONFIGURATION => scsi_command_emulate_get_configuration(&self.cmd, &self.dev),
-                _ => {
-                    not_supported_flag = true;
-                    Err(anyhow!("Emulation scsi command is not supported now!"))
-                }
-            }
+            self.emulate_device_execute(&mut not_supported_flag, &mut sense)
         };
 
         match result {
