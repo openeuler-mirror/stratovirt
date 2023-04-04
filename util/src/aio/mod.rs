@@ -65,6 +65,26 @@ impl FromStr for AioEngine {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum WriteZeroesState {
+    Off,
+    On,
+    Unmap,
+}
+
+impl FromStr for WriteZeroesState {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "off" => Ok(WriteZeroesState::Off),
+            "on" => Ok(WriteZeroesState::On),
+            "unmap" => Ok(WriteZeroesState::Unmap),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Iovec {
     pub iov_base: u64,
@@ -92,6 +112,7 @@ pub enum OpCode {
     Pwritev = 2,
     Fdsync = 3,
     Discard = 4,
+    WriteZeroes = 5,
 }
 
 pub struct AioCb<T: Clone> {
@@ -105,6 +126,9 @@ pub struct AioCb<T: Clone> {
     pub nbytes: u64,
     pub user_data: u64,
     pub iocompletecb: T,
+    pub discard: bool,
+    pub write_zeroes: WriteZeroesState,
+    pub write_zeroes_unmap: bool,
 }
 
 pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
@@ -187,6 +211,16 @@ impl<T: Clone + 'static> Aio<T> {
             return (self.complete_func)(&cb, res);
         }
 
+        if cb.opcode == OpCode::Pwritev
+            && cb.write_zeroes != WriteZeroesState::Off
+            && iovec_is_zero(&cb.iovec)
+        {
+            cb.opcode = OpCode::WriteZeroes;
+            if cb.write_zeroes == WriteZeroesState::Unmap && cb.discard {
+                cb.write_zeroes_unmap = true;
+            }
+        }
+
         match cb.opcode {
             OpCode::Preadv | OpCode::Pwritev => {
                 if self.ctx.is_some() {
@@ -203,6 +237,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
             OpCode::Discard => self.discard_sync(cb),
+            OpCode::WriteZeroes => self.write_zeroes_sync(cb),
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
         }
     }
@@ -498,6 +533,21 @@ impl<T: Clone + 'static> Aio<T> {
         }
         (self.complete_func)(&cb, ret)
     }
+
+    fn write_zeroes_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+        let mut ret;
+        if cb.write_zeroes_unmap {
+            ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
+            if ret == 0 {
+                return (self.complete_func)(&cb, ret);
+            }
+        }
+        ret = raw_write_zeroes(cb.file_fd, cb.offset, cb.nbytes);
+        if ret < 0 {
+            error!("Failed to do sync write zeroes.");
+        }
+        (self.complete_func)(&cb, ret)
+    }
 }
 
 pub fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
@@ -560,4 +610,23 @@ pub fn iov_discard_front_direct(iovec: &mut [Iovec], mut size: u64) -> Option<&m
         size -= iov.iov_len as u64;
     }
     None
+}
+
+fn iovec_is_zero(iovecs: &[Iovec]) -> bool {
+    let size = std::mem::size_of::<u64>() as u64;
+    for iov in iovecs {
+        if iov.iov_len % size != 0 {
+            return false;
+        }
+        // SAFETY: iov_base and iov_len has been checked in pop_avail().
+        let slice = unsafe {
+            std::slice::from_raw_parts(iov.iov_base as *const u64, (iov.iov_len / size) as usize)
+        };
+        for val in slice.iter() {
+            if *val != 0 {
+                return false;
+            }
+        }
+    }
+    true
 }

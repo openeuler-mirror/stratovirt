@@ -25,7 +25,7 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use util::aio::{AioCb, Iovec, OpCode};
+use util::aio::{AioCb, Iovec, OpCode, WriteZeroesState};
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -563,6 +563,9 @@ impl ScsiRequest {
             iocompletecb: ScsiCompleteCb {
                 req: Arc::new(Mutex::new(self)),
             },
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            write_zeroes_unmap: false,
         };
 
         if op == SYNCHRONIZE_CACHE {
