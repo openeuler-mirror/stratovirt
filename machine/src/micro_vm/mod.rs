@@ -1175,6 +1175,7 @@ impl DeviceInterface for LightMachine {
                 AioEngine::Off
             },
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            discard: false,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);
