@@ -124,12 +124,8 @@ impl VmConfig {
         self.boot_source.check()?;
         self.machine_config.check()?;
 
-        if self.guest_name.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.guest_name, "name")?;
+
         if self.boot_source.kernel_file.is_none()
             && self.machine_config.mach_type == MachineType::MicroVm
         {
@@ -618,6 +614,22 @@ impl FromStr for IntegerList {
 
         Ok(IntegerList(integer_list))
     }
+}
+
+pub fn check_arg_too_long(arg: &str, name: &str) -> Result<()> {
+    if arg.len() > MAX_STRING_LENGTH {
+        bail!(ConfigError::StringLengthTooLong(
+            name.to_string(),
+            MAX_STRING_LENGTH
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Result<()> {
+    arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
+
+    Ok(())
 }
 
 #[cfg(test)]

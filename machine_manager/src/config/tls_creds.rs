@@ -40,7 +40,10 @@ impl VmConfig {
         if let Some(id) = cmd_parser.get_value::<String>("id")? {
             tlscred.id = id;
         } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("id", "vnc tls_creds")));
+            return Err(anyhow!(ConfigError::FieldIsMissing(
+                "id".to_string(),
+                "vnc tls_creds".to_string()
+            )));
         }
 
         if let Some(dir) = cmd_parser.get_value::<String>("dir")? {

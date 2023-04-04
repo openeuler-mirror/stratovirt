@@ -41,7 +41,7 @@ pub struct RealModeKernelHeader {
     root_flags: u16,
     syssize: u32,
     ram_size: u16,
-    vid_mode: u16,
+    video_mode: u16,
     root_dev: u16,
     boot_flag: u16,
     jump: u16,

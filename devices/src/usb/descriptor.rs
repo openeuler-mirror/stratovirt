@@ -45,6 +45,23 @@ pub struct UsbDeviceDescriptor {
 
 impl ByteCode for UsbDeviceDescriptor {}
 
+/// USB device qualifier descriptor for transfer
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct UsbDeviceQualifierDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bcdUSB: u16,
+    pub bDeviceClass: u8,
+    pub bDeviceSubClass: u8,
+    pub bDeviceProtocol: u8,
+    pub bMaxPacketSize0: u8,
+    pub bNumConfigurations: u8,
+    pub bReserved: u8,
+}
+impl ByteCode for UsbDeviceQualifierDescriptor {}
+
 /// USB config descriptor for transfer
 #[allow(non_snake_case)]
 #[repr(C, packed)]
@@ -131,11 +148,39 @@ pub struct UsbDescDevice {
     pub configs: Vec<Arc<UsbDescConfig>>,
 }
 
+/// USB device qualifier descriptor.
+pub struct UsbDescDeviceQualifier {
+    pub qualifier_desc: UsbDeviceQualifierDescriptor,
+}
+
 /// USB config descriptor.
 pub struct UsbDescConfig {
     pub config_desc: UsbConfigDescriptor,
+    pub iad_desc: Vec<Arc<UsbDescIAD>>,
     pub interfaces: Vec<Arc<UsbDescIface>>,
 }
+
+/// USB Interface Association Descriptor, and related interfaces
+pub struct UsbDescIAD {
+    pub iad_desc: UsbIadDescriptor,
+    pub itfs: Vec<Arc<UsbDescIface>>,
+}
+
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct UsbIadDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bFirstInterface: u8,
+    pub bInterfaceCount: u8,
+    pub bFunctionClass: u8,
+    pub bFunctionSubClass: u8,
+    pub bFunctionProtocol: u8,
+    pub iFunction: u8,
+}
+
+impl ByteCode for UsbIadDescriptor {}
 
 /// USB interface descriptor.
 pub struct UsbDescIface {
@@ -145,6 +190,7 @@ pub struct UsbDescIface {
 }
 
 /// USB other descriptor.
+#[derive(Debug)]
 pub struct UsbDescOther {
     pub data: Vec<u8>,
 }
@@ -158,6 +204,7 @@ pub struct UsbDescEndpoint {
 /// USB Descriptor.
 pub struct UsbDescriptor {
     pub device_desc: Option<Arc<UsbDescDevice>>,
+    pub device_qualifier_desc: Option<Arc<UsbDescDeviceQualifier>>,
     pub configuration_selected: Option<Arc<UsbDescConfig>>,
     pub interfaces: Vec<Option<Arc<UsbDescIface>>>,
     pub altsetting: Vec<u32>,
@@ -169,6 +216,7 @@ impl UsbDescriptor {
     pub fn new() -> Self {
         Self {
             device_desc: None,
+            device_qualifier_desc: None,
             configuration_selected: None,
             interfaces: vec![None; USB_MAX_INTERFACES as usize],
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
@@ -197,20 +245,47 @@ impl UsbDescriptor {
             bail!("Config descriptor index {} is invalid", index);
         };
         let mut config_desc = conf.config_desc;
-        let mut total = config_desc.bLength as u16;
-        let mut ifs = Vec::new();
-        for i in 0..conf.interfaces.len() {
-            let mut iface = self.get_interface_descriptor(conf.interfaces[i].as_ref())?;
-            total += iface.len() as u16;
-            ifs.append(&mut iface);
-        }
-        config_desc.wTotalLength = total;
+        let mut iads = self.get_iads_descriptor(conf.iad_desc.as_ref())?;
+        let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
+
+        config_desc.wTotalLength =
+            config_desc.bLength as u16 + iads.len() as u16 + ifs.len() as u16;
+
         let mut buf = config_desc.as_bytes().to_vec();
+        buf.append(&mut iads);
         buf.append(&mut ifs);
         Ok(buf)
     }
 
-    fn get_interface_descriptor(&self, iface: &UsbDescIface) -> Result<Vec<u8>> {
+    fn get_iads_descriptor(&self, iad_desc: &[Arc<UsbDescIAD>]) -> Result<Vec<u8>> {
+        let mut iads = Vec::new();
+        for iad in iad_desc {
+            let mut buf = self.get_single_iad_descriptor(iad.as_ref())?;
+            iads.append(&mut buf);
+        }
+        Ok(iads)
+    }
+
+    fn get_single_iad_descriptor(&self, iad: &UsbDescIAD) -> Result<Vec<u8>> {
+        let mut buf = iad.iad_desc.as_bytes().to_vec();
+
+        let mut ifs = self.get_interfaces_descriptor(iad.itfs.as_ref())?;
+        buf.append(&mut ifs);
+
+        Ok(buf)
+    }
+
+    fn get_interfaces_descriptor(&self, ifaces: &[Arc<UsbDescIface>]) -> Result<Vec<u8>> {
+        let mut ifs = Vec::new();
+        for iface in ifaces {
+            let mut buf = self.get_single_interface_descriptor(iface.as_ref())?;
+            ifs.append(&mut buf);
+        }
+
+        Ok(ifs)
+    }
+
+    fn get_single_interface_descriptor(&self, iface: &UsbDescIface) -> Result<Vec<u8>> {
         let desc = iface.interface_desc;
         let mut buf = desc.as_bytes().to_vec();
         for i in 0..iface.other_desc.len() {
@@ -256,8 +331,32 @@ impl UsbDescriptor {
         Ok(vec)
     }
 
+    fn get_device_qualifier_descriptor(&self) -> Result<Vec<u8>> {
+        if let Some(desc) = self.device_qualifier_desc.as_ref() {
+            Ok(desc.qualifier_desc.as_bytes().to_vec())
+        } else {
+            bail!("Device qualifier descriptor not found");
+        }
+    }
+
+    fn get_debug_descriptor(&self) -> Result<Vec<u8>> {
+        log::debug!("usb DEBUG descriptor");
+        Ok(vec![])
+    }
+
     fn find_interface(&self, nif: u32, alt: u32) -> Option<Arc<UsbDescIface>> {
         let conf = self.configuration_selected.as_ref()?;
+
+        for i in 0..conf.iad_desc.len() {
+            let ifaces = &conf.iad_desc[i].as_ref().itfs;
+            for iface in ifaces {
+                if iface.interface_desc.bInterfaceNumber == nif as u8
+                    && iface.interface_desc.bAlternateSetting == alt as u8
+                {
+                    return Some(iface.clone());
+                }
+            }
+        }
         for i in 0..conf.interfaces.len() {
             let iface = conf.interfaces[i].as_ref();
             if iface.interface_desc.bInterfaceNumber == nif as u8
@@ -292,6 +391,12 @@ pub trait UsbDescriptorOps {
 
     /// Init descriptor with the device descriptor and string descriptors.
     fn init_descriptor(&mut self, desc: Arc<UsbDescDevice>, str: Vec<String>) -> Result<()>;
+
+    /// Init device qualifier descriptor.
+    fn init_device_qualifier_descriptor(
+        &mut self,
+        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
+    ) -> Result<()>;
 }
 
 impl UsbDescriptorOps for UsbDevice {
@@ -302,6 +407,8 @@ impl UsbDescriptorOps for UsbDevice {
             USB_DT_DEVICE => self.descriptor.get_device_descriptor()?,
             USB_DT_CONFIGURATION => self.descriptor.get_config_descriptor(index)?,
             USB_DT_STRING => self.descriptor.get_string_descriptor(index)?,
+            USB_DT_DEVICE_QUALIFIER => self.descriptor.get_device_qualifier_descriptor()?,
+            USB_DT_DEBUG => self.descriptor.get_debug_descriptor()?,
             _ => {
                 bail!("Unknown descriptor type {}", desc_type);
             }
@@ -388,6 +495,14 @@ impl UsbDescriptorOps for UsbDevice {
         self.descriptor.device_desc = Some(device_desc);
         self.descriptor.strings = str;
         self.set_config_descriptor(0)?;
+        Ok(())
+    }
+
+    fn init_device_qualifier_descriptor(
+        &mut self,
+        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
+    ) -> Result<()> {
+        self.descriptor.device_qualifier_desc = Some(device_qualifier_desc);
         Ok(())
     }
 }

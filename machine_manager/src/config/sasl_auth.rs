@@ -34,7 +34,10 @@ impl VmConfig {
         if let Some(id) = cmd_parser.get_value::<String>("id")? {
             saslauth.id = id;
         } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("id", "vnc sasl_auth")));
+            return Err(anyhow!(ConfigError::FieldIsMissing(
+                "id".to_string(),
+                "vnc sasl_auth".to_string()
+            )));
         }
 
         if let Some(identity) = cmd_parser.get_value::<String>("identity")? {

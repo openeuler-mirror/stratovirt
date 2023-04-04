@@ -195,6 +195,7 @@ pub const USB_DT_CONFIGURATION: u8 = 2;
 pub const USB_DT_STRING: u8 = 3;
 pub const USB_DT_INTERFACE: u8 = 4;
 pub const USB_DT_ENDPOINT: u8 = 5;
+pub const USB_DT_DEVICE_QUALIFIER: u8 = 6;
 pub const USB_DT_INTERFACE_POWER: u8 = 8;
 pub const USB_DT_OTG: u8 = 9;
 pub const USB_DT_DEBUG: u8 = 10;
@@ -225,3 +226,5 @@ pub const USB_CONFIGURATION_ATTR_REMOTE_WAKEUP: u8 = 1 << 5;
 
 // USB Class
 pub const USB_CLASS_HID: u8 = 3;
+pub const USB_CLASS_VIDEO: u8 = 0xe;
+pub const USB_CLASS_MISCELLANEOUS: u8 = 0xef;

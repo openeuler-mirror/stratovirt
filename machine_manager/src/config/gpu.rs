@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::{error::ConfigError, M};
-use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
+use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 use anyhow::{anyhow, Result};
 use log::warn;
 
@@ -45,13 +45,7 @@ impl Default for GpuDevConfig {
 
 impl ConfigCheck for GpuDevConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
-
+        check_arg_too_long(&self.id, "id")?;
         if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 || self.max_outputs == 0 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "max_outputs".to_string(),

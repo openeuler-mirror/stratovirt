@@ -17,6 +17,7 @@
 //! - legacy devices, such as serial devices
 
 pub mod acpi;
+pub mod camera_backend;
 mod interrupt_controller;
 pub mod legacy;
 pub mod misc;

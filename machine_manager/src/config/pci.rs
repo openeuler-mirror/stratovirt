@@ -14,8 +14,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
-use crate::config::ExBool;
+use super::{CmdParser, ConfigCheck};
+use crate::config::{check_arg_too_long, ExBool};
 use util::num_ops::str_to_usize;
 
 /// Basic information of pci devices such as bus number,
@@ -53,14 +53,7 @@ pub struct RootPortConfig {
 
 impl ConfigCheck for RootPortConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "root_port id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
-        Ok(())
+        check_arg_too_long(&self.id, "root_port id")
     }
 }
 
@@ -153,7 +146,10 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     let mut root_port = RootPortConfig::default();
     let port = cmd_parser.get_value::<String>("port")?;
     if port.is_none() {
-        return Err(anyhow!(ConfigError::FieldIsMissing("port", "rootport")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "port".to_string(),
+            "rootport".to_string()
+        )));
     }
     // Safety: as port is validated non-none at the previous line, it's safe to unwrap() it
     root_port.port = str_to_usize(port.unwrap())? as u8;
@@ -163,7 +159,10 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         root_port.id = id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rootport")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "rootport".to_string()
+        )));
     }
     root_port.multifunction =
         if let Some(multi_func) = cmd_parser.get_value::<ExBool>("multifunction")? {

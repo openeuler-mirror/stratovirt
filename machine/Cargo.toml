@@ -16,6 +16,8 @@ vmm-sys-util = "0.11.0"
 vfio-bindings = "0.3"
 thiserror = "1.0"
 anyhow = "1.0"
+strum = "0.24.1"
+strum_macros = "0.24.3"
 acpi = { path = "../acpi" }
 address_space = { path = "../address_space" }
 boot_loader = { path = "../boot_loader" }

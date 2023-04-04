@@ -82,13 +82,19 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
     if let Some(tag) = cmd_parser.get_value::<String>("tag")? {
         fs_cfg.tag = tag;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("tag", "virtio-fs")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "tag".to_string(),
+            "virtio-fs".to_string()
+        )));
     }
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         fs_cfg.id = id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "virtio-fs")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "virtio-fs".to_string()
+        )));
     }
 
     if let Some(name) = cmd_parser.get_value::<String>("chardev")? {
@@ -105,7 +111,10 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
             bail!("Chardev {:?} not found or is in use", &name);
         }
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("chardev", "virtio-fs")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "chardev".to_string(),
+            "virtio-fs".to_string()
+        )));
     }
     fs_cfg.check()?;
 

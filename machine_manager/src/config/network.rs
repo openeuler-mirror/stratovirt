@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use super::{error::ConfigError, pci_args_check};
 use crate::config::get_chardev_socket_path;
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    MAX_PATH_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
@@ -57,19 +57,8 @@ impl Default for NetDevcfg {
 
 impl ConfigCheck for NetDevcfg {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
-
-        if self.ifname.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                self.ifname.clone(),
-                MAX_STRING_LENGTH
-            )));
-        }
+        check_arg_too_long(&self.id, "id")?;
+        check_arg_too_long(&self.ifname, "ifname")?;
 
         if let Some(vhost_type) = self.vhost_type.as_ref() {
             if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
@@ -130,29 +119,15 @@ impl Default for NetworkInterfaceConfig {
 
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
-
-        if self.host_dev_name.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                self.host_dev_name.clone(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "id")?;
+        check_arg_too_long(&self.host_dev_name, "host dev name")?;
 
         if self.mac.is_some() && !check_mac_address(self.mac.as_ref().unwrap()) {
             return Err(anyhow!(ConfigError::MacFormatError));
         }
 
-        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
         }
 
         if self.socket_path.is_some() && self.socket_path.as_ref().unwrap().len() > MAX_PATH_LENGTH
@@ -210,7 +185,10 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
         net.id = net_id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "netdev")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "netdev".to_string()
+        )));
     }
     if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
         net.ifname = ifname;
@@ -305,7 +283,10 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     let netdev = if let Some(devname) = cmd_parser.get_value::<String>("netdev")? {
         devname
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("netdev", "net")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "netdev".to_string(),
+            "net".to_string()
+        )));
     };
     let netid = if let Some(id) = cmd_parser.get_value::<String>("id")? {
         id
@@ -568,7 +549,7 @@ fn is_netdev_queues_valid(queues: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::get_pci_bdf;
+    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
 
     use super::*;
 

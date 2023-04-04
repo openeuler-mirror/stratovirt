@@ -50,7 +50,8 @@ use devices::InterruptController;
 
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
-    keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+    camera::UsbCamera, keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
+    UsbDeviceOps,
 };
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
@@ -63,7 +64,9 @@ use machine_manager::config::{
     MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
-use machine_manager::config::{parse_gpu, parse_usb_keyboard, parse_usb_tablet, parse_xhci};
+use machine_manager::config::{
+    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_tablet, parse_xhci,
+};
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
@@ -1148,18 +1151,18 @@ pub trait MachineOps {
         None
     }
 
-    /// Add usb keyboard.
+    /// Attach usb device to xhci controller.
     ///
     /// # Arguments
     ///
-    /// * `cfg_args` - Keyboard Configuration.
+    /// * `vm_config` - VM configuration.
+    /// * `usb_dev` - Usb device.
     #[cfg(not(target_env = "musl"))]
-    fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_keyboard(cfg_args)?;
-        let keyboard = UsbKeyboard::new(device_cfg.id);
-        let kbd = keyboard
-            .realize()
-            .with_context(|| "Failed to realize usb keyboard device")?;
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        vm_config: &mut VmConfig,
+        usb_dev: Arc<Mutex<dyn UsbDeviceOps>>,
+    ) -> Result<()> {
         let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
         if parent_dev_op.is_none() {
             bail!("Can not find parent device from pci bus");
@@ -1170,9 +1173,27 @@ pub trait MachineOps {
         if xhci_pci.is_none() {
             bail!("PciDevOps can not downcast to XhciPciDevice");
         }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))?;
+
+        xhci_pci.unwrap().attach_device(&(usb_dev))?;
+
+        Ok(())
+    }
+
+    /// Add usb keyboard.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Keyboard Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_keyboard(cfg_args)?;
+        // SAFETY: id is already checked not none in parse_usb_keyboard().
+        let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
+        let kbd = keyboard
+            .realize()
+            .with_context(|| "Failed to realize usb keyboard device")?;
+
+        self.attach_usb_to_xhci_controller(vm_config, kbd as Arc<Mutex<dyn UsbDeviceOps>>)?;
         Ok(())
     }
 
@@ -1184,23 +1205,30 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
-        let tablet = UsbTablet::new(device_cfg.id);
+        // SAFETY: id is already checked not none in parse_usb_tablet().
+        let tablet = UsbTablet::new(device_cfg.id.unwrap());
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
-        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))?;
+
+        self.attach_usb_to_xhci_controller(vm_config, tbt as Arc<Mutex<dyn UsbDeviceOps>>)?;
+
+        Ok(())
+    }
+
+    /// Add usb camera.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Camera Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_camera(cfg_args)?;
+        let camera = UsbCamera::new(device_cfg);
+        let camera = camera.realize()?;
+
+        self.attach_usb_to_xhci_controller(vm_config, camera as Arc<Mutex<dyn UsbDeviceOps>>)?;
+
         Ok(())
     }
 
@@ -1297,6 +1325,10 @@ pub trait MachineOps {
                 #[cfg(not(target_env = "musl"))]
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "usb-camera" => {
+                    self.add_usb_camera(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {

@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Result};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use util::aio::AioEngine;
 
@@ -63,18 +63,10 @@ impl Default for ScsiCntlrConfig {
 
 impl ConfigCheck for ScsiCntlrConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "virtio-scsi-pci device id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "virtio-scsi-pci device id")?;
 
-        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
         }
 
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u32 {
@@ -134,8 +126,8 @@ pub fn parse_scsi_controller(
         cntlr_cfg.id = id;
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id",
-            "virtio scsi pci"
+            "id".to_string(),
+            "virtio scsi pci".to_string()
         )));
     }
 
@@ -214,7 +206,10 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     let scsi_drive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
         drive
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "scsi device")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "drive".to_string(),
+            "scsi device".to_string()
+        )));
     };
 
     if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
@@ -228,7 +223,10 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         scsi_dev_cfg.id = id;
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "scsi device")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "id".to_string(),
+            "scsi device".to_string()
+        )));
     }
 
     if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
@@ -239,7 +237,10 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         }
         scsi_dev_cfg.cntlr = strs[0].to_string();
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("bus", "scsi device")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "bus".to_string(),
+            "scsi device".to_string()
+        )));
     }
 
     if let Some(target) = cmd_parser.get_value::<u8>("scsi-id")? {

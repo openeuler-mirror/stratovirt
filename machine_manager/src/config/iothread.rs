@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
+use crate::config::{check_arg_too_long, CmdParser, ConfigCheck, VmConfig};
 use anyhow::{anyhow, Result};
 
 const MAX_IOTHREAD_NUM: usize = 8;
@@ -26,14 +26,7 @@ pub struct IothreadConfig {
 
 impl ConfigCheck for IothreadConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
-        Ok(())
+        check_arg_too_long(&self.id, "iothread id")
     }
 }
 
