@@ -354,17 +354,22 @@ pub trait DeviceInterface {
     }
 
     fn query_command_line_options(&self) -> Response {
-        let mut cmd_lines = Vec::<CmdLine>::new();
-        let parameters = vec![CmdParameter {
-            name: "discard".to_string(),
-            help: "discard operation (ignore/off, unmap/on)".to_string(),
-            paramter_type: "string".to_string(),
-        }];
-        let cmd_line = CmdLine {
+        let parameters = vec![
+            CmdParameter {
+                name: "discard".to_string(),
+                help: "discard operation (unmap|ignore)".to_string(),
+                paramter_type: "string".to_string(),
+            },
+            CmdParameter {
+                name: "detect-zeroes".to_string(),
+                help: "optimize zero writes (unmap|on|off)".to_string(),
+                paramter_type: "string".to_string(),
+            },
+        ];
+        let cmd_lines = vec![CmdLine {
             parameters,
             option: "drive".to_string(),
-        };
-        cmd_lines.push(cmd_line);
+        }];
         Response::create_response(serde_json::to_value(cmd_lines).unwrap(), None)
     }
 

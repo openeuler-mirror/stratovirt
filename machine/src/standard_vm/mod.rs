@@ -28,7 +28,7 @@ use ui::{
     input::{key_event, point_event},
     vnc::qmp_query_vnc,
 };
-use util::aio::AioEngine;
+use util::aio::{AioEngine, WriteZeroesState};
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -770,6 +770,7 @@ impl StdMachine {
                 aio: conf.aio,
                 queue_size,
                 discard: conf.discard,
+                write_zeroes: conf.write_zeroes,
             };
             dev.check()?;
             dev
@@ -1258,6 +1259,7 @@ impl DeviceInterface for StdMachine {
             aio: AioEngine::Native,
             media: "disk".to_string(),
             discard: false,
+            write_zeroes: WriteZeroesState::Off,
         };
         if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
             config.direct = false;
@@ -1276,6 +1278,20 @@ impl DeviceInterface for StdMachine {
                 );
             }
             config.discard = ret.unwrap().into();
+        }
+        if let Some(detect_zeroes) = args.detect_zeroes {
+            let state = detect_zeroes.as_str().parse::<WriteZeroesState>();
+            if state.is_err() {
+                let err_msg = format!(
+                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
+                    detect_zeroes
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_msg),
+                    None,
+                );
+            }
+            config.write_zeroes = state.unwrap();
         }
         if let Err(e) = config.check() {
             error!("{:?}", e);

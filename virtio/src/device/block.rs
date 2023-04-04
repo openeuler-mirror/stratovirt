@@ -27,10 +27,11 @@ use crate::{
     iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
     Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
-    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID,
-    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
+    VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
+    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
@@ -45,6 +46,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::aio::{
     iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioEngine, Iovec, OpCode,
+    WriteZeroesState,
 };
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -249,9 +251,13 @@ impl Request {
         }
 
         match out_header.request_type {
-            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_GET_ID | VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_DISCARD => {
+            VIRTIO_BLK_T_IN
+            | VIRTIO_BLK_T_GET_ID
+            | VIRTIO_BLK_T_OUT
+            | VIRTIO_BLK_T_DISCARD
+            | VIRTIO_BLK_T_WRITE_ZEROES => {
                 let data_iovec = match out_header.request_type {
-                    VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_DISCARD => {
+                    VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_DISCARD | VIRTIO_BLK_T_WRITE_ZEROES => {
                         iov_discard_front(&mut elem.out_iovec, size_of::<RequestOutHeader>() as u64)
                     }
                     // Otherwise discard the last "status" byte.
@@ -350,7 +356,20 @@ impl Request {
                 aiocb.iocompletecb.complete_request(status)?;
             }
             VIRTIO_BLK_T_DISCARD => {
-                self.handle_discard_request(iohandler, aiocb)?;
+                if !iohandler.discard {
+                    error!("Device does not support discard");
+                    return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+                }
+                aiocb.opcode = OpCode::Discard;
+                self.handle_discard_write_zeroes_req(iohandler, aiocb)?;
+            }
+            VIRTIO_BLK_T_WRITE_ZEROES => {
+                if iohandler.write_zeroes == WriteZeroesState::Off {
+                    error!("Device does not support write-zeroes");
+                    return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+                }
+                aiocb.opcode = OpCode::WriteZeroes;
+                self.handle_discard_write_zeroes_req(iohandler, aiocb)?;
             }
             // The illegal request type has been handled in method new().
             _ => {}
@@ -358,16 +377,11 @@ impl Request {
         Ok(())
     }
 
-    fn handle_discard_request(
+    fn handle_discard_write_zeroes_req(
         &self,
         iohandler: &mut BlockIoHandler,
         mut aiocb: AioCb<AioCompleteCb>,
     ) -> Result<()> {
-        if !iohandler.discard {
-            error!("Device does not support discard");
-            return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
-        }
-
         let size = size_of::<DiscardWriteZeroesSeg>() as u64;
         // Just support one segment per request.
         if self.data_len > size {
@@ -399,18 +413,29 @@ impl Request {
             return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
         }
         let flags = LittleEndian::read_u32(segment.flags.as_bytes());
-        if flags & VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP != 0 {
-            error!("Discard request must not set unmap flags");
+        if flags & !VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP != 0 {
+            error!("Invalid unmap flags 0x{:x}", flags);
             return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
         }
 
-        aiocb.opcode = OpCode::Discard;
+        if aiocb.opcode == OpCode::Discard {
+            if flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP {
+                error!("Discard request must not set unmap flags");
+                return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+            }
+        } else if aiocb.opcode == OpCode::WriteZeroes
+            && flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP
+            && iohandler.discard
+        {
+            aiocb.write_zeroes_unmap = true;
+        }
+
         aiocb.offset = (sector as usize) << SECTOR_SHIFT;
         aiocb.nbytes = (num_sectors as u64) << SECTOR_SHIFT;
         iohandler
             .aio
             .submit_request(aiocb)
-            .with_context(|| "Failed to process block request for discard")
+            .with_context(|| "Failed to process block request for discard or write-zeroes")
     }
 
     fn io_range_valid(&self, disk_sectors: u64) -> bool {
@@ -481,6 +506,8 @@ struct BlockIoHandler {
     leak_bucket: Option<LeakBucket>,
     /// Supporting discard or not.
     discard: bool,
+    /// The write-zeroes state.
+    write_zeroes: WriteZeroesState,
 }
 
 impl BlockIoHandler {
@@ -602,6 +629,9 @@ impl BlockIoHandler {
                     nbytes: 0,
                     user_data: 0,
                     iocompletecb: aiocompletecb,
+                    discard: self.discard,
+                    write_zeroes: self.write_zeroes,
+                    write_zeroes_unmap: false,
                 };
                 req_rc.execute(self, aiocb)?;
             } else {
@@ -1044,11 +1074,20 @@ impl Block {
             self.state.config_space.discard_sector_alignment = 1;
             self.state.config_space.max_discard_sectors = MAX_REQUEST_SECTORS;
         }
+
+        if self.blk_cfg.write_zeroes != WriteZeroesState::Off {
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
+            // Just support one segment per request.
+            self.state.config_space.max_write_zeroes_seg = 1;
+            self.state.config_space.max_write_zeroes_sectors = MAX_REQUEST_SECTORS;
+            self.state.config_space.write_zeroes_may_unmap = 1;
+        }
     }
 
     fn get_blk_config_size(&self) -> u64 {
-        // F_WRITE_ZEROES is not supported for now, so related config does not exist.
-        if virtio_has_feature(self.state.device_features, VIRTIO_BLK_F_DISCARD) {
+        if virtio_has_feature(self.state.device_features, VIRTIO_BLK_F_WRITE_ZEROES) {
+            offset_of!(VirtioBlkConfig, unused1) as u64
+        } else if virtio_has_feature(self.state.device_features, VIRTIO_BLK_F_DISCARD) {
             offset_of!(VirtioBlkConfig, max_write_zeroes_sectors) as u64
         } else {
             offset_of!(VirtioBlkConfig, max_discard_sectors) as u64
@@ -1218,6 +1257,7 @@ impl VirtioDevice for Block {
                     None => None,
                 },
                 discard: self.blk_cfg.discard,
+                write_zeroes: self.blk_cfg.write_zeroes,
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));

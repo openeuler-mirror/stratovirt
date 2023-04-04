@@ -225,6 +225,8 @@ pub const VIRTIO_BLK_T_FLUSH: u32 = 4;
 pub const VIRTIO_BLK_T_GET_ID: u32 = 8;
 /// Discard command.
 pub const VIRTIO_BLK_T_DISCARD: u32 = 11;
+/// Write zeroes command.
+pub const VIRTIO_BLK_T_WRITE_ZEROES: u32 = 13;
 /// Device id length
 pub const VIRTIO_BLK_ID_BYTES: u32 = 20;
 /// Success
