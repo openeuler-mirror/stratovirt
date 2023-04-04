@@ -91,6 +91,7 @@ pub enum OpCode {
     Preadv = 1,
     Pwritev = 2,
     Fdsync = 3,
+    Discard = 4,
 }
 
 pub struct AioCb<T: Clone> {
@@ -201,6 +202,7 @@ impl<T: Clone + 'static> Aio<T> {
                     self.flush_sync(cb)
                 }
             }
+            OpCode::Discard => self.discard_sync(cb),
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
         }
     }
@@ -485,6 +487,14 @@ impl<T: Clone + 'static> Aio<T> {
         let ret = raw_datasync(cb.file_fd);
         if ret < 0 {
             error!("Failed to do sync flush.");
+        }
+        (self.complete_func)(&cb, ret)
+    }
+
+    fn discard_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+        let ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
+        if ret < 0 {
+            error!("Failed to do sync discard.");
         }
         (self.complete_func)(&cb, ret)
     }

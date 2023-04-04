@@ -68,6 +68,7 @@ pub struct BlkDevConfig {
     pub socket_path: Option<String>,
     pub aio: AioEngine,
     pub queue_size: u16,
+    pub discard: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,7 @@ impl Default for BlkDevConfig {
             socket_path: None,
             aio: AioEngine::Native,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            discard: false,
         }
     }
 }
@@ -109,6 +111,7 @@ pub struct DriveConfig {
     pub iops: Option<u64>,
     pub aio: AioEngine,
     pub media: String,
+    pub discard: bool,
 }
 
 impl Default for DriveConfig {
@@ -121,6 +124,7 @@ impl Default for DriveConfig {
             iops: None,
             aio: AioEngine::Native,
             media: "disk".to_string(),
+            discard: false,
         }
     }
 }
@@ -314,6 +318,10 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         .get_value::<String>("media")?
         .unwrap_or_else(|| "disk".to_string());
 
+    if let Some(discard) = cmd_parser.get_value::<ExBool>("discard")? {
+        drive.discard = discard.into();
+    }
+
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -387,6 +395,7 @@ pub fn parse_blk(
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
         blkdevcfg.aio = drive_arg.aio;
+        blkdevcfg.discard = drive_arg.discard;
     } else {
         bail!("No drive configured matched for blk device");
     }
@@ -521,7 +530,8 @@ impl VmConfig {
             .push("if")
             .push("throttling.iops-total")
             .push("aio")
-            .push("media");
+            .push("media")
+            .push("discard");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
@@ -867,5 +877,26 @@ mod tests {
             assert!(vm_config.del_drive_by_id(*id).is_ok());
             assert!(vm_config.drives.get(*id).is_none());
         }
+    }
+
+    #[test]
+    fn test_drive_config_discard() {
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=ignore")
+            .unwrap();
+        assert_eq!(drive_conf.discard, false);
+
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=unmap")
+            .unwrap();
+        assert_eq!(drive_conf.discard, true);
+
+        let mut vm_config = VmConfig::default();
+        let ret = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=invalid")
+            .is_err();
+        assert_eq!(ret, true);
     }
 }

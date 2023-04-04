@@ -1831,10 +1831,10 @@ pub struct query_command_line_options {}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CmdParameter {
-    name: String,
-    help: String,
+    pub name: String,
+    pub help: String,
     #[serde(rename = "type")]
-    paramter_type: String,
+    pub paramter_type: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

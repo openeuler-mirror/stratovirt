@@ -551,8 +551,8 @@ impl FromStr for ExBool {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "true" | "on" | "yes" => Ok(ExBool { inner: true }),
-            "false" | "off" | "no" => Ok(ExBool { inner: false }),
+            "true" | "on" | "yes" | "unmap" => Ok(ExBool { inner: true }),
+            "false" | "off" | "no" | "ignore" => Ok(ExBool { inner: false }),
             _ => Err(()),
         }
     }
