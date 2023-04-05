@@ -182,19 +182,19 @@ fn console_rw_conifg() {
     assert_eq!(
         console.borrow().config_readw(0),
         ROWS_DEFAULT,
-        "The rows of the console config is uncorrect or the testcase parament is out of date!"
+        "The rows of the console config is incorrect or the testcase parament is out of date!"
     );
 
     assert_eq!(
         console.borrow().config_readw(2),
         COLS_DEFAULT,
-        "The cols of the console config is uncorrect or the testcase parament is out of date!"
+        "The cols of the console config is incorrect or the testcase parament is out of date!"
     );
 
     assert_eq!(
         console.borrow().config_readl(8),
         EMERG_WR_DEFAULT,
-        "The emerg_wr of the console config is uncorrect or the testcase parament is out of date!"
+        "The emerg_wr of the console config is incorrect or the testcase parament is out of date!"
     );
 
     console.borrow().config_writew(0, 1);

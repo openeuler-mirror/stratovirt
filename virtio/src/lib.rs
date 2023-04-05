@@ -180,7 +180,7 @@ pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
 
 /// The driver can send control commands for MAC address filtering.
 pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
-/// The driver sets the unicast/multicast addresse table.
+/// The driver sets the unicast/multicast address table.
 pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
 /// The driver sets the default MAC address which rx filtering accepts.
 pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
@@ -229,7 +229,7 @@ pub const VIRTIO_BLK_ID_BYTES: u32 = 20;
 pub const VIRTIO_BLK_S_OK: u8 = 0;
 /// IO Error.
 pub const VIRTIO_BLK_S_IOERR: u8 = 1;
-/// Unsupport.
+/// Unsupported.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 
 /// The Type of virtio gpu, refer to Virtio Spec.
@@ -334,7 +334,7 @@ pub trait VirtioDevice: Send + AsAny {
         let unsupported_features = value & !self.get_device_features(page);
         if unsupported_features != 0 {
             warn!(
-                "Receive acknowlege request with unknown feature: {:x}",
+                "Receive acknowledge request with unknown feature: {:x}",
                 write_u32(value, page)
             );
             v &= !unsupported_features;
@@ -454,7 +454,7 @@ pub fn report_virtio_error(
     broken.store(true, Ordering::SeqCst);
 }
 
-/// Read iovec to buf and return the readed number of bytes.
+/// Read iovec to buf and return the read number of bytes.
 pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;

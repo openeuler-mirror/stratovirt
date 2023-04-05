@@ -19,7 +19,7 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck};
 
-/// XHCI contoller configuration.
+/// XHCI controller configuration.
 #[derive(Debug)]
 pub struct XhciConfig {
     pub id: Option<String>,

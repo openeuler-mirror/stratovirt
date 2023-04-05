@@ -23,7 +23,7 @@ use crate::qmp::qmp_schema;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
-/// Charecter device options.
+/// Character device options.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChardevType {
     Stdio,

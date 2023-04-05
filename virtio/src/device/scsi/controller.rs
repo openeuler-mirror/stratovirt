@@ -171,7 +171,7 @@ impl VirtioDevice for ScsiCntlr {
         self.state.config_space.num_queues = self.config.queues;
 
         self.state.config_space.max_sectors = 0xFFFF_u32;
-        // cmd_per_lun: maximum nuber of linked commands can be sent to one LUN. 32bit.
+        // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.state.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
         self.state.config_space.seg_max = self.queue_size() as u32 - 2;
@@ -380,7 +380,7 @@ impl ByteCode for VirtioScsiCtrlAnReq {}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct VirtioScsiCtrlAnResp {
-    pub evnet_actual: u32,
+    pub event_actual: u32,
     pub response: u8,
 }
 
@@ -672,7 +672,7 @@ impl ScsiCtrlHandler {
                         )?;
                     info!("incomplete tmf req, subtype {}!", tmf.req.subtype);
                     // Scsi Task Management Function is not supported.
-                    // So, do nothing when stratovirt receives TMF request except responsing guest scsi drivers.
+                    // So, do nothing when stratovirt receives TMF request except responding guest scsi drivers.
                     tmf.resp.response = VIRTIO_SCSI_S_OK;
                     tmf.complete(&self.mem_space)?;
                 }
@@ -685,7 +685,7 @@ impl ScsiCtrlHandler {
                             self.driver_features,
                             &elem,
                         )?;
-                    an.resp.evnet_actual = 0;
+                    an.resp.event_actual = 0;
                     an.resp.response = VIRTIO_SCSI_S_OK;
                     an.complete(&self.mem_space)?;
                 }

@@ -80,7 +80,7 @@ pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
 
 /// The driver can send control commands for MAC address filtering.
 pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
-/// The driver sets the unicast/multicast addresse table.
+/// The driver sets the unicast/multicast address table.
 pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
 /// The driver sets the default MAC address which rx filtering accepts.
 pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
@@ -465,7 +465,7 @@ fn set_up(
     create_net(id, mq, num_queues, with_mac, false)
 }
 
-// Set the iothread argument in comand line.
+// Set the iothread argument in command line.
 fn set_up_iothread(
     id: u8,
     mq: bool,
@@ -1728,7 +1728,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     test_state.borrow().writew(vqs[0].borrow().avail + 2, 0);
     net.borrow().set_driver_ok();
 
-    // Test send 256 packet to execeed the handle_tx limitation once.
+    // Test send 256 packet to exceed the handle_tx limitation once.
     let request = get_arp_request(id);
     let length = request.as_bytes().len() as u64;
     let size = net.borrow().get_queue_size();

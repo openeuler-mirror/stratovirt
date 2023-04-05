@@ -380,7 +380,7 @@ pub fn display_graphic_update(
     Ok(())
 }
 
-/// Update cursor data in dispaly.
+/// Update cursor data in display.
 ///
 /// # Arguments
 ///
@@ -494,7 +494,7 @@ pub fn unregister_display(dcl: &Option<Weak<Mutex<DisplayChangeListener>>>) -> R
     Ok(())
 }
 
-/// Create a console and add into a gloabl list. Then returen a console id
+/// Create a console and add into a global list. Then returen a console id
 /// for later finding the assigned console.
 pub fn console_init(dev_opts: Arc<dyn HardWareOperations>) -> Option<Weak<Mutex<DisplayConsole>>> {
     let mut locked_consoles = CONSOLES.lock().unwrap();

@@ -254,7 +254,7 @@ impl EdidInfo {
             // serial
             LittleEndian::write_u32(&mut edid_array[offset + 5..offset + 9], self.serial);
         } else {
-            warn!("Unexpectd desc type");
+            warn!("Unexpected desc type");
         }
     }
 

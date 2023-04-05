@@ -94,8 +94,8 @@ mod test {
         assert_eq!(*u32::from_bytes(&bytes).unwrap(), 0x0512_5634);
 
         // Convert failed because byte stream's length is not equal to u32's size
-        let mis_bytes = [0x0_u8, 0x0, 0x12];
-        assert!(u32::from_bytes(&mis_bytes).is_none());
+        let miss_bytes = [0x0_u8, 0x0, 0x12];
+        assert!(u32::from_bytes(&miss_bytes).is_none());
     }
 
     #[test]

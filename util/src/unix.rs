@@ -69,7 +69,7 @@ pub fn parse_unix_uri(uri: &str) -> Result<String> {
 /// # Arguments
 ///
 /// * `file` - Backend file.
-/// * `len` - Length of maping.
+/// * `len` - Length of mapping.
 /// * `offset` - Offset in the file (or other object).
 /// * `read_only` - Allow to write or not.
 /// * `is_share` - Share the mapping or not.

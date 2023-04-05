@@ -490,7 +490,7 @@ trait AcpiBuilder {
             fadt.set_field(148, 0x01_u8);
             fadt.set_field(149, 0x20_u8);
             fadt.set_field(152, PM_EVENT_OFFSET as u64);
-            // PM1a contol register bit, offset is 172.
+            // PM1a control register bit, offset is 172.
             fadt.set_field(172, 0x01_u8);
             fadt.set_field(173, 0x10_u8);
             fadt.set_field(176, PM_CTRL_OFFSET as u64);

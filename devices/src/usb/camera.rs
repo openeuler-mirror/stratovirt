@@ -73,7 +73,7 @@ pub struct UsbCamera {
     id: String,                                 // uniq device id
     usb_device: UsbDevice,                      // general usb device object
     frame: Vec<u64>,                            // video frame data
-    max_pkt_size: u32,                          // the max size of the packet that can be seperated
+    max_pkt_size: u32,                          // the max size of the packet that can be separated
     vs_eps: Vec<u8>,                            // the endpoints that the VS uses
     backend_type: CamBackendType,               // backend interface, eg. v4l2
     backend_path: String,                       // backend interface file, eg. /dev/video0
@@ -545,19 +545,19 @@ mod test {
         let descs = &interface.other_desc;
         let mut total_len_exact: usize = 0;
 
-        let total_len_setted: usize = (descs[0].data[size_offset] as usize
+        let total_len_set: usize = (descs[0].data[size_offset] as usize
             + ((descs[0].data[size_offset + 1] as usize) << 8))
             as usize; // field 'wTotalLength' in the 1st data desc
 
         for desc in descs {
-            let sub_len_setted = desc.data[0] as usize; // field 'bLength'
+            let sub_len_set = desc.data[0] as usize; // field 'bLength'
             let sub_len_exact = desc.data.len();
-            assert_eq!(sub_len_setted, sub_len_exact);
+            assert_eq!(sub_len_set, sub_len_exact);
 
             total_len_exact += sub_len_exact;
         }
 
-        assert_eq!(total_len_setted, total_len_exact);
+        assert_eq!(total_len_set, total_len_exact);
     }
 
     #[test]

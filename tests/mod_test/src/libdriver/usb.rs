@@ -1074,7 +1074,7 @@ impl TestXhciPciDevice {
         self.event_list.pop_front()
     }
 
-    pub fn queue_device_reqeust(&mut self, slot_id: u32, device_req: &UsbDeviceRequest) {
+    pub fn queue_device_request(&mut self, slot_id: u32, device_req: &UsbDeviceRequest) {
         // Setup Stage.
         let mut setup_trb = TestNormalTRB::generate_setup_td(&device_req);
         self.queue_trb(slot_id, CONTROL_ENDPOINT_ID, &mut setup_trb);
@@ -1373,7 +1373,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: 64,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::StallError as u32);
@@ -1636,7 +1636,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_config_descriptor(&mut self, slot_id: u32) {
@@ -1648,7 +1648,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_string_descriptor(&mut self, slot_id: u32, index: u16) {
@@ -1660,7 +1660,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_status(&mut self, slot_id: u32) {
@@ -1672,7 +1672,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_configuration(&mut self, slot_id: u32) {
@@ -1684,7 +1684,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_configuration(&mut self, slot_id: u32, v: u16) {
@@ -1696,7 +1696,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn clear_feature(&mut self, slot_id: u32, v: u16) {
@@ -1708,7 +1708,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_feature(&mut self, slot_id: u32, v: u16) {
@@ -1720,7 +1720,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_interface(&mut self, slot_id: u32, index: u16) {
@@ -1732,7 +1732,7 @@ impl TestXhciPciDevice {
             index: index,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_interface(&mut self, slot_id: u32, v: u16, index: u16) {
@@ -1744,7 +1744,7 @@ impl TestXhciPciDevice {
             index: index,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_hid_report_descriptor(&mut self, slot_id: u32, len: u16) {
@@ -1755,7 +1755,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_report(&mut self, slot_id: u32) {
@@ -1767,7 +1767,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_report(&mut self, slot_id: u32, v: u16) {
@@ -1780,7 +1780,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: buf_len,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_protocol(&mut self, slot_id: u32) {
@@ -1791,7 +1791,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: 1,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_protocol(&mut self, slot_id: u32, v: u16) {
@@ -1802,7 +1802,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: 0,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn get_idle(&mut self, slot_id: u32) {
@@ -1813,7 +1813,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: 1,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 
     pub fn set_idle(&mut self, slot_id: u32, v: u16) {
@@ -1824,7 +1824,7 @@ impl TestXhciPciDevice {
             index: 0,
             length: 0,
         };
-        self.queue_device_reqeust(slot_id, &device_req);
+        self.queue_device_request(slot_id, &device_req);
     }
 }
 

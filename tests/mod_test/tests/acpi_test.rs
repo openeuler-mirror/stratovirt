@@ -57,7 +57,7 @@ fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     assert_eq!(file_size, mem::size_of::<AcpiRsdp>() as u32);
     // Check RSDP signature: "RSD PTR".
     assert_eq!(String::from_utf8_lossy(&read_data[..8]), "RSD PTR ");
-    // Check RSDP revison: 2.
+    // Check RSDP revision: 2.
     assert_eq!(read_data[15], 2);
 
     // Check 32-bit address of RSDT table: 0
@@ -99,7 +99,7 @@ fn check_madt(data: &[u8], cpu: u8) {
     let gicd_addr = LittleEndian::read_u64(&data[(offset + 8)..]);
     assert_eq!(gicd_addr, MEM_LAYOUT[LayoutEntryType::GicDist as usize].0);
 
-    // Check GIC verison
+    // Check GIC version
     assert_eq!(data[offset + 20], 3);
 
     // Check GIC CPU
@@ -205,8 +205,8 @@ fn check_srat(data: &[u8]) {
     // -numa node,nodeid=1,cpus=4-7,memdev=mem1
     for i in 0..2 {
         for j in 0..4 {
-            let proximity_domian = LittleEndian::read_u32(&data[(offset + 2)..]);
-            assert_eq!(proximity_domian, i);
+            let proximity_domain = LittleEndian::read_u32(&data[(offset + 2)..]);
+            assert_eq!(proximity_domain, i);
             let process_uid = LittleEndian::read_u32(&data[(offset + 6)..]);
             assert_eq!(process_uid, (i * 4) + j);
             offset = offset + mem::size_of::<AcpiSratGiccAffinity>();

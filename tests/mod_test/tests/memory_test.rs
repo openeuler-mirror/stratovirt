@@ -19,7 +19,7 @@ use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
 
 pub struct MemoryTest {
     pub state: Rc<RefCell<TestState>>,
-    pub alloctor: Rc<RefCell<GuestAllocator>>,
+    pub allocator: Rc<RefCell<GuestAllocator>>,
 }
 
 const MEM_SIZE: u64 = 2048; // 2GB
@@ -78,14 +78,14 @@ impl MemoryTest {
 
         MemoryTest {
             state: test_state,
-            alloctor: allocator,
+            allocator: allocator,
         }
     }
 }
 
 fn ram_read_write(memory_test: &MemoryTest) {
     let str = "test memory read write";
-    let addr = memory_test.alloctor.borrow_mut().alloc(PAGE_SIZE);
+    let addr = memory_test.allocator.borrow_mut().alloc(PAGE_SIZE);
 
     memory_test
         .state
@@ -163,7 +163,7 @@ fn io_region_read_write() {
 #[test]
 fn region_priority() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
-    let addr = memory_test.alloctor.borrow_mut().alloc(PAGE_SIZE);
+    let addr = memory_test.allocator.borrow_mut().alloc(PAGE_SIZE);
     let data = [0x01u8; 8];
 
     // Ram write and read.
@@ -257,7 +257,7 @@ fn region_update_exception() {
 ///   1/2/6/7: Success.
 ///   4/5: Failed.
 ///   3: Got [0x02u8; 8] from the device. The read and write behavior is the same as io region.
-///   8: Got [0x00u8; 8] fro the device. The write opration does nothing, and read the original data.
+///   8: Got [0x00u8; 8] fro the device. The write operation does nothing, and read the original data.
 #[test]
 fn rom_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);

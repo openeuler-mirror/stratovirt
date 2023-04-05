@@ -260,7 +260,7 @@ root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
 Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration, and these threads can be used by devices exclusively improving performance.
 
-Note: iothread is strongly recommanded if a specific device supports it, otherwise the main thread has the risk of getting stuck.
+Note: iothread is strongly recommended if a specific device supports it, otherwise the main thread has the risk of getting stuck.
 
 There is only one argument for iothread:
 
@@ -593,7 +593,7 @@ To use the first method, chardev for redirection will be required. See [section 
 
 Or you can simply use `-serial dev` to bind serial with character device.
 ```shell
-# simplifed redirect methods
+# simplified redirect methods
 -serial stdio
 -serial pty
 -serial socket,path=<socket_path>,server,nowait
@@ -895,7 +895,7 @@ The vhost-user filesystem device contains virtio fs device and the vhost-user se
 Seven properties are supported for vhost_user_fs.
 * source: Shared directory path.
 * socket-path: vhost user socket path.
-* rlimit-nofile: Set maxinum number of file descriptors, The limit of file resources which can be opened for the process.
+* rlimit-nofile: Set maximum number of file descriptors, The limit of file resources which can be opened for the process.
 * D: log file path.
 * seccomp: Action to take when seccomp finds a not allowed syscall (allow, kill, log, trap).
   - **allow**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule.
@@ -938,10 +938,10 @@ Sample Configuration：
 ```
 
 In addition to the required slot information, five optional properties are supported for virtio-gpu.
-* max_outputs: Number of screens supported by the current graphics card. The maximun value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
+* max_outputs: Number of screens supported by the current graphics card. The maximum value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
 * edid: Edid feature, the virtual machine's kernel may checks this feature for HiDPi. You are advised to set to true.
 * xres/yres: The size of the login windows.
-* max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resoltuion is affected.
+* max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resolutions is affected.
 
 Note:
 1. Only virtio-gpu 2D supported.
@@ -1061,7 +1061,7 @@ About the arguments:
 * `clean-resource` : a flag to clean resource.
 * `numa` : numa node, this argument must be configured if `cpuset.cpus` is set.
 * `cgroup` : set cgroup controller value. supported controller: `cpuset.cpus` and `memory.limit_in_bytes`.
-* `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
+* `--` : these two dashes are used to split args, the args followed are used to launched StratoVirt.
 
 ### 6.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.

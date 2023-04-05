@@ -139,7 +139,7 @@ impl BalloonedPageBitmap {
 }
 
 /// Read data segment starting at `iov.iov_base` + `offset` to buffer <T>.
-/// Return bufer <T>.
+/// Return buffer <T>.
 ///
 /// # Arguments
 ///
@@ -574,7 +574,7 @@ impl BalloonIoHandler {
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
-                .with_context(|| "Failed to pop avail ring for process baloon queue")?;
+                .with_context(|| "Failed to pop avail ring for process balloon queue")?;
 
             if elem.desc_num == 0 {
                 break;
@@ -921,7 +921,7 @@ impl Balloon {
     ///
     /// # Argument
     ///
-    /// * `size` - Target momery size.
+    /// * `size` - Target memory size.
     pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
         let host_page_size = host_page_size();
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {

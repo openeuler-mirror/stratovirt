@@ -122,9 +122,9 @@ pub struct ShmemStreamFmt {
     pub fmt_generation: u32,
     /// Audio sampling rate.
     pub rate: u8,
-    /// Numner of audio sampling bits.
+    /// Number of audio sampling bits.
     pub size: u8,
-    //// Number of audio channel.
+    /// Number of audio channel.
     pub channels: u8,
     pad: u8,
     /// Mapping of audio channel.

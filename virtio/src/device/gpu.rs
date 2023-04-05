@@ -383,7 +383,7 @@ struct GpuIoHandler {
     cursor_queue: Arc<Mutex<Queue>>,
     /// The address space to which the GPU device belongs.
     mem_space: Arc<AddressSpace>,
-    /// Eventfd for contorl virtqueue.
+    /// Eventfd for control virtqueue.
     ctrl_queue_evt: Arc<EventFd>,
     /// Eventfd for cursor virtqueue.
     cursor_queue_evt: Arc<EventFd>,
@@ -465,7 +465,7 @@ pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
         VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM => Ok(pixman_format_code_t::PIXMAN_r8g8b8a8),
         VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8b8g8r8),
         _ => {
-            bail!("Unsupport pixman format")
+            bail!("Unsupported pixman format")
         }
     }
 }
@@ -476,7 +476,7 @@ pub fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) 
     height as u64 * stride
 }
 
-fn is_rect_in_resouce(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
+fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
     if rect
         .x_coord
         .checked_add(rect.width)
@@ -553,7 +553,7 @@ impl GpuIoHandler {
                 Ok(())
             } else {
                 bail!(
-                    "Expected response length is {}, actual get reponse length {}.",
+                    "Expected response length is {}, actual get response length {}.",
                     size_of::<T>(),
                     size
                 );
@@ -561,7 +561,7 @@ impl GpuIoHandler {
         }) {
             error!(
                 "GuestError: An incomplete response will be used instead of the expected, because {:?}. \
-                 Also, be aware that the virtual machine may suspended if reponse is too short to  \
+                 Also, be aware that the virtual machine may suspended if response is too short to  \
                  carry the necessary information.",
                 e
             );
@@ -849,7 +849,7 @@ impl GpuIoHandler {
             let res = &self.resources_list[res_index];
             if info_set_scanout.rect.width < 16
                 || info_set_scanout.rect.height < 16
-                || !is_rect_in_resouce(&info_set_scanout.rect, res)
+                || !is_rect_in_resource(&info_set_scanout.rect, res)
             {
                 error!(
                     "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
@@ -886,7 +886,7 @@ impl GpuIoHandler {
                     .image
                     .is_null()
                     {
-                        error!("HostError: surface image create failed, check pixman libary.");
+                        error!("HostError: surface image create failed, check pixman library.");
                         return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
                     }
                 }
@@ -906,7 +906,7 @@ impl GpuIoHandler {
                         .image
                         .is_null()
                     {
-                        error!("HostError: surface pixman image create failed, please check pixman libary.");
+                        error!("HostError: surface pixman image create failed, please check pixman library.");
                         return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
                     }
                 }
@@ -950,7 +950,7 @@ impl GpuIoHandler {
             .position(|x| x.resource_id == info_res_flush.resource_id)
         {
             let res = &self.resources_list[res_index];
-            if !is_rect_in_resouce(&info_res_flush.rect, res) {
+            if !is_rect_in_resource(&info_res_flush.rect, res) {
                 error!(
                     "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
                     res.resource_id, res.width, res.height,
@@ -1046,7 +1046,7 @@ impl GpuIoHandler {
             return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         }
 
-        if !is_rect_in_resouce(&info_transfer.rect, res) {
+        if !is_rect_in_resource(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
                 res.resource_id,
@@ -1195,7 +1195,7 @@ impl GpuIoHandler {
             let res = &mut self.resources_list[res_index];
             if !res.iov.is_empty() {
                 error!(
-                    "GuestError: The resource_id {} in resource attach backing request allready has iov.",
+                    "GuestError: The resource_id {} in resource attach backing request already has iov.",
                     info_attach_backing.resource_id
                 );
                 return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
@@ -1349,7 +1349,7 @@ impl GpuIoHandler {
                 Err(e) => {
                     error!(
                         "GuestError: Request will be ignored, because request header is incomplete and {:?}. \
-                         Also, be aware that the virtual machine may suspended if reponse does not  \
+                         Also, be aware that the virtual machine may suspended if response does not  \
                          carry the necessary information.",
                         e
                     );

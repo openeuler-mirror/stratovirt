@@ -369,7 +369,7 @@ pub enum RfbClientMessage {
 }
 
 pub struct TestPointEvent {
-    pub evnet_type: RfbClientMessage,
+    pub event_type: RfbClientMessage,
     pub button_mask: u8,
     pub x: u16,
     pub y: u16,
@@ -378,7 +378,7 @@ pub struct TestPointEvent {
 impl TestPointEvent {
     fn new(button_mask: u8, x: u16, y: u16) -> Self {
         Self {
-            evnet_type: RfbClientMessage::RfbPointerEvent,
+            event_type: RfbClientMessage::RfbPointerEvent,
             button_mask,
             x,
             y,
@@ -389,7 +389,7 @@ impl TestPointEvent {
 impl TestEventOperation for TestPointEvent {
     fn to_be_bytes(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
-        buf.append(&mut (self.evnet_type as u8).to_be_bytes().to_vec());
+        buf.append(&mut (self.event_type as u8).to_be_bytes().to_vec());
         buf.append(&mut self.button_mask.to_be_bytes().to_vec());
         buf.append(&mut self.x.to_be_bytes().to_vec());
         buf.append(&mut self.y.to_be_bytes().to_vec());
@@ -571,7 +571,7 @@ impl DisplayMode {
         buf.drain(..name_len as usize);
 
         println!(
-            "Display infomation set by server:\n \
+            "Display information set by server:\n \
             application name: {:?} Image size: width: {:?}, height: {:?}\n \
             big endian: {:?}, true color flag: {:?} red max {:?} red shift {:?}\n \
             green max {:?} green shift {:?} blue max {:?} blue shift {:?}\n",
@@ -784,7 +784,7 @@ impl VncClient {
         // Step 1: Exchange RFB Protocol: RFB 003.008.
         self.read_msg(&mut buf, 12)?;
         if "RFB 003.008\n".as_bytes().to_vec() != buf[..12].to_vec() {
-            bail!("Unsupport RFB version");
+            bail!("Unsupported RFB version");
         }
         self.write_msg(&"RFB 003.008\n".as_bytes().to_vec())?;
         buf.drain(..12);
@@ -796,7 +796,7 @@ impl VncClient {
         buf.drain(..1);
         self.read_msg(&mut buf, auth_num as usize)?;
         if sec_type as u8 != buf[0] {
-            bail!("Unsupport security type!");
+            bail!("Unsupported security type!");
         }
         buf.drain(..auth_num as usize);
         self.write_msg(&(sec_type as u8).to_be_bytes().to_vec())?;
@@ -896,7 +896,7 @@ impl VncClient {
 
     /// Send client cut event to VncServer.
     pub fn test_send_client_cut(&mut self, client_cut: TestClientCut) -> Result<()> {
-        println!("Test send client cut evnet.");
+        println!("Test send client cut event.");
         self.write_msg(&mut client_cut.to_be_bytes())?;
         Ok(())
     }
@@ -1001,7 +1001,7 @@ impl VncClient {
             _ => {
                 assert!(
                     false,
-                    "unsupport event type from client: {}",
+                    "unsupported event type from client: {}",
                     frame_buff.enc
                 );
             }
@@ -1138,7 +1138,7 @@ impl TestDemoGpuDevice {
     }
 
     /// Replace the surface of the display.
-    /// The width and height corresponding the width and height of the suface.
+    /// The width and height corresponding the width and height of the surface.
     pub fn replace_surface(&mut self, width: u32, height: u32, pixman_format: u32) {
         let cmd = TestGpuCmd {
             event_type: GpuEvent::ReplaceSurface,
