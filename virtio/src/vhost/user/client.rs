@@ -799,7 +799,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring num",
+                "The queue index {} is invalid {} for setting vring num",
                 queue_idx,
                 client.max_queue_num
             );
@@ -925,7 +925,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring kick",
+                "The queue index {} is invalid {} for setting vring kick",
                 queue_idx,
                 client.max_queue_num
             );
@@ -949,7 +949,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring enable",
+                "The queue index {} is invalid {} for setting vring enable",
                 queue_idx,
                 client.max_queue_num
             );

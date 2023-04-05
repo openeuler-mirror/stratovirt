@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 /// BaseDevice is a simplest demo-pci-device. Its function is to
-/// multiply data writed by two and return it when reading.
+/// multiply data written by two and return it when reading.
 use crate::demo_dev::DeviceTypeOperation;
 use address_space::GuestAddress;
 pub use anyhow::{bail, Result};

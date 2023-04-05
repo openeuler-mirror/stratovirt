@@ -241,7 +241,7 @@ fn do_event_idx_with_flag(flag: u16) {
         );
     }
 
-    // Set avail->used_event to DEFAULT_IO_REQS which the rigth value is DEFAULT_IO_REQS - 1,
+    // Set avail->used_event to DEFAULT_IO_REQS which the right value is DEFAULT_IO_REQS - 1,
     // it will not get the interrupt which means event index feature works.
     vqs[0]
         .borrow()
@@ -556,7 +556,7 @@ fn virtio_feature_event_idx() {
     do_event_idx_with_flag(0);
 }
 
-/// Driver just enable these featues:
+/// Driver just enable these features:
 ///     VIRTIO_F_VERSION_1 | VIRTIO_RING_F_INDIRECT_DESC | VIRTIO_RING_F_EVENT_IDX
 /// and succeed to do the I/O request(normal + indirect) which has opened the event idx.
 /// TestStep:
@@ -628,7 +628,7 @@ fn virtio_feature_indirect_and_event_idx() {
         );
     }
 
-    // Set avail->used_event to DEFAULT_IO_REQS which the rigth value is DEFAULT_IO_REQS - 1,
+    // Set avail->used_event to DEFAULT_IO_REQS which the right value is DEFAULT_IO_REQS - 1,
     // it will not get the interrupt which means event index feature works.
     vqs[0]
         .borrow()
@@ -775,7 +775,7 @@ fn virtio_init_device_abnormal_status() {
 /// Setting abnormal feature in device initialization.
 /// TestStep:
 ///   1. Init device.
-///     negotiate unsupport features:
+///     negotiate unsupported features:
 ///       1) 1 << 63;
 ///       2) 1 << 63 | 1 << VIRTIO_F_VERSION_1;
 ///   2. Do the I/O request.
@@ -863,7 +863,7 @@ fn virtio_init_device_abnormal_features() {
 ///    5) set invalid desc/avail/used address:
 ///     0, 1 << 48, u64::MAX
 ///    6) set 0 to enable vq;
-///    7) check if the writed queue info is right.
+///    7) check if the written queue info is right.
 ///   2. Do the I/O request.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
@@ -1008,7 +1008,7 @@ fn virtio_init_device_abnormal_vring_info() {
             used = value;
         }
         blk.borrow().activate_queue(desc, avail, used);
-        // TEST if the writed queue info is right.
+        // TEST if the written queue info is right.
         if err_type == 10 {
             check_queue(blk.clone(), desc, avail, used);
         }
@@ -1094,7 +1094,7 @@ fn virtio_init_device_abnormal_vring_info() {
 ///		1.1->1.2->1.3->1.5->1.4->1.6->1.7->1.8
 ///		1.1->1.2->1.3->1.4->1.6->1.5->1.7->1.8
 ///		1.1->1.2->1.3->1.4->1.7->1.6->1.5->1.8
-///	  2. Noraml init device.
+///	  2. Normal init device.
 ///	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
@@ -1153,7 +1153,7 @@ fn virtio_init_device_out_of_order_1() {
 ///		1.1->1.2->1.4->1.5->1.6->1.7->1.8
 ///		1.1->1.2->1.3->1.4->1.6->1.7->1.8
 ///		1.1->1.2->1.3->1.4->1.5->1.6->1.8
-///	  2. Noraml init device.
+///	  2. Normal init device.
 ///	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
@@ -1212,7 +1212,7 @@ fn virtio_init_device_out_of_order_2() {
 ///		1.1->1.2->1.3->1.5->1.8
 ///		1.1->1.2->1.3->1.4->1.9(FAILED)->normal init process
 ///		1.1->1.2->1.3->1.4->1.9(FAILED)->1.2->1.3->1.4->1.5->1.6->1.7->1.8
-///	  2. Noraml init device.
+///	  2. Normal init device.
 ///	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
@@ -1477,7 +1477,7 @@ fn virtio_io_abnormal_desc_len() {
                     .borrow_mut()
                     .add_indirect(test_state.clone(), indirect_req, true);
             vqs[0].borrow().update_avail(test_state.clone(), free_head);
-            // Test invalid lengh of the indirect desc elem.
+            // Test invalid length of the indirect desc elem.
             if length == 16 {
                 test_state.borrow().writel(
                     indirect_desc + offset_of!(VringDesc, len) as u64,

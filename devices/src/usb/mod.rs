@@ -295,10 +295,10 @@ pub trait UsbDeviceOps: Send + Sync {
     fn reset(&mut self);
 
     /// Set the controller which the USB device attached.
-    /// USB deivce need to kick controller in some cases.
+    /// USB device need to kick controller in some cases.
     fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>);
 
-    /// Set the controller which the USB device attached.
+    /// Get the controller which the USB device attached.
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
 
     /// Get the endpoint to wakeup.
@@ -477,33 +477,33 @@ impl UsbPacket {
     pub fn transfer_packet(&mut self, vec: &mut [u8], len: usize) {
         let len = min(vec.len(), len);
         let to_host = self.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
-        let mut copyed = 0;
+        let mut copied = 0;
         if to_host {
             for iov in &self.iovecs {
-                let cnt = min(iov.iov_len, len - copyed);
-                let tmp = &vec[copyed..(copyed + cnt)];
+                let cnt = min(iov.iov_len, len - copied);
+                let tmp = &vec[copied..(copied + cnt)];
                 if let Err(e) = mem_from_buf(tmp, iov.iov_base) {
                     error!("Failed to write mem: {:?}", e);
                 }
-                copyed += cnt;
-                if len == copyed {
+                copied += cnt;
+                if len == copied {
                     break;
                 }
             }
         } else {
             for iov in &self.iovecs {
-                let cnt = min(iov.iov_len, len - copyed);
-                let tmp = &mut vec[copyed..(copyed + cnt)];
+                let cnt = min(iov.iov_len, len - copied);
+                let tmp = &mut vec[copied..(copied + cnt)];
                 if let Err(e) = mem_to_buf(tmp, iov.iov_base) {
                     error!("Failed to read mem {:?}", e);
                 }
-                copyed += cnt;
-                if len == copyed {
+                copied += cnt;
+                if len == copied {
                     break;
                 }
             }
         }
-        self.actual_length = copyed as u32;
+        self.actual_length = copied as u32;
     }
 }
 

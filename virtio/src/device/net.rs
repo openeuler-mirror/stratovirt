@@ -74,7 +74,7 @@ const CTRL_MAX_VLAN: u16 = 1 << 12;
 const MAX_MAC_ADDR_NUM: usize = 0xff;
 /// The header length of virtio net packet.
 const NET_HDR_LENGTH: usize = mem::size_of::<VirtioNetHdr>();
-/// The legnth of vlan tag.
+/// The length of vlan tag.
 const VLAN_TAG_LENGTH: usize = 4;
 /// The offset of vlan tpid for 802.1Q tag.
 const VLAN_TPID_LENGTH: usize = 2;
@@ -768,7 +768,7 @@ impl NetIoHandler {
                 self.rx.queue_full = true;
                 break;
             } else if elem.in_iovec.is_empty() {
-                bail!("The lengh of in iovec is 0");
+                bail!("The length of in iovec is 0");
             }
             let iovecs = NetIoHandler::get_libc_iovecs(
                 &self.mem_space,
@@ -883,7 +883,7 @@ impl NetIoHandler {
             if elem.desc_num == 0 {
                 break;
             } else if elem.out_iovec.is_empty() {
-                bail!("The lengh of out iovec is 0");
+                bail!("The length of out iovec is 0");
             }
 
             let iovecs = NetIoHandler::get_libc_iovecs(

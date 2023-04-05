@@ -942,7 +942,7 @@ mod tests {
         let mut vm_config = VmConfig::default();
         let memory_path_str = "/path/to/memory-backend";
         let mem_path = vm_config.machine_config.mem_config.mem_path.clone();
-        // defalut value is none.
+        // default value is none.
         assert!(mem_path.is_none());
         let mem_cfg_ret = vm_config.add_mem_path(memory_path_str);
         assert!(mem_cfg_ret.is_ok());

@@ -1092,11 +1092,11 @@ mod test {
             data_match: false,
             data: 0,
         };
-        // comapre unchanged
+        // compare unchanged
         let mut fd2 = fd1.clone();
         assert!(fd2 == fd1);
 
-        // comapre fd
+        // compare fd
         fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
         assert!(fd2 != fd1);
 

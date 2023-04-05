@@ -98,7 +98,7 @@ fn env_clean(test_dir: String) {
     Command::new("rm").arg("-rf").arg(test_dir).spawn().unwrap();
 }
 
-fn virtio_fs_defalut_feature(dev: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
+fn virtio_fs_default_feature(dev: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
     let mut features = dev.borrow().get_device_features();
     features &=
         !(VIRTIO_F_BAD_FEATURE | 1 << VIRTIO_RING_F_INDIRECT_DESC | 1 << VIRTIO_RING_F_EVENT_IDX);
@@ -133,7 +133,7 @@ impl VirtioFsTest {
         let allocator = machine.allocator.clone();
         let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
         dev.borrow_mut().init(pci_slot, pci_fn);
-        let features = virtio_fs_defalut_feature(dev.clone());
+        let features = virtio_fs_default_feature(dev.clone());
         let queues =
             dev.borrow_mut()
                 .init_device(test_state.clone(), allocator.clone(), features, 2);

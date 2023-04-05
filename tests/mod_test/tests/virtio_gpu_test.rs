@@ -404,7 +404,7 @@ fn resource_detach_dfx() {
     let (dpy, gpu) = set_up(&gpu_cfg);
     gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
-    // invlid resource id
+    // invalid resource id
     assert_eq!(
         VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
         resource_detach_backing(&gpu, VirtioGpuResourceDetachBacking::new(D_RES_ID),).hdr_type
@@ -420,7 +420,7 @@ fn resource_detach_dfx() {
         .hdr_type
     );
 
-    // invlid resource id
+    // invalid resource id
     assert_eq!(
         VIRTIO_GPU_RESP_ERR_UNSPEC,
         resource_detach_backing(&gpu, VirtioGpuResourceDetachBacking::new(D_RES_ID),).hdr_type
@@ -440,7 +440,7 @@ fn resource_transfer_dfx() {
     let (dpy, gpu) = set_up(&gpu_cfg);
     let image_addr = gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
-    // invlid resource id
+    // invalid resource id
     assert_eq!(
         VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
         transfer_to_host(
@@ -702,7 +702,7 @@ fn crash_dfx() {
         .request_complete(true, slice, None, None, Some(&mut resp));
     assert_eq!(0x1234, resp.header.hdr_type);
 
-    // invlid hdr_ctx
+    // invalid hdr_ctx
     let mut hdr = VirtioGpuCtrlHdr::default();
     hdr.hdr_type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
 

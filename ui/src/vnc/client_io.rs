@@ -20,7 +20,7 @@ use crate::{
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
     vnc::{
-        auth_sasl::AuthState, framebuffer_upadate, round_up_div, server_io::VncServer,
+        auth_sasl::AuthState, framebuffer_update, round_up_div, server_io::VncServer,
         set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
         MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
     },
@@ -449,7 +449,7 @@ impl ClientIoHandler {
     }
 
     /// Write a chunk of data to client socket. If there is some
-    /// error in io channel, then return and break the connnection.
+    /// error in io channel, then return and break the connection.
     fn client_handle_write(&mut self) {
         let client = self.client.clone();
         if client.conn_state.lock().unwrap().dis_conn {
@@ -1266,7 +1266,7 @@ pub fn desktop_resize(
     buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
     buf.append(&mut (0_u8).to_be_bytes().to_vec());
     buf.append(&mut (1_u16).to_be_bytes().to_vec());
-    framebuffer_upadate(0, 0, width, height, ENCODING_DESKTOPRESIZE, buf);
+    framebuffer_update(0, 0, width, height, ENCODING_DESKTOPRESIZE, buf);
     Ok(())
 }
 
@@ -1280,7 +1280,7 @@ pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
         buf.append(&mut (0_u8).to_be_bytes().to_vec());
         buf.append(&mut (1_u16).to_be_bytes().to_vec());
-        framebuffer_upadate(0, 0, client_width, client_height, ENCODING_WMVI, buf);
+        framebuffer_update(0, 0, client_width, client_height, ENCODING_WMVI, buf);
         buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
         pixel_format_message(client, buf);
     } else if !locked_dpm.pf.is_default_pixel_format() {
@@ -1329,7 +1329,7 @@ pub fn display_cursor_define(
         buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
         buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
 
-        framebuffer_upadate(
+        framebuffer_update(
             cursor.hot_x as i32,
             cursor.hot_y as i32,
             cursor.width as i32,
@@ -1352,7 +1352,7 @@ pub fn display_cursor_define(
         buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
         buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
 
-        framebuffer_upadate(
+        framebuffer_update(
             cursor.hot_x as i32,
             cursor.hot_y as i32,
             cursor.width as i32,
@@ -1405,7 +1405,7 @@ pub fn vnc_flush(client: &Arc<ClientState>) {
         .lock()
         .unwrap()
         .write(1)
-        .unwrap_or_else(|e| error!("Error occurrs during data flush:{:?}", e));
+        .unwrap_or_else(|e| error!("Error occurs during data flush:{:?}", e));
 }
 
 /// Disconnect for vnc client.
@@ -1415,5 +1415,5 @@ pub fn vnc_disconnect_start(client: &Arc<ClientState>) {
         .lock()
         .unwrap()
         .write(1)
-        .unwrap_or_else(|e| error!("Error occurrs during disconnection: {:?}", e));
+        .unwrap_or_else(|e| error!("Error occurs during disconnection: {:?}", e));
 }

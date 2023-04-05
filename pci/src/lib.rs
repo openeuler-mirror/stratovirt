@@ -203,7 +203,7 @@ pub trait PciDevOps: Send + AsAny {
         parent_dev_path
     }
 
-    /// Fill the device path accroding to parent device path and device function.
+    /// Fill the device path according to parent device path and device function.
     fn populate_dev_path(&self, parent_dev_path: String, devfn: u8, dev_type: &str) -> String {
         let slot = pci_slot(devfn);
         let function = pci_func(devfn);

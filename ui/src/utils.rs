@@ -85,7 +85,7 @@ impl BuffPool {
 
     /// Add data to the bufferpool. If the remaining
     /// free space is not enough, it will not work. So it is
-    /// recommended to call is_enouth() before this function.
+    /// recommended to call is_enough() before this function.
     ///
     /// # Example
     /// ```rust

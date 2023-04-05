@@ -78,7 +78,7 @@ impl Net {
                     .delete_event()
                     .with_context(|| "Failed to delete vhost-user net event")?;
             }
-            None => return Err(anyhow!("Failed to get client when stoping event")),
+            None => return Err(anyhow!("Failed to get client when stopping event")),
         };
         if ((self.state.lock().unwrap().driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0)
             && self.net_cfg.mq

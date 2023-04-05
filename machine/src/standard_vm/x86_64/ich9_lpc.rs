@@ -50,7 +50,7 @@ pub struct LPCBridge {
     rst_ctrl: Arc<AtomicU8>,
     pm_evt: Arc<Mutex<AcpiPmEvent>>,
     pm_ctrl: Arc<Mutex<AcpiPmCtrl>>,
-    /// Reset request trigged by ACPI PM1 Control Registers.
+    /// Reset request triggered by ACPI PM1 Control Registers.
     pub reset_req: Arc<EventFd>,
     pub shutdown_req: Arc<EventFd>,
 }

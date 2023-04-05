@@ -155,7 +155,7 @@ pub enum HidType {
 
 /// HID keyboard including keycode and modifier.
 pub struct HidKeyboard {
-    /// Recive keycode from VNC.
+    /// Receive keycode from VNC.
     pub keycodes: [u32; QUEUE_LENGTH as usize],
     pub modifiers: u16,
     /// Send keycode to driver.

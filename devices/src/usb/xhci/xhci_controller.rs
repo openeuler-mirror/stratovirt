@@ -1028,7 +1028,7 @@ impl XhciDevice {
         }
         // From section 4.6.6 Configure Endpoint of the spec:
         // If all Endpoints are Disabled:
-        // Set the Slot State in the Output Slot Context to Addresed.
+        // Set the Slot State in the Output Slot Context to Addressed.
         // else (An Endpoint is Enabled):
         // Set the Slot State in the Output Slot Context to Configured.
         // Set the Context Entries field in the Output Slot Context to the index of
@@ -1668,14 +1668,14 @@ impl XhciDevice {
         &mut self,
         xfer: &XhciTransfer,
         trb: &XhciTRB,
-        transfered: u32,
+        transferred: u32,
         edtla: &mut u32,
     ) -> Result<()> {
         let trb_type = trb.get_type();
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & TRB_TR_LEN_MASK) - transfered;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - transferred;
         evt.flags = 0;
         evt.ptr = trb.addr;
         evt.ccode = xfer.status;

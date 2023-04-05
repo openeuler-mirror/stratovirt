@@ -16,7 +16,7 @@ use mod_test::libdriver::pci::*;
 use mod_test::libdriver::pci_bus::{PciBusOps, TestPciBus};
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps, VIRTIO_F_VERSION_1};
 use mod_test::libdriver::virtio_block::{
-    add_blk_request, virtio_blk_defalut_feature, virtio_blk_read, virtio_blk_write,
+    add_blk_request, virtio_blk_default_feature, virtio_blk_read, virtio_blk_write,
     VIRTIO_BLK_T_OUT,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
@@ -555,7 +555,7 @@ fn validate_blk_io_success(
     test_state: Rc<RefCell<TestState>>,
     alloc: Rc<RefCell<GuestAllocator>>,
 ) {
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
     let virtqueues = blk
         .borrow_mut()
         .init_device(test_state.clone(), alloc.clone(), features, 1);
@@ -1461,7 +1461,7 @@ fn test_pci_msix_global_ctl() {
 }
 
 /// Test whether the Mask bit in the vector register in msix table works well,
-/// which means that when it's set, msix pends notification of the related vecotr,
+/// which means that when it's set, msix pends notification of the related vector,
 /// and starts to notify as soon as the mask bit is cleared by the OS.
 #[test]
 fn test_pci_msix_local_ctl() {
