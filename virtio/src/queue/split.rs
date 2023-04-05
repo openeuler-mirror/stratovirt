@@ -512,7 +512,7 @@ impl SplitVring {
             VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
         // Make sure the event idx read from sys_mem is new.
         fence(Ordering::SeqCst);
-        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let used_event_addr = self.addr_cache.avail_ring_host + used_event_offset;
         let used_event = sys_mem
@@ -671,7 +671,7 @@ impl SplitVring {
     ) -> Result<()> {
         let index_offset = VRING_FLAGS_AND_IDX_LEN
             + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
-        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
         let desc_index = sys_mem

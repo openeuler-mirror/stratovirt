@@ -230,7 +230,7 @@ impl SysBusDevOps for Ramfb {
     }
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
-        error!("Ramfb can not be writed!");
+        error!("Ramfb can not be written!");
         false
     }
 

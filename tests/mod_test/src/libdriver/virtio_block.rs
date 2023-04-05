@@ -53,7 +53,7 @@ pub const VIRTIO_BLK_T_ILLGEAL: u32 = 32;
 pub const VIRTIO_BLK_S_OK: u8 = 0;
 /// IO error.
 pub const VIRTIO_BLK_S_IOERR: u8 = 1;
-/// Unsupport request.
+/// Unsupported request.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 
 pub const TIMEOUT_US: u64 = 15 * 1000 * 1000;
@@ -341,7 +341,7 @@ pub fn virtio_blk_read(
     );
 }
 
-pub fn virtio_blk_defalut_feature(blk: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
+pub fn virtio_blk_default_feature(blk: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
     let mut features = blk.borrow().get_device_features();
     features &= !(VIRTIO_F_BAD_FEATURE
         | 1 << VIRTIO_RING_F_INDIRECT_DESC

@@ -199,7 +199,7 @@ pub struct EventLoopContext {
     /// Used to avoid unnecessary kick operation when the
     /// next re-evaluation is performed before next epoll.
     kick_me: AtomicBool,
-    /// Used to identify that a kick operation ocurred.
+    /// Used to identify that a kick operation occurred.
     kicked: AtomicBool,
     /// Fds registered to the `EventLoop`.
     events: Arc<RwLock<BTreeMap<RawFd, Box<EventNotifier>>>>,

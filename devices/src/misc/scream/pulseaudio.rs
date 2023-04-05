@@ -176,7 +176,7 @@ impl PulseStreamData {
             32 => self.ss.format = Format::S32le,
             _ => {
                 warn!(
-                    "Unsuported sample size {}, not playing until next format switch",
+                    "Unsupported sample size {}, not playing until next format switch",
                     recv_data.fmt.size
                 );
                 self.ss.rate = 0;

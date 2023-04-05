@@ -93,7 +93,7 @@ pub const WRITE_LONG_10: u8 = 0x3f;
 pub const CHANGE_DEFINITION: u8 = 0x40;
 pub const WRITE_SAME_10: u8 = 0x41;
 pub const UNMAP: u8 = 0x42;
-/// The Read TOC command requests that the Drive read data from a table of contets.
+/// The Read TOC command requests that the Drive read data from a table of contexts.
 pub const READ_TOC: u8 = 0x43;
 pub const REPORT_DENSITY_SUPPORT: u8 = 0x44;
 pub const GET_CONFIGURATION: u8 = 0x46;
@@ -973,7 +973,7 @@ fn scsi_command_emulate_vpd_page(
             // Byte[6-7] = 0: Optimal transfer length granularity.
             // Byte[8-11]: Maximum transfer length.
             // Byte[12-15] = 0: Optimal Transfer Length.
-            // Byte[16-19] = 0: Maxium Prefetch Length.
+            // Byte[16-19] = 0: Maximum Prefetch Length.
             // Byte[20-23]: Maximum unmap lba count.
             // Byte[24-27]: Maximum unmap block descriptor count.
             // Byte[28-31]: Optimal unmap granulatity.
@@ -1045,7 +1045,7 @@ fn scsi_command_emulate_target_inquiry(lun: u16, cmd: &ScsiCommand) -> Result<Ve
     // EVPD = 0 means it's a Standard INQUIRY command.
     // Byte2: page code.
     if cmd.buf[2] != 0 {
-        bail!("Invalid standatd inquiry command!");
+        bail!("Invalid standard inquiry command!");
     }
 
     outbuf.resize(SCSI_TARGET_INQUIRY_LEN as usize, 0);
@@ -1631,7 +1631,7 @@ fn scsi_command_emulate_get_event_status_notification(
     let dev_lock = dev.lock().unwrap();
 
     if dev_lock.scsi_type != SCSI_TYPE_ROM {
-        bail!("Invalid scsi tye {}", dev_lock.scsi_type);
+        bail!("Invalid scsi type {}", dev_lock.scsi_type);
     }
 
     // Byte1: Bit0: Polled.

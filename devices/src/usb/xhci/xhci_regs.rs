@@ -614,7 +614,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
             XHCI_PORTLI => 0,
             XHCI_PORTHLPMC => 0,
             _ => {
-                error!("Faield to read port register: offset {:x}", offset);
+                error!("Failed to read port register: offset {:x}", offset);
                 return false;
             }
         };

@@ -16,7 +16,7 @@ use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::TestVringDescEntry;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
 use mod_test::libdriver::virtio_block::{
-    add_blk_request, create_blk, set_up, tear_down, virtio_blk_defalut_feature, virtio_blk_read,
+    add_blk_request, create_blk, set_up, tear_down, virtio_blk_default_feature, virtio_blk_read,
     virtio_blk_request, virtio_blk_write, TestVirtBlkReq, DEFAULT_IO_REQS, REQ_ADDR_LEN,
     REQ_DATA_LEN, REQ_STATUS_LEN, TIMEOUT_US, VIRTIO_BLK_F_BARRIER, VIRTIO_BLK_F_BLK_SIZE,
     VIRTIO_BLK_F_CONFIG_WCE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_GEOMETRY,
@@ -151,7 +151,7 @@ fn virtio_blk_illegal_req(
 fn blk_basic() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -256,7 +256,7 @@ fn blk_features_negotiate() {
 fn blk_feature_seg_max() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
     features |= 1 << VIRTIO_BLK_F_SEG_MAX;
 
     let virtqueues = blk
@@ -308,7 +308,7 @@ fn blk_feature_seg_max() {
 fn blk_feature_ro() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -400,7 +400,7 @@ fn blk_feature_ro() {
 fn blk_feature_flush() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
     features |= 1 << VIRTIO_BLK_F_FLUSH;
 
     let virtqueues = blk
@@ -458,7 +458,7 @@ fn blk_feature_mq() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
     features |= 1 << VIRTIO_BLK_F_MQ;
 
     let num_queues = 4;
@@ -579,7 +579,7 @@ fn blk_all_features() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
     features |= 1 << VIRTIO_BLK_F_SEG_MAX | 1 << VIRTIO_BLK_F_FLUSH | 1 << VIRTIO_BLK_F_MQ;
 
     let num_queues = 4;
@@ -631,7 +631,7 @@ fn blk_small_file_511b() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -731,7 +731,7 @@ fn blk_serial() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -788,7 +788,7 @@ fn blk_iops() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -873,7 +873,7 @@ fn blk_aio_native() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -926,7 +926,7 @@ fn blk_aio_io_uring() {
     let (blk, test_state, alloc) =
         create_blk(image_path.clone(), device_args, drive_args, other_args);
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -970,7 +970,7 @@ fn blk_aio_io_uring() {
 fn blk_illegal_req_type() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -1005,7 +1005,7 @@ fn blk_illegal_req_type() {
 fn blk_rw_config() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -1043,7 +1043,7 @@ fn blk_rw_config() {
 fn blk_abnormal_req() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()
@@ -1311,7 +1311,7 @@ fn blk_abnormal_req() {
 fn blk_parallel_req() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let mut features = virtio_blk_defalut_feature(blk.clone());
+    let mut features = virtio_blk_default_feature(blk.clone());
     features |= 1 << VIRTIO_BLK_F_FLUSH;
 
     let virtqueues = blk
@@ -1403,7 +1403,7 @@ fn blk_parallel_req() {
 fn blk_exceed_capacity() {
     let (blk, test_state, alloc, image_path) = set_up();
 
-    let features = virtio_blk_defalut_feature(blk.clone());
+    let features = virtio_blk_default_feature(blk.clone());
 
     let virtqueues = blk
         .borrow_mut()

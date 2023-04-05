@@ -482,7 +482,7 @@ fn test_xhci_keyboard_over_ring_limit() {
             assert_eq!(buf, [0, 0, 0, 0, 0, 0, 0, 0]);
         }
         if i == 0 {
-            // Fake link new addrress.
+            // Fake link new address.
             xhci.queue_link_trb(
                 slot_id,
                 HID_DEVICE_ENDPOINT_ID,
@@ -1337,7 +1337,7 @@ fn test_xhci_keyboard_device_init_control_command_invalid_order() {
     xhci.stop_endpoint(slot_id, HID_DEVICE_ENDPOINT_ID);
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
-    // configure agian.
+    // configure again.
     xhci.configure_endpoint(slot_id, false);
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
@@ -1527,7 +1527,7 @@ fn test_xhci_keyboard_device_init_invalid_request() {
         index: 10,
         length: 10,
     };
-    xhci.queue_device_reqeust(slot_id, &device_req);
+    xhci.queue_device_request(slot_id, &device_req);
     xhci.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
     // Stall Error.
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
@@ -1549,7 +1549,7 @@ fn test_xhci_keyboard_device_init_invalid_request() {
         index: 2,
         length: 64,
     };
-    xhci.queue_device_reqeust(slot_id, &device_req);
+    xhci.queue_device_request(slot_id, &device_req);
     xhci.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
     // Stall Error.
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
@@ -1805,7 +1805,7 @@ fn test_xhci_keyboard_device_init_reset_device() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
     let slot_id = evt.get_slot_id();
-    //  Case 1: reset afer enable slot.
+    //  Case 1: reset after enable slot.
     xhci.reset_device(slot_id);
     let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
@@ -2031,7 +2031,7 @@ fn test_xhci_keyboard_device_init_device_miss_step() {
     qmp_send_key_event(test_state.borrow_mut(), KEYCODE_SPACE, true);
     xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_KEYBOARD_LEN);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
-    // NOTE: not kick acually, just print error.
+    // NOTE: not kick actually, just print error.
     assert!(xhci.fetch_event(PRIMARY_INTERRUPTER_ID).is_none());
 
     // configure endpoint
@@ -2179,7 +2179,7 @@ fn test_xhci_tablet_over_ring_limit() {
             assert_eq!(buf, [0, 50, 0, 100, 0, 0]);
         }
         if i == 0 {
-            // Fake link new addrress.
+            // Fake link new address.
             xhci.queue_link_trb(
                 slot_id,
                 HID_DEVICE_ENDPOINT_ID,
@@ -2483,7 +2483,7 @@ fn test_xhci_tablet_invalid_request() {
     let port_id = 1;
     let slot_id = xhci.init_device(port_id);
 
-    // unsupport report request for tablet.
+    // unsupported report request for tablet.
     xhci.test_invalie_device_request(slot_id, USB_INTERFACE_CLASS_OUT_REQUEST, HID_SET_REPORT, 0);
     // invalid descriptor type.
     xhci.test_invalie_device_request(

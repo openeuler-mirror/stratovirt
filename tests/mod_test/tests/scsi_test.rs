@@ -149,7 +149,7 @@ impl VirtioScsiTest {
         }];
 
         let (cntlr, state, alloc) = scsi_test_init(cntlrcfg, scsi_devices.clone());
-        let features = virtio_scsi_defalut_feature(cntlr.clone());
+        let features = virtio_scsi_default_feature(cntlr.clone());
         let queues = cntlr
             .borrow_mut()
             .init_device(state.clone(), alloc.clone(), features, 3);
@@ -560,7 +560,7 @@ fn get_sense_bytes(sense: ScsiSense) -> [u8; TEST_VIRTIO_SCSI_SENSE_SIZE] {
     bytes
 }
 
-pub fn virtio_scsi_defalut_feature(cntlr: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
+pub fn virtio_scsi_default_feature(cntlr: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
     let mut features = cntlr.borrow().get_device_features();
     features &=
         !(VIRTIO_F_BAD_FEATURE | 1 << VIRTIO_RING_F_INDIRECT_DESC | 1 << VIRTIO_RING_F_EVENT_IDX);
@@ -697,8 +697,8 @@ fn scsi_hd_basic_test() {
     };
     vst.scsi_cdb_test(cdb_test_args);
 
-    // Test 3: scsi command: TESE_UNIT_READY.
-    // Test 3 Result: Check if scsi command TESE_UNIT_READY was handled successfully.
+    // Test 3: scsi command: TEST_UNIT_READY.
+    // Test 3 Result: Check if scsi command TEST_UNIT_READY was handled successfully.
     let mut test_unit_ready_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     test_unit_ready_cdb[0] = TEST_UNIT_READY;
     let cdb_test_args = CdbTest {
@@ -1358,7 +1358,7 @@ fn scsi_cd_basic_test() {
 ///   1. Test scsi command REPORT_LUNS.
 ///   2. Test scsi command INQUIRY.
 ///   3. Test scsi command REQUEST_SENSE.
-///   4. Test scsi command TESE_UNIT_READY.
+///   4. Test scsi command TEST_UNIT_READY.
 ///   5. Test other scsi command, e.g. READ_CAPACITY_10.
 ///   6. Destroy device.
 /// Expect:
@@ -1543,8 +1543,8 @@ fn scsi_target_cdb_test() {
     };
     vst.scsi_cdb_test(cdb_test_args);
 
-    // Test 4: scsi command: TESE_UNIT_READY.
-    // Test 4 Result: Check if scsi command TESE_UNIT_READY was handled successfully.
+    // Test 4: scsi command: TEST_UNIT_READY.
+    // Test 4 Result: Check if scsi command TEST_UNIT_READY was handled successfully.
     let mut test_unit_ready_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     test_unit_ready_cdb[0] = TEST_UNIT_READY;
     let cdb_test_args = CdbTest {
@@ -1600,13 +1600,13 @@ struct VirtioScsiConfig {
 /// TestStep:
 ///   1. Init process.
 ///   2. For every parameter in VirtioScsiConfig, do check just like:
-///      Read default value -> Set other value -> Read value again -> Check if value was setted successfully.
+///      Read default value -> Set other value -> Read value again -> Check if value was set successfully.
 ///   3. Destroy device.
 /// Note:
 ///   1. sense size and cdb size can not be changed in stratovirt now. So, they are 0 now.
 /// Expect:
 ///   1/2/3: success.
-///   2: only sense_size and cdb_size are setted successfully.
+///   2: only sense_size and cdb_size are set successfully.
 #[test]
 fn device_config_test() {
     let target = 0x0;
@@ -1883,7 +1883,7 @@ fn aio_model_test() {
     }
 
     let (cntlr, state, alloc) = scsi_test_init(cntlrcfg, device_vec.clone());
-    let features = virtio_scsi_defalut_feature(cntlr.clone());
+    let features = virtio_scsi_default_feature(cntlr.clone());
     let queues = cntlr
         .borrow_mut()
         .init_device(state.clone(), alloc.clone(), features, 3);
@@ -2266,7 +2266,7 @@ fn send_cd_command_to_hd_test() {
 ///   1. Init process.
 ///   2. Send READ_10/WRITE_10 CDB.
 ///     2.1 READ_10/WRITE_10 transfer length is larger than disk size.
-///     2.2 READ_10/WRITE_10 read/write offset is larget than disk size.
+///     2.2 READ_10/WRITE_10 read/write offset is larger than disk size.
 ///   3. Wait for return value.
 ///   4. Destroy device.
 /// Expect:
@@ -2321,7 +2321,7 @@ fn wrong_io_test() {
     vst.scsi_cdb_test(cdb_test_args);
 
     // Test3: scsi command: WRITE_10.
-    // Write to LBA(logical block address) 2K, transfer length 1 secotr and disk is 1KB size.
+    // Write to LBA(logical block address) 2K, transfer length 1 sector and disk is 1KB size.
     // Test Result: Check if scsi command WRITE_10 was failure.
     let mut write_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     write_cdb[0] = WRITE_10;

@@ -75,7 +75,7 @@ pub struct Iovec {
 trait AioContext<T: Clone> {
     /// Submit IO requests to the OS, the nr submitted is returned.
     fn submit(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
-    /// Get the IO events of the requests sumbitted earlier.
+    /// Get the IO events of the requests submitted earlier.
     fn get_events(&mut self) -> &[AioEvent];
 }
 
@@ -499,7 +499,7 @@ pub fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
     Ok(())
 }
 
-/// Write buf to iovec and return the writed number of bytes.
+/// Write buf to iovec and return the written number of bytes.
 pub fn iov_from_buf_direct(iovec: &[Iovec], buf: &[u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;
@@ -523,7 +523,7 @@ pub fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
     Ok(())
 }
 
-/// Read iovec to buf and return the readed number of bytes.
+/// Read iovec to buf and return the read number of bytes.
 pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;

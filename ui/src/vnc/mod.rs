@@ -303,7 +303,7 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         Some(Arc::downgrade(&dcl)),
     ));
 
-    // Parameter configuation for VncServeer.
+    // Parameter configuration for VncServeer.
     make_server_config(&server, vnc_cfg, object)?;
 
     // Add an VncServer.
@@ -481,7 +481,7 @@ pub fn update_server_surface(server: &Arc<VncServer>) -> Result<()> {
     )
 }
 
-/// Check if the suface for VncClient is need update
+/// Check if the surface for VncClient is need update
 fn check_surface(locked_vnc_surface: &mut VncSurface, surface: &DisplaySurface) -> bool {
     let guest_width = get_image_width(surface.image);
     let guest_height = get_image_height(surface.image);
@@ -525,7 +525,7 @@ fn check_rect(rect: &mut Rectangle, width: i32, height: i32) -> bool {
 ///
 /// * `x` `y` `w` `h` - coordinate, width, height
 /// * `buf` - send buffer
-pub fn framebuffer_upadate(x: i32, y: i32, w: i32, h: i32, encoding: i32, buf: &mut Vec<u8>) {
+pub fn framebuffer_update(x: i32, y: i32, w: i32, h: i32, encoding: i32, buf: &mut Vec<u8>) {
     buf.append(&mut (x as u16).to_be_bytes().to_vec());
     buf.append(&mut (y as u16).to_be_bytes().to_vec());
     buf.append(&mut (w as u16).to_be_bytes().to_vec());
@@ -658,11 +658,11 @@ fn send_framebuffer_update(
 ) -> i32 {
     match client_dpm.enc {
         ENCODING_HEXTILE => {
-            framebuffer_upadate(rect.x, rect.y, rect.w, rect.h, ENCODING_HEXTILE, buf);
+            framebuffer_update(rect.x, rect.y, rect.w, rect.h, ENCODING_HEXTILE, buf);
             hextile_send_framebuffer_update(image, rect, client_dpm, buf)
         }
         _ => {
-            framebuffer_upadate(rect.x, rect.y, rect.w, rect.h, ENCODING_RAW, buf);
+            framebuffer_update(rect.x, rect.y, rect.w, rect.h, ENCODING_RAW, buf);
             raw_send_framebuffer_update(image, rect, client_dpm, buf)
         }
     }

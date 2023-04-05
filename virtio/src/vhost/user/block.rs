@@ -59,7 +59,7 @@ impl Block {
     fn delete_event(&mut self) -> Result<()> {
         self.client
             .as_ref()
-            .with_context(|| "Failed to get client when stoping event")?
+            .with_context(|| "Failed to get client when stopping event")?
             .lock()
             .unwrap()
             .delete_event()

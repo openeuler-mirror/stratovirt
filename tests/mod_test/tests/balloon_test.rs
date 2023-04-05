@@ -475,7 +475,7 @@ fn balloon_huge_fun_001() {
 ///     2.set guest feature 0xFFFFFFFFFFFFFFFF
 /// Expect:
 ///     1.Success
-///     2.guest feature equel device feature
+///     2.guest feature equal device feature
 #[test]
 fn balloon_feature_001() {
     let pci_slot: u8 = 0x4;

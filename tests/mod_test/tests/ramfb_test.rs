@@ -151,7 +151,7 @@ fn test_abnormal_param() {
         Err(e) => assert!(false, "{}", e),
     }
 
-    // Set frambuffer address is abnormal.
+    // Set framebuffer address is abnormal.
     let mut ramfb_config = RamfbConfig::new(ABNORMAL_FB_BASE);
     ramfb_config.write_to_file(&mut allocator.borrow_mut(), &test_state.borrow(), file_name);
 

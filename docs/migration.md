@@ -126,7 +126,7 @@ Before live migration:
 
 During live migration:
 - source and destination networks cannot be disconnected.
-- it is banned to operate VM lifecycle, inclues using the QMP command and executing in the VM.
+- it is banned to operate VM lifecycle, includes using the QMP command and executing in the VM.
 - live migration time is affected by network performance, total memory of VM and applications.
 
 After live migration:

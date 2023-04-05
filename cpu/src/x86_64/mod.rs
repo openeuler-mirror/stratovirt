@@ -397,7 +397,7 @@ impl X86CPUState {
             return Ok(());
         }
 
-        // Intel CPU topology with multi-dies support requies CPUID[0x1f].
+        // Intel CPU topology with multi-dies support requires CPUID[0x1f].
         let entries = cpuid.as_mut_slice();
         for entry in entries.iter_mut() {
             if entry.function == 0 {

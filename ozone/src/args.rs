@@ -86,7 +86,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("cgroup")
                 .long("cgroup")
-                .help("set cgroup arguments, use -cgroup <controler1>=<value1> ...")
+                .help("set cgroup arguments, use -cgroup <controller>=<value1> ...")
                 .required(false)
                 .takes_values(true),
         )

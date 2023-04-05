@@ -155,7 +155,7 @@ fn compress_each_tile<'a>(
             );
         }
         if n_subtiles != 0 {
-            buf.append(&mut (n_subtiles as u8).to_be_bytes().to_vec()); // Num of SubRectanges.
+            buf.append(&mut (n_subtiles as u8).to_be_bytes().to_vec()); // Num of SubRectangles.
             buf.append(&mut tmp_buf); // SubrectsColoured.
         }
     } else {
