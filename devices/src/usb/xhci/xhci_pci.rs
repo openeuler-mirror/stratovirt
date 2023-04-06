@@ -24,7 +24,7 @@ use pci::config::{
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::update_dev_id;
-use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
+use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevOps};
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
@@ -35,7 +35,6 @@ use crate::usb::UsbDeviceOps;
 
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;
-const PCI_INTERRUPT_PIN: u16 = 0x3d;
 const PCI_CACHE_LINE_SIZE: u16 = 0x0c;
 const PCI_SERIAL_BUS_RELEASE_NUMBER: u8 = 0x60;
 const PCI_FRAME_LENGTH_ADJUSTMENT: u8 = 0x61;
@@ -189,7 +188,10 @@ impl PciDevOps for XhciPciDevice {
             PCI_CLASS_SERIAL_USB,
         )?;
         self.pci_config.config[PCI_CLASS_PI as usize] = 0x30;
-        self.pci_config.config[PCI_INTERRUPT_PIN as usize] = 0x01;
+
+        #[cfg(target_arch = "aarch64")]
+        self.pci_config.set_interrupt_pin();
+
         self.pci_config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
         self.pci_config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
@@ -209,6 +211,13 @@ impl PciDevOps for XhciPciDevice {
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
+        init_intx(
+            self.name.clone(),
+            &mut self.pci_config,
+            self.parent_bus.clone(),
+            self.devfn,
+        )?;
+
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
         mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         self.pci_config.register_bar(
@@ -222,14 +231,22 @@ impl PciDevOps for XhciPciDevice {
         let devfn = self.devfn;
         // It is safe to unwrap, because it is initialized in init_msix.
         let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
-        self.xhci.lock().unwrap().send_interrupt_ops = Some(Box::new(move |n: u32| {
-            cloned_msix
-                .lock()
-                .unwrap()
-                .notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
-        }));
+        self.xhci.lock().unwrap().send_interrupt_ops =
+            Some(Box::new(move |n: u32, level: u8| -> bool {
+                let mut locked_msix = cloned_msix.lock().unwrap();
+                if locked_msix.enabled && level != 0 {
+                    locked_msix.notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
+                    return true;
+                }
+                if n == 0 && !locked_msix.enabled {
+                    cloned_intx.lock().unwrap().notify(level);
+                }
+
+                false
+            }));
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();

@@ -93,6 +93,7 @@ ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 #[cfg(target_arch = "aarch64")]
 ioctl_iow_nr!(KVM_ARM_VCPU_INIT, KVMIO, 0xae, kvm_vcpu_init);
 ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
+ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
@@ -175,6 +176,14 @@ impl KVMFds {
             .unwrap()
             .unregister_irqfd(fd, gsi)
             .with_context(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
+    }
+
+    pub fn set_irq_line(&self, irq: u32, level: bool) -> Result<()> {
+        self.vm_fd
+            .as_ref()
+            .unwrap()
+            .set_irq_line(irq, level)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", irq, level))
     }
 
     /// Start dirty page tracking in kvm.

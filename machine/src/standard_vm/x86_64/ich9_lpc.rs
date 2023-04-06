@@ -74,7 +74,7 @@ impl LPCBridge {
         })
     }
 
-    fn update_pm_base(&self) -> Result<()> {
+    fn update_pm_base(&mut self) -> Result<()> {
         let cloned_pmtmr = self.pm_timer.clone();
         let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
             cloned_pmtmr.lock().unwrap().read(data, addr, offset)

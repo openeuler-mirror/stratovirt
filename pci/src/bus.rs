@@ -16,11 +16,12 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::Region;
 use log::debug;
 
-use super::config::{
-    BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET, SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM,
+use super::{
+    config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET, SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM},
+    hotplug::HotplugOps,
+    PciDevOps, PciIntxState,
 };
-use super::hotplug::HotplugOps;
-use super::PciDevOps;
+
 use anyhow::{bail, Context, Result};
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
@@ -42,6 +43,8 @@ pub struct PciBus {
     pub mem_region: Region,
     /// Hot Plug controller for obtaining hot plug ops.
     pub hotplug_controller: Option<Weak<Mutex<dyn HotplugOps>>>,
+    /// Interrupt info related to INTx.
+    pub intx_state: Option<Arc<Mutex<PciIntxState>>>,
 }
 
 impl PciBus {
@@ -66,6 +69,7 @@ impl PciBus {
             io_region,
             mem_region,
             hotplug_controller: None,
+            intx_state: None,
         }
     }
 
@@ -332,6 +336,7 @@ mod tests {
             (0xF000_0000, 0x1000_0000),
             #[cfg(target_arch = "aarch64")]
             (512 << 30, 512 << 30),
+            16,
         )))
     }
 

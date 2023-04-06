@@ -15,6 +15,7 @@ pub use error::PciError;
 pub mod config;
 pub mod demo_dev;
 pub mod hotplug;
+pub mod intx;
 pub mod msix;
 
 mod bus;
@@ -23,8 +24,10 @@ mod host;
 mod root_port;
 
 pub use bus::PciBus;
+pub use config::{PciConfig, INTERRUPT_PIN};
 pub use host::PciHost;
-pub use msix::init_msix;
+pub use intx::{init_intx, InterruptHandler, PciIntxState};
+pub use msix::{init_msix, is_msix_enabled};
 pub use root_port::RootPort;
 use util::AsAny;
 
@@ -39,6 +42,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use crate::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 
 const BDF_FUNC_SHIFT: u8 = 3;
+pub const PCI_SLOT_MAX: u8 = 32;
+pub const PCI_PIN_NUM: u8 = 4;
+pub const PCI_INTR_BASE: u8 = 32;
 
 /// Macros that write data in little endian.
 macro_rules! le_write {
@@ -221,6 +227,14 @@ pub trait PciDevOps: Send + AsAny {
     fn get_dev_path(&self) -> Option<String> {
         None
     }
+
+    fn change_irq_level(&self, _irq_pin: u32, _level: i8) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_intx_state(&self) -> Option<Arc<Mutex<PciIntxState>>> {
+        None
+    }
 }
 
 /// Init multifunction for pci devices.
@@ -291,6 +305,13 @@ pub fn init_multifunction(
         }
     }
     Ok(())
+}
+
+/// 0 <= pin <= 3. 0 = INTA, 1 = INTB, 2 = INTC, 3 = INTD.
+/// PCI-to-PCI bridge specification 9.1: Interrupt routing.
+pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
+    let pci_slot = devfn >> 3 & 0x1f;
+    ((pci_slot + pin) % PCI_PIN_NUM) as u32
 }
 
 /// Check whether two regions overlap with each other.

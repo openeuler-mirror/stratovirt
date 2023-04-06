@@ -542,7 +542,7 @@ pub struct XhciDevice {
     pub intrs: Vec<XhciInterrupter>,
     pub cmd_ring: XhciRing,
     mem_space: Arc<AddressSpace>,
-    pub send_interrupt_ops: Option<Box<dyn Fn(u32) + Send + Sync>>,
+    pub send_interrupt_ops: Option<Box<dyn Fn(u32, u8) -> bool + Send + Sync>>,
 }
 
 impl XhciDevice {
@@ -1814,19 +1814,25 @@ impl XhciDevice {
         }
 
         if let Some(intr_ops) = self.send_interrupt_ops.as_ref() {
-            intr_ops(idx);
-            self.intrs[idx as usize].iman &= !IMAN_IP;
+            if intr_ops(idx, 1) {
+                self.intrs[idx as usize].iman &= !IMAN_IP;
+            }
         }
     }
 
     pub fn update_intr(&mut self, v: u32) {
-        if self.intrs[v as usize].iman & IMAN_IP == IMAN_IP
-            && self.intrs[v as usize].iman & IMAN_IE == IMAN_IE
-            && self.oper.usb_cmd & USB_CMD_INTE == USB_CMD_INTE
-        {
+        let mut level = 0;
+        if v == 0 {
+            if self.intrs[0].iman & IMAN_IP == IMAN_IP
+                && self.intrs[0].iman & IMAN_IE == IMAN_IE
+                && self.oper.usb_cmd & USB_CMD_INTE == USB_CMD_INTE
+            {
+                level = 1;
+            }
             if let Some(intr_ops) = &self.send_interrupt_ops {
-                intr_ops(v);
-                self.intrs[v as usize].iman &= !IMAN_IP;
+                if intr_ops(0, level) {
+                    self.intrs[0].iman &= !IMAN_IP;
+                }
             }
         }
     }

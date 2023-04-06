@@ -244,6 +244,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
 }
 
 fn madvise_rule() -> BpfRule {
