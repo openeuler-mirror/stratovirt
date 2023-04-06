@@ -518,7 +518,7 @@ impl UsbDeviceOps for UsbCamera {
         self.id.clone()
     }
 
-    fn set_controller(&mut self, _ctrl: Weak<Mutex<XhciDevice>>) {}
+    fn set_controller(&mut self, _cntlr: Weak<Mutex<XhciDevice>>) {}
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         None
