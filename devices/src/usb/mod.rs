@@ -296,7 +296,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Set the controller which the USB device attached.
     /// USB device need to kick controller in some cases.
-    fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>);
+    fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>);
 
     /// Get the controller which the USB device attached.
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
@@ -381,8 +381,8 @@ pub trait UsbDeviceOps: Send + Sync {
 /// Notify controller to process data request.
 pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     let locked_dev = dev.lock().unwrap();
-    let xhci = if let Some(ctrl) = &locked_dev.get_controller() {
-        ctrl.upgrade().unwrap()
+    let xhci = if let Some(cntlr) = &locked_dev.get_controller() {
+        cntlr.upgrade().unwrap()
     } else {
         bail!("USB controller not found");
     };
