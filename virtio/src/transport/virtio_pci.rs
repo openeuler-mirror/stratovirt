@@ -26,11 +26,12 @@ use pci::config::{
     PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
     SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
+
 use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
 use pci::Result as PciResult;
 use pci::{
-    config::PciConfig, init_msix, init_multifunction, le_write_u16, le_write_u32, ranges_overlap,
-    PciBus, PciDevOps, PciError,
+    config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
+    ranges_overlap, PciBus, PciDevOps, PciError,
 };
 use util::byte_code::ByteCode;
 use util::num_ops::{read_data_u32, write_data_u32};
@@ -644,7 +645,8 @@ impl VirtioPciDevice {
 
     fn assign_interrupt_cb(&mut self) {
         let cloned_common_cfg = self.common_config.clone();
-        let cloned_msix = self.config.msix.clone();
+        let cloned_msix = self.config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.config.intx.as_ref().unwrap().clone();
         let dev_id = self.dev_id.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>, needs_reset: bool| {
@@ -665,17 +667,19 @@ impl VirtioPciDevice {
                         locked_common_cfg.msix_config
                     }
                     VirtioInterruptType::Vring => {
+                        let mut locked_common_cfg = cloned_common_cfg.lock().unwrap();
+                        locked_common_cfg.interrupt_status |= VIRTIO_MMIO_INT_VRING;
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
                     }
                 };
 
-                if let Some(msix) = &cloned_msix {
-                    msix.lock()
-                        .unwrap()
-                        .notify(vector, dev_id.load(Ordering::Acquire));
+                let mut locked_msix = cloned_msix.lock().unwrap();
+                if locked_msix.enabled {
+                    locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
                 } else {
-                    bail!("Failed to send interrupt, msix does not exist");
+                    cloned_intx.lock().unwrap().notify(1);
                 }
+
                 Ok(())
             },
         ) as VirtioInterrupt);
@@ -866,11 +870,13 @@ impl VirtioPciDevice {
 
         // 2. PCI ISR cap sub-region.
         let cloned_common_cfg = self.common_config.clone();
+        let cloned_intx = self.config.intx.as_ref().unwrap().clone();
         let isr_read = move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
             if let Some(val) = data.get_mut(0) {
                 let mut common_cfg_lock = cloned_common_cfg.lock().unwrap();
                 *val = common_cfg_lock.interrupt_status as u8;
                 common_cfg_lock.interrupt_status = 0;
+                cloned_intx.lock().unwrap().notify(0);
             }
             true
         };
@@ -1075,6 +1081,8 @@ impl PciDevOps for VirtioPciDevice {
             self.devfn,
             self.parent_bus.clone(),
         )?;
+        #[cfg(target_arch = "aarch64")]
+        self.config.set_interrupt_pin();
 
         let common_cap = VirtioPciCap::new(
             size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
@@ -1140,6 +1148,13 @@ impl PciDevOps for VirtioPciDevice {
             &self.name,
             None,
             None,
+        )?;
+
+        init_intx(
+            self.name.clone(),
+            &mut self.config,
+            self.parent_bus.clone(),
+            self.devfn,
         )?;
 
         self.assign_interrupt_cb();
@@ -1738,9 +1753,9 @@ mod tests {
             Arc::downgrade(&parent_bus),
             false,
         );
+        #[cfg(target_arch = "aarch64")]
+        virtio_pci.config.set_interrupt_pin();
 
-        // Prepare msix and interrupt callback
-        virtio_pci.assign_interrupt_cb();
         init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
@@ -1751,6 +1766,17 @@ mod tests {
             None,
         )
         .unwrap();
+
+        init_intx(
+            virtio_pci.name.clone(),
+            &mut virtio_pci.config,
+            virtio_pci.parent_bus.clone(),
+            virtio_pci.devfn,
+        )
+        .unwrap();
+        // Prepare msix and interrupt callback
+        virtio_pci.assign_interrupt_cb();
+
         // Prepare valid queue config
         for queue_cfg in virtio_pci
             .common_config

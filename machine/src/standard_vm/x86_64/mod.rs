@@ -51,7 +51,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+use sysbus::SysBus;
 use syscall::syscall_whitelist;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
@@ -92,6 +92,21 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0xFEE0_0000, 0x10_0000),        // LocalApic
     (0xFEF0_C000, 0x4000),           // Identity map address and TSS
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
+];
+
+/// The type of Irq entry on aarch64
+enum IrqEntryType {
+    #[allow(unused)]
+    Uart,
+    Sysbus,
+    Pcie,
+}
+
+/// IRQ MAP of x86_64
+const IRQ_MAP: &[(i32, i32)] = &[
+    (4, 4),   // Uart
+    (5, 15),  // Sysbus
+    (16, 19), // Pcie
 ];
 
 /// Standard machine structure.
@@ -144,7 +159,10 @@ impl StdMachine {
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
-            (IRQ_BASE, IRQ_MAX),
+            (
+                IRQ_MAP[IrqEntryType::Sysbus as usize].0,
+                IRQ_MAP[IrqEntryType::Sysbus as usize].1,
+            ),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -164,6 +182,7 @@ impl StdMachine {
                 &sys_mem,
                 MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
                 MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+                IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,

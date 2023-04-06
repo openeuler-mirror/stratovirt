@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use address_space::Region;
 use log::{error, warn};
 
-use crate::msix::Msix;
+use crate::intx::Intx;
+use crate::msix::{is_msix_enabled, Msix};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
@@ -104,6 +105,7 @@ pub const IO_LIMIT: u8 = 0x1d;
 pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
+pub const INTERRUPT_PIN: u8 = 0x3d;
 pub const BRIDGE_CONTROL: u8 = 0x3e;
 
 const BRIDGE_CTL_PARITY_ENABLE: u16 = 0x0001;
@@ -256,6 +258,7 @@ pub const PCI_EXP_SLOTSTA_EVENTS: u16 = PCI_EXP_SLTSTA_ABP
     | PCI_EXP_SLTSTA_MRLSC
     | PCI_EXP_SLTSTA_PDC
     | PCI_EXP_SLTSTA_CC;
+pub const PCI_EXP_HP_EV_SPT: u16 = PCI_EXP_SLTCTL_ABPE | PCI_EXP_SLTCTL_PDCE | PCI_EXP_SLTCTL_CCIE;
 
 // System error on correctable error enable.
 const PCI_EXP_RTCTL_SECEE: u16 = 0x01;
@@ -390,6 +393,8 @@ pub struct PciConfig {
     pub msix: Option<Arc<Mutex<Msix>>>,
     /// Offset of the PCI express capability.
     pub pci_express_cap_offset: u16,
+    /// INTx infomation.
+    pub intx: Option<Arc<Mutex<Intx>>>,
 }
 
 impl PciConfig {
@@ -422,6 +427,7 @@ impl PciConfig {
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
             pci_express_cap_offset: PCI_CONFIG_HEAD_END as u16,
+            intx: None,
         }
     }
 
@@ -506,11 +512,26 @@ impl PciConfig {
     ///
     /// * `offset` - Offset in the configuration space from which to read.
     /// * `data` - Buffer to put read data.
-    pub fn read(&self, offset: usize, buf: &mut [u8]) {
+    pub fn read(&mut self, offset: usize, buf: &mut [u8]) {
         if let Err(err) = self.validate_config_boundary(offset, buf) {
             warn!("invalid read: {:?}", err);
             return;
+        };
+        if ranges_overlap(
+            offset,
+            offset + buf.len(),
+            STATUS as usize,
+            (STATUS + 1) as usize,
+        ) {
+            if let Some(intx) = &self.intx {
+                if intx.lock().unwrap().level == 1 {
+                    self.config[STATUS as usize] |= STATUS_INTERRUPT;
+                } else {
+                    self.config[STATUS as usize] &= !STATUS_INTERRUPT;
+                }
+            }
         }
+
         let size = buf.len();
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
     }
@@ -569,7 +590,8 @@ impl PciConfig {
             _ => (BAR_NUM_MAX_FOR_ENDPOINT, ROM_ADDRESS_ENDPOINT),
         };
 
-        if ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize)
+        let cmd_overlap = ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize);
+        if cmd_overlap
             || ranges_overlap(
                 old_offset,
                 end,
@@ -587,7 +609,30 @@ impl PciConfig {
             }
         }
 
+        if cmd_overlap {
+            if let Some(intx) = &self.intx {
+                let cmd = le_read_u16(self.config.as_slice(), COMMAND as usize).unwrap();
+                let enabled = cmd & COMMAND_INTERRUPT_DISABLE == 0;
+
+                let mut locked_intx = intx.lock().unwrap();
+                if locked_intx.enabled != enabled {
+                    if !enabled {
+                        locked_intx.change_irq_level(-(locked_intx.level as i8));
+                    } else {
+                        locked_intx.change_irq_level(locked_intx.level as i8);
+                    }
+                    locked_intx.enabled = enabled;
+                }
+            }
+        }
+
         if let Some(msix) = &mut self.msix {
+            if is_msix_enabled(msix.lock().unwrap().msix_cap_offset as usize, &self.config) {
+                if let Some(intx) = &self.intx {
+                    intx.lock().unwrap().notify(0);
+                }
+            }
+
             msix.lock()
                 .unwrap()
                 .write_config(&self.config, dev_id, old_offset, data);
@@ -627,6 +672,10 @@ impl PciConfig {
 
     /// General reset process for pci devices
     pub fn reset(&mut self) -> Result<()> {
+        if let Some(intx) = &self.intx {
+            intx.lock().unwrap().reset();
+        }
+
         self.reset_common_regs()?;
 
         if let Err(e) = self.update_bar_mapping(
@@ -1125,6 +1174,10 @@ impl PciConfig {
             )));
         }
         Ok(())
+    }
+
+    pub fn set_interrupt_pin(&mut self) {
+        self.config[INTERRUPT_PIN as usize] = 0x01;
     }
 }
 

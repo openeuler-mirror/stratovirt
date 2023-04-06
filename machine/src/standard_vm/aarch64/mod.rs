@@ -25,6 +25,8 @@ use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use vmm_sys_util::eventfd::EventFd;
 
+use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
+
 use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
     AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
@@ -47,7 +49,7 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
-use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
+use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
@@ -60,9 +62,9 @@ use machine_manager::machine::{
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
-use pci::{PciDevOps, PciHost};
+use pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes, IRQ_BASE, IRQ_MAX};
+use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 #[cfg(not(target_env = "musl"))]
 use ui::vnc;
@@ -112,6 +114,18 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (510 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
     (511 << 30, 0x1000_0000),      // HighPcieEcam
     (512 << 30, 512 << 30),        // HighPcieMmio
+];
+
+/// The type of Irq entry on aarch64
+enum IrqEntryType {
+    Sysbus,
+    Pcie,
+}
+
+/// IRQ MAP of aarch64
+const IRQ_MAP: &[(i32, i32)] = &[
+    (5, 15),  // Sysbus
+    (16, 19), // Pcie
 ];
 
 /// Standard machine structure.
@@ -166,7 +180,10 @@ impl StdMachine {
             .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_mem,
-            (IRQ_BASE, IRQ_MAX),
+            (
+                IRQ_MAP[IrqEntryType::Sysbus as usize].0,
+                IRQ_MAP[IrqEntryType::Sysbus as usize].1,
+            ),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -186,6 +203,7 @@ impl StdMachine {
                 MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
                 MEM_LAYOUT[LayoutEntryType::PciePio as usize],
                 MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
+                IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
@@ -416,6 +434,24 @@ impl MachineOps for StdMachine {
             .unwrap()
             .init_irq_route_table();
         KVM_FDS.load().commit_irq_routing()?;
+
+        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let irq_handler = Box::new(move |gsi: u32, level: bool| -> Result<()> {
+            // The handler is only used to send PCI INTx interrupt.
+            // PCI INTx interrupt is belong to SPI interrupt type.
+            let irq = gsi + GIC_IRQ_INTERNAL;
+            let irqtype = KVM_ARM_IRQ_TYPE_SPI;
+            let kvm_irq = irqtype << KVM_ARM_IRQ_TYPE_SHIFT | irq;
+
+            KVM_FDS.load().set_irq_line(kvm_irq, level)
+        }) as InterruptHandler;
+
+        let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
+            IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
+            irq_handler,
+        ))));
+        root_bus.lock().unwrap().intx_state = irq_state;
+
         Ok(())
     }
 
