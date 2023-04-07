@@ -314,7 +314,7 @@ impl UsbStorage {
 
         match self.state.mode {
             UsbMsdMode::Cbw => {
-                if packet.get_iovecs_size() != CBW_SIZE as usize {
+                if packet.get_iovecs_size() != CBW_SIZE as u64 {
                     error!("usb-storage: Bad CBW size {}", packet.get_iovecs_size());
                     packet.status = UsbPacketStatus::Stall;
                     return;
@@ -342,7 +342,7 @@ impl UsbStorage {
             }
             UsbMsdMode::DataOut => {
                 // TODO: SCSI data out processing.
-                if packet.get_iovecs_size() < self.state.cbw.data_len as usize {
+                if packet.get_iovecs_size() < self.state.cbw.data_len as u64 {
                     packet.status = UsbPacketStatus::Stall;
                     return;
                 }
@@ -363,7 +363,7 @@ impl UsbStorage {
 
         match self.state.mode {
             UsbMsdMode::DataOut => {
-                if self.state.cbw.data_len != 0 || packet.get_iovecs_size() < CSW_SIZE as usize {
+                if self.state.cbw.data_len != 0 || packet.get_iovecs_size() < CSW_SIZE as u64 {
                     packet.status = UsbPacketStatus::Stall;
                     return;
                 }
@@ -371,7 +371,7 @@ impl UsbStorage {
                 packet.status = UsbPacketStatus::Async;
             }
             UsbMsdMode::Csw => {
-                if packet.get_iovecs_size() < CSW_SIZE as usize {
+                if packet.get_iovecs_size() < CSW_SIZE as u64 {
                     packet.status = UsbPacketStatus::Stall;
                     return;
                 }

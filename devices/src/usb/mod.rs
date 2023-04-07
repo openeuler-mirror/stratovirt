@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context};
 use log::{debug, error};
-use util::aio::{mem_from_buf, mem_to_buf};
+use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
@@ -417,22 +417,6 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     Ok(())
 }
 
-/// Io vector which save the hva.
-#[derive(Debug, Copy, Clone)]
-pub struct Iovec {
-    pub iov_base: u64,
-    pub iov_len: usize,
-}
-
-impl Iovec {
-    pub fn new(base: u64, len: usize) -> Self {
-        Iovec {
-            iov_base: base,
-            iov_len: len,
-        }
-    }
-}
-
 /// Usb packet used for device transfer data.
 #[derive(Clone)]
 pub struct UsbPacket {
@@ -480,7 +464,7 @@ impl UsbPacket {
         let mut copied = 0;
         if to_host {
             for iov in &self.iovecs {
-                let cnt = min(iov.iov_len, len - copied);
+                let cnt = min(iov.iov_len as usize, len - copied);
                 let tmp = &vec[copied..(copied + cnt)];
                 if let Err(e) = mem_from_buf(tmp, iov.iov_base) {
                     error!("Failed to write mem: {:?}", e);
@@ -492,7 +476,7 @@ impl UsbPacket {
             }
         } else {
             for iov in &self.iovecs {
-                let cnt = min(iov.iov_len, len - copied);
+                let cnt = min(iov.iov_len as usize, len - copied);
                 let tmp = &mut vec[copied..(copied + cnt)];
                 if let Err(e) = mem_to_buf(tmp, iov.iov_base) {
                     error!("Failed to read mem {:?}", e);
@@ -506,7 +490,7 @@ impl UsbPacket {
         self.actual_length = copied as u32;
     }
 
-    pub fn get_iovecs_size(&mut self) -> usize {
+    pub fn get_iovecs_size(&mut self) -> u64 {
         let mut size = 0;
         for iov in &self.iovecs {
             size += iov.iov_len;
