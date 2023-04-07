@@ -23,12 +23,13 @@ use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use machine_manager::config::XhciConfig;
+use util::aio::Iovec;
 use util::num_ops::{read_u32, write_u64_low};
 
 use super::xhci_regs::{XchiOperReg, XhciInterrupter};
 use crate::usb::config::*;
 use crate::usb::UsbError;
-use crate::usb::{Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
+use crate::usb::{UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 
 use super::xhci_ring::XhciEventRingSeg;
 use super::xhci_ring::XhciRing;
@@ -1537,7 +1538,7 @@ impl XhciDevice {
                     trb.parameter
                 };
                 if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
-                    vec.push(Iovec::new(hva, chunk as usize));
+                    vec.push(Iovec::new(hva, chunk as u64));
                 } else {
                     bail!("HVA not existed {:x}", dma_addr);
                 }

@@ -91,6 +91,15 @@ pub struct Iovec {
     pub iov_len: u64,
 }
 
+impl Iovec {
+    pub fn new(base: u64, len: u64) -> Self {
+        Iovec {
+            iov_base: base,
+            iov_len: len,
+        }
+    }
+}
+
 /// The trait for Asynchronous IO operation.
 trait AioContext<T: Clone> {
     /// Submit IO requests to the OS, the nr submitted is returned.
