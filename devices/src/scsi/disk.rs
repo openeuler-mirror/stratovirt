@@ -17,8 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
 
-use crate::ScsiBus::ScsiBus;
-use crate::ScsiCntlr::ScsiCompleteCb;
+use crate::ScsiBus::{ScsiBus, ScsiCompleteCb};
 use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
 use util::aio::Aio;
 

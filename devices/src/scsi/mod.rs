@@ -11,5 +11,4 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod bus;
-pub mod controller;
 pub mod disk;

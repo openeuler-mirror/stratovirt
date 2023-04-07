@@ -21,6 +21,7 @@ pub mod camera_backend;
 mod interrupt_controller;
 pub mod legacy;
 pub mod misc;
+pub mod scsi;
 pub mod usb;
 
 #[cfg(target_arch = "aarch64")]
@@ -29,3 +30,5 @@ pub use interrupt_controller::{
     GIC_IRQ_MAX,
 };
 pub use legacy::error::LegacyError as LegacyErrs;
+pub use scsi::bus as ScsiBus;
+pub use scsi::disk as ScsiDisk;
