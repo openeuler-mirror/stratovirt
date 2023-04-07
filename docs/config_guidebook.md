@@ -729,7 +729,10 @@ Five properties can be set for chardev.
 -chardev file,id=<chardev_id>,path=<file_path>
 ```
 
-### 2.13 USB controller
+### 2.13 USB
+StratoVirt supports XHCI USB controller, you can attach USB devices under XHCI USB controller.
+
+#### 2.13.1 USB controller
 USB controller is a pci device which can be attached USB device.
 
 Three properties can be set for USB controller.
@@ -744,7 +747,7 @@ Three properties can be set for USB controller.
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
 
-### 2.14 USB Keyboard
+#### 2.13.2 USB Keyboard
 The USB keyboard is a keyboard that uses the USB protocol. It should be attached to USB controller. Keypad and led are not supported yet.
 
 One property can be set for USB Keyboard.
@@ -757,7 +760,7 @@ One property can be set for USB Keyboard.
 
 Note: Only one keyboard can be configured.
 
-### 2.15 USB Tablet
+#### 2.13.3 USB Tablet
 Pointer Device which uses alsolute coordinates. It should be attached to USB controller.
 
 One property can be set for USB Tablet.
@@ -770,7 +773,7 @@ One property can be set for USB Tablet.
 
 Note: Only one tablet can be configured.
 
-### 2.16 USB Camera
+### 2.13.4 USB Camera
 Video Camera Device that based on USB video class protocol. It should be attached to USB controller.
 
 3 properties can be set for USB Camera.
@@ -786,7 +789,21 @@ Video Camera Device that based on USB video class protocol. It should be attache
 
 Note: Only one camera can be configured.
 
-### 2.17 Virtio Scsi Controller
+#### 2.13.5 USB Storage
+USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
+
+Three properties can be set for USB Storage.
+
+* id: unique device id.
+* file: the path of backend image file.
+* media: the media type of storage. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
+
+```shell
+-device usb-storage,drive=<drive_id>,id=<storage_id>
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}]
+```
+
+### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
 Six properties can be set for Virtio-Scsi controller.
@@ -800,7 +817,7 @@ Six properties can be set for Virtio-Scsi controller.
 ```shell
 -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
 ```
-### 2.18 Virtio Scsi HardDisk
+### 2.15 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
 
 Note: Only support using raw image file as backend now.
@@ -825,7 +842,7 @@ It determines the order of bootable devices which firmware will use for booting 
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-### 2.19 VNC
+### 2.16 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
 In order to use VNC, the ip and port value must be configured. The IP address can be set to a specified value or `0.0.0.0`, which means that all IP addresses on the host network card are monitored
@@ -875,10 +892,10 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
-### 2.20 Virtio-fs
+### 2.17 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
-#### 2.20.1 virtio fs device
+#### 2.17.1 virtio fs device
 Three properties can be set for virtio fs device.
 * chardevid: id for char device
 * device_id: the unique id for device
@@ -889,7 +906,7 @@ Three properties can be set for virtio fs device.
 -device vhost-user-fs-pci,id=<device id>,chardev=<chardevid>,tag=<mount tag>
 ```
 
-#### 2.20.2 vhost_user_fs
+#### 2.17.2 vhost_user_fs
 The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
 Seven properties are supported for vhost_user_fs.
@@ -928,7 +945,7 @@ host# stratovirt \
 guest# mount -t virtiofs myfs /mnt
 ```
 
-### 2.21 virtio-gpu
+### 2.18 virtio-gpu
 virtio-gpu is an virtualized graphics card that lets virtual machines can display with it. 
 Usually used in conjunction with VNC, the final images is rendered to the VNC client.
 
@@ -947,7 +964,7 @@ Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
 
-### 2.22 ivshmem-scream
+### 2.19 ivshmem-scream
 
 ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
 

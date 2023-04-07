@@ -124,7 +124,7 @@ pub struct UsbKeyboard {
     usb_device: UsbDevice,
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
-    ctrl: Option<Weak<Mutex<XhciDevice>>>,
+    cntlr: Option<Weak<Mutex<XhciDevice>>>,
 }
 
 pub struct UsbKeyboardAdapter {
@@ -168,7 +168,7 @@ impl UsbKeyboard {
             id,
             usb_device: UsbDevice::new(),
             hid: Hid::new(HidType::Keyboard),
-            ctrl: None,
+            cntlr: None,
         }
     }
 
@@ -234,12 +234,12 @@ impl UsbDeviceOps for UsbKeyboard {
         &mut self.usb_device
     }
 
-    fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>) {
-        self.ctrl = Some(ctrl);
+    fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>) {
+        self.cntlr = Some(cntlr);
     }
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
-        self.ctrl.clone()
+        self.cntlr.clone()
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {

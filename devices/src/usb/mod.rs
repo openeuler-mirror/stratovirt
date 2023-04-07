@@ -23,6 +23,8 @@ pub mod hid;
 #[cfg(not(target_env = "musl"))]
 pub mod keyboard;
 #[cfg(not(target_env = "musl"))]
+pub mod storage;
+#[cfg(not(target_env = "musl"))]
 pub mod tablet;
 pub mod xhci;
 
@@ -296,7 +298,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Set the controller which the USB device attached.
     /// USB device need to kick controller in some cases.
-    fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>);
+    fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>);
 
     /// Get the controller which the USB device attached.
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
@@ -381,8 +383,8 @@ pub trait UsbDeviceOps: Send + Sync {
 /// Notify controller to process data request.
 pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     let locked_dev = dev.lock().unwrap();
-    let xhci = if let Some(ctrl) = &locked_dev.get_controller() {
-        ctrl.upgrade().unwrap()
+    let xhci = if let Some(cntlr) = &locked_dev.get_controller() {
+        cntlr.upgrade().unwrap()
     } else {
         bail!("USB controller not found");
     };
@@ -504,6 +506,15 @@ impl UsbPacket {
             }
         }
         self.actual_length = copied as u32;
+    }
+
+    pub fn get_iovecs_size(&mut self) -> usize {
+        let mut size = 0;
+        for iov in &self.iovecs {
+            size += iov.iov_len;
+        }
+
+        size
     }
 }
 

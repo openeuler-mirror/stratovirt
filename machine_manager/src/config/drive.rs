@@ -108,6 +108,7 @@ pub struct DriveConfig {
     pub direct: bool,
     pub iops: Option<u64>,
     pub aio: AioEngine,
+    pub media: String,
 }
 
 impl Default for DriveConfig {
@@ -119,6 +120,7 @@ impl Default for DriveConfig {
             direct: true,
             iops: None,
             aio: AioEngine::Native,
+            media: "disk".to_string(),
         }
     }
 }
@@ -196,6 +198,14 @@ impl ConfigCheck for DriveConfig {
                 "low performance expected when use sync io with \"direct\" on".to_string(),
             )));
         }
+
+        if !["disk", "cdrom"].contains(&self.media.as_str()) {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "media".to_string(),
+                "media should be \"disk\" or \"cdrom\"".to_string(),
+            )));
+        }
+
         Ok(())
     }
 }
@@ -299,6 +309,11 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
             AioEngine::Off
         }
     });
+
+    drive.media = cmd_parser
+        .get_value::<String>("media")?
+        .unwrap_or_else(|| "disk".to_string());
+
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -505,7 +520,8 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("aio");
+            .push("aio")
+            .push("media");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;

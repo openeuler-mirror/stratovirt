@@ -308,6 +308,7 @@ pub trait DeviceInterface {
             ("nec-usb-xhci", "base-xhci"),
             ("usb-tablet", "usb-hid"),
             ("usb-kbd", "usb-hid"),
+            ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
         ];
 
