@@ -978,17 +978,17 @@ pub struct VirtioBlkConfig {
     /// Number of virtio queues, only available when `VIRTIO_BLK_F_MQ` is set.
     pub num_queues: u16,
     /// The maximum discard sectors for one segment.
-    max_discard_sectors: u32,
+    pub max_discard_sectors: u32,
     /// The maximum number of discard segments in a discard command.
-    max_discard_seg: u32,
+    pub max_discard_seg: u32,
     /// Discard commands must be aligned to this number of sectors.
-    discard_sector_alignment: u32,
+    pub discard_sector_alignment: u32,
     /// The maximum number of write zeros sectors.
-    max_write_zeroes_sectors: u32,
+    pub max_write_zeroes_sectors: u32,
     /// The maximum number of segments in a write zeroes command.
-    max_write_zeroes_seg: u32,
+    pub max_write_zeroes_seg: u32,
     /// Deallocation of one or more of the sectors.
-    write_zeroes_may_unmap: u8,
+    pub write_zeroes_may_unmap: u8,
     /// Reserved data.
     unused1: [u8; 3],
 }
