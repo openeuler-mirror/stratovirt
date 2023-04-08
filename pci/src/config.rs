@@ -62,8 +62,8 @@ pub const MEMORY_BASE: u8 = 0x20;
 pub const PREF_MEMORY_BASE: u8 = 0x24;
 /// Prefetchable memory limit register.
 pub const PREF_MEMORY_LIMIT: u8 = 0x26;
-pub const ROM_ADDRESS: usize = 0x30;
-pub const ROM_ADDRESS1: usize = 0x38;
+pub const ROM_ADDRESS_ENDPOINT: usize = 0x30;
+pub const ROM_ADDRESS_BRIDGE: usize = 0x38;
 
 /// 64-bit prefetchable memory addresses.
 pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
@@ -564,10 +564,11 @@ impl PciConfig {
             offset += 1;
         }
 
-        let mut bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
-        if self.config[HEADER_TYPE as usize] == HEADER_TYPE_BRIDGE {
-            bar_num = BAR_NUM_MAX_FOR_BRIDGE;
-        }
+        let (bar_num, rom_addr) = match self.config[HEADER_TYPE as usize] & HEADER_TYPE_BRIDGE {
+            HEADER_TYPE_BRIDGE => (BAR_NUM_MAX_FOR_BRIDGE, ROM_ADDRESS_BRIDGE),
+            _ => (BAR_NUM_MAX_FOR_ENDPOINT, ROM_ADDRESS_ENDPOINT),
+        };
+
         if ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(
                 old_offset,
@@ -575,7 +576,7 @@ impl PciConfig {
                 BAR_0 as usize,
                 BAR_0 as usize + REG_SIZE * bar_num as usize,
             )
-            || ranges_overlap(old_offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
+            || ranges_overlap(old_offset, end, rom_addr, rom_addr + 4)
         {
             if let Err(e) = self.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
