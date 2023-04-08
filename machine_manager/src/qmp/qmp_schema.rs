@@ -715,8 +715,8 @@ pub struct blockdev_add {
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
-    #[serde(rename = "read-zeros")]
-    pub read_zeros: Option<bool>,
+    #[serde(rename = "detect-zeroes")]
+    pub detect_zeroes: Option<String>,
     pub driver: Option<String>,
     pub backing: Option<String>,
     pub discard: Option<String>,
@@ -1831,10 +1831,10 @@ pub struct query_command_line_options {}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CmdParameter {
-    name: String,
-    help: String,
+    pub name: String,
+    pub help: String,
     #[serde(rename = "type")]
-    paramter_type: String,
+    pub paramter_type: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

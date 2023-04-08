@@ -28,7 +28,7 @@ use ui::{
     input::{key_event, point_event},
     vnc::qmp_query_vnc,
 };
-use util::aio::AioEngine;
+use util::aio::{AioEngine, WriteZeroesState};
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -59,8 +59,8 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig,
+    VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -769,6 +769,8 @@ impl StdMachine {
                 socket_path: None,
                 aio: conf.aio,
                 queue_size,
+                discard: conf.discard,
+                write_zeroes: conf.write_zeroes,
             };
             dev.check()?;
             dev
@@ -1247,27 +1249,50 @@ impl DeviceInterface for StdMachine {
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        let read_only = args.read_only.unwrap_or(false);
-        let direct = if let Some(cache) = args.cache {
-            cache.direct.unwrap_or(true)
-        } else {
-            true
-        };
-        let config = DriveConfig {
+        let mut config = DriveConfig {
             id: args.node_name,
             path_on_host: args.file.filename.clone(),
-            read_only,
-            direct,
+            read_only: args.read_only.unwrap_or(false),
+            direct: true,
             iops: args.iops,
             // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: if direct {
-                AioEngine::Native
-            } else {
-                AioEngine::Off
-            },
+            aio: AioEngine::Native,
             media: "disk".to_string(),
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
         };
-
+        if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
+            config.direct = false;
+            config.aio = AioEngine::Off;
+        }
+        if let Some(discard) = args.discard {
+            let ret = discard.as_str().parse::<ExBool>();
+            if ret.is_err() {
+                let err_msg = format!(
+                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
+                    discard
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_msg),
+                    None,
+                );
+            }
+            config.discard = ret.unwrap().into();
+        }
+        if let Some(detect_zeroes) = args.detect_zeroes {
+            let state = detect_zeroes.as_str().parse::<WriteZeroesState>();
+            if state.is_err() {
+                let err_msg = format!(
+                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
+                    detect_zeroes
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_msg),
+                    None,
+                );
+            }
+            config.write_zeroes = state.unwrap();
+        }
         if let Err(e) = config.check() {
             error!("{:?}", e);
             return Response::create_error_response(
@@ -1284,7 +1309,9 @@ impl DeviceInterface for StdMachine {
             );
         }
         // Register drive backend file for hotplug drive.
-        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+        if let Err(e) =
+            self.register_drive_file(&args.file.filename, config.read_only, config.direct)
+        {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),

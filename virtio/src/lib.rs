@@ -153,6 +153,8 @@ pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
 pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
+/// Unmap flags for write zeroes command.
+pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
 
@@ -221,6 +223,10 @@ pub const VIRTIO_BLK_T_OUT: u32 = 1;
 pub const VIRTIO_BLK_T_FLUSH: u32 = 4;
 /// Device id
 pub const VIRTIO_BLK_T_GET_ID: u32 = 8;
+/// Discard command.
+pub const VIRTIO_BLK_T_DISCARD: u32 = 11;
+/// Write zeroes command.
+pub const VIRTIO_BLK_T_WRITE_ZEROES: u32 = 13;
 /// Device id length
 pub const VIRTIO_BLK_ID_BYTES: u32 = 20;
 /// Success

@@ -11,7 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use super::Iovec;
-use libc::{c_int, c_void, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t};
+use libc::{
+    c_int, c_void, fallocate, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t,
+    FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_ZERO_RANGE,
+};
 use log::error;
 use std::os::unix::io::RawFd;
 
@@ -128,6 +131,58 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
     let ret = unsafe { i64::from(fdatasync(fd)) };
     if ret < 0 {
         error!("Failed to fdatasync: errno{}.", errno::errno().0);
+    }
+    ret
+}
+
+pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
+    let mut ret;
+    loop {
+        // SAFETY: fd is valid.
+        ret = unsafe {
+            fallocate(
+                fd as c_int,
+                FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                offset as i64,
+                size as i64,
+            ) as i64
+        };
+        if ret == 0 || errno::errno().0 != libc::EINTR {
+            break;
+        }
+    }
+    if ret < 0 {
+        error!(
+            "Failed to fallocate for {}, errno {}.",
+            fd,
+            errno::errno().0,
+        );
+    }
+    ret
+}
+
+pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
+    let mut ret;
+    loop {
+        // SAFETY: fd is valid.
+        ret = unsafe {
+            fallocate(
+                fd as c_int,
+                FALLOC_FL_ZERO_RANGE,
+                offset as i64,
+                size as i64,
+            ) as i64
+        };
+        if ret == 0 || errno::errno().0 != libc::EINTR {
+            break;
+        }
+    }
+    if ret < 0 {
+        error!(
+            "Failed to fallocate zero range for fd {}, errno {}.",
+            fd,
+            errno::errno().0,
+        );
     }
     ret
 }

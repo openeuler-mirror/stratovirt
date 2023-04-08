@@ -275,7 +275,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-twelve properties are supported for virtio block device.
+fourteen properties are supported for virtio block device.
 
 * id: unique device-id in StratoVirt.
 * file: the path of backend file on host.
@@ -284,6 +284,8 @@ twelve properties are supported for virtio block device.
 * direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
 * iothread: indicate which iothread will be used. (optional) if not set, the main thread will be used.
 * throttling.iops-total: used to limit IO operations for block device. (optional)
+* discard: free up unused disk space. (optional) `unmap/ignore` means `on/off`. If not set, default is `ignore`.
+* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If dicard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
 * if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
 * format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
@@ -304,10 +306,10 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```shell
 # virtio mmio block device.
--drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>][,discard={unmap|ignore}][,detect-zeroes={unmap|on|off}]
 -device virtio-blk-device,drive=<drive_id>,id=<blkid>[,iothread=<iothread1>][,serial=<serial_num>]
 # virtio pci block device.
--drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>][,discard={unmap|ignore}][,detect-zeroes={unmap|on|off}]
 -device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 
 ```

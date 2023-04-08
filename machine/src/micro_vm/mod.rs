@@ -32,7 +32,7 @@ pub mod error;
 pub use error::MicroVmError;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
-use util::aio::AioEngine;
+use util::aio::{AioEngine, WriteZeroesState};
 
 mod mem_layout;
 mod syscall;
@@ -1175,6 +1175,8 @@ impl DeviceInterface for LightMachine {
                 AioEngine::Off
             },
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);
