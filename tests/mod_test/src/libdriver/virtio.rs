@@ -49,6 +49,7 @@ pub trait VirtioDeviceOps {
     fn config_writew(&self, addr: u64, value: u16);
     fn config_writel(&self, addr: u64, value: u32);
     fn config_writeq(&self, addr: u64, value: u64);
+    fn isr_readb(&self) -> u8;
     fn enable_interrupt(&mut self);
     fn disable_interrupt(&mut self);
     fn get_device_features(&self) -> u64;

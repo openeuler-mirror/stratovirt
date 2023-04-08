@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use log::error;
+use util::test_helper::{is_test_enabled, trigger_intx};
 
-use crate::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_PIN_NUM};
+use crate::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_INTR_BASE, PCI_PIN_NUM};
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
 
@@ -93,6 +94,12 @@ impl Intx {
 
             let irq = locked_intx_state.gsi_base + self.irq_pin;
             let level = locked_intx_state.irq_count[self.irq_pin as usize] != 0;
+
+            if is_test_enabled() {
+                trigger_intx(irq + PCI_INTR_BASE as u32, change);
+                return;
+            }
+
             if let Err(e) = (locked_intx_state.irq_handler)(irq, level) {
                 error!(
                     "Failed to set irq {} level {} of device {}: {}.",
