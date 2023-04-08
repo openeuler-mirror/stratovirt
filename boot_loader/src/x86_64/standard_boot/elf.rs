@@ -211,13 +211,12 @@ pub fn load_elf_kernel(
             }
         }
     }
-    if pvh_start_addr.is_none() {
-        bail!("No Note header contains PVH entry info in ELF kernel image.");
-    }
 
+    let pvh_start_addr = pvh_start_addr
+        .with_context(|| "No Note header contains PVH entry info in ELF kernel image.")?;
     fwcfg.add_data_entry(
         FwCfgEntryType::KernelEntry,
-        (pvh_start_addr.unwrap() as u32).as_bytes().to_vec(),
+        (pvh_start_addr as u32).as_bytes().to_vec(),
     )?;
     fwcfg.add_data_entry(
         FwCfgEntryType::KernelAddr,

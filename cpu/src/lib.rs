@@ -471,11 +471,10 @@ impl CPUInterface for CPU {
     }
 
     fn kvm_vcpu_exec(&self) -> Result<bool> {
-        let vm = if let Some(vm) = self.vm.upgrade() {
-            vm
-        } else {
-            return Err(anyhow!(CpuError::NoMachineInterface));
-        };
+        let vm = self
+            .vm
+            .upgrade()
+            .with_context(|| CpuError::NoMachineInterface)?;
 
         match self.fd.run() {
             Ok(run) => match run {

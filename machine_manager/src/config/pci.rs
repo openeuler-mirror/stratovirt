@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
@@ -102,12 +102,12 @@ pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
     cmd_parser.push("").push("bus").push("addr");
     cmd_parser.get_parameters(pci_cfg)?;
 
-    let mut pci_bdf = PciBdf::default();
-    if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
-        pci_bdf.bus = bus;
-    } else {
-        bail!("Bus not specified for pci device");
-    }
+    let mut pci_bdf = PciBdf {
+        bus: cmd_parser
+            .get_value::<String>("bus")?
+            .with_context(|| "Bus not specified for pci device")?,
+        ..Default::default()
+    };
     if let Some(addr) = cmd_parser.get_value::<String>("addr")? {
         pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get addr")?;
     } else {
@@ -144,34 +144,23 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     cmd_parser.parse(rootport_cfg)?;
 
     let mut root_port = RootPortConfig::default();
-    let port = cmd_parser.get_value::<String>("port")?;
-    if port.is_none() {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "port".to_string(),
-            "rootport".to_string()
-        )));
-    }
-    // Safety: as port is validated non-none at the previous line, it's safe to unwrap() it
-    root_port.port = str_to_usize(port.unwrap())? as u8;
+
+    let port = cmd_parser
+        .get_value::<String>("port")?
+        .with_context(|| ConfigError::FieldIsMissing("port".to_string(), "rootport".to_string()))?;
+    root_port.port = str_to_usize(port)? as u8;
 
     let _ = cmd_parser.get_value::<u8>("chassis")?;
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        root_port.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "rootport".to_string()
-        )));
-    }
-    root_port.multifunction =
-        if let Some(multi_func) = cmd_parser.get_value::<ExBool>("multifunction")? {
-            multi_func.into()
-        } else {
-            false
-        };
-    root_port.check()?;
+    root_port.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "rootport".to_string()))?;
 
+    root_port.multifunction = cmd_parser
+        .get_value::<ExBool>("multifunction")?
+        .map_or(false, bool::from);
+
+    root_port.check()?;
     Ok(root_port)
 }
 

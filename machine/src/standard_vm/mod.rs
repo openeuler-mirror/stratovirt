@@ -743,11 +743,7 @@ impl StdMachine {
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
-        let drive = if let Some(drv) = &args.drive {
-            drv
-        } else {
-            bail!("Drive not set");
-        };
+        let drive = args.drive.as_ref().with_context(|| "Drive not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -841,11 +837,7 @@ impl StdMachine {
         let multifunction = args.multifunction.unwrap_or(false);
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
-        let chardev = if let Some(dev) = &args.chardev {
-            dev
-        } else {
-            bail!("Chardev not set");
-        };
+        let chardev = args.chardev.as_ref().with_context(|| "Chardev not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let socket_path = self
             .get_socket_path(&locked_vmconfig, chardev.to_string())
@@ -874,11 +866,10 @@ impl StdMachine {
     }
 
     fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
-        let char_dev = if let Some(char_dev) = vm_config.chardev.get(&chardev) {
-            char_dev
-        } else {
-            bail!("Chardev: {:?} not found for character device", &chardev);
-        };
+        let char_dev = vm_config
+            .chardev
+            .get(&chardev)
+            .with_context(|| format!("Chardev: {:?} not found for character device", &chardev))?;
 
         let socket_path = match &char_dev.backend {
             ChardevType::Socket {
@@ -908,11 +899,7 @@ impl StdMachine {
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
-        let netdev = if let Some(dev) = &args.netdev {
-            dev
-        } else {
-            bail!("Netdev not set");
-        };
+        let netdev = args.netdev.as_ref().with_context(|| "Netdev not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -971,36 +958,19 @@ impl StdMachine {
         bdf: &PciBdf,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
-        let host = if args.host.is_none() {
-            ""
-        } else {
-            args.host.as_ref().unwrap()
-        };
-
-        let sysfsdev = if args.sysfsdev.is_none() {
-            ""
-        } else {
-            args.sysfsdev.as_ref().unwrap()
-        };
-
         if args.host.is_none() && args.sysfsdev.is_none() {
             bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");
         }
-
         if args.host.is_some() && args.sysfsdev.is_some() {
             bail!("Both option \"host\" and \"sysfsdev\" was provided.");
         }
 
-        if let Err(e) = self.create_vfio_pci_device(
-            &args.id,
-            bdf,
-            host,
-            sysfsdev,
-            args.multifunction.map_or(false, |m| m),
-        ) {
-            error!("{:?}", e);
-            bail!("Failed to plug vfio-pci device.");
-        }
+        let host = args.host.as_ref().map_or("", String::as_str);
+        let sysfsdev = args.sysfsdev.as_ref().map_or("", String::as_str);
+        let multifunc = args.multifunction.unwrap_or(false);
+        self.create_vfio_pci_device(&args.id, bdf, host, sysfsdev, multifunc)
+            .with_context(|| "Failed to plug vfio-pci device.")?;
+
         Ok(())
     }
 }
@@ -1170,6 +1140,7 @@ impl DeviceInterface for StdMachine {
             }
             "vfio-pci" => {
                 if let Err(e) = self.plug_vfio_pci_device(&pci_bdf, args.as_ref()) {
+                    error!("{:?}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,

@@ -100,19 +100,12 @@ fn load_initrd(
         File::open(initrd_path).with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
 
-    let initrd_start = if let Some(addr) = sys_mem
+    let initrd_start = sys_mem
         .memory_end_address()
         .raw_value()
         .checked_sub(initrd_size)
         .filter(|addr| addr >= &kernel_end)
-    {
-        addr
-    } else {
-        return Err(anyhow!(BootLoaderError::InitrdOverflow(
-            kernel_end,
-            initrd_size
-        )));
-    };
+        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))?;
 
     if let Some(fw_cfg) = fwcfg {
         let mut initrd_data = Vec::new();

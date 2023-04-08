@@ -15,7 +15,7 @@ use crate::config::{
     pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_SOCK_PATH_LENGTH,
     MAX_STRING_LENGTH, MAX_TAG_LENGTH,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 /// Config struct for `fs`.
 /// Contains fs device's attr.
@@ -78,24 +78,16 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
         .push("multifunction");
     cmd_parser.parse(fs_config)?;
     pci_args_check(&cmd_parser)?;
-    let mut fs_cfg = FsConfig::default();
-    if let Some(tag) = cmd_parser.get_value::<String>("tag")? {
-        fs_cfg.tag = tag;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "tag".to_string(),
-            "virtio-fs".to_string()
-        )));
-    }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        fs_cfg.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "virtio-fs".to_string()
-        )));
-    }
+    let mut fs_cfg = FsConfig {
+        tag: cmd_parser.get_value::<String>("tag")?.with_context(|| {
+            ConfigError::FieldIsMissing("tag".to_string(), "virtio-fs".to_string())
+        })?,
+        id: cmd_parser.get_value::<String>("id")?.with_context(|| {
+            ConfigError::FieldIsMissing("id".to_string(), "virtio-fs".to_string())
+        })?,
+        ..Default::default()
+    };
 
     if let Some(name) = cmd_parser.get_value::<String>("chardev")? {
         if let Some(char_dev) = vm_config.chardev.remove(&name) {

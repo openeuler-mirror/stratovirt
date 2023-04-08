@@ -645,11 +645,7 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
 }
 
 fn get_inner<T>(outer: Option<T>) -> Result<T> {
-    if let Some(x) = outer {
-        Ok(x)
-    } else {
-        Err(anyhow!(ConfigError::IntegerOverflow("-m".to_string())))
-    }
+    outer.with_context(|| ConfigError::IntegerOverflow("-m".to_string()))
 }
 
 #[cfg(test)]

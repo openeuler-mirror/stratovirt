@@ -12,7 +12,8 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+
 use util::byte_code::ByteCode;
 
 use super::config::*;
@@ -234,16 +235,14 @@ impl UsbDescriptor {
     }
 
     fn get_config_descriptor(&self, index: u32) -> Result<Vec<u8>> {
-        let confs = if let Some(desc) = self.device_desc.as_ref() {
-            &desc.configs
-        } else {
-            bail!("Device descriptor not found");
-        };
-        let conf = if let Some(conf) = confs.get(index as usize) {
-            conf
-        } else {
-            bail!("Config descriptor index {} is invalid", index);
-        };
+        let confs = self
+            .device_desc
+            .as_ref()
+            .map(|desc| &desc.configs)
+            .with_context(|| "Device descriptor not found")?;
+        let conf = confs
+            .get(index as usize)
+            .with_context(|| format!("Config descriptor index {} is invalid", index))?;
         let mut config_desc = conf.config_desc;
         let mut iads = self.get_iads_descriptor(conf.iad_desc.as_ref())?;
         let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
@@ -312,11 +311,10 @@ impl UsbDescriptor {
             let str: [u8; 4] = [4, 3, 9, 4];
             return Ok(str.to_vec());
         }
-        let found_str = if let Some(str) = self.strings.get(index as usize) {
-            str
-        } else {
-            bail!("String descriptor index {} is invalid", index);
-        };
+        let found_str = self
+            .strings
+            .get(index as usize)
+            .with_context(|| format!("String descriptor index {} is invalid", index))?;
         let len = found_str.len() as u8 * 2 + 2;
         let mut vec = vec![0_u8; len as usize];
         vec[0] = len;
@@ -421,11 +419,11 @@ impl UsbDescriptorOps for UsbDevice {
             self.descriptor.interface_number = 0;
             self.descriptor.configuration_selected = None;
         } else {
-            let desc = if let Some(desc) = self.descriptor.device_desc.as_ref() {
-                desc
-            } else {
-                bail!("Device Descriptor not found");
-            };
+            let desc = self
+                .descriptor
+                .device_desc
+                .as_ref()
+                .with_context(|| "Device Descriptor not found")?;
             let num = desc.device_desc.bNumConfigurations;
             let mut found = false;
             for i in 0..num as usize {
@@ -453,15 +451,12 @@ impl UsbDescriptorOps for UsbDevice {
     }
 
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()> {
-        let iface = if let Some(face) = self.descriptor.find_interface(index, v) {
-            face
-        } else {
-            bail!(
+        let iface = self.descriptor.find_interface(index, v).with_context(|| {
+            format!(
                 "Interface descriptor not found. index {} value {}",
-                index,
-                v
-            );
-        };
+                index, v
+            )
+        })?;
         self.descriptor.altsetting[index as usize] = v;
         self.descriptor.interfaces[index as usize] = Some(iface);
         self.init_endpoint()?;
@@ -471,12 +466,11 @@ impl UsbDescriptorOps for UsbDevice {
     fn init_endpoint(&mut self) -> Result<()> {
         self.reset_usb_endpoint();
         for i in 0..self.descriptor.interface_number {
-            let iface = if let Some(iface) = self.descriptor.interfaces[i as usize].as_ref() {
-                iface
-            } else {
+            let iface = self.descriptor.interfaces[i as usize].as_ref();
+            if iface.is_none() {
                 continue;
-            };
-            let iface = iface.clone();
+            }
+            let iface = iface.unwrap().clone();
             for e in 0..iface.interface_desc.bNumEndpoints {
                 let in_direction = iface.endpoints[e as usize].endpoint_desc.bEndpointAddress
                     & USB_DIRECTION_DEVICE_TO_HOST

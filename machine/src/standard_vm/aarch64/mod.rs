@@ -608,14 +608,13 @@ impl MachineOps for StdMachine {
 
     #[cfg(not(target_env = "musl"))]
     fn add_ramfb(&mut self) -> Result<()> {
-        let fwcfg_dev = self.get_fwcfg_dev();
-        if fwcfg_dev.is_none() {
-            bail!("Ramfb device must be used UEFI to boot, please add pflash devices");
-        }
-
+        let fwcfg_dev = self
+            .get_fwcfg_dev()
+            .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
         let mut ramfb = Ramfb::new(sys_mem.clone());
-        ramfb.ramfb_state.setup(&fwcfg_dev.unwrap())?;
+
+        ramfb.ramfb_state.setup(&fwcfg_dev)?;
         ramfb.realize(&mut self.sysbus)?;
         Ok(())
     }

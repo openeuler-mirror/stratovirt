@@ -374,11 +374,10 @@ pub trait MachineOps {
                     &device_cfg.id,
                 );
             } else {
-                let virtio_serial_info = if let Some(serial_info) = &vm_config.virtio_serial {
-                    serial_info
-                } else {
-                    bail!("No virtio-serial-pci device configured for virtconsole");
-                };
+                let virtio_serial_info = vm_config
+                    .virtio_serial
+                    .as_ref()
+                    .with_context(|| "No virtio-serial-pci device configured for virtconsole")?;
                 // Reasonable, because for virtio-serial-pci device, the bdf has been checked.
                 let bdf = virtio_serial_info.pci_bdf.clone().unwrap();
                 let multi_func = virtio_serial_info.multifunction;
@@ -934,22 +933,18 @@ pub trait MachineOps {
     fn reset_bus(&mut self, dev_id: &str) -> Result<()> {
         let pci_host = self.get_pci_host()?;
         let locked_pci_host = pci_host.lock().unwrap();
-        let bus =
-            if let Some((bus, _)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id) {
-                bus
-            } else {
-                bail!("Bus not found, dev id {}", dev_id);
-            };
+        let bus = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id)
+            .with_context(|| format!("Bus not found, dev id {}", dev_id))?
+            .0;
         let locked_bus = bus.lock().unwrap();
         if locked_bus.name == "pcie.0" {
             // No need to reset root bus
             return Ok(());
         }
-        let parent_bridge = if let Some(bridge) = locked_bus.parent_bridge.as_ref() {
-            bridge
-        } else {
-            bail!("Parent bridge does not exist, dev id {}", dev_id);
-        };
+        let parent_bridge = locked_bus
+            .parent_bridge
+            .as_ref()
+            .with_context(|| format!("Parent bridge does not exist, dev id {}", dev_id))?;
         let dev = parent_bridge.upgrade().unwrap();
         let locked_dev = dev.lock().unwrap();
         let name = locked_dev.name();
@@ -1013,15 +1008,17 @@ pub trait MachineOps {
                         ..Default::default()
                     };
 
-                    if let Some(mem_cfg) = vm_config.object.mem_object.remove(&numa_config.mem_dev)
-                    {
-                        numa_node.size = mem_cfg.size;
-                    } else {
-                        bail!(
-                            "Object for memory-backend-ram {} config not found",
-                            numa_config.mem_dev
-                        );
-                    }
+                    numa_node.size = vm_config
+                        .object
+                        .mem_object
+                        .remove(&numa_config.mem_dev)
+                        .map(|mem_conf| mem_conf.size)
+                        .with_context(|| {
+                            format!(
+                                "Object for memory-backend-ram {} config not found",
+                                numa_config.mem_dev
+                            )
+                        })?;
                     numa_nodes.insert(numa_config.numa_id, numa_node);
                 }
                 "dist" => {
@@ -1162,18 +1159,15 @@ pub trait MachineOps {
         vm_config: &mut VmConfig,
         usb_dev: Arc<Mutex<dyn UsbDeviceOps>>,
     ) -> Result<()> {
-        let parent_dev_op = self.get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
         let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-
-        xhci_pci.unwrap().attach_device(&(usb_dev))?;
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        xhci_pci.attach_device(&(usb_dev))?;
 
         Ok(())
     }

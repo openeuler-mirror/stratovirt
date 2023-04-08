@@ -14,7 +14,7 @@ use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
@@ -285,23 +285,12 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         }
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        drive.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "blk".to_string()
-        )));
-    }
-
-    if let Some(file) = cmd_parser.get_value::<String>("file")? {
-        drive.path_on_host = file;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "file".to_string(),
-            "blk".to_string()
-        )));
-    }
+    drive.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "blk".to_string()))?;
+    drive.path_on_host = cmd_parser
+        .get_value::<String>("file")?
+        .with_context(|| ConfigError::FieldIsMissing("file".to_string(), "blk".to_string()))?;
 
     if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
         drive.read_only = read_only.into();
@@ -361,14 +350,9 @@ pub fn parse_blk(
         blkdevcfg.boot_index = Some(boot_index);
     }
 
-    let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
-        drive
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "drive".to_string(),
-            "blk".to_string()
-        )));
-    };
+    let blkdrive = cmd_parser
+        .get_value::<String>("drive")?
+        .with_context(|| ConfigError::FieldIsMissing("drive".to_string(), "blk".to_string()))?;
 
     if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
         blkdevcfg.iothread = Some(iothread);
@@ -378,11 +362,9 @@ pub fn parse_blk(
         blkdevcfg.serial_num = Some(serial);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        blkdevcfg.id = id;
-    } else {
-        bail!("No id configured for blk device");
-    }
+    blkdevcfg.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| "No id configured for blk device")?;
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
@@ -435,20 +417,16 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.boot_index = Some(boot_index);
     }
 
-    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
-        blkdevcfg.chardev = Some(chardev);
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev".to_string(),
-            "vhost-user-blk-pci".to_string()
-        )));
-    };
+    blkdevcfg.chardev = cmd_parser
+        .get_value::<String>("chardev")?
+        .map(Some)
+        .with_context(|| {
+            ConfigError::FieldIsMissing("chardev".to_string(), "vhost-user-blk-pci".to_string())
+        })?;
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        blkdevcfg.id = id;
-    } else {
-        bail!("No id configured for blk device");
-    }
+    blkdevcfg.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| "No id configured for blk device")?;
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
@@ -504,11 +482,9 @@ impl VmConfig {
         cmd_parser.push("if");
 
         cmd_parser.get_parameters(drive_config)?;
-        let drive_type = if let Some(_type) = cmd_parser.get_value::<String>("if")? {
-            _type
-        } else {
-            "none".to_string()
-        };
+        let drive_type = cmd_parser
+            .get_value::<String>("if")?
+            .unwrap_or_else(|| "none".to_string());
         match drive_type.as_str() {
             "none" => {
                 self.add_block_drive(drive_config)?;
@@ -658,27 +634,17 @@ impl VmConfig {
                 bail!("Only \'raw\' type of pflash is supported");
             }
         }
-        if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
-            pflash.path_on_host = drive_path;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "file".to_string(),
-                "pflash".to_string()
-            )));
-        }
+        pflash.path_on_host = cmd_parser.get_value::<String>("file")?.with_context(|| {
+            ConfigError::FieldIsMissing("file".to_string(), "pflash".to_string())
+        })?;
 
         if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
             pflash.read_only = read_only.into();
         }
 
-        if let Some(unit_id) = cmd_parser.get_value::<u64>("unit")? {
-            pflash.unit = unit_id as usize;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "unit".to_string(),
-                "pflash".to_string()
-            )));
-        }
+        pflash.unit = cmd_parser.get_value::<u64>("unit")?.with_context(|| {
+            ConfigError::FieldIsMissing("unit".to_string(), "pflash".to_string())
+        })? as usize;
 
         pflash.check()?;
         self.add_flashdev(pflash)
