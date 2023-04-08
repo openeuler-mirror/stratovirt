@@ -421,6 +421,11 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     Ok(())
 }
 
+/// Transfer ops for submit callback.
+pub trait TransferOps: Send + Sync {
+    fn submit_transfer(&mut self);
+}
+
 /// Usb packet used for device transfer data.
 pub struct UsbPacket {
     /// USB packet id.
@@ -435,6 +440,8 @@ pub struct UsbPacket {
     pub actual_length: u32,
     /// Endpoint number.
     pub ep_number: u8,
+    /// Transfer for complete packet.
+    pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
 }
 
 impl std::fmt::Display for UsbPacket {
@@ -448,13 +455,22 @@ impl std::fmt::Display for UsbPacket {
 }
 
 impl UsbPacket {
-    pub fn init(&mut self, pid: u32, ep_number: u8) {
-        self.pid = pid;
-        self.is_async = false;
-        self.status = UsbPacketStatus::Success;
-        self.actual_length = 0;
-        self.parameter = 0;
-        self.ep_number = ep_number;
+    pub fn new(
+        pid: u32,
+        ep_number: u8,
+        iovecs: Vec<Iovec>,
+        xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
+    ) -> Self {
+        Self {
+            pid,
+            is_async: false,
+            iovecs,
+            parameter: 0,
+            status: UsbPacketStatus::Success,
+            actual_length: 0,
+            ep_number,
+            xfer_ops,
+        }
     }
 
     /// Transfer USB packet from host to device or from device to host.
@@ -515,6 +531,7 @@ impl Default for UsbPacket {
             status: UsbPacketStatus::NoDev,
             actual_length: 0,
             ep_number: 0,
+            xfer_ops: None,
         }
     }
 }
