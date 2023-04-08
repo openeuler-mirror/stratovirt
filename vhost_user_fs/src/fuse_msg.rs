@@ -399,11 +399,9 @@ impl FuseBuffer {
                 bail!("{} out of bufs's index", index);
             }
 
-            let buf = if let Some(b) = bufs.get_mut(index) {
-                b
-            } else {
-                bail!("{} out of bufs's bound", index);
-            };
+            let buf = bufs
+                .get_mut(index)
+                .with_context(|| format!("{} out of bufs's bound", index))?;
 
             let len = if remain_len < buf.len {
                 remain_len
@@ -411,11 +409,9 @@ impl FuseBuffer {
                 buf.len
             };
 
-            let hva = if let Some(hva) = sys_mem.get_host_address(buf.addr) {
-                hva
-            } else {
-                bail!("read file error: get hva failed.");
-            };
+            let hva = sys_mem
+                .get_host_address(buf.addr)
+                .with_context(|| "read file error: get hva failed.")?;
 
             let iov = vec![libc::iovec {
                 iov_base: hva as *mut libc::c_void,

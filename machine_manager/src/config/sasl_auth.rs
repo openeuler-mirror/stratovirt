@@ -13,7 +13,7 @@
 use crate::config::{
     ConfigError, {CmdParser, VmConfig},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -30,15 +30,12 @@ impl VmConfig {
         cmd_parser.push("").push("id").push("identity");
         cmd_parser.parse(saslauth_config)?;
 
-        let mut saslauth = SaslAuthObjConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            saslauth.id = id;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "id".to_string(),
-                "vnc sasl_auth".to_string()
-            )));
-        }
+        let mut saslauth = SaslAuthObjConfig {
+            id: cmd_parser.get_value::<String>("id")?.with_context(|| {
+                ConfigError::FieldIsMissing("id".to_string(), "vnc sasl_auth".to_string())
+            })?,
+            ..Default::default()
+        };
 
         if let Some(identity) = cmd_parser.get_value::<String>("identity")? {
             saslauth.identity = identity;

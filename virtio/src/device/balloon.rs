@@ -598,12 +598,12 @@ impl BalloonIoHandler {
     }
 
     fn reporting_evt_handler(&mut self) -> Result<()> {
-        let queue = &self.report_queue;
-        if queue.is_none() {
-            return Err(anyhow!(VirtioError::VirtQueueIsNone));
-        }
-        let unwraped_queue = queue.as_ref().unwrap();
-        let mut locked_queue = unwraped_queue.lock().unwrap();
+        let queue = self
+            .report_queue
+            .as_ref()
+            .with_context(|| VirtioError::VirtQueueIsNone)?;
+        let mut locked_queue = queue.lock().unwrap();
+
         loop {
             let elem = locked_queue
                 .vring
@@ -632,13 +632,11 @@ impl BalloonIoHandler {
     }
 
     fn auto_msg_evt_handler(&mut self) -> Result<()> {
-        let queue = &self.msg_queue;
-        if queue.is_none() {
-            return Err(anyhow!(VirtioError::VirtQueueIsNone));
-        }
-
-        let unwraped_queue = queue.as_ref().unwrap();
-        let mut locked_queue = unwraped_queue.lock().unwrap();
+        let queue = self
+            .msg_queue
+            .as_ref()
+            .with_context(|| VirtioError::VirtQueueIsNone)?;
+        let mut locked_queue = queue.lock().unwrap();
 
         loop {
             let elem = locked_queue

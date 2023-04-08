@@ -17,8 +17,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use address_space::{AddressSpace, GuestAddress};
+use anyhow::{Context, Result};
 use log::info;
+
+use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 
 use self::gdt::setup_gdt;
@@ -30,7 +32,6 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
-use anyhow::{bail, Context, Result};
 
 /// Load bzImage linux kernel to Guest Memory.
 ///
@@ -238,20 +239,16 @@ pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<X86BootLoader> {
-    if config.kernel.is_none() {
-        bail!("Kernel is required for direct-boot mode.");
-    }
-
+    let kernel_path = config
+        .kernel
+        .as_ref()
+        .with_context(|| "Kernel is required for direct-boot mode.")?;
     let mut boot_loader_layout = X86BootLoader {
         boot_sp: BOOT_LOADER_SP,
         zero_page_addr: ZERO_PAGE_START,
         ..Default::default()
     };
-    let mut boot_header = load_kernel_image(
-        config.kernel.as_ref().unwrap(),
-        sys_mem,
-        &mut boot_loader_layout,
-    )?;
+    let mut boot_header = load_kernel_image(kernel_path, sys_mem, &mut boot_loader_layout)?;
 
     load_initrd(config, sys_mem, &mut boot_header)
         .with_context(|| "Failed to load initrd to vm memory")?;

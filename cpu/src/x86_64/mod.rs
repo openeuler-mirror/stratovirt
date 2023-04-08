@@ -601,11 +601,7 @@ impl StateTransfer for CPU {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&X86CPUState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&X86CPUState::descriptor().name).unwrap_or(!0)
     }
 }
 

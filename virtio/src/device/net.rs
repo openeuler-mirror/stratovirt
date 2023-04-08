@@ -1693,11 +1693,7 @@ impl StateTransfer for Net {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name).unwrap_or(!0)
     }
 }
 

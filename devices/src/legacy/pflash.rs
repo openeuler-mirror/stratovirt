@@ -515,8 +515,8 @@ impl PFlash {
                 } else {
                     self.bank_width * 8
                 };
-                value = if let Some(v) = extract_u32(value, 0, length) {
-                    v
+                if let Some(v) = extract_u32(value, 0, length) {
+                    value = v;
                 } else {
                     error!("Failed to extract bits from u32 value");
                     return false;

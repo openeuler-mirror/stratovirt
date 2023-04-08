@@ -13,7 +13,7 @@
 use crate::config::{
     ConfigError, {CmdParser, VmConfig},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -36,15 +36,13 @@ impl VmConfig {
             .push("endpoint")
             .push("verify-peer");
         cmd_parser.parse(tlscred_config)?;
-        let mut tlscred = TlsCredObjConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            tlscred.id = id;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "id".to_string(),
-                "vnc tls_creds".to_string()
-            )));
-        }
+
+        let mut tlscred = TlsCredObjConfig {
+            id: cmd_parser.get_value::<String>("id")?.with_context(|| {
+                ConfigError::FieldIsMissing("id".to_string(), "vnc tls_creds".to_string())
+            })?,
+            ..Default::default()
+        };
 
         if let Some(dir) = cmd_parser.get_value::<String>("dir")? {
             if Path::new(&dir).is_dir() {

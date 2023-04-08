@@ -181,11 +181,9 @@ impl VmConfig {
         cmd_params.push("");
 
         cmd_params.get_parameters(object_args)?;
-        let obj_type = cmd_params.get_value::<String>("")?;
-        if obj_type.is_none() {
-            bail!("Object type not specified");
-        }
-        let device_type = obj_type.unwrap();
+        let device_type = cmd_params
+            .get_value::<String>("")?
+            .with_context(|| "Object type not specified")?;
         match device_type.as_str() {
             "iothread" => {
                 self.add_iothread(object_args)

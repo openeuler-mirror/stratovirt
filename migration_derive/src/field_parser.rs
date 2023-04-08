@@ -41,11 +41,8 @@ fn parse_field(
     // parse var of field
     let var_ident = input.value().ident.as_ref().unwrap();
     let var_name = var_ident.to_string();
-    let alias_name = if let Some(alias) = parse_field_attributes(&input.value().attrs) {
-        alias
-    } else {
-        var_name.clone()
-    };
+    let alias_name =
+        parse_field_attributes(&input.value().attrs).unwrap_or_else(|| var_name.clone());
 
     // parse type of field
     let ty = input.value().ty.clone();
