@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
+use util::byte_code::ByteCode;
 use util::num_ops::round_up;
 
 use super::machine::TestStdMachine;
@@ -64,12 +65,20 @@ pub const REQ_STATUS_LEN: u32 = 1;
 pub const REQ_DATA_OFFSET: u64 = REQ_ADDR_LEN as u64;
 pub const REQ_STATUS_OFFSET: u64 = (REQ_ADDR_LEN + REQ_DATA_LEN) as u64;
 
-#[allow(unused)]
+/// Used to compute the number of sectors.
+pub const SECTOR_SHIFT: u8 = 9;
+/// Max number sectors of per request.
+pub const MAX_REQUEST_SECTORS: u32 = u32::MAX >> SECTOR_SHIFT;
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
 pub struct VirtBlkDiscardWriteZeroes {
-    sector: u64,
-    num_sectors: u32,
-    flags: u32,
+    pub sector: u64,
+    pub num_sectors: u32,
+    pub flags: u32,
 }
+
+impl ByteCode for VirtBlkDiscardWriteZeroes {}
 
 #[allow(unused)]
 pub struct TestVirtBlkReq {
@@ -161,12 +170,7 @@ pub fn virtio_blk_request(
         }
         VIRTIO_BLK_T_FLUSH => {}
         VIRTIO_BLK_T_GET_ID => {}
-        VIRTIO_BLK_T_DISCARD => {
-            assert_eq!(data_size % (REQ_DATA_LEN as usize), 0)
-        }
-        VIRTIO_BLK_T_WRITE_ZEROES => {
-            assert_eq!(data_size % size_of::<VirtBlkDiscardWriteZeroes>(), 0)
-        }
+        VIRTIO_BLK_T_DISCARD | VIRTIO_BLK_T_WRITE_ZEROES => {}
         VIRTIO_BLK_T_ILLGEAL => {}
         _ => {
             assert_eq!(data_size, 0)
@@ -189,9 +193,19 @@ pub fn virtio_blk_request(
     test_state.borrow().memwrite(addr, req_bytes.as_slice());
     let mut data_bytes = req.data.as_bytes().to_vec();
     data_bytes.resize(data_size, 0);
-    test_state
-        .borrow()
-        .memwrite(data_addr, data_bytes.as_slice());
+
+    // Write data to memory. If the data length is bigger than 4096, the memwrite()
+    // will return error. So, split it to 512 bytes.
+    let size = data_bytes.len();
+    let mut offset = 0;
+    while offset < size {
+        let len = std::cmp::min(512, size - offset);
+        test_state.borrow().memwrite(
+            data_addr + offset as u64,
+            &data_bytes.as_slice()[offset..offset + len],
+        );
+        offset += len;
+    }
     test_state
         .borrow()
         .memwrite(data_addr + data_size as u64, &status.to_le_bytes());
@@ -339,6 +353,66 @@ pub fn virtio_blk_read(
         String::from_utf8(test_state.borrow().memread(data_addr, 4)).unwrap(),
         "TEST"
     );
+}
+
+pub fn virtio_blk_read_write_zeroes(
+    blk: Rc<RefCell<TestVirtioPciDev>>,
+    test_state: Rc<RefCell<TestState>>,
+    alloc: Rc<RefCell<GuestAllocator>>,
+    vq: Rc<RefCell<TestVirtQueue>>,
+    req_type: u32,
+    sector: u64,
+    data_len: usize,
+) {
+    let mut read = true;
+    let mut blk_req = TestVirtBlkReq::new(req_type, 1, sector, data_len);
+    if req_type == VIRTIO_BLK_T_OUT {
+        unsafe {
+            blk_req.data.as_mut_vec().append(&mut vec![0; data_len]);
+        }
+        read = false;
+    }
+    let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, false);
+    let data_addr = req_addr + REQ_ADDR_LEN as u64;
+    let data_entries: Vec<TestVringDescEntry> = vec![
+        TestVringDescEntry {
+            data: req_addr,
+            len: REQ_ADDR_LEN,
+            write: false,
+        },
+        TestVringDescEntry {
+            data: data_addr,
+            len: data_len as u32,
+            write: read,
+        },
+        TestVringDescEntry {
+            data: data_addr + data_len as u64,
+            len: REQ_STATUS_LEN,
+            write: true,
+        },
+    ];
+    let free_head = vq
+        .borrow_mut()
+        .add_chained(test_state.clone(), data_entries);
+    blk.borrow().kick_virtqueue(test_state.clone(), vq.clone());
+    blk.borrow().poll_used_elem(
+        test_state.clone(),
+        vq.clone(),
+        free_head,
+        TIMEOUT_US,
+        &mut None,
+        true,
+    );
+    let status_addr = req_addr + REQ_ADDR_LEN as u64 + data_len as u64;
+    let status = test_state.borrow().readb(status_addr);
+    assert_eq!(status, VIRTIO_BLK_S_OK);
+
+    if read {
+        assert_eq!(
+            test_state.borrow().memread(data_addr, data_len as u64),
+            vec![0; data_len],
+        );
+    }
 }
 
 pub fn virtio_blk_default_feature(blk: Rc<RefCell<TestVirtioPciDev>>) -> u64 {

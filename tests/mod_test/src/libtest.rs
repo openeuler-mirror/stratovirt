@@ -25,6 +25,8 @@ use hex;
 
 use crate::utils::get_tmp_dir;
 
+const MAX_SOCKET_MSG_LENGTH: usize = 8192;
+
 pub struct StreamHandler {
     stream: UnixStream,
 }
@@ -35,6 +37,7 @@ impl StreamHandler {
     }
 
     fn write_line(&self, cmd: &str) {
+        assert!(cmd.len() <= MAX_SOCKET_MSG_LENGTH);
         self.stream
             .try_clone()
             .unwrap()
