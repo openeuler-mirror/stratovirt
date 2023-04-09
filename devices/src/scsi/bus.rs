@@ -641,6 +641,11 @@ impl ScsiRequest {
                     Ok(Vec::new())
                 }
             }
+            // Do not support SCSI_DISK_F_REMOVABLE now.
+            // Return Ok is enough for START_STOP/ALLOW_MEDIUM_REMOVAL.
+            // TODO: implement SCSI_DISK_F_REMOVABLE.
+            START_STOP => Ok(Vec::new()),
+            ALLOW_MEDIUM_REMOVAL => Ok(Vec::new()),
             INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
             READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
             MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
