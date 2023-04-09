@@ -2102,15 +2102,15 @@ impl TestUsbBuilder {
         self
     }
 
-    pub fn with_usb_storage(mut self, image_path: &str) -> Self {
+    pub fn with_usb_storage(mut self, image_path: &str, media: &str) -> Self {
         let args = format!("-device usb-storage,drive=drive0,id=storage0");
         let args: Vec<&str> = args[..].split(' ').collect();
         let mut args = args.into_iter().map(|s| s.to_string()).collect();
         self.args.append(&mut args);
 
         let args = format!(
-            "-drive if=none,id=drive0,format=raw,media=cdrom,aio=off,direct=false,file={}",
-            image_path
+            "-drive if=none,id=drive0,format=raw,media={},aio=off,direct=false,file={}",
+            media, image_path
         );
         let args: Vec<&str> = args[..].split(' ').collect();
         let mut args = args.into_iter().map(|s| s.to_string()).collect();
