@@ -250,8 +250,7 @@ enum UsbMsdMode {
     Csw,
 }
 
-#[allow(dead_code)]
-enum UsbMsdCswStatus {
+pub enum UsbMsdCswStatus {
     Passed,
     Failed,
     PhaseError,
