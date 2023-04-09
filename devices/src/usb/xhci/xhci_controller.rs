@@ -1494,9 +1494,6 @@ impl XhciDevice {
             || epctx.ep_type == EpType::IsoIn
             || epctx.ep_type == EpType::BulkIn
             || epctx.ep_type == EpType::IntrIn;
-        if epctx.ep_type != EpType::IntrOut && epctx.ep_type != EpType::IntrIn {
-            warn!("Unhandled ep_type {:?}", epctx.ep_type);
-        }
         if let Err(e) = self.setup_usb_packet(xfer) {
             error!("Failed to setup packet when transfer data {:?}", e);
             xfer.status = TRBCCode::TrbError;
