@@ -26,6 +26,7 @@ use crate::ScsiDisk::{
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
 use util::aio::{AioCb, Iovec, OpCode, WriteZeroesState};
+use util::AsAny;
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -471,7 +472,7 @@ pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
     Ok(())
 }
 
-pub trait ScsiRequestOps {
+pub trait ScsiRequestOps: AsAny {
     // Will be called in the end of this scsi instruction execution.
     fn scsi_request_complete_cb(&mut self, status: u8, scsisense: Option<ScsiSense>) -> Result<()>;
 }
@@ -539,41 +540,43 @@ impl ScsiRequest {
         })
     }
 
-    pub fn execute(self) -> Result<u32> {
+    pub fn execute(self) -> Result<Arc<Mutex<ScsiRequest>>> {
         let mode = self.cmd.mode.clone();
         let op = self.cmd.op;
         let dev = self.dev.clone();
         let locked_dev = dev.lock().unwrap();
         let mut aio = locked_dev.aio.as_ref().unwrap().lock().unwrap();
+        let s_req = Arc::new(Mutex::new(self));
 
         let offset = match locked_dev.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
+        let locked_req = s_req.lock().unwrap();
+
         let mut aiocb = AioCb {
             direct: locked_dev.config.direct,
             req_align: locked_dev.req_align,
             buf_align: locked_dev.buf_align,
             file_fd: locked_dev.disk_image.as_ref().unwrap().as_raw_fd(),
             opcode: OpCode::Noop,
-            iovec: self.iovec.clone(),
-            offset: (self.cmd.lba << offset) as usize,
-            nbytes: self.cmd.xfer as u64,
+            iovec: locked_req.iovec.clone(),
+            offset: (locked_req.cmd.lba << offset) as usize,
+            nbytes: locked_req.cmd.xfer as u64,
             user_data: 0,
-            iocompletecb: ScsiCompleteCb {
-                req: Arc::new(Mutex::new(self)),
-            },
+            iocompletecb: ScsiCompleteCb { req: s_req.clone() },
             discard: false,
             write_zeroes: WriteZeroesState::Off,
             write_zeroes_unmap: false,
         };
+        drop(locked_req);
 
         if op == SYNCHRONIZE_CACHE {
             aiocb.opcode = OpCode::Fdsync;
             aio.submit_request(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
             aio.flush_request()?;
-            return Ok(0);
+            return Ok(s_req);
         }
 
         match mode {
@@ -593,7 +596,7 @@ impl ScsiRequest {
         }
 
         aio.flush_request()?;
-        Ok(0)
+        Ok(s_req)
     }
 
     fn emulate_target_execute(
@@ -657,7 +660,7 @@ impl ScsiRequest {
         }
     }
 
-    pub fn emulate_execute(&mut self) -> Result<()> {
+    pub fn emulate_execute(mut self) -> Result<Arc<Mutex<ScsiRequest>>> {
         debug!("emulate scsi command is {:#x}", self.cmd.op);
         let mut not_supported_flag = false;
         let mut sense = None;
@@ -697,7 +700,7 @@ impl ScsiRequest {
             .as_mut()
             .scsi_request_complete_cb(status, sense)?;
 
-        Ok(())
+        Ok(Arc::new(Mutex::new(self)))
     }
 }
 

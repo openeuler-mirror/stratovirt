@@ -1018,7 +1018,7 @@ impl ScsiCmdQueueHandler {
         Ok(())
     }
 
-    fn handle_scsi_request(&mut self, mut sreq: ScsiRequest) -> Result<()> {
+    fn handle_scsi_request(&mut self, sreq: ScsiRequest) -> Result<()> {
         if sreq.opstype == EMULATE_SCSI_OPS {
             sreq.emulate_execute()?;
         } else {
