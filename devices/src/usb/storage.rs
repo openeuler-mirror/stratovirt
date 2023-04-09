@@ -12,16 +12,16 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
     sync::{Arc, Mutex, Weak},
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 
-use machine_manager::config::{DriveFile, UsbStorageConfig, VmConfig};
+use machine_manager::config::{DriveFile, UsbStorageConfig};
+use util::aio::{Aio, AioEngine};
 
 use super::config::*;
 use super::descriptor::{
@@ -30,6 +30,13 @@ use super::descriptor::{
 };
 use super::xhci::xhci_controller::XhciDevice;
 use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
+use crate::{
+    ScsiBus::{
+        aio_complete_cb, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+        EMULATE_SCSI_OPS, GOOD, SCSI_CMD_BUF_SIZE,
+    },
+    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
+};
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -139,10 +146,24 @@ pub const CBW_FLAG_OUT: u8 = 0;
 pub const CBW_SIZE: u8 = 31;
 pub const CSW_SIZE: u8 = 13;
 
+// USB-storage has only target 0 and lun 0.
+const USB_STORAGE_SCSI_LUN_ID: u8 = 0;
+
 struct UsbStorageState {
     mode: UsbMsdMode,
     cbw: UsbMsdCbw,
     csw: UsbMsdCsw,
+    cdb: Option<[u8; SCSI_CMD_BUF_SIZE]>,
+    iovec_len: u32,
+}
+
+impl ScsiRequestOps for UsbMsdCsw {
+    fn scsi_request_complete_cb(&mut self, status: u8, _: Option<ScsiSense>) -> Result<()> {
+        if status != GOOD {
+            self.status = UsbMsdCswStatus::Failed as u8;
+        }
+        Ok(())
+    }
 }
 
 impl UsbStorageState {
@@ -151,7 +172,54 @@ impl UsbStorageState {
             mode: UsbMsdMode::Cbw,
             cbw: UsbMsdCbw::default(),
             csw: UsbMsdCsw::new(),
+            cdb: None,
+            iovec_len: 0,
         }
+    }
+
+    /// Check if there exists SCSI CDB.
+    ///
+    /// # Arguments
+    ///
+    /// `exist` - Expected existence status.
+    ///
+    /// Return Error if expected existence status is not equal to the actual situation.
+    fn check_cdb_exist(&self, exist: bool) -> Result<()> {
+        if exist {
+            self.cdb.with_context(|| "No scsi CDB can be executed")?;
+        } else if self.cdb.is_some() {
+            bail!(
+                "Another request has not been done! cdb {:x?}",
+                self.cdb.unwrap()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Check if Iovec is empty.
+    ///
+    /// # Arguments
+    ///
+    /// `empty` - Expected status. If true, expect empty iovec.
+    ///
+    /// Return Error if expected iovec status is not equal to the actual situation.
+    fn check_iovec_empty(&self, empty: bool) -> Result<()> {
+        if empty != (self.iovec_len == 0) {
+            match empty {
+                true => {
+                    bail!(
+                        "Another request has not been done! Data buffer length {}.",
+                        self.iovec_len
+                    );
+                }
+                false => {
+                    bail!("Missing data buffer!");
+                }
+            };
+        }
+
+        Ok(())
     }
 }
 
@@ -164,14 +232,14 @@ pub struct UsbStorage {
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
     /// Configuration of the USB storage device.
     pub config: UsbStorageConfig,
-    /// Image file opened.
-    pub disk_image: Option<Arc<File>>,
-    /// The align requirement of request(offset/len).
-    pub req_align: u32,
-    /// The align requirement of buffer(iova_base).
-    pub buf_align: u32,
-    /// Drive backend files.
-    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// Scsi bus attached to this usb-storage device.
+    scsi_bus: Arc<Mutex<ScsiBus>>,
+    /// Effective scsi backend.
+    // Note: scsi device should attach to scsi bus. Logically, scsi device shoud not be placed in UsbStorage.
+    // But scsi device is needed in processing scsi request. Because the three (usb-storage/scsi bus/scsi device)
+    // correspond one-to-one, add scsi device member here for the execution efficiency (No need to find a unique
+    // device from the hash table of the unique bus).
+    scsi_dev: Arc<Mutex<ScsiDevice>>,
 }
 
 #[derive(Debug)]
@@ -212,7 +280,7 @@ impl UsbMsdCbw {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct UsbMsdCsw {
     sig: u32,
     tag: u32,
@@ -243,16 +311,23 @@ impl UsbStorage {
         config: UsbStorageConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Self {
+        let scsi_type = match &config.media as &str {
+            "disk" => SCSI_TYPE_DISK,
+            _ => SCSI_TYPE_ROM,
+        };
+
         Self {
             id: config.id.clone().unwrap(),
             usb_device: UsbDevice::new(),
             state: UsbStorageState::new(),
             cntlr: None,
-            config,
-            disk_image: None,
-            req_align: 1,
-            buf_align: 1,
-            drive_files,
+            config: config.clone(),
+            scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
+            scsi_dev: Arc::new(Mutex::new(ScsiDevice::new(
+                config.scsi_cfg,
+                scsi_type,
+                drive_files,
+            ))),
         }
     }
 
@@ -263,15 +338,17 @@ impl UsbStorage {
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
-        if !self.config.path_on_host.is_empty() {
-            let drive_files = self.drive_files.lock().unwrap();
-            let file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
-            self.disk_image = Some(Arc::new(file));
-
-            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
-            self.req_align = alignments.0;
-            self.buf_align = alignments.1;
-        }
+        let aio = Aio::new(Arc::new(aio_complete_cb), AioEngine::Off)
+            .with_context(|| format!("USB-storage {}: aio creation error!", self.id))?;
+        let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
+        locked_scsi_dev.aio = Some(Arc::new(Mutex::new(aio)));
+        locked_scsi_dev.realize()?;
+        drop(locked_scsi_dev);
+        self.scsi_bus
+            .lock()
+            .unwrap()
+            .devices
+            .insert((0, 0), self.scsi_dev.clone());
 
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)
@@ -293,7 +370,7 @@ impl UsbStorage {
             USB_INTERFACE_CLASS_IN_REQUEST => {
                 if device_req.request == GET_MAX_LUN {
                     // TODO: Now only supports 1 LUN.
-                    let maxlun = 0;
+                    let maxlun = USB_STORAGE_SCSI_LUN_ID;
                     self.usb_device.data_buf[0] = maxlun;
                     packet.actual_length = 1;
                     return;
@@ -306,92 +383,156 @@ impl UsbStorage {
         packet.status = UsbPacketStatus::Stall;
     }
 
-    fn handle_token_out(&mut self, packet: &mut UsbPacket) {
+    fn handle_token_out(&mut self, packet: &mut UsbPacket) -> Result<()> {
         if packet.ep_number != 2 {
-            packet.status = UsbPacketStatus::Stall;
-            return;
+            bail!("Error ep_number {}!", packet.ep_number);
         }
 
         match self.state.mode {
             UsbMsdMode::Cbw => {
-                if packet.get_iovecs_size() != CBW_SIZE as u64 {
-                    error!("usb-storage: Bad CBW size {}", packet.get_iovecs_size());
-                    packet.status = UsbPacketStatus::Stall;
-                    return;
+                if packet.get_iovecs_size() < CBW_SIZE as u64 {
+                    bail!("Bad CBW size {}", packet.get_iovecs_size());
                 }
+                self.state.check_cdb_exist(false)?;
+
                 let mut cbw_buf = [0_u8; CBW_SIZE as usize];
                 packet.transfer_packet(&mut cbw_buf, CBW_SIZE as usize);
                 self.state.cbw.convert(&cbw_buf);
                 debug!("Storage cbw {:?}", self.state.cbw);
 
                 if self.state.cbw.sig != CBW_SIGNATURE {
-                    error!("usb-storage: Bad signature {:X}", self.state.cbw.sig);
-                    packet.status = UsbPacketStatus::Stall;
-                    return;
+                    bail!("Bad signature {:x}", self.state.cbw.sig);
+                }
+                if self.state.cbw.lun != USB_STORAGE_SCSI_LUN_ID {
+                    bail!(
+                        "Bad lun id {:x}. Usb-storage only supports lun id 0!",
+                        self.state.cbw.lun
+                    );
                 }
 
+                self.state.cdb = Some(self.state.cbw.cmd);
+
                 if self.state.cbw.data_len == 0 {
+                    self.handle_scsi_request(packet)?;
                     self.state.mode = UsbMsdMode::Csw;
                 } else if self.state.cbw.flags & CBW_FLAG_IN == CBW_FLAG_IN {
                     self.state.mode = UsbMsdMode::DataIn;
                 } else {
                     self.state.mode = UsbMsdMode::DataOut;
                 }
-                // TODO: Convert CBW to SCSI CDB.
-                self.state.csw = UsbMsdCsw::new();
             }
             UsbMsdMode::DataOut => {
-                // TODO: SCSI data out processing.
-                if packet.get_iovecs_size() < self.state.cbw.data_len as u64 {
-                    packet.status = UsbPacketStatus::Stall;
-                    return;
-                }
-
-                self.state.mode = UsbMsdMode::Csw;
+                self.handle_data_inout_packet(packet, UsbMsdMode::DataOut)?;
             }
             _ => {
-                packet.status = UsbPacketStatus::Stall;
+                bail!(
+                    "Unexpected token out. Expected mode {:?} packet.",
+                    self.state.mode
+                );
             }
         }
+        Ok(())
     }
 
-    fn handle_token_in(&mut self, packet: &mut UsbPacket) {
+    fn handle_token_in(&mut self, packet: &mut UsbPacket) -> Result<()> {
         if packet.ep_number != 1 {
-            packet.status = UsbPacketStatus::Stall;
-            return;
+            bail!("Error ep_number {}!", packet.ep_number);
         }
 
         match self.state.mode {
             UsbMsdMode::DataOut => {
-                if self.state.cbw.data_len != 0 || packet.get_iovecs_size() < CSW_SIZE as u64 {
-                    packet.status = UsbPacketStatus::Stall;
-                    return;
-                }
-
-                packet.status = UsbPacketStatus::Async;
+                bail!("Not supported usb packet(Token_in and data_out).");
             }
             UsbMsdMode::Csw => {
                 if packet.get_iovecs_size() < CSW_SIZE as u64 {
-                    packet.status = UsbPacketStatus::Stall;
-                    return;
+                    bail!("Bad CSW size {}", packet.get_iovecs_size());
                 }
+                self.state.check_cdb_exist(true)?;
+                self.state.check_iovec_empty(self.state.cbw.data_len == 0)?;
 
-                // TODO: CSW after SCSI data processing.
                 let mut csw_buf = [0_u8; CSW_SIZE as usize];
                 self.state.csw.tag = self.state.cbw.tag;
                 self.state.csw.convert(&mut csw_buf);
+                debug!("Storage csw {:?}", self.state.csw);
                 packet.transfer_packet(&mut csw_buf, CSW_SIZE as usize);
-                self.state.mode = UsbMsdMode::Cbw;
-                self.state.csw = UsbMsdCsw::new();
+
+                // Reset UsbStorageState.
+                self.state = UsbStorageState::new();
             }
             UsbMsdMode::DataIn => {
-                // TODO: SCSI data in processing.
-                self.state.mode = UsbMsdMode::Csw;
+                self.handle_data_inout_packet(packet, UsbMsdMode::DataIn)?;
             }
             _ => {
-                packet.status = UsbPacketStatus::Stall;
+                bail!(
+                    "Unexpected token in. Expected mode {:?} packet.",
+                    self.state.mode
+                );
             }
         }
+        Ok(())
+    }
+
+    fn handle_data_inout_packet(&mut self, packet: &mut UsbPacket, mode: UsbMsdMode) -> Result<()> {
+        self.state.check_cdb_exist(true)?;
+        self.state.check_iovec_empty(true)?;
+
+        let iovec_len = packet.get_iovecs_size() as u32;
+        if iovec_len < self.state.cbw.data_len {
+            bail!(
+                "Insufficient transmission buffer, transfer size {}, buffer size {}, MSD mode {:?}!",
+                self.state.cbw.data_len,
+                iovec_len,
+                mode,
+            );
+        }
+
+        self.state.iovec_len = iovec_len;
+        debug!("Storage: iovec_len {}.", iovec_len);
+        self.handle_scsi_request(packet)?;
+        packet.actual_length = iovec_len;
+        self.state.mode = UsbMsdMode::Csw;
+
+        Ok(())
+    }
+
+    // Handle scsi request and save result in self.csw for next CSW packet.
+    fn handle_scsi_request(&mut self, packet: &mut UsbPacket) -> Result<()> {
+        self.state
+            .cdb
+            .with_context(|| "No scsi CDB can be executed")?;
+
+        let csw = Box::new(UsbMsdCsw::new());
+        let sreq = ScsiRequest::new(
+            self.state.cdb.unwrap(),
+            0,
+            packet.iovecs.clone(),
+            self.state.iovec_len,
+            self.scsi_dev.clone(),
+            csw,
+        )
+        .with_context(|| "Error in creating scsirequest.")?;
+
+        if sreq.cmd.xfer > sreq.datalen && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
+            // Wrong USB packet which doesn't provide enough datain/dataout buffer.
+            bail!(
+                "command {:x} requested data's length({}), provided buffer length({})",
+                sreq.cmd.op,
+                sreq.cmd.xfer,
+                sreq.datalen
+            );
+        }
+
+        let sreq_h = match sreq.opstype {
+            EMULATE_SCSI_OPS => sreq.emulate_execute(),
+            _ => sreq.execute(),
+        }
+        .with_context(|| "Error in executing scsi request.")?;
+
+        let csw_h = &sreq_h.lock().unwrap().upper_req;
+        let csw = csw_h.as_ref().as_any().downcast_ref::<UsbMsdCsw>().unwrap();
+        self.state.csw = *csw;
+
+        Ok(())
     }
 }
 
@@ -429,16 +570,15 @@ impl UsbDeviceOps for UsbStorage {
             packet.ep_number, self.state.mode
         );
 
-        match packet.pid as u8 {
-            USB_TOKEN_OUT => {
-                self.handle_token_out(packet);
-            }
-            USB_TOKEN_IN => {
-                self.handle_token_in(packet);
-            }
-            _ => {
-                packet.status = UsbPacketStatus::Stall;
-            }
+        let result = match packet.pid as u8 {
+            USB_TOKEN_OUT => self.handle_token_out(packet),
+            USB_TOKEN_IN => self.handle_token_in(packet),
+            _ => Err(anyhow!("Bad token!")),
+        };
+
+        if let Err(e) = result {
+            warn!("USB-storage {}: handle data error: {:?}", self.id, e);
+            packet.status = UsbPacketStatus::Stall;
         }
     }
 

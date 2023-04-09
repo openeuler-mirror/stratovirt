@@ -140,7 +140,7 @@ pub fn parse_scsi_controller(
     Ok(cntlr_cfg)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ScsiDevConfig {
     /// Scsi Device id.
     pub id: String,

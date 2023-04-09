@@ -802,8 +802,10 @@ Three properties can be set for USB Storage.
 
 ```shell
 -device usb-storage,drive=<drive_id>,id=<storage_id>
--drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}]
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}],aio=off,direct=false
 ```
+
+Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
