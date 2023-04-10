@@ -932,15 +932,13 @@ impl StdMachine {
         drop(locked_vmconfig);
 
         if dev.vhost_type.is_some() {
-            let mut need_irqfd = false;
             let net: Arc<Mutex<dyn VirtioDevice>> =
                 if dev.vhost_type == Some(String::from("vhost-kernel")) {
                     Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
                 } else {
-                    need_irqfd = true;
                     Arc::new(Mutex::new(VhostUser::Net::new(&dev, self.get_sys_mem())))
                 };
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, need_irqfd)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, true)
                 .with_context(|| "Failed to add vhost-kernel/vhost-user net device")?;
         } else {
             let net_id = dev.id.clone();
