@@ -220,6 +220,7 @@ pub const USB_DT_INTERFACE_SIZE: u8 = 9;
 pub const USB_DT_ENDPOINT_SIZE: u8 = 7;
 pub const USB_DT_BOS_SIZE: u8 = 5;
 pub const USB_DT_SS_CAP_SIZE: u8 = 10;
+pub const USB_DT_SS_EP_COMP_SIZE: u8 = 6;
 
 /// USB Endpoint Descriptor
 pub const USB_ENDPOINT_ATTR_CONTROL: u8 = 0;

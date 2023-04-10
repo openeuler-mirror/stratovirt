@@ -15,6 +15,7 @@
 use anyhow::{bail, Result};
 use log::{debug, error};
 use once_cell::sync::Lazy;
+use util::byte_code::ByteCode;
 
 use std::sync::{Arc, Mutex, Weak};
 use strum::EnumCount;
@@ -348,7 +349,15 @@ static DESC_INTERFACE_CAMERA_VS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 0x400,
                 bInterval: 0x20,
             },
-            extra: Vec::new(),
+            extra: UsbSuperSpeedEndpointCompDescriptor {
+                bLength: USB_DT_SS_EP_COMP_SIZE,
+                bDescriptorType: USB_DT_ENDPOINT_COMPANION,
+                bMaxBurst: 0,
+                bmAttributes: 0,
+                wBytesPerInterval: 0,
+            }
+            .as_bytes()
+            .to_vec(),
         })],
     })
 });
