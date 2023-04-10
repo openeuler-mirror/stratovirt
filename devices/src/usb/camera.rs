@@ -28,6 +28,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -536,6 +537,26 @@ impl UsbCamera {
         locked_camera.set_fmt(fmt)?;
         locked_camera.video_stream_on()?;
         drop(locked_camera);
+        self.register_camera_fd()?;
+        Ok(())
+    }
+
+    fn register_camera_fd(&mut self) -> Result<()> {
+        if self.listening {
+            return Ok(());
+        }
+        let cam_handler = Arc::new(Mutex::new(CameraIoHander::new(
+            &self.camera_fd,
+            &self.packet_list,
+            &self.camera_dev,
+            &self.payload,
+        )));
+        register_event_helper(
+            EventNotifierHelper::internal_notifiers(cam_handler),
+            self.iothread.as_ref(),
+            &mut self.delete_evts,
+        )?;
+        self.listening = true;
         Ok(())
     }
 
@@ -548,7 +569,17 @@ impl UsbCamera {
         } else {
             self.camera_dev.lock().unwrap().video_stream_off()?;
         }
+        self.unregister_camera_fd()?;
         self.packet_list.lock().unwrap().clear();
+        Ok(())
+    }
+
+    fn unregister_camera_fd(&mut self) -> Result<()> {
+        if !self.listening {
+            return Ok(());
+        }
+        unregister_event_helper(self.iothread.as_ref(), &mut self.delete_evts)?;
+        self.listening = false;
         Ok(())
     }
 
@@ -686,6 +717,9 @@ impl UsbDeviceOps for UsbCamera {
     fn reset(&mut self) {
         info!("Camera {} device reset", self.id);
         self.usb_device.addr = 0;
+        if let Err(e) = self.unregister_camera_fd() {
+            error!("Failed to unregister fd when reset {:?}", e);
+        }
         self.vs_control.reset();
         self.payload.lock().unwrap().reset();
         self.camera_dev.lock().unwrap().reset();
@@ -718,7 +752,29 @@ impl UsbDeviceOps for UsbCamera {
         }
     }
 
-    fn handle_data(&mut self, _p: &Arc<Mutex<UsbPacket>>) {}
+    fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        if packet.lock().unwrap().ep_number == ENDPOINT_ID_STREAMING {
+            packet.lock().unwrap().is_async = true;
+            let mut locked_list = self.packet_list.lock().unwrap();
+            locked_list.push_back(packet.clone());
+            // Notify the camera to deal with the request.
+            if let Err(e) = self.camera_fd.write(1) {
+                error!(
+                    "Failed to write fd when handle data for {} {:?}",
+                    self.id, e
+                );
+                // SAFETY: packet is push before, and no other thread modify the list.
+                let p = locked_list.pop_back().unwrap();
+                let mut locked_p = p.lock().unwrap();
+                locked_p.status = UsbPacketStatus::Stall;
+                // Async request failed, let controller report the error.
+                locked_p.is_async = false;
+            }
+        } else {
+            error!("Invalid ep number {}", packet.lock().unwrap().ep_number);
+            packet.lock().unwrap().status = UsbPacketStatus::Stall;
+        }
+    }
 
     fn device_id(&self) -> String {
         self.id.clone()
@@ -764,6 +820,163 @@ impl UvcPayload {
         self.header[1] = 0;
         self.frame_offset = 0;
         self.payload_offset = 0;
+    }
+
+    fn get_frame_data_size(&self, current_frame_size: usize, iov_size: u64) -> Result<u64> {
+        let mut frame_data_size = iov_size;
+        let header_len = self.header.len();
+        // Within the scope of the frame.
+        if self.frame_offset + frame_data_size as usize >= current_frame_size {
+            if self.frame_offset > current_frame_size {
+                bail!(
+                    "Invalid frame offset {} {}",
+                    self.frame_offset,
+                    current_frame_size
+                );
+            }
+            frame_data_size = (current_frame_size - self.frame_offset) as u64;
+        }
+        // Within the scope of the payload.
+        if self.payload_offset + frame_data_size as usize >= MAX_PAYLOAD as usize {
+            if self.payload_offset > MAX_PAYLOAD as usize {
+                bail!(
+                    "Invalid payload offset {} {}",
+                    self.payload_offset,
+                    MAX_PAYLOAD
+                );
+            }
+            frame_data_size = MAX_PAYLOAD as u64 - self.payload_offset as u64;
+        }
+        // payload start, reserve the header.
+        if self.payload_offset == 0 && frame_data_size + header_len as u64 > iov_size {
+            if iov_size <= header_len as u64 {
+                bail!("Invalid iov size {}", iov_size);
+            }
+            frame_data_size = iov_size as u64 - header_len as u64;
+        }
+        Ok(frame_data_size)
+    }
+
+    fn next_frame(&mut self) {
+        self.frame_offset = 0;
+        self.payload_offset = 0;
+        self.header[1] ^= UVC_FID;
+    }
+}
+
+/// Camere handler for copying frame data to usb packet.
+struct CameraIoHander {
+    camera: Arc<Mutex<dyn CameraHostdevOps>>,
+    fd: Arc<EventFd>,
+    packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
+    payload: Arc<Mutex<UvcPayload>>,
+}
+
+impl CameraIoHander {
+    fn new(
+        fd: &Arc<EventFd>,
+        list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
+        camera: &Arc<Mutex<dyn CameraHostdevOps>>,
+        payload: &Arc<Mutex<UvcPayload>>,
+    ) -> Self {
+        CameraIoHander {
+            camera: camera.clone(),
+            fd: fd.clone(),
+            packet_list: list.clone(),
+            payload: payload.clone(),
+        }
+    }
+
+    fn handle_io(&mut self) {
+        const REQUEST_LIMIT: u32 = 100;
+        for _ in 0..REQUEST_LIMIT {
+            let len = self.camera.lock().unwrap().get_frame_size();
+            if len == 0 {
+                break;
+            }
+            let mut locked_list = self.packet_list.lock().unwrap();
+            if locked_list.is_empty() {
+                break;
+            }
+            // SAFETY: packet list is not empty.
+            let p = locked_list.pop_front().unwrap();
+            drop(locked_list);
+            let mut locked_p = p.lock().unwrap();
+            if let Err(e) = self.handle_payload(&mut locked_p) {
+                error!("Failed handle uvc data {:?}", e);
+                locked_p.status = UsbPacketStatus::IoError;
+            }
+            if let Some(transfer) = locked_p.xfer_ops.as_ref() {
+                if let Some(ops) = transfer.clone().upgrade() {
+                    drop(locked_p);
+                    ops.lock().unwrap().submit_transfer();
+                }
+            }
+        }
+    }
+
+    fn handle_payload(&mut self, pkt: &mut UsbPacket) -> Result<()> {
+        let mut locked_camera = self.camera.lock().unwrap();
+        let current_frame_size = locked_camera.get_frame_size();
+        let mut locked_payload = self.payload.lock().unwrap();
+        let header_len = locked_payload.header.len();
+        let pkt_size = pkt.get_iovecs_size();
+        let frame_data_size = locked_payload.get_frame_data_size(current_frame_size, pkt_size)?;
+        if frame_data_size == 0 {
+            bail!(
+                "Invalid frame data size, frame offset {} payload offset {} packet size {}",
+                locked_payload.frame_offset,
+                locked_payload.payload_offset,
+                pkt.get_iovecs_size(),
+            );
+        }
+        let mut iovecs: &mut [Iovec] = &mut pkt.iovecs;
+        if locked_payload.payload_offset == 0 {
+            // Payload start, add header.
+            pkt.transfer_packet(&mut locked_payload.header, header_len);
+            locked_payload.payload_offset += header_len as usize;
+            iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
+                .with_context(|| format!("Invalid iov size {}", pkt_size))?;
+        }
+        let copyed = locked_camera.get_frame(
+            iovecs,
+            locked_payload.frame_offset,
+            frame_data_size as usize,
+        )?;
+        pkt.actual_length += copyed as u32;
+        debug!(
+            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copyed {}",
+            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copyed
+        );
+        locked_payload.frame_offset += frame_data_size as usize;
+        locked_payload.payload_offset += frame_data_size as usize;
+
+        if locked_payload.payload_offset >= MAX_PAYLOAD as usize {
+            locked_payload.payload_offset = 0;
+        }
+        if locked_payload.frame_offset >= current_frame_size {
+            locked_payload.next_frame();
+            locked_camera.next_frame()?;
+        }
+        Ok(())
+    }
+}
+
+impl EventNotifierHelper for CameraIoHander {
+    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_io_handler = io_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            cloned_io_handler.lock().unwrap().handle_io();
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            io_handler.lock().unwrap().fd.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
     }
 }
 
