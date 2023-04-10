@@ -548,14 +548,11 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
     if let Some(mon_config) = args.value_of("mon") {
         let mut cmd_parser = CmdParser::new("monitor");
         cmd_parser.push("id").push("mode").push("chardev");
-
         cmd_parser.parse(&mon_config)?;
 
-        let chardev = if let Some(dev) = cmd_parser.get_value::<String>("chardev")? {
-            dev
-        } else {
-            bail!("Argument \'chardev\'  is missing for \'mon\'");
-        };
+        let chardev = cmd_parser
+            .get_value::<String>("chardev")?
+            .with_context(|| "Argument \'chardev\' is missing for \'mon\'")?;
 
         if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
             if mode != *"control" {

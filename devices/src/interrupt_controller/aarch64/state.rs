@@ -650,11 +650,7 @@ impl StateTransfer for GICv3 {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&GICv3State::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&GICv3State::descriptor().name).unwrap_or(!0)
     }
 }
 
@@ -726,11 +722,7 @@ impl StateTransfer for GICv3Its {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&GICv3ItsState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&GICv3ItsState::descriptor().name).unwrap_or(!0)
     }
 }
 

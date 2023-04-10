@@ -31,7 +31,7 @@ pub mod xhci;
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use log::{debug, error};
 use util::aio::{mem_from_buf, mem_to_buf};
 
@@ -195,17 +195,15 @@ impl UsbDevice {
                     let conf = if let Some(conf) = &self.descriptor.configuration_selected {
                         conf.clone()
                     } else {
-                        let desc = if let Some(desc) = self.descriptor.device_desc.as_ref() {
-                            desc
-                        } else {
-                            bail!("Device descriptor not found");
-                        };
-                        let conf = if let Some(conf) = desc.configs.get(0) {
-                            conf
-                        } else {
-                            bail!("Config descriptor not found");
-                        };
-                        conf.clone()
+                        let desc = self
+                            .descriptor
+                            .device_desc
+                            .as_ref()
+                            .with_context(|| "Device descriptor not found")?;
+                        desc.configs
+                            .get(0)
+                            .with_context(|| "Config descriptor not found")?
+                            .clone()
                     };
                     self.data_buf[0] = 0;
                     if conf.config_desc.bmAttributes & USB_CONFIGURATION_ATTR_SELF_POWER

@@ -1147,14 +1147,10 @@ impl DeviceInterface for LightMachine {
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
         let read_only = args.read_only.unwrap_or(false);
-        let direct = if let Some(cache) = args.cache {
-            match cache.direct {
-                Some(direct) => direct,
-                _ => true,
-            }
-        } else {
-            true
-        };
+        let mut direct = true;
+        if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
+            direct = false;
+        }
 
         let config = BlkDevConfig {
             id: args.node_name.clone(),

@@ -109,14 +109,9 @@ fn check_chardev_args(cmd_parser: CmdParser) -> Result<()> {
 }
 
 pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
-    let chardev_id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
-        chardev_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "chardev".to_string()
-        )));
-    };
+    let chardev_id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "chardev".to_string()))?;
     let backend = cmd_parser.get_value::<String>("")?;
     let path = cmd_parser.get_value::<String>("path")?;
     let server = if let Some(server) = cmd_parser.get_value::<String>("server")? {
@@ -262,23 +257,15 @@ pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<
     cmd_parser.push("").push("id").push("chardev");
     cmd_parser.parse(config_args)?;
 
-    let chardev_name = if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
-        chardev
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev".to_string(),
-            "virtconsole".to_string()
-        )));
-    };
+    let chardev_name = cmd_parser
+        .get_value::<String>("chardev")?
+        .with_context(|| {
+            ConfigError::FieldIsMissing("chardev".to_string(), "virtconsole".to_string())
+        })?;
 
-    let id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
-        chardev_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "virtconsole".to_string()
-        )));
-    };
+    let id = cmd_parser.get_value::<String>("id")?.with_context(|| {
+        ConfigError::FieldIsMissing("id".to_string(), "virtconsole".to_string())
+    })?;
 
     if let Some(char_dev) = vm_config.chardev.remove(&chardev_name) {
         return Ok(VirtioConsole {
@@ -420,23 +407,13 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
         .push("vhostfd");
     cmd_parser.parse(vsock_config)?;
     pci_args_check(&cmd_parser)?;
-    let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
-        vsock_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "vsock".to_string()
-        )));
-    };
+    let id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "vsock".to_string()))?;
 
-    let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
-        cid
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "guest-cid".to_string(),
-            "vsock".to_string()
-        )));
-    };
+    let guest_cid = cmd_parser.get_value::<u64>("guest-cid")?.with_context(|| {
+        ConfigError::FieldIsMissing("guest-cid".to_string(), "vsock".to_string())
+    })?;
 
     let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
     let vsock = VsockConfig {
@@ -472,16 +449,12 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
     pci_args_check(&cmd_parser)?;
 
     if vm_config.virtio_serial.is_none() {
-        let id = if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            id
-        } else {
-            "".to_string()
-        };
-        let multifunction = if let Some(switch) = cmd_parser.get_value::<ExBool>("multifunction")? {
-            switch.into()
-        } else {
-            false
-        };
+        let id = cmd_parser
+            .get_value::<String>("id")?
+            .unwrap_or_else(|| "".to_string());
+        let multifunction = cmd_parser
+            .get_value::<ExBool>("multifunction")?
+            .map_or(false, |switch| switch.into());
         let virtio_serial = if serial_config.contains("-pci") {
             let pci_bdf = get_pci_bdf(serial_config)?;
             VirtioSerialInfo {

@@ -635,12 +635,13 @@ impl XhciDevice {
     /// Reset xhci port.
     pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<UsbPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
-        let usb_dev = if let Some(dev) = locked_port.dev.as_ref() {
-            dev
-        } else {
+        let usb_dev = locked_port.dev.as_ref();
+        if usb_dev.is_none() {
             // No device, no need to reset.
             return Ok(());
-        };
+        }
+
+        let usb_dev = usb_dev.unwrap();
         usb_dev.lock().unwrap().reset();
         let speed = usb_dev.lock().unwrap().speed();
         if speed == USB_SPEED_SUPER && warm_reset {
@@ -856,13 +857,12 @@ impl XhciDevice {
 
     fn address_device(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
-        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
-            bail!(
+        ictx.checked_add(INPUT_CONTEXT_SIZE).with_context(|| {
+            format!(
                 "Input Context access overflow, addr {:x} size {:x}",
-                ictx,
-                INPUT_CONTEXT_SIZE
-            );
-        }
+                ictx, INPUT_CONTEXT_SIZE
+            )
+        })?;
         let ccode = self.check_input_ctx(ictx)?;
         if ccode != TRBCCode::Success {
             return Ok(ccode);
@@ -897,13 +897,12 @@ impl XhciDevice {
         let ctx_addr = self.get_device_context_addr(slot_id)?;
         let mut octx = 0;
         dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
-        if octx.checked_add(DEVICE_CONTEXT_SIZE).is_none() {
-            bail!(
+        octx.checked_add(DEVICE_CONTEXT_SIZE).with_context(|| {
+            format!(
                 "Device Context access overflow, addr {:x} size {:x}",
-                octx,
-                DEVICE_CONTEXT_SIZE
-            );
-        }
+                octx, DEVICE_CONTEXT_SIZE
+            )
+        })?;
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
         self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
         dev.lock().unwrap().reset();
@@ -999,13 +998,12 @@ impl XhciDevice {
     }
 
     fn config_slot_ep(&mut self, slot_id: u32, ictx: u64) -> Result<TRBCCode> {
-        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
-            bail!(
+        ictx.checked_add(INPUT_CONTEXT_SIZE).with_context(|| {
+            format!(
                 "Input Context access overflow, addr {:x} size {:x}",
-                ictx,
-                INPUT_CONTEXT_SIZE
-            );
-        }
+                ictx, INPUT_CONTEXT_SIZE
+            )
+        })?;
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
             &self.mem_space,
@@ -1058,13 +1056,12 @@ impl XhciDevice {
             return Ok(TRBCCode::ContextStateError);
         }
         let ictx = trb.parameter;
-        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
-            bail!(
+        ictx.checked_add(INPUT_CONTEXT_SIZE).with_context(|| {
+            format!(
                 "Input Context access overflow, addr {:x} size {:x}",
-                ictx,
-                INPUT_CONTEXT_SIZE
-            );
-        }
+                ictx, INPUT_CONTEXT_SIZE
+            )
+        })?;
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
@@ -1553,17 +1550,15 @@ impl XhciDevice {
     }
 
     fn get_usb_dev(&self, slotid: u32, epid: u32) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        let port = if let Some(port) = &self.slots[(slotid - 1) as usize].usb_port {
-            port
-        } else {
-            bail!("USB port not found slotid {} epid {}", slotid, epid);
-        };
+        let port = self.slots[(slotid - 1) as usize]
+            .usb_port
+            .as_ref()
+            .with_context(|| format!("USB port not found slotid {} epid {}", slotid, epid))?;
         let locked_port = port.lock().unwrap();
-        let dev = if let Some(dev) = locked_port.dev.as_ref() {
-            dev
-        } else {
-            bail!("No device found in USB port.");
-        };
+        let dev = locked_port
+            .dev
+            .as_ref()
+            .with_context(|| "No device found in USB port.")?;
         Ok(dev.clone())
     }
 
@@ -1625,11 +1620,9 @@ impl XhciDevice {
                         xfer.status = TRBCCode::ShortPacket;
                     }
                     left -= chunk;
-                    if let Some(v) = edtla.checked_add(chunk) {
-                        edtla = v;
-                    } else {
-                        bail!("Event Data Transfer Length Accumulator overflow, edtla {:x} offset {:x}", edtla, chunk);
-                    }
+                    edtla = edtla.checked_add(chunk).with_context(||
+                        format!("Event Data Transfer Length Accumulator overflow, edtla {:x} offset {:x}", edtla, chunk)
+                    )?;
                 }
                 TRBType::TrStatus => {}
                 _ => {

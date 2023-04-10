@@ -153,14 +153,9 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
             "numa".to_string()
         )));
     }
-    if let Some(mem_dev) = cmd_parser.get_value::<String>("memdev")? {
-        config.mem_dev = mem_dev;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "memdev".to_string(),
-            "numa".to_string()
-        )));
-    }
+    config.mem_dev = cmd_parser
+        .get_value::<String>("memdev")?
+        .with_context(|| ConfigError::FieldIsMissing("memdev".to_string(), "numa".to_string()))?;
 
     Ok(config)
 }

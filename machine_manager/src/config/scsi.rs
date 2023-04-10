@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
@@ -122,14 +122,9 @@ pub fn parse_scsi_controller(
         cntlr_cfg.iothread = Some(iothread);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        cntlr_cfg.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "virtio scsi pci".to_string()
-        )));
-    }
+    cntlr_cfg.id = cmd_parser.get_value::<String>("id")?.with_context(|| {
+        ConfigError::FieldIsMissing("id".to_string(), "virtio scsi pci".to_string())
+    })?;
 
     if let Some(queues) = cmd_parser.get_value::<u32>("num-queues")? {
         cntlr_cfg.queues = queues;
@@ -203,14 +198,9 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
 
     let mut scsi_dev_cfg = ScsiDevConfig::default();
 
-    let scsi_drive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
-        drive
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "drive".to_string(),
-            "scsi device".to_string()
-        )));
-    };
+    let scsi_drive = cmd_parser.get_value::<String>("drive")?.with_context(|| {
+        ConfigError::FieldIsMissing("drive".to_string(), "scsi device".to_string())
+    })?;
 
     if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
         scsi_dev_cfg.boot_index = Some(boot_index);
@@ -220,14 +210,9 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         scsi_dev_cfg.serial = Some(serial);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        scsi_dev_cfg.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id".to_string(),
-            "scsi device".to_string()
-        )));
-    }
+    scsi_dev_cfg.id = cmd_parser.get_value::<String>("id")?.with_context(|| {
+        ConfigError::FieldIsMissing("id".to_string(), "scsi device".to_string())
+    })?;
 
     if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
         // Format "$parent_cntlr_name.0" is required by scsi bus.
