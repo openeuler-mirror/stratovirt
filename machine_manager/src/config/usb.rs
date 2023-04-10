@@ -176,13 +176,19 @@ pub const CAM_OPT_STR_BACKEND_TYPES: [&str; CamBackendType::COUNT] = ["v4l2", "d
 
 pub fn parse_usb_camera(conf: &str) -> Result<UsbCameraConfig> {
     let mut cmd_parser = CmdParser::new("usb-camera");
-    cmd_parser.push("").push("id").push("backend").push("path");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("backend")
+        .push("path")
+        .push("iothread");
     cmd_parser.parse(conf)?;
 
     let mut dev = UsbCameraConfig::new();
     dev.id = cmd_parser.get_value::<String>("id")?;
     dev.backend = cmd_parser.get_value::<CamBackendType>("backend")?.unwrap();
     dev.path = cmd_parser.get_value::<String>("path")?;
+    dev.iothread = cmd_parser.get_value::<String>("iothread")?;
 
     dev.check()?;
     Ok(dev)
@@ -200,6 +206,7 @@ pub struct UsbCameraConfig {
     pub id: Option<String>,
     pub backend: CamBackendType,
     pub path: Option<String>,
+    pub iothread: Option<String>,
 }
 
 impl UsbCameraConfig {
@@ -208,6 +215,7 @@ impl UsbCameraConfig {
             id: None,
             backend: CamBackendType::Demo,
             path: None,
+            iothread: None,
         }
     }
 }
@@ -222,7 +230,11 @@ impl ConfigCheck for UsbCameraConfig {
     fn check(&self) -> Result<()> {
         // Note: backend has already been checked during args parsing.
         check_id(self.id.clone(), "usb-camera")?;
-        check_camera_path(self.path.clone())
+        check_camera_path(self.path.clone())?;
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
+        }
+        Ok(())
     }
 }
 
