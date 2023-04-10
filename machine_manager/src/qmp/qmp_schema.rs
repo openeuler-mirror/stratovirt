@@ -753,13 +753,14 @@ pub struct netdev_add {
     pub id: String,
     #[serde(rename = "ifname")]
     pub if_name: Option<String>,
+    pub fd: Option<String>,
     pub fds: Option<String>,
     pub dnssearch: Option<String>,
     #[serde(rename = "type")]
     pub net_type: Option<String>,
-    pub vhost: Option<String>,
+    pub vhost: Option<bool>,
+    pub vhostfd: Option<String>,
     pub vhostfds: Option<String>,
-    pub ifname: Option<String>,
     pub downscript: Option<String>,
     pub script: Option<String>,
     pub queues: Option<u16>,
@@ -2511,23 +2512,6 @@ mod tests {
         };
         let ret_msg = r#"ok"#;
         assert!(err_msg == ret_msg);
-
-        // right arguments for netdev-add.
-        let json_msg = r#"
-        {
-            "execute": "netdev_add",
-            "arguments": {
-                "id": "net-0",
-                "ifname":"tap0"
-            }
-        }
-        "#;
-        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
-            Ok(_) => "ok".to_string(),
-            Err(e) => e.to_string(),
-        };
-        let ret_msg = r#"ok"#;
-        assert!(err_msg == ret_msg);
     }
 
     #[test]
@@ -2601,6 +2585,69 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_netdev_add() {
+        // Normal netdev_add test.
+        let json_msg = r#"
+        {
+            "execute": "netdev_add",
+            "arguments": {
+                "id": "net0",
+                "ifname": "tap0",
+                "fd": "11",
+                "fds": "fd-net00:fd-net01",
+                "dnssearch": "test",
+                "type": "vhost-user",
+                "vhost": true,
+                "vhostfd": "21",
+                "vhostfds": "vhostfd-net00:vhostfd-net01",
+                "downscript": "/etc/ifdown.sh",
+                "script": "/etc/ifup.sh",
+                "queues": 16,
+                "chardev": "char_dev_name"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+
+        // Abnormal netdev_add test with invalid vhost type.
+        let json_msg = r#"
+        {
+            "execute": "netdev_add",
+            "arguments": {
+                "vhost": "invalid_type"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"expected a boolean"#;
+        assert!(err_msg.contains(part_msg));
+
+        // Abnormal netdev_add test with invalid queues type.
+        let json_msg = r#"
+        {
+            "execute": "netdev_add",
+            "arguments": {
+                "queues": "invalid_type"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"expected u16"#;
         assert!(err_msg.contains(part_msg));
     }
 

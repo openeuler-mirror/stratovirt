@@ -10,20 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use log::error;
-use machine_manager::temp_cleaner::TempCleaner;
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::slice;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
+
+use anyhow::{bail, Context, Result};
+use log::error;
+
+use machine_manager::temp_cleaner::TempCleaner;
 use util::unix::limit_permission;
 use virtio::vhost::user::{
     RegionMemInfo, VhostUserHdrFlag, VhostUserMemHdr, VhostUserMsgHdr, VhostUserMsgReq,
     VhostUserVringAddr, VhostUserVringState, MAX_ATTACHED_FD_ENTRIES,
 };
 use virtio::VhostUser::VhostUserSock;
-
-use anyhow::{bail, Context, Result};
 
 /// The trait for dealing with vhost-user request in the server.
 pub trait VhostUserReqHandler: Send + Sync {

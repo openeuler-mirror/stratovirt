@@ -10,26 +10,35 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use serde::Deserialize;
 use std::io::{Error, ErrorKind, Read, Write};
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{bail, Result};
+use libc::{
+    c_void, iovec, msghdr, recvmsg, sendmsg, CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN, CMSG_NXTHDR,
+    MSG_DONTWAIT, MSG_NOSIGNAL, SCM_RIGHTS, SOL_SOCKET,
+};
 use log::{error, info};
+use serde::Deserialize;
+use vmm_sys_util::epoll::EventSet;
+
+use crate::machine::MachineExternalInterface;
+use crate::qmp::{QmpChannel, QmpGreeting, Response};
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use vmm_sys_util::epoll::EventSet;
-
-use crate::machine::MachineExternalInterface;
-use crate::qmp::{QmpChannel, QmpGreeting, Response};
 
 const MAX_SOCKET_MSG_LENGTH: usize = 8192;
+/// The max buffer length received by recvmsg.
+const MAX_RECV_BUF_LEN: usize = 4096;
+/// The max buffer length used by recvmsg for file descriptors.
+const MAX_RECV_FDS_LEN: usize = MAX_RECV_BUF_LEN;
 pub(crate) const LEAK_BUCKET_LIMIT: u64 = 100;
 
 /// The wrapper over Unix socket and socket handler.
@@ -154,9 +163,9 @@ impl Socket {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
-                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap() + "\r"
+                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap()
             } else {
-                serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
+                serde_json::to_string(&Response::create_empty_response()).unwrap()
             };
             handler.send_str(&resp)?;
             info!("QMP: --> {:?}", resp);
@@ -342,6 +351,31 @@ impl SocketRWHandler {
         }
     }
 
+    fn parse_fd(&mut self, mhdr: &msghdr) {
+        // At least it should has one RawFd.
+        let min_cmsg_len = unsafe { CMSG_LEN(size_of::<RawFd>() as u32) as usize };
+        if (mhdr.msg_controllen as usize) < min_cmsg_len {
+            return;
+        }
+
+        let mut cmsg_hdr = unsafe { CMSG_FIRSTHDR(mhdr as *const msghdr).as_ref() };
+        while cmsg_hdr.is_some() {
+            let scm = cmsg_hdr.unwrap();
+            if scm.cmsg_level == SOL_SOCKET
+                && scm.cmsg_type == SCM_RIGHTS
+                && scm.cmsg_len as usize >= min_cmsg_len
+            {
+                let fds = unsafe {
+                    let fd_num =
+                        (scm.cmsg_len as usize - CMSG_LEN(0) as usize) / size_of::<RawFd>();
+                    std::slice::from_raw_parts(CMSG_DATA(scm) as *const RawFd, fd_num)
+                };
+                self.scm_fd.append(&mut fds.to_vec());
+            }
+            cmsg_hdr = unsafe { CMSG_NXTHDR(mhdr as *const msghdr, scm).as_ref() };
+        }
+    }
+
     /// Receive bytes and scm_fd from socket file descriptor.
     ///
     /// # Notes
@@ -354,30 +388,13 @@ impl SocketRWHandler {
     /// # Errors
     /// The socket file descriptor is broken.
     fn read_fd(&mut self) -> std::io::Result<()> {
-        use libc::{
-            c_uint, c_void, cmsghdr, iovec, msghdr, recvmsg, CMSG_DATA, CMSG_FIRSTHDR, CMSG_SPACE,
-            MSG_DONTWAIT, SCM_RIGHTS, SOL_SOCKET,
+        let recv_buf = [0_u8; MAX_RECV_BUF_LEN];
+        let mut iov = iovec {
+            iov_base: recv_buf.as_ptr() as *mut c_void,
+            iov_len: MAX_RECV_BUF_LEN,
         };
-
+        let mut cmsg_space = [0_u8; MAX_RECV_FDS_LEN];
         loop {
-            let tmp_buf = [0_u8; 1];
-            let mut iov = iovec {
-                iov_base: tmp_buf.as_ptr() as *mut c_void,
-                iov_len: 1,
-            };
-
-            let mut cmsg_space = {
-                let mut space = 0;
-                space +=
-                    unsafe { CMSG_SPACE(std::mem::size_of::<[RawFd; 2]>() as c_uint) } as usize;
-                Some(Vec::<u8>::with_capacity(space))
-            };
-
-            let (msg_control, msg_controllen) = cmsg_space
-                .as_mut()
-                .map(|v| (v.as_mut_ptr(), v.capacity()))
-                .unwrap_or((std::ptr::null_mut(), 0));
-
             // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
             // initialized in normal way.
             let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
@@ -385,14 +402,13 @@ impl SocketRWHandler {
             mhdr.msg_namelen = 0;
             mhdr.msg_iov = &mut iov as *mut iovec;
             mhdr.msg_iovlen = 1;
-            mhdr.msg_control = msg_control as *mut c_void;
-            mhdr.msg_controllen = msg_controllen as _;
+            mhdr.msg_control = cmsg_space.as_mut_ptr() as *mut c_void;
+            mhdr.msg_controllen = cmsg_space.len() as _;
             mhdr.msg_flags = 0;
 
             // MSG_DONTWAIT: Enables nonblocking operation, if the operation would block the call
             // fails with the error EAGAIN or EWOULDBLOCK. When this error occurs, break loop
             let ret = unsafe { recvmsg(self.socket_fd, &mut mhdr, MSG_DONTWAIT) };
-
             if ret == -1 {
                 let sock_err = Error::last_os_error();
                 if sock_err.kind() == ErrorKind::WouldBlock {
@@ -400,44 +416,15 @@ impl SocketRWHandler {
                 } else {
                     return Err(sock_err);
                 }
-            } else if ret == 0 {
-                break;
             }
-
-            let cmsg_hdr: Option<&cmsghdr> = unsafe {
-                if mhdr.msg_controllen > 0 {
-                    cmsg_space
-                        .as_mut()
-                        .unwrap()
-                        .set_len(mhdr.msg_controllen as usize);
-                    CMSG_FIRSTHDR(&mhdr as *const msghdr)
+            self.parse_fd(&mhdr);
+            if ret > 0 {
+                self.buf.extend(&recv_buf[..ret as usize]);
+                if let Some(pos) = self.pos.checked_add(ret as usize) {
+                    self.pos = pos;
                 } else {
-                    std::ptr::null()
+                    return Err(ErrorKind::InvalidInput.into());
                 }
-                .as_ref()
-            };
-
-            if let Some(scm) = cmsg_hdr {
-                if scm.cmsg_level == SOL_SOCKET && scm.cmsg_type == SCM_RIGHTS {
-                    let scm_cmsg_header = unsafe {
-                        std::slice::from_raw_parts(
-                            CMSG_DATA(scm),
-                            std::mem::size_of::<[RawFd; 2]>(),
-                        )
-                    };
-                    for fd in scm_cmsg_header.iter() {
-                        if *fd != 0 {
-                            self.scm_fd.push(i32::from(*fd));
-                        }
-                    }
-                }
-            };
-
-            self.buf.push(tmp_buf[0]);
-            if let Some(pos) = self.pos.checked_add(1) {
-                self.pos = pos;
-            } else {
-                return Err(ErrorKind::InvalidInput.into());
             }
         }
         Ok(())
@@ -457,8 +444,6 @@ impl SocketRWHandler {
     /// # Errors
     /// The socket file descriptor is broken.
     fn write_fd(&mut self, length: usize) -> std::io::Result<()> {
-        use libc::{c_void, iovec, msghdr, sendmsg, MSG_NOSIGNAL};
-
         let mut iov = iovec {
             iov_base: self.buf.as_slice()[(self.pos - length)..(self.pos - 1)].as_ptr()
                 as *mut c_void,
@@ -626,7 +611,8 @@ impl SocketHandler {
     /// The socket file descriptor is broken.
     pub fn send_str(&mut self, s: &str) -> std::io::Result<()> {
         self.stream.flush().unwrap();
-        match self.stream.write(s.as_bytes()) {
+        let msg = s.to_string() + "\r";
+        match self.stream.write(msg.as_bytes()) {
             Ok(_) => {
                 let _ = self.stream.write(&[b'\n'])?;
                 Ok(())
@@ -746,7 +732,7 @@ mod tests {
         let length = client.read(&mut response).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&response[..length]),
-            "I am a test str\n".to_string()
+            "I am a test str\r\n".to_string()
         );
 
         // 2.send String
@@ -755,7 +741,7 @@ mod tests {
         let length = client.read(&mut response).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&response[..length]),
-            "I am a test String\n".to_string()
+            "I am a test String\r\n".to_string()
         );
 
         // After test. Environment Recover

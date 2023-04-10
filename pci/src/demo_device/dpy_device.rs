@@ -27,8 +27,7 @@ use std::{
     ptr,
     sync::{Arc, Mutex},
 };
-use util::pixman::{pixman_format_bpp, pixman_image_get_stride, pixman_image_t};
-use vnc::{
+use ui::{
     console::{
         register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayMouse,
         DisplaySurface,
@@ -37,6 +36,7 @@ use vnc::{
         get_image_data, get_image_format, get_image_height, ref_pixman_image, unref_pixman_image,
     },
 };
+use util::pixman::{pixman_format_bpp, pixman_image_get_stride, pixman_image_t};
 
 unsafe impl Send for Surface {}
 unsafe impl Sync for Surface {}
@@ -72,10 +72,10 @@ impl DemoDisplay {
 pub struct DpyInterface {}
 
 impl DisplayChangeListenerOperations for DpyInterface {
-    fn dpy_switch(&self, surface: &DisplaySurface) {
+    fn dpy_switch(&self, surface: &DisplaySurface) -> Result<()> {
         if DISPLAY.lock().unwrap().is_empty() {
             error!("Demo Display is empty, check initialize");
-            return;
+            return Ok(());
         }
 
         let ds_clone = DISPLAY.lock().unwrap()[0].clone();
@@ -97,14 +97,17 @@ impl DisplayChangeListenerOperations for DpyInterface {
             ptr::copy(res_data_ptr, data.as_mut_ptr(), size as usize);
         }
         ds.image = data;
+        Ok(())
     }
 
-    fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) {}
+    fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
+        Ok(())
+    }
 
-    fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) {
+    fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
         if DISPLAY.lock().unwrap().is_empty() {
             error!("Demo Display is empty, check initialize");
-            return;
+            return Ok(());
         }
 
         let ds_clone = DISPLAY.lock().unwrap()[0].clone();
@@ -144,18 +147,20 @@ impl DisplayChangeListenerOperations for DpyInterface {
             offset += stride as i32;
             i += 1;
         }
+        Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) {
+    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) -> Result<()> {
         if DISPLAY.lock().unwrap().is_empty() {
             error!("Demo Display is empty, check initialize");
-            return;
+            return Ok(());
         }
 
         let ds_clone = DISPLAY.lock().unwrap()[0].clone();
         let mut ds = ds_clone.lock().unwrap();
 
         ds.cursor = cursor.data.clone();
+        Ok(())
     }
 }
 

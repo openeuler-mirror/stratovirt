@@ -21,34 +21,32 @@ const VIRTIO_FS_VRING_IDX_MASK: usize = 0xff;
 /// VRING_ERR, Bits (0-7) of the payload contain the vring index. Bit 8 is the invalid
 /// FD flag. This flag is set when there is no file descriptor in the ancillary data.
 /// This signals that polling should be used instead of waiting for the kick.
-const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
-
-use crate::cmdline::FsConfig;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
+use super::fs::FileSystem;
+use super::fuse_req::FuseReq;
+use super::vhost_user_server::VhostUserReqHandler;
+use crate::cmdline::FsConfig;
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-
-use super::fs::FileSystem;
-use super::fuse_req::FuseReq;
-use super::vhost_user_server::VhostUserReqHandler;
-
-use anyhow::{anyhow, bail, Context, Result};
 use virtio::vhost::user::RegionMemInfo;
 use virtio::{
     Queue, QueueConfig, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
 };
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 
 struct FsIoHandler {
     queue: Queue,

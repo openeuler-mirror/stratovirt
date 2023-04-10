@@ -11,18 +11,19 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    auth::AuthState,
-    console::DisplayMouse,
+    console::{console_select, DisplayMouse},
+    error::VncError,
+    input::{
+        key_event, point_event, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT,
+        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+    },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
-    round_up_div,
-    server::VncServer,
     utils::BuffPool,
     vnc::{
-        framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-        DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT,
-        OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
+        auth_sasl::AuthState, framebuffer_upadate, round_up_div, server_io::VncServer,
+        set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
+        MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
-    VncError,
 };
 use anyhow::{anyhow, Result};
 use log::error;
@@ -548,9 +549,7 @@ impl ClientIoHandler {
         let ver_str = &res[0..12].to_string();
         let ver = match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
             Ok(v) => v,
-            Err(e) => {
-                let msg = format!("Unsupport RFB version: {}", e);
-                error!("{}", msg);
+            Err(_e) => {
                 return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
             }
         };
@@ -571,7 +570,6 @@ impl ClientIoHandler {
         let auth = self.server.security_type.borrow().auth;
 
         if self.client.conn_state.lock().unwrap().version.minor == 3 {
-            error!("Waiting for handle minor=3 ...");
             match auth {
                 AuthState::No => {
                     let mut buf = Vec::new();
@@ -581,9 +579,10 @@ impl ClientIoHandler {
                 }
                 _ => {
                     self.auth_failed("Unsupported auth method");
-                    return Err(anyhow!(VncError::AuthFailed(String::from(
-                        "Unsupported auth method"
-                    ))));
+                    return Err(anyhow!(VncError::AuthFailed(
+                        "handle_version".to_string(),
+                        "Unsupported auth method".to_string()
+                    )));
                 }
             }
         } else {
@@ -624,8 +623,7 @@ impl ClientIoHandler {
         let height = get_image_height(locked_surface.server_image);
         drop(locked_surface);
         if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
-            error!("Invalid Image Size!");
-            return Err(anyhow!(VncError::InvalidImageSize));
+            return Err(anyhow!(VncError::InvalidImageSize(width, height)));
         }
         let mut locked_dpm = client.client_dpm.lock().unwrap();
         locked_dpm.client_width = width;
@@ -653,8 +651,10 @@ impl ClientIoHandler {
 
         if buf[0] != auth as u8 {
             self.auth_failed("Authentication failed");
-            error!("handle_auth");
-            return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
+            return Err(anyhow!(VncError::AuthFailed(
+                "handle_auth".to_string(),
+                "auth type is not supported".to_string()
+            )));
         }
 
         match auth {
@@ -676,8 +676,10 @@ impl ClientIoHandler {
             }
             _ => {
                 self.auth_failed("Unhandled auth method");
-                error!("handle_auth");
-                return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
+                return Err(anyhow!(VncError::AuthFailed(
+                    "handle_auth".to_string(),
+                    "auth type is not supported".to_string()
+                )));
             }
         }
         vnc_flush(&client);
@@ -690,19 +692,21 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         match ClientMsg::from(buf[0]) {
             ClientMsg::SetPixelFormat => {
-                return self.set_pixel_format();
+                self.set_pixel_format()?;
             }
             ClientMsg::SetEncodings => {
-                return self.set_encodings();
+                self.set_encodings()?;
             }
             ClientMsg::FramebufferUpdateRequest => {
-                self.update_frame_buff();
+                self.update_frame_buff()?;
             }
             ClientMsg::KeyEvent => {
-                self.key_envent();
+                self.key_envent()
+                    .unwrap_or_else(|e| error!("Key event error: {}", e));
             }
             ClientMsg::PointerEvent => {
-                self.point_event();
+                self.point_event()
+                    .unwrap_or_else(|e| error!("Point event error: {}", e));
             }
             ClientMsg::ClientCutText => {
                 self.client_cut_event();
@@ -775,7 +779,6 @@ impl ClientIoHandler {
         // bit_per_pixel: Bits occupied by each pixel.
         if ![8, 16, 32].contains(&bit_per_pixel) {
             self.client.conn_state.lock().unwrap().dis_conn = true;
-            error!("Worng format of bits_per_pixel");
             return Err(anyhow!(VncError::ProtocolMessageFailed(String::from(
                 "set pixel format"
             ))));
@@ -897,7 +900,7 @@ impl ClientIoHandler {
         drop(locked_dpm);
         let mut buf: Vec<u8> = Vec::new();
         // VNC desktop resize.
-        desktop_resize(&client, &server, &mut buf);
+        desktop_resize(&client, &server, &mut buf)?;
         // VNC display cursor define.
         display_cursor_define(&client, &server, &mut buf);
         vnc_write(&client, buf);
@@ -907,10 +910,10 @@ impl ClientIoHandler {
     }
 
     /// Update image for client.
-    fn update_frame_buff(&mut self) {
+    fn update_frame_buff(&mut self) -> Result<()> {
         if self.expect == 1 {
             self.expect = 10;
-            return;
+            return Ok(());
         }
         let buf = self.read_incoming_msg();
         let locked_dpm = self.client.client_dpm.lock().unwrap();
@@ -937,9 +940,102 @@ impl ClientIoHandler {
                 h,
                 width,
                 height,
-            );
+            )?;
         }
         drop(locked_state);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+        Ok(())
+    }
+
+    /// Keyboard event.
+    pub fn key_envent(&mut self) -> Result<()> {
+        if self.expect == 1 {
+            self.expect = 8;
+            return Ok(());
+        }
+        let buf = self.read_incoming_msg();
+        let down: bool = buf[1] != 0;
+        let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let server = self.server.clone();
+
+        // Uppercase -> Lowercase.
+        if (ASCII_A..=ASCII_Z).contains(&keysym) {
+            keysym += UPPERCASE_TO_LOWERCASE;
+        }
+        let mut kbd_state = server.keyboard_state.borrow_mut();
+
+        let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
+            Some(k) => *k,
+            None => 0,
+        };
+
+        // Ctr + Alt + Num(1~9)
+        // Switch to the corresponding display device.
+        if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
+            && down
+            && self.server.display_listener.is_some()
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+        {
+            kbd_state.keyboard_state_reset();
+            console_select(Some((keycode - KEYCODE_1) as usize))?;
+        }
+
+        kbd_state.keyboard_state_update(keycode, down)?;
+        key_event(keycode, down)?;
+
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+        Ok(())
+    }
+
+    // Mouse event.
+    pub fn point_event(&mut self) -> Result<()> {
+        if self.expect == 1 {
+            self.expect = 6;
+            return Ok(());
+        }
+
+        let buf = self.read_incoming_msg();
+        let mut x = ((buf[2] as u16) << 8) + buf[3] as u16;
+        let mut y = ((buf[4] as u16) << 8) + buf[5] as u16;
+
+        // Window size alignment.
+        let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+        x = ((x as u64 * ABS_MAX) / width as u64) as u16;
+        y = ((y as u64 * ABS_MAX) / height as u64) as u16;
+
+        // ASCII -> HidCode.
+        let button_mask: u8 = match buf[1] {
+            INPUT_POINT_LEFT => 0x01,
+            INPUT_POINT_MIDDLE => 0x04,
+            INPUT_POINT_RIGHT => 0x02,
+            _ => buf[1],
+        };
+
+        point_event(button_mask as u32, x as u32, y as u32)?;
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+        Ok(())
+    }
+
+    /// Client cut text.
+    pub fn client_cut_event(&mut self) {
+        let buf = self.read_incoming_msg();
+        if self.expect == 1 {
+            self.expect = 8;
+            return;
+        }
+        if self.expect == 8 {
+            let buf = [buf[4], buf[5], buf[6], buf[7]];
+            let len = u32::from_be_bytes(buf);
+            if len > 0 {
+                self.expect += len as usize;
+                return;
+            }
+        }
+
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
@@ -1013,7 +1109,8 @@ impl EventNotifierHelper for ClientIoHandler {
             {
                 client.conn_state.lock().unwrap().dis_conn = true;
             } else if event & EventSet::IN == EventSet::IN {
-                if let Err(_e) = locked_client_io.client_handle_read() {
+                if let Err(e) = locked_client_io.client_handle_read() {
+                    error!("{}", e);
                     client.conn_state.lock().unwrap().dis_conn = true;
                 }
             }
@@ -1089,12 +1186,12 @@ impl EventNotifierHelper for ClientIoHandler {
 
 /// Generate the data that needs to be sent.
 /// Add to send queue
-pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
+pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) -> Result<()> {
     let mut locked_state = client.conn_state.lock().unwrap();
     let num = locked_state.dirty_num;
     locked_state.dirty_num = num.checked_add(dirty_num).unwrap_or(0);
     if !locked_state.is_need_update() {
-        return;
+        return Ok(());
     }
     drop(locked_state);
 
@@ -1128,10 +1225,7 @@ pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
             }
             let start = (i * bpl as u64 + x) as usize;
             let len = (x2 - x) as usize;
-            if let Err(e) = locked_dirty.clear_range(start, len) {
-                error!("clear bitmap error: {:?}", e);
-                return;
-            }
+            locked_dirty.clear_range(start, len)?;
             i += 1;
         }
 
@@ -1161,6 +1255,7 @@ pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
         .push(RectInfo::new(client, rects));
 
     client.conn_state.lock().unwrap().clear_update_state();
+    Ok(())
 }
 
 fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> Result<()> {
@@ -1183,7 +1278,7 @@ fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> R
 }
 
 /// Set pixformat for client.
-pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
+fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     let mut locked_dpm = client.client_dpm.lock().unwrap();
     locked_dpm.pf.init_pixelformat();
     let big_endian: u8 = u8::from(cfg!(target_endian = "big"));
@@ -1202,15 +1297,18 @@ pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
 }
 
 /// Set Desktop Size.
-pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
+pub fn desktop_resize(
+    client: &Arc<ClientState>,
+    server: &Arc<VncServer>,
+    buf: &mut Vec<u8>,
+) -> Result<()> {
     let locked_surface = server.vnc_surface.lock().unwrap();
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
     if !(0..=MAX_IMAGE_SIZE as i32).contains(&width)
         || !(0..=MAX_IMAGE_SIZE as i32).contains(&height)
     {
-        error!("Invalid Image Size!");
-        return;
+        return Err(anyhow!(VncError::InvalidImageSize(width, height)));
     }
     drop(locked_surface);
     let mut locked_dpm = client.client_dpm.lock().unwrap();
@@ -1218,7 +1316,7 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
         && !locked_dpm.has_feature(VncFeatures::VncFeatureResize))
         || (locked_dpm.client_width == width && locked_dpm.client_height == height)
     {
-        return;
+        return Ok(());
     }
     locked_dpm.client_width = width;
     locked_dpm.client_height = height;
@@ -1228,6 +1326,7 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
     buf.append(&mut (0_u8).to_be_bytes().to_vec());
     buf.append(&mut (1_u16).to_be_bytes().to_vec());
     framebuffer_upadate(0, 0, width, height, ENCODING_DESKTOPRESIZE, buf);
+    Ok(())
 }
 
 /// Set color depth for client.

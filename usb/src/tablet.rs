@@ -28,7 +28,7 @@ use crate::usb::{
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
-use vnc::input::{register_pointer, PointerOpts};
+use ui::input::{register_pointer, PointerOpts};
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;

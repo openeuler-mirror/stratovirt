@@ -1,10 +1,10 @@
 [package]
-name = "vnc"
+name = "ui"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"
 license = "Mulan PSL v2"
-description = "Visual Network Computing"
+description = "User Interface"
 
 [dependencies]
 thiserror = "1.0"

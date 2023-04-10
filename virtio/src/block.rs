@@ -424,13 +424,12 @@ impl BlockIoHandler {
                 || req.out_header.request_type == VIRTIO_BLK_T_OUT;
             let can_merge = match last_req {
                 Some(ref req_ref) => {
-                    io && merged_reqs < MAX_NUM_MERGE_REQS
+                    io && req_ref.out_header.request_type == req.out_header.request_type
+                        // Note: sector plus sector_num has been checked not overflow.
+                        && (req_ref.out_header.sector + req_ref.get_req_sector_num() == req.out_header.sector)
+                        && merged_reqs < MAX_NUM_MERGE_REQS
                         && merged_iovs + req_iovs <= MAX_NUM_MERGE_IOVS
                         && merged_bytes + req_bytes <= MAX_NUM_MERGE_BYTES
-                        && req_ref.out_header.request_type == req.out_header.request_type
-                        // Note: sector plus sector_num has been checked not overflow.
-                        && (req_ref.out_header.sector + req_ref.get_req_sector_num()
-                            == req.out_header.sector)
                 }
                 None => false,
             };

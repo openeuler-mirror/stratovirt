@@ -11,24 +11,21 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    auth::SaslAuth,
-    auth::{AuthState, SaslConfig, SubAuthState},
-    client::vnc_write,
-    client::{vnc_flush, ClientIoHandler, ClientState},
     console::{DisplayChangeListener, DisplayMouse},
+    error::VncError,
     input::KeyBoardState,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
         get_image_width, pixman_image_linebuf_create, pixman_image_linebuf_fill,
         unref_pixman_image,
     },
-    round_up_div,
-    vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
     vnc::{
-        update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+        auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
+        auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState},
+        round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
         VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
-    VncError,
 };
 use anyhow::{anyhow, Result};
 use log::{error, info};
@@ -262,7 +259,6 @@ impl SecurityType {
         }
 
         if !is_x509 && !is_anon {
-            error!("Unsupported tls cred type");
             return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
                 "Unsupported tls cred type",
             ))));
@@ -337,7 +333,7 @@ impl VncSurface {
 
     /// Flush dirty data from guest_image to server_image.
     /// Return the number of dirty area.
-    pub fn update_server_image(&mut self) -> i32 {
+    pub fn update_server_image(&mut self) -> Result<i32> {
         let mut dirty_num = 0;
         let height = self.get_min_height() as usize;
         let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
@@ -348,7 +344,7 @@ impl VncSurface {
             .unwrap_or(total_dirty_bits);
 
         if offset >= total_dirty_bits {
-            return dirty_num;
+            return Ok(dirty_num);
         }
 
         let mut s_info = ImageInfo::new(self.server_image);
@@ -390,7 +386,7 @@ impl VncSurface {
                 g_info.ptr = (g_info.data as usize + y * g_info.stride as usize) as *mut u8;
             }
             g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
-            dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
+            dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes)?;
             y += 1;
             offset = self
                 .guest_dirty_bitmap
@@ -402,7 +398,7 @@ impl VncSurface {
         }
 
         unref_pixman_image(line_buf);
-        dirty_num
+        Ok(dirty_num)
     }
 
     /// Update each line
@@ -419,7 +415,7 @@ impl VncSurface {
         s_info: &mut ImageInfo,
         g_info: &mut ImageInfo,
         cmp_bytes: usize,
-    ) -> i32 {
+    ) -> Result<i32> {
         let mut count = 0;
         let width = self.get_min_width();
         let line_bytes = cmp::min(s_info.stride, g_info.length);
@@ -436,8 +432,7 @@ impl VncSurface {
                 continue;
             }
             self.guest_dirty_bitmap
-                .clear(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap_or_else(|e| error!("Error occurrs during clearing the bitmap: {:?}", e));
+                .clear(x + y * VNC_BITMAP_WIDTH as usize)?;
             let mut _cmp_bytes = cmp_bytes;
             if (x + 1) * cmp_bytes > line_bytes as usize {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
@@ -460,7 +455,7 @@ impl VncSurface {
                 ptr::copy(g_info.ptr, s_info.ptr, _cmp_bytes);
             };
 
-            set_dirty_for_each_clients(x, y);
+            set_dirty_for_each_clients(x, y)?;
             count += 1;
 
             x += 1;
@@ -468,7 +463,7 @@ impl VncSurface {
             s_info.ptr = (s_info.ptr as usize + cmp_bytes) as *mut u8;
         }
 
-        count
+        Ok(count)
     }
 }
 
@@ -477,7 +472,7 @@ impl VncSurface {
 /// # Arguments
 ///
 /// * `x` `y`- coordinates of dirty area.
-fn set_dirty_for_each_clients(x: usize, y: usize) {
+fn set_dirty_for_each_clients(x: usize, y: usize) -> Result<()> {
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let mut locked_handlers = server.client_handlers.lock().unwrap();
     for client in locked_handlers.values_mut() {
@@ -485,9 +480,9 @@ fn set_dirty_for_each_clients(x: usize, y: usize) {
             .dirty_bitmap
             .lock()
             .unwrap()
-            .set(x + y * VNC_BITMAP_WIDTH as usize)
-            .unwrap_or_else(|e| error!("{:?}", e));
+            .set(x + y * VNC_BITMAP_WIDTH as usize)?;
     }
+    Ok(())
 }
 
 /// Accpet client's connection.
@@ -523,8 +518,7 @@ pub fn handle_connection(
 
     EventLoop::update_event(EventNotifierHelper::internal_notifiers(client_io), None)?;
 
-    update_server_surface(server);
-    Ok(())
+    update_server_surface(server)
 }
 
 /// make configuration for VncServer

@@ -89,13 +89,13 @@ pub struct DisplayMouse {
 /// called to display images on the user's desktop.
 pub trait DisplayChangeListenerOperations {
     /// Switch the image in display surface.
-    fn dpy_switch(&self, _surface: &DisplaySurface) {}
+    fn dpy_switch(&self, _surface: &DisplaySurface) -> Result<()>;
     /// Refresh the image.
-    fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) {}
+    fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()>;
     /// Update image.
-    fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) {}
+    fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<()>;
     /// Update the cursor data.
-    fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) {}
+    fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()>;
 }
 
 /// Callback functions registered by graphic hardware.
@@ -234,7 +234,10 @@ pub fn display_refresh() {
 
     for dcl in &mut related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
-        (*dcl_opts).dpy_refresh(dcl);
+        if let Err(e) = (*dcl_opts).dpy_refresh(dcl) {
+            error!("{}", e);
+            return;
+        }
 
         // Update refresh interval.
         dcl_interval = dcl.lock().unwrap().update_interval;
@@ -320,7 +323,7 @@ pub fn display_replace_surface(
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Some(s) = &con.lock().unwrap().surface.clone() {
-            (*dcl_opts).dpy_switch(s);
+            (*dcl_opts).dpy_switch(s)?;
         }
     }
     Ok(())
@@ -372,7 +375,7 @@ pub fn display_graphic_update(
 
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
-        (*dcl_opts).dpy_image_update(x, y, w, h);
+        (*dcl_opts).dpy_image_update(x, y, w, h)?;
     }
     Ok(())
 }
@@ -409,7 +412,7 @@ pub fn display_cursor_define(
 
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
-        (*dcl_opts).dpy_cursor_update(cursor);
+        (*dcl_opts).dpy_cursor_update(cursor)?;
     }
     Ok(())
 }
@@ -452,7 +455,7 @@ pub fn register_display(dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
     let console = CONSOLES.lock().unwrap().get_console_by_id(con_id);
     if let Some(con) = console {
         if let Some(surface) = &mut con.lock().unwrap().surface.clone() {
-            (*dcl_opts).dpy_switch(surface);
+            (*dcl_opts).dpy_switch(surface)?;
         }
     } else {
         let mut place_holder_image = create_msg_surface(
@@ -461,7 +464,7 @@ pub fn register_display(dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
             "This VM has no graphic display device.".to_string(),
         );
         if let Some(surface) = &mut place_holder_image {
-            (*dcl_opts).dpy_switch(surface);
+            (*dcl_opts).dpy_switch(surface)?;
         }
     }
 
@@ -602,7 +605,7 @@ pub fn console_select(con_id: Option<usize>) -> Result<()> {
     for dcl in related_listeners {
         let dpy_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Some(s) = &mut con.lock().unwrap().surface {
-            (*dpy_opts).dpy_switch(s);
+            (*dpy_opts).dpy_switch(s)?;
         }
     }
 
@@ -658,7 +661,23 @@ mod tests {
     use super::*;
     use machine_manager::config::VmConfig;
     pub struct DclOpts {}
-    impl DisplayChangeListenerOperations for DclOpts {}
+    impl DisplayChangeListenerOperations for DclOpts {
+        fn dpy_switch(&self, _surface: &DisplaySurface) -> Result<()> {
+            Ok(())
+        }
+
+        fn dpy_refresh(&self, _dcl: &Arc<Mutex<DisplayChangeListener>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<()> {
+            Ok(())
+        }
+
+        fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()> {
+            Ok(())
+        }
+    }
     struct HwOpts {}
     impl HardWareOperations for HwOpts {}
 

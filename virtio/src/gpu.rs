@@ -36,6 +36,10 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
+use ui::console::{
+    console_close, console_init, display_cursor_define, display_graphic_update,
+    display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
+};
 use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
 use util::byte_code::ByteCode;
 use util::loop_context::{
@@ -52,10 +56,6 @@ use util::pixman::{
 };
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-use vnc::console::{
-    console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
-};
 
 // number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;

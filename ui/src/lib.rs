@@ -10,17 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod cmdline;
-pub mod fs;
-pub mod fs_ops;
-pub mod fuse_msg;
-pub mod fuse_proc;
-pub mod fuse_req;
-pub mod sandbox;
-pub mod securecomputing;
-pub mod vhost_user_fs;
-pub mod vhost_user_server;
-pub mod virtio_fs;
-
+pub mod console;
+mod data;
 pub mod error;
-pub use error::VhostUserFsError;
+pub mod input;
+pub mod pixman;
+pub mod utils;
+pub mod vnc;

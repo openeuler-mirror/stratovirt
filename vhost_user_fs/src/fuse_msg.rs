@@ -10,6 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp;
+use std::collections::VecDeque;
+use std::ffi::CString;
+use std::mem::size_of;
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+use log::error;
+
+use address_space::AddressSpace;
+use util::byte_code::ByteCode;
+use virtio::ElemIovec;
+
 pub const FUSE_LOOKUP: u32 = 1;
 pub const FUSE_FORGET: u32 = 2;
 pub const FUSE_GETATTR: u32 = 3;
@@ -138,19 +151,6 @@ pub const FUSE_SET_ATTR_MTIME: u32 = 1 << 5;
 pub const FUSE_SET_ATTR_ATIME_NOW: u32 = 1 << 7;
 pub const FUSE_SET_ATTR_MTIME_NOW: u32 = 1 << 8;
 pub const FUSE_SET_ATTR_CTIME: u32 = 1 << 10;
-
-use std::cmp;
-use std::collections::VecDeque;
-use std::ffi::CString;
-use std::mem::size_of;
-use std::sync::Arc;
-
-use address_space::AddressSpace;
-use log::error;
-use util::byte_code::ByteCode;
-
-use anyhow::{bail, Context, Result};
-use virtio::ElemIovec;
 
 /// Get the buffers from the element of virtio queue to parse fuse message or
 /// reply fuse message.

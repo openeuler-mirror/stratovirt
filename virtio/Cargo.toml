@@ -28,4 +28,4 @@ acpi = { path = "../acpi" }
 devices = {path = "../devices"}
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
-vnc = { path = "../vnc" }
+ui = { path = "../ui" }

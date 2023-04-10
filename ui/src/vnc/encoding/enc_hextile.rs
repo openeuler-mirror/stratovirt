@@ -10,9 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::client::{DisplayMode, Rectangle};
-use crate::pixman::{bytes_per_pixel, get_image_data, get_image_stride};
-use crate::vnc::write_pixel;
+use crate::{
+    pixman::{bytes_per_pixel, get_image_data, get_image_stride},
+    vnc::{
+        client_io::{DisplayMode, Rectangle},
+        write_pixel,
+    },
+};
 use std::{cmp, mem};
 use util::pixman::pixman_image_t;
 
@@ -355,12 +359,14 @@ fn pixel_statistical<'a>(
 mod tests {
     use super::hextile_send_framebuffer_update;
     use crate::{
-        client::{DisplayMode, Rectangle, ENCODING_HEXTILE},
-        encoding::test_hextile_image_data::{
-            IMAGE_DATA_MULTI_PIXELS, IMAGE_DATA_SINGLE_PIXEL, IMAGE_DATA_TWO_PIXEL,
-            TARGET_DATA_MULTI_PIXELS, TARGET_DATA_SINGLE_PIXEL, TARGET_DATA_TWO_PIXEL,
-        },
         pixman::{create_pixman_image, PixelFormat},
+        vnc::{
+            client_io::{DisplayMode, Rectangle, ENCODING_HEXTILE},
+            encoding::test_hextile_image_data::{
+                IMAGE_DATA_MULTI_PIXELS, IMAGE_DATA_SINGLE_PIXEL, IMAGE_DATA_TWO_PIXEL,
+                TARGET_DATA_MULTI_PIXELS, TARGET_DATA_SINGLE_PIXEL, TARGET_DATA_TWO_PIXEL,
+            },
+        },
     };
     use util::pixman::pixman_format_code_t;
     fn color_init() -> PixelFormat {

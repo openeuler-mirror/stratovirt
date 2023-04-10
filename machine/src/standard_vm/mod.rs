@@ -23,15 +23,15 @@ pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+#[cfg(not(target_env = "musl"))]
+use ui::{
+    input::{key_event, point_event},
+    vnc::qmp_query_vnc,
+};
 use util::aio::AioEngine;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
-#[cfg(not(target_env = "musl"))]
-use vnc::{
-    input::{key_event, point_event},
-    vnc::qmp_query_vnc,
-};
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
