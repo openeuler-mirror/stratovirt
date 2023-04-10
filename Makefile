@@ -19,3 +19,4 @@ yum-deps:
 	@yum install libcap-ng-devel
 	@yum install cyrus-sasl-devel
 	@yum install pulseaudio
+	@yum install clang

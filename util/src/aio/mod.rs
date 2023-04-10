@@ -98,6 +98,10 @@ impl Iovec {
             iov_len: len,
         }
     }
+
+    pub fn is_none(&self) -> bool {
+        self.iov_base == 0 && self.iov_len == 0
+    }
 }
 
 /// The trait for Asynchronous IO operation.
