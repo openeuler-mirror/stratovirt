@@ -468,12 +468,6 @@ pub trait UsbDescriptorOps {
 
     /// Init descriptor with the device descriptor and string descriptors.
     fn init_descriptor(&mut self, desc: Arc<UsbDescDevice>, str: Vec<String>) -> Result<()>;
-
-    /// Init device qualifier descriptor.
-    fn init_device_qualifier_descriptor(
-        &mut self,
-        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
-    ) -> Result<()>;
 }
 
 impl UsbDescriptorOps for UsbDevice {
@@ -569,14 +563,6 @@ impl UsbDescriptorOps for UsbDevice {
         self.descriptor.device_desc = Some(device_desc);
         self.descriptor.strings = str;
         self.set_config_descriptor(0)?;
-        Ok(())
-    }
-
-    fn init_device_qualifier_descriptor(
-        &mut self,
-        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
-    ) -> Result<()> {
-        self.descriptor.device_qualifier_desc = Some(device_qualifier_desc);
         Ok(())
     }
 }

@@ -26,15 +26,6 @@ use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use crate::aio::Iovec;
 
-macro_rules! fourcc_code {
-    ($a: expr, $b: expr, $c: expr, $d: expr) => {
-        $a as u32 | (($b as u32) << 8) | (($c as u32) << 16) | (($d as u32) << 24)
-    };
-}
-
-pub const V4L2_FORMAT_YUYV: u32 = fourcc_code!('Y', 'U', 'Y', 'V');
-pub const V4L2_FORMAT_MJPG: u32 = fourcc_code!('M', 'J', 'P', 'G');
-
 const VIDEO: u32 = 86;
 
 ioctl_ior_nr!(VIDIOC_QUERYCAP, VIDEO, 0, v4l2_capability);
