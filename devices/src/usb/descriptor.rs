@@ -173,6 +173,20 @@ struct UsbSuperSpeedCapDescriptor {
 
 impl ByteCode for UsbSuperSpeedCapDescriptor {}
 
+/// USB super speed endpoint companion descriptor for transfer.
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct UsbSuperSpeedEndpointCompDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bMaxBurst: u8,
+    pub bmAttributes: u8,
+    pub wBytesPerInterval: u16,
+}
+
+impl ByteCode for UsbSuperSpeedEndpointCompDescriptor {}
+
 /// USB device descriptor.
 pub struct UsbDescDevice {
     pub device_desc: UsbDeviceDescriptor,
