@@ -18,9 +18,12 @@ pub mod v4l2;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use util::aio::Iovec;
+
+/// Frame interval in 100ns units.
+pub const INTERVALS_PER_SEC: u32 = 10_000_000;
 
 #[allow(dead_code)]
 #[derive(Default)]
@@ -41,12 +44,21 @@ impl CamFmt {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CamBasicFmt {
     width: u32,
     height: u32,
     fps: u32,
     fmttype: FmtType,
+}
+
+impl CamBasicFmt {
+    pub fn get_frame_intervals(&self) -> Result<u32> {
+        if self.fps == 0 {
+            bail!("Invalid fps!");
+        }
+        Ok(INTERVALS_PER_SEC / self.fps)
+    }
 }
 
 #[allow(dead_code)]
@@ -67,6 +79,7 @@ pub struct CamLensFmt {
     // TODO: to be extended.
 }
 
+#[derive(Debug)]
 pub enum FmtType {
     Uncompressed = 0,
     Mjpg,
@@ -78,6 +91,7 @@ impl Default for FmtType {
     }
 }
 
+#[derive(Debug)]
 pub struct CameraFrame {
     pub width: u32,
     pub height: u32,
@@ -104,10 +118,10 @@ pub trait CameraHostdevOps: Send + Sync {
     fn set_ctl(&self) -> Result<()>;
 
     // Turn stream on to start to receive frame buffer.
-    fn video_stream_on(&self) -> Result<()>;
+    fn video_stream_on(&mut self) -> Result<()>;
 
     // Turn stream off to end receiving frame buffer.
-    fn video_stream_off(&self) -> Result<()>;
+    fn video_stream_off(&mut self) -> Result<()>;
 
     /// List all formats supported by backend.
     fn list_format(&mut self) -> Result<Vec<CameraFormatList>>;

@@ -23,7 +23,7 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use super::config::USB_SPEED_HIGH;
 use super::xhci::xhci_controller::XhciDevice;
-use crate::camera_backend::{v4l2::V4l2HostDev, CameraHostdevOps};
+use crate::camera_backend::{v4l2::V4l2CameraBackend, CameraHostdevOps};
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
 use crate::usb::{
@@ -452,8 +452,8 @@ impl UsbCamera {
     fn set_hostdev(&mut self) -> Result<()> {
         match self.backend_type {
             CamBackendType::V4l2 => {
-                let mut hostdev = V4l2HostDev::new(self.backend_path.clone());
-                hostdev.realize()?;
+                let hostdev =
+                    V4l2CameraBackend::new(self.id.clone(), self.backend_path.clone(), None)?;
                 self.hostdev = Some(Box::new(hostdev));
             }
             _ => {
