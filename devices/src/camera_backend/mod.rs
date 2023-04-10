@@ -144,3 +144,31 @@ pub trait CameraHostdevOps: Send + Sync {
     /// Register broken callback which is called when backend is broken.
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
+
+pub fn get_format_by_index(format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
+    let fmttype = if format_index == 1 {
+        FmtType::Mjpg
+    } else if format_index == 2 {
+        FmtType::Uncompressed
+    } else {
+        bail!("Invalid format index {}", format_index);
+    };
+
+    let width_height_list = [(960, 540), (1280, 720), (640, 480)];
+    let fps_list = [5, 10, 30];
+    if width_height_list.get((frame_index - 1) as usize).is_none() {
+        bail!("Invalid frame index {}", frame_index);
+    }
+    let fps = if format_index == 1 {
+        30
+    } else {
+        fps_list[(frame_index - 1) as usize]
+    };
+
+    Ok(CamBasicFmt {
+        width: width_height_list[(frame_index - 1) as usize].0,
+        height: width_height_list[(frame_index - 1) as usize].1,
+        fmttype,
+        fps,
+    })
+}
