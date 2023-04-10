@@ -758,13 +758,13 @@ pub trait MachineOps {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         let mut need_irqfd = false;
         let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
+            need_irqfd = true;
             if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
                 Arc::new(Mutex::new(VhostKern::Net::new(
                     &device_cfg,
                     self.get_sys_mem(),
                 )))
             } else {
-                need_irqfd = true;
                 Arc::new(Mutex::new(VhostUser::Net::new(
                     &device_cfg,
                     self.get_sys_mem(),
