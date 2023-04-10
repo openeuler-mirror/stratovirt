@@ -363,6 +363,7 @@ dependencies = [
  "thiserror",
  "ui",
  "util",
+ "v4l2-sys-mit",
  "vmm-sys-util",
 ]
 
