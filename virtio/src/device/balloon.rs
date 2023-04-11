@@ -53,7 +53,7 @@ use crate::{
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
 /// The feature for Auto-balloon
-const VIRTIO_BALLOON_F_MESSAGE_VQ: u32 = 6;
+const VIRTIO_BALLOON_F_MESSAGE_VQ: u32 = 16;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
 const QUEUE_NUM_BALLOON: usize = 2;
 const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
