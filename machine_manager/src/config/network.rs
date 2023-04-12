@@ -174,9 +174,7 @@ fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
 
 fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     let mut net = NetDevcfg::default();
-    let netdev_type = cmd_parser
-        .get_value::<String>("")?
-        .unwrap_or_else(|| "".to_string());
+    let netdev_type = cmd_parser.get_value::<String>("")?.unwrap_or_default();
     if netdev_type.ne("tap") && netdev_type.ne("vhost-user") {
         bail!("Unsupported netdev type: {:?}", &netdev_type);
     }
@@ -276,9 +274,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     let netdev = cmd_parser
         .get_value::<String>("netdev")?
         .with_context(|| ConfigError::FieldIsMissing("netdev".to_string(), "net".to_string()))?;
-    let netid = cmd_parser
-        .get_value::<String>("id")?
-        .unwrap_or_else(|| "".to_string());
+    let netid = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
 
     if let Some(mq) = cmd_parser.get_value::<ExBool>("mq")? {
         netdevinterfacecfg.mq = mq.inner;

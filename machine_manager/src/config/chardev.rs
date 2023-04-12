@@ -449,9 +449,7 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
     pci_args_check(&cmd_parser)?;
 
     if vm_config.virtio_serial.is_none() {
-        let id = cmd_parser
-            .get_value::<String>("id")?
-            .unwrap_or_else(|| "".to_string());
+        let id = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
         let multifunction = cmd_parser
             .get_value::<ExBool>("multifunction")?
             .map_or(false, |switch| switch.into());
