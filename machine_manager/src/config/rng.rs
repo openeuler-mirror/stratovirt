@@ -85,9 +85,7 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
         .get_value::<String>("rng")?
         .with_context(|| ConfigError::FieldIsMissing("rng".to_string(), "rng".to_string()))?;
 
-    rng_cfg.id = cmd_parser
-        .get_value::<String>("id")?
-        .unwrap_or_else(|| "".to_string());
+    rng_cfg.id = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
 
     if let Some(max) = cmd_parser.get_value::<u64>("max-bytes")? {
         if let Some(peri) = cmd_parser.get_value::<u64>("period")? {
