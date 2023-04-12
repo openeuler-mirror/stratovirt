@@ -516,13 +516,10 @@ impl PciConfig {
         if let Err(err) = self.validate_config_boundary(offset, buf) {
             warn!("invalid read: {:?}", err);
             return;
-        };
-        if ranges_overlap(
-            offset,
-            offset + buf.len(),
-            STATUS as usize,
-            (STATUS + 1) as usize,
-        ) {
+        }
+
+        let size = buf.len();
+        if ranges_overlap(offset, size, STATUS as usize, 1) {
             if let Some(intx) = &self.intx {
                 if intx.lock().unwrap().level == 1 {
                     self.config[STATUS as usize] |= STATUS_INTERRUPT;
@@ -532,7 +529,6 @@ impl PciConfig {
             }
         }
 
-        let size = buf.len();
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
     }
 
@@ -577,7 +573,6 @@ impl PciConfig {
 
         let cloned_data = data.to_vec();
         let old_offset = offset;
-        let end = offset + data.len();
         for data in &cloned_data {
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
                 | (data & self.write_mask[offset]);
@@ -586,19 +581,15 @@ impl PciConfig {
         }
 
         let (bar_num, rom_addr) = match self.config[HEADER_TYPE as usize] & HEADER_TYPE_BRIDGE {
-            HEADER_TYPE_BRIDGE => (BAR_NUM_MAX_FOR_BRIDGE, ROM_ADDRESS_BRIDGE),
-            _ => (BAR_NUM_MAX_FOR_ENDPOINT, ROM_ADDRESS_ENDPOINT),
+            HEADER_TYPE_BRIDGE => (BAR_NUM_MAX_FOR_BRIDGE as usize, ROM_ADDRESS_BRIDGE),
+            _ => (BAR_NUM_MAX_FOR_ENDPOINT as usize, ROM_ADDRESS_ENDPOINT),
         };
 
-        let cmd_overlap = ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize);
+        let size = data.len();
+        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1);
         if cmd_overlap
-            || ranges_overlap(
-                old_offset,
-                end,
-                BAR_0 as usize,
-                BAR_0 as usize + REG_SIZE * bar_num as usize,
-            )
-            || ranges_overlap(old_offset, end, rom_addr, rom_addr + 4)
+            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num)
+            || ranges_overlap(old_offset, size, rom_addr, 4)
         {
             if let Err(e) = self.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
