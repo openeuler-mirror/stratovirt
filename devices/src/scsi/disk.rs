@@ -46,8 +46,6 @@ pub const SCSI_DISK_F_DPOFUA: u32 = 1;
 
 /// Used to compute the number of sectors.
 pub const SECTOR_SHIFT: u8 = 9;
-/// Size of the dummy block device.
-const DUMMY_IMG_SIZE: u64 = 0;
 pub const DEFAULT_SECTOR_SIZE: u32 = 1_u32 << SECTOR_SHIFT;
 
 /// Scsi disk's block size is 512 Bytes.
@@ -155,26 +153,18 @@ impl ScsiDevice {
         if let Some(serial) = &self.config.serial {
             self.state.serial = serial.clone();
         }
-        let mut disk_size = DUMMY_IMG_SIZE;
 
-        if !self.config.path_on_host.is_empty() {
-            self.disk_image = None;
+        let drive_files = self.drive_files.lock().unwrap();
+        // File path can not be empty string. And it has also been checked in CmdParser::parse.
+        let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
+        let disk_size = file
+            .seek(SeekFrom::End(0))
+            .with_context(|| "Failed to seek the end for scsi device")?;
+        self.disk_image = Some(Arc::new(file));
 
-            let drive_files = self.drive_files.lock().unwrap();
-            let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
-            disk_size = file
-                .seek(SeekFrom::End(0))
-                .with_context(|| "Failed to seek the end for scsi device")?;
-            self.disk_image = Some(Arc::new(file));
-
-            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
-            self.req_align = alignments.0;
-            self.buf_align = alignments.1;
-        } else {
-            self.disk_image = None;
-            self.req_align = 1;
-            self.buf_align = 1;
-        }
+        let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
+        self.req_align = alignments.0;
+        self.buf_align = alignments.1;
 
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
 
