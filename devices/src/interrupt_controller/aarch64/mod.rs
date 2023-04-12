@@ -31,7 +31,7 @@ use util::{
 };
 
 // First 32 are private to each CPU (SGIs and PPIs).
-pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
+pub const GIC_IRQ_INTERNAL: u32 = 32;
 // Last usable IRQ on aarch64.
 pub const GIC_IRQ_MAX: u32 = 192;
 

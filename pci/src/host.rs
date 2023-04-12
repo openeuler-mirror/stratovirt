@@ -13,10 +13,12 @@
 use std::sync::{Arc, Mutex};
 
 use acpi::{
-    AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable, AmlCreateDWordField,
-    AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf, AmlInteger,
-    AmlLNot, AmlLocal, AmlMethod, AmlName, AmlNameDecl, AmlOr, AmlReadAndWrite, AmlResTemplate,
-    AmlReturn, AmlScopeBuilder, AmlStore, AmlToUuid, AmlWordDesc, AmlZero,
+    AmlActiveLevel, AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable,
+    AmlCreateDWordField, AmlDWord, AmlDWordDesc, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlElse,
+    AmlEqual, AmlExtendedInterrupt, AmlISARanges, AmlIf, AmlIntShare, AmlInteger, AmlLNot,
+    AmlLocal, AmlMethod, AmlName, AmlNameDecl, AmlOr, AmlPackage, AmlReadAndWrite, AmlResTemplate,
+    AmlResourceUsage, AmlReturn, AmlScopeBuilder, AmlStore, AmlString, AmlToUuid, AmlWordDesc,
+    AmlZero,
 };
 #[cfg(target_arch = "x86_64")]
 use acpi::{AmlIoDecode, AmlIoResource};
@@ -26,7 +28,10 @@ use address_space::{AddressSpace, GuestAddress, RegionOps};
 use anyhow::Context;
 use sysbus::SysBusDevOps;
 
-use crate::{bus::PciBus, PciDevOps};
+#[cfg(target_arch = "aarch64")]
+use crate::PCI_INTR_BASE;
+use crate::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
+
 #[cfg(target_arch = "x86_64")]
 use crate::{le_read_u32, le_write_u32};
 
@@ -56,6 +61,7 @@ pub struct PciHost {
     pcie_pio_range: (u64, u64),
     #[cfg(target_arch = "aarch64")]
     high_pcie_mmio_range: (u64, u64),
+    pub intx_gsi_base: i32,
 }
 
 impl PciHost {
@@ -69,6 +75,7 @@ impl PciHost {
     /// * `pcie_mmio_range` - PCIe MMIO base address and length.
     /// * `pcie_pio_range` - PCIe PIO base addreass and length (only on aarch64).
     /// * `high_pcie_mmio_range` - PCIe high MMIO base address and length (only on aarch64).
+    /// * `intx_gsi_base` - PCIe INTx gsi base.
     pub fn new(
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
@@ -76,6 +83,7 @@ impl PciHost {
         pcie_mmio_range: (u64, u64),
         #[cfg(target_arch = "aarch64")] pcie_pio_range: (u64, u64),
         #[cfg(target_arch = "aarch64")] high_pcie_mmio_range: (u64, u64),
+        intx_gsi_base: i32,
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -96,6 +104,7 @@ impl PciHost {
             pcie_pio_range,
             #[cfg(target_arch = "aarch64")]
             high_pcie_mmio_range,
+            intx_gsi_base,
         }
     }
 
@@ -361,6 +370,53 @@ fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
     pci_host_bridge.append_child(method);
 }
 
+fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
+    let mut prt_pkg = AmlPackage::new(PCI_SLOT_MAX * PCI_PIN_NUM);
+    (0..PCI_SLOT_MAX).for_each(|slot| {
+        (0..PCI_PIN_NUM).for_each(|pin| {
+            let gsi = (pin + slot) % PCI_PIN_NUM;
+            let mut pkg = AmlPackage::new(4);
+            pkg.append_child(AmlDWord(((slot as u32) << 16) as u32 | 0xFFFF));
+            pkg.append_child(AmlDWord(pin as u32));
+            pkg.append_child(AmlName(format!("GSI{}", gsi)));
+            pkg.append_child(AmlZero);
+            prt_pkg.append_child(pkg);
+        });
+    });
+    pci_bus.append_child(AmlNameDecl::new("_PRT", prt_pkg));
+
+    for i in 0..PCI_PIN_NUM {
+        #[cfg(target_arch = "x86_64")]
+        let irqs = irq as u8 + i;
+        #[cfg(target_arch = "aarch64")]
+        let irqs = irq as u8 + PCI_INTR_BASE + i;
+        let mut gsi = AmlDevice::new(format!("GSI{}", i).as_str());
+        gsi.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0C0F")));
+        gsi.append_child(AmlNameDecl::new("_UID", AmlString(i.to_string())));
+        let mut crs = AmlResTemplate::new();
+        crs.append_child(AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![irqs as u32],
+        ));
+        gsi.append_child(AmlNameDecl::new("_PRS", crs));
+        let mut crs = AmlResTemplate::new();
+        crs.append_child(AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![irqs as u32],
+        ));
+        gsi.append_child(AmlNameDecl::new("_CRS", crs));
+        let method = AmlMethod::new("_SRS", 1, false);
+        gsi.append_child(method);
+        pci_bus.append_child(gsi);
+    }
+}
+
 impl AmlBuilder for PciHost {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut pci_host_bridge = AmlDevice::new("PCI0");
@@ -453,6 +509,8 @@ impl AmlBuilder for PciHost {
             pcie_mmio.1 as u32,
         ));
         pci_host_bridge.append_child(AmlNameDecl::new("_CRS", crs));
+
+        build_prt_for_aml(&mut pci_host_bridge, self.intx_gsi_base);
 
         pci_host_bridge.aml_bytes()
     }
@@ -547,6 +605,7 @@ pub mod tests {
             (0xF000_0000, 0x1000_0000),
             #[cfg(target_arch = "aarch64")]
             (512 << 30, 512 << 30),
+            16,
         )))
     }
 

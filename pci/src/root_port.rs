@@ -28,18 +28,20 @@ use util::byte_code::ByteCode;
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
     DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE,
-    PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA,
+    PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_HP_EV_SPT, PCI_EXP_LNKSTA,
     PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1, PCI_EXP_SLOTSTA_EVENTS,
-    PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
-    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA,
-    PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
-    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, SUB_CLASS_CODE, VENDOR_ID,
+    PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_HPIE, PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC,
+    PCI_EXP_SLTCTL_PWR_IND_BLINK, PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON,
+    PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS,
+    PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT,
+    SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
 use crate::hotplug::HotplugOps;
+use crate::intx::init_intx;
 use crate::msix::init_msix;
-use crate::{init_multifunction, PciError};
+use crate::{init_multifunction, PciError, PciIntxState, INTERRUPT_PIN};
 use crate::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
@@ -75,6 +77,7 @@ pub struct RootPort {
     mem_region: Region,
     dev_id: Arc<AtomicU16>,
     multifunction: bool,
+    hpev_notified: bool,
 }
 
 impl RootPort {
@@ -115,6 +118,7 @@ impl RootPort {
             mem_region,
             dev_id: Arc::new(AtomicU16::new(0)),
             multifunction,
+            hpev_notified: false,
         }
     }
 
@@ -129,13 +133,43 @@ impl RootPort {
         }
     }
 
+    fn update_hp_event_status(&mut self) {
+        let cap_offset = self.config.pci_express_cap_offset;
+        let slot_status =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let slot_control =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
+
+        self.hpev_notified = (slot_control & PCI_EXP_SLTCTL_HPIE != 0)
+            && (slot_status & slot_control & PCI_EXP_HP_EV_SPT != 0);
+    }
+
     fn hotplug_event_notify(&mut self) {
-        if let Some(msix) = self.config.msix.as_mut() {
-            msix.lock()
-                .unwrap()
-                .notify(0, self.dev_id.load(Ordering::Acquire));
-        } else {
-            error!("Failed to send interrupt: msix does not exist");
+        let last_event = self.hpev_notified;
+        self.update_hp_event_status();
+        if last_event == self.hpev_notified {
+            return;
+        }
+
+        let msix = self.config.msix.as_ref().unwrap();
+        let intx = self.config.intx.as_ref().unwrap();
+        let mut locked_msix = msix.lock().unwrap();
+        if locked_msix.enabled {
+            locked_msix.notify(0, self.dev_id.load(Ordering::Acquire));
+        } else if self.config.config[INTERRUPT_PIN as usize] != 0 {
+            intx.lock().unwrap().notify(self.hpev_notified as u8);
+        }
+    }
+
+    fn hotplug_event_clear(&mut self) {
+        self.update_hp_event_status();
+
+        let msix = self.config.msix.as_ref().unwrap();
+        let intx = self.config.intx.as_ref().unwrap();
+        let locked_msix = msix.lock().unwrap();
+        let intr_pin = self.config.config[INTERRUPT_PIN as usize];
+        if !locked_msix.enabled && intr_pin != 0 && !self.hpev_notified {
+            intx.lock().unwrap().notify(0);
         }
     }
 
@@ -316,12 +350,17 @@ impl PciDevOps for RootPort {
         config_space[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE;
         config_space[PREF_MEMORY_BASE as usize] = PREF_MEM_RANGE_64BIT;
         config_space[PREF_MEMORY_LIMIT as usize] = PREF_MEM_RANGE_64BIT;
+
         init_multifunction(
             self.multifunction,
             config_space,
             self.devfn,
             self.parent_bus.clone(),
         )?;
+
+        #[cfg(target_arch = "aarch64")]
+        self.config.set_interrupt_pin();
+
         self.config
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
 
@@ -334,6 +373,13 @@ impl PciDevOps for RootPort {
             &self.name,
             None,
             None,
+        )?;
+
+        init_intx(
+            self.name.clone(),
+            &mut self.config,
+            self.parent_bus.clone(),
+            self.devfn,
         )?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
@@ -432,11 +478,32 @@ impl PciDevOps for RootPort {
             self.register_region();
         }
 
+        let mut status =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let exp_slot_status = (cap_offset + PCI_EXP_SLTSTA) as usize;
+        if ranges_overlap(offset, end, exp_slot_status, exp_slot_status + 2) {
+            let new_status = le_read_u16(data, 0).unwrap();
+            if new_status & !old_status & PCI_EXP_SLOTSTA_EVENTS != 0 {
+                status = (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
+                if let Err(e) = le_write_u16(
+                    &mut self.config.config,
+                    (cap_offset + PCI_EXP_SLTSTA) as usize,
+                    status,
+                ) {
+                    error!("Failed to write config: {:?}", e);
+                }
+            }
+            self.hotplug_event_clear();
+        }
         self.do_unplug(offset, data, old_ctl, old_status);
     }
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn devfn(&self) -> Option<u8> {
+        Some(self.devfn)
     }
 
     /// Only set slot status to on, and no other device reset actions are implemented.
@@ -465,8 +532,9 @@ impl PciDevOps for RootPort {
                 PCI_EXP_LNKSTA_DLLLA,
             )?;
         }
+
         self.config.reset_bridge_regs()?;
-        self.config.reset_common_regs()
+        self.config.reset()
     }
 
     fn get_dev_path(&self) -> Option<String> {
@@ -474,6 +542,16 @@ impl PciDevOps for RootPort {
         let parent_dev_path = self.get_parent_dev_path(parent_bus);
         let dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/pci-bridge@");
         Some(dev_path)
+    }
+
+    fn get_intx_state(&self) -> Option<Arc<Mutex<PciIntxState>>> {
+        let intx = self.config.intx.as_ref().unwrap();
+        if intx.lock().unwrap().intx_state.is_some() {
+            let intx_state = intx.lock().unwrap().intx_state.as_ref().unwrap().clone();
+            return Some(intx_state);
+        }
+
+        None
     }
 }
 

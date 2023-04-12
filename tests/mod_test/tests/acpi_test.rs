@@ -23,8 +23,8 @@ use std::{cell::RefCell, mem, rc::Rc};
 use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libtest::{test_init, TestState};
 
-// Now dsdt table data length is 877.
-const DSDT_TABLE_DATA_LENGTH: u32 = 877;
+// Now dsdt table data length is 3482.
+const DSDT_TABLE_DATA_LENGTH: u32 = 3482;
 // Now fadt table data length is 276.
 const FADT_TABLE_DATA_LENGTH: u32 = 276;
 // Now madt table data length is 744.
@@ -37,10 +37,10 @@ const IORT_TABLE_DATA_LENGTH: u32 = 128;
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 3005(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 3005;
-// Now acpi tables data length is 29354(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 29354;
+// Now acpi tables data length is 5610(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 5610;
+// Now acpi tables data length is 31953(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 31953;
 
 fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     let file_name = "etc/acpi/rsdp";
@@ -171,7 +171,7 @@ fn check_spcr(data: &[u8]) {
         MEM_LAYOUT[LayoutEntryType::Uart as usize].0
     );
     assert_eq!(data[52], 1_u8 << 3); // Interrupt Type: Arm GIC interrupu
-    assert_eq!(LittleEndian::read_u32(&data[54..]), 66); // Irq number used by the UART
+    assert_eq!(LittleEndian::read_u32(&data[54..]), 39); // Irq number used by the UART
     assert_eq!(data[58], 3); // Set baud rate: 3 = 9600
     assert_eq!(data[60], 1); // Stop bit
     assert_eq!(data[61], 2); // Hardware flow control

@@ -20,7 +20,7 @@ use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
-use util::test_helper::{get_test_clock, has_msix_msg, set_test_clock};
+use util::test_helper::{eoi_intx, get_test_clock, has_msix_msg, query_intx, set_test_clock};
 use vmm_sys_util::epoll::EventSet;
 
 pub struct TestSock {
@@ -223,6 +223,22 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<Mutex<dyn MachineTestInter
             let addr = cmd[1].parse::<u64>().unwrap();
             let data = cmd[2].parse::<u32>().unwrap();
             match has_msix_msg(addr, data) {
+                true => handler.send_str("OK TRUE".to_string().as_str()).unwrap(),
+                false => handler.send_str("OK FALSE".to_string().as_str()).unwrap(),
+            }
+        }
+        "query_intx" => {
+            assert!(cmd.len() == 2);
+            let irq = cmd[1].parse::<u32>().unwrap();
+            match query_intx(irq) {
+                true => handler.send_str("OK TRUE".to_string().as_str()).unwrap(),
+                false => handler.send_str("OK FALSE".to_string().as_str()).unwrap(),
+            }
+        }
+        "eoi_intx" => {
+            assert!(cmd.len() == 2);
+            let irq = cmd[1].parse::<u32>().unwrap();
+            match eoi_intx(irq) {
                 true => handler.send_str("OK TRUE".to_string().as_str()).unwrap(),
                 false => handler.send_str("OK FALSE".to_string().as_str()).unwrap(),
             }
