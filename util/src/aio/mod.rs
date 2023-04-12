@@ -65,7 +65,7 @@ impl FromStr for AioEngine {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WriteZeroesState {
     Off,
     On,

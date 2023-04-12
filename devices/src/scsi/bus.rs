@@ -353,7 +353,7 @@ const GC_FC_CORE: u16 = 0x0001;
 /// The medium may be removed from the device.
 const GC_FC_REMOVEABLE_MEDIUM: u16 = 0x0003;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ScsiXferMode {
     /// TEST_UNIT_READY, ...
     ScsiXferNone,
