@@ -940,8 +940,8 @@ impl VirtioPciDevice {
     fn do_cfg_access(&mut self, start: usize, end: usize, is_write: bool) {
         let pci_cfg_data_offset =
             self.cfg_cap_offset + offset_of!(VirtioPciCfgAccessCap, pci_cfg_data);
-        let pci_cfg_data_end = self.cfg_cap_offset + size_of::<VirtioPciCfgAccessCap>();
-        if !ranges_overlap(start, end, pci_cfg_data_offset, pci_cfg_data_end) {
+        let cap_size = size_of::<VirtioPciCfgAccessCap>();
+        if !ranges_overlap(start, end - start, pci_cfg_data_offset, cap_size) {
             return;
         }
 
