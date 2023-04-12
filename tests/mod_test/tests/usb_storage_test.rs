@@ -17,8 +17,8 @@ use byteorder::{ByteOrder, LittleEndian};
 use devices::usb::{
     config::{USB_INTERFACE_CLASS_IN_REQUEST, USB_INTERFACE_CLASS_OUT_REQUEST},
     storage::{
-        CBW_FLAG_IN, CBW_FLAG_OUT, CBW_SIGNATURE, CBW_SIZE, CSW_SIGNATURE, CSW_SIZE, GET_MAX_LUN,
-        MASS_STORAGE_RESET,
+        UsbMsdCswStatus, CBW_FLAG_IN, CBW_FLAG_OUT, CBW_SIGNATURE, CBW_SIZE, CSW_SIGNATURE,
+        CSW_SIZE, GET_MAX_LUN, MASS_STORAGE_RESET,
     },
     xhci::{TRBCCode, TRB_SIZE},
     UsbDeviceRequest,
@@ -33,9 +33,12 @@ use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
 
 const READ_10: u8 = 0x28;
 const WRITE_10: u8 = 0x2a;
+const RESERVE: u8 = 0x16;
 
 const CBW_ILLEGAL_SIZE: u8 = CBW_SIZE - 1;
 const CSW_ILLEGAL_SIZE: u8 = CSW_SIZE - 1;
+
+const DISK_SECTOR_SIZE: usize = 512;
 
 struct Cbw {
     sig: u32,
@@ -98,6 +101,7 @@ fn data_phase(
     slot_id: u32,
     buf: &[u8],
     to_host: bool,
+    if_success: bool,
 ) {
     let mut iovecs = Vec::new();
     let ptr = guest_allocator.alloc(buf.len() as u64);
@@ -118,7 +122,11 @@ fn data_phase(
     }
 
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    if if_success {
+        assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    } else {
+        assert_ne!(evt.ccode, TRBCCode::Success as u32);
+    }
 
     if to_host {
         let data_buf = xhci.mem_read(ptr, buf.len());
@@ -169,7 +177,7 @@ fn usb_storage_basic() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "disk")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -194,13 +202,15 @@ fn usb_storage_basic() {
     );
 
     // Test 2: DataOut phase.
-    let buf = "TEST".as_bytes();
+    let mut buf = "TEST".as_bytes().to_vec();
+    buf.resize(DISK_SECTOR_SIZE, 0);
     data_phase(
         xhci.borrow_mut(),
         guest_allocator.borrow_mut(),
         slot_id,
-        buf,
+        &buf,
         false,
+        true,
     );
 
     // Test 3: CSW phase.
@@ -230,12 +240,12 @@ fn usb_storage_basic() {
     );
 
     // Test 5: Datain phase.
-    let buf = "TEST".as_bytes();
     data_phase(
         xhci.borrow_mut(),
         guest_allocator.borrow_mut(),
         slot_id,
-        buf,
+        &buf,
+        true,
         true,
     );
 
@@ -265,7 +275,7 @@ fn usb_storage_functional_reset() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, _) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -295,15 +305,17 @@ fn usb_storage_functional_reset() {
 /// TestStep:
 ///   0. Init process.
 ///   1. Get Max Lun.
-///   2. Test ends. Destroy device.
+///   2. Send CBW whose lun is greater than 'MAX LUN'.
+///   3. Test ends. Destroy device.
 /// Expect:
-///   0/1/2: success.
+///   0/1/3: success.
+///   2: Stallerror.
 #[test]
 fn usb_storage_functional_get_max_lun() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
-    let (xhci, test_state, _) = TestUsbBuilder::new()
+    let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -328,6 +340,23 @@ fn usb_storage_functional_get_max_lun() {
 
     assert_eq!(buf, [0]);
 
+    // Test: lun > 0 CBW phase.
+    let mut cbw = Cbw::new();
+    cbw.data_len = 512;
+    cbw.lun = 8;
+    cbw.flags = CBW_FLAG_IN;
+    cbw.cmd_len = 10;
+    cbw.cmd[0] = READ_10;
+    cbw.cmd[8] = 1;
+    cbw_phase(
+        cbw,
+        xhci,
+        guest_allocator.borrow_mut(),
+        slot_id,
+        TRBCCode::StallError,
+        CBW_SIZE,
+    );
+
     test_state.borrow_mut().stop();
     cleanup_img(image_path);
 }
@@ -345,7 +374,7 @@ fn usb_storage_illegal_request() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, _) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -384,7 +413,7 @@ fn usb_storage_cbw_signature() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -422,7 +451,7 @@ fn usb_storage_cbw_illegal_size() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -459,7 +488,7 @@ fn usb_storage_csw_illegal_size() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -500,13 +529,13 @@ fn usb_storage_csw_illegal_size() {
 ///   3. Test ends. Destroy device.
 /// Expect:
 ///   0/1/3: success.
-///   2: CSW signature verification failed.
+///   2: CSW StallError.
 #[test]
 fn usb_storage_abnormal_phase_01() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -535,7 +564,7 @@ fn usb_storage_abnormal_phase_01() {
         xhci.borrow_mut(),
         guest_allocator.borrow_mut(),
         slot_id,
-        TRBCCode::Success,
+        TRBCCode::StallError,
         CSW_SIZE,
         false,
     );
@@ -562,7 +591,7 @@ fn usb_storage_abnormal_phase_02() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -619,7 +648,7 @@ fn usb_storage_abnormal_phase_03() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -677,7 +706,7 @@ fn usb_storage_illegal_scsi_cdb() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -715,6 +744,112 @@ fn usb_storage_illegal_scsi_cdb() {
     cleanup_img(image_path);
 }
 
+/// USB storage device does not provide enough data buffer test.
+/// TestStep:
+///   0. Init process.
+///   1. CBW: read.
+///   2. DataIn: data read from device to host.
+///   3. Test ends. Destroy device.
+/// Expect:
+///   0/1/3: success.
+///   2: StallError.
+#[test]
+fn insufficient_data_buffer_test() {
+    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_usb_storage(&image_path, "cdrom")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+
+    let port_id = 1;
+    let slot_id = xhci.borrow_mut().init_device(port_id);
+
+    // Test 1: CBW phase.
+    let mut cbw = Cbw::new();
+    cbw.data_len = 512; // 512 Bytes data buffer.
+    cbw.flags = CBW_FLAG_IN;
+    cbw.cmd_len = 10;
+    cbw.cmd[0] = READ_10;
+    cbw.cmd[8] = 1; // Need 1 logical sector(CD-ROM: 2048Bytes).
+    cbw_phase(
+        cbw,
+        xhci.borrow_mut(),
+        guest_allocator.borrow_mut(),
+        slot_id,
+        TRBCCode::Success,
+        CBW_SIZE,
+    );
+
+    // Test 2: Datain phase.
+    let buf = vec![0; 512]; // Provides 512 Bytes datain buffer.
+    data_phase(
+        xhci.borrow_mut(),
+        guest_allocator.borrow_mut(),
+        slot_id,
+        &buf,
+        true,
+        false,
+    );
+
+    test_state.borrow_mut().stop();
+    cleanup_img(image_path);
+}
+
+/// USB storage device not supported scsi cdb test.
+/// TestStep:
+///   0. Init process.
+///   1. CBW.
+///   2. CSW.
+///   3. Test ends. Destroy device.
+/// Expect:
+///   0/1/2/3: success.
+///   2: CSW status = UsbMsdCswStatus::Failed.
+#[test]
+fn usb_storage_not_supported_scsi_cdb() {
+    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_usb_storage(&image_path, "cdrom")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+
+    let port_id = 1;
+    let slot_id = xhci.borrow_mut().init_device(port_id);
+
+    // Test 1: CBW phase.
+    let mut cbw = Cbw::new();
+    cbw.flags = CBW_FLAG_IN;
+    cbw.cmd_len = 10;
+    cbw.cmd[0] = RESERVE;
+    cbw_phase(
+        cbw,
+        xhci.borrow_mut(),
+        guest_allocator.borrow_mut(),
+        slot_id,
+        TRBCCode::Success,
+        CBW_SIZE,
+    );
+
+    // Test 2: CSW phase.
+    let csw_addr = csw_phase(
+        xhci.borrow_mut(),
+        guest_allocator.borrow_mut(),
+        slot_id,
+        TRBCCode::Success,
+        CSW_SIZE,
+        true,
+    );
+
+    let buf = xhci.borrow_mut().mem_read(csw_addr, CSW_SIZE as usize);
+    assert_eq!(UsbMsdCswStatus::Failed as u8, buf[12]);
+
+    test_state.borrow_mut().stop();
+    cleanup_img(image_path);
+}
+
 /// USB storage device CBW phase to invalid endpoint test.
 /// TestStep:
 ///   0. Init process.
@@ -728,7 +863,7 @@ fn usb_storage_cbw_invalid_endpoint() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();
@@ -772,7 +907,7 @@ fn usb_storage_csw_invalid_endpoint() {
     let image_path = create_img(TEST_IMAGE_SIZE, 0);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
-        .with_usb_storage(&image_path)
+        .with_usb_storage(&image_path, "cdrom")
         .with_config("auto_run", true)
         .with_config("command_auto_doorbell", true)
         .build();

@@ -12,12 +12,15 @@
 
 use std::{path::Path, str::FromStr};
 
-use super::error::ConfigError;
 use anyhow::{anyhow, bail, Context, Result};
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use crate::config::{check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, VmConfig};
+use super::error::ConfigError;
+use crate::config::{
+    check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, ScsiDevConfig, VmConfig,
+};
+use util::aio::AioEngine;
 
 /// XHCI controller configuration.
 #[derive(Debug)]
@@ -187,7 +190,9 @@ pub fn parse_usb_camera(conf: &str) -> Result<UsbCameraConfig> {
 
 fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
-    check_arg_too_long(&id.unwrap(), "id")
+    check_arg_too_long(&id.unwrap(), "id")?;
+
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -236,18 +241,18 @@ fn check_camera_path(path: Option<String>) -> Result<()> {
 pub struct UsbStorageConfig {
     /// USB Storage device id.
     pub id: Option<String>,
-    /// The image file path.
-    pub path_on_host: String,
-    /// USB Storage device can not do write operation.
-    pub read_only: bool,
+    /// The scsi backend config.
+    pub scsi_cfg: ScsiDevConfig,
+    /// The backend scsi device type(Disk or CD-ROM).
+    pub media: String,
 }
 
 impl UsbStorageConfig {
     fn new() -> Self {
-        UsbStorageConfig {
+        Self {
             id: None,
-            path_on_host: "".to_string(),
-            read_only: false,
+            scsi_cfg: ScsiDevConfig::default(),
+            media: "".to_string(),
         }
     }
 }
@@ -260,7 +265,13 @@ impl Default for UsbStorageConfig {
 
 impl ConfigCheck for UsbStorageConfig {
     fn check(&self) -> Result<()> {
-        check_id(self.id.clone(), "usb-storage")
+        check_id(self.id.clone(), "usb-storage")?;
+
+        if self.scsi_cfg.aio_type != AioEngine::Off || self.scsi_cfg.direct {
+            bail!("USB-storage: \"aio=off,direct=false\" must be configured.");
+        }
+
+        Ok(())
     }
 }
 
@@ -285,9 +296,12 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     let drive_arg = &vm_config
         .drives
         .remove(&storage_drive)
-        .with_context(|| "No drive configured matched for usb storage device")?;
-    dev.path_on_host = drive_arg.path_on_host.clone();
-    dev.read_only = drive_arg.read_only;
+        .with_context(|| "No drive configured matched for usb storage device.")?;
+    dev.scsi_cfg.path_on_host = drive_arg.path_on_host.clone();
+    dev.scsi_cfg.read_only = drive_arg.read_only;
+    dev.scsi_cfg.aio_type = drive_arg.aio;
+    dev.scsi_cfg.direct = drive_arg.direct;
+    dev.media = drive_arg.media.clone();
 
     dev.check()?;
     Ok(dev)
