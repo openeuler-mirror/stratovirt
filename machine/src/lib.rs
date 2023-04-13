@@ -278,7 +278,7 @@ pub trait MachineOps {
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let virtio_pci_device = VirtioPciDevice::new(
+            let mut virtio_pci_device = VirtioPciDevice::new(
                 device_cfg.id.clone(),
                 devfn,
                 sys_mem,
@@ -286,6 +286,7 @@ pub trait MachineOps {
                 parent_bus,
                 multi_func,
             );
+            virtio_pci_device.enable_need_irqfd();
             virtio_pci_device
                 .realize()
                 .with_context(|| "Failed to add virtio pci vsock device")?;
