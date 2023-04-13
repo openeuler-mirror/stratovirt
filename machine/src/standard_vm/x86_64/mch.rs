@@ -154,11 +154,10 @@ impl PciDevOps for Mch {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let end = offset + data.len();
         let old_pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize).unwrap();
         self.config.write(offset, data, 0, None, None);
 
-        if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8)
+        if ranges_overlap(offset, data.len(), PCIEXBAR as usize, 8)
             && self.check_pciexbar_update(old_pciexbar)
         {
             if let Err(e) = self.update_pciexbar_mapping() {

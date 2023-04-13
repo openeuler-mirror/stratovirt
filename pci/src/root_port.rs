@@ -254,14 +254,9 @@ impl RootPort {
     }
 
     fn correct_race_unplug(&mut self, offset: usize, data: &[u8], old_status: u16) {
-        let end = offset + data.len();
+        let size = data.len();
         let cap_offset = self.config.pci_express_cap_offset;
-        if !ranges_overlap(
-            offset,
-            end,
-            (cap_offset + PCI_EXP_SLTSTA) as usize,
-            (cap_offset + PCI_EXP_SLTSTA + 2) as usize,
-        ) {
+        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTSTA) as usize, 2) {
             return;
         }
 
@@ -283,15 +278,10 @@ impl RootPort {
     fn do_unplug(&mut self, offset: usize, data: &[u8], old_ctl: u16, old_status: u16) {
         self.correct_race_unplug(offset, data, old_status);
 
-        let end = offset + data.len();
+        let size = data.len();
         let cap_offset = self.config.pci_express_cap_offset;
         // Only care the write config about slot control
-        if !ranges_overlap(
-            offset,
-            end,
-            (cap_offset + PCI_EXP_SLTCTL) as usize,
-            (cap_offset + PCI_EXP_SLTCTL + 2) as usize,
-        ) {
+        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTCTL) as usize, 2) {
             return;
         }
 
@@ -466,14 +456,9 @@ impl PciDevOps for RootPort {
             }
         }
 
-        if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
-            || ranges_overlap(offset, end, IO_BASE as usize, (IO_BASE + 2) as usize)
-            || ranges_overlap(
-                offset,
-                end,
-                MEMORY_BASE as usize,
-                (MEMORY_BASE + 20) as usize,
-            )
+        if ranges_overlap(offset, size, COMMAND as usize, 1)
+            || ranges_overlap(offset, size, IO_BASE as usize, 2)
+            || ranges_overlap(offset, size, MEMORY_BASE as usize, 20)
         {
             self.register_region();
         }
@@ -481,7 +466,7 @@ impl PciDevOps for RootPort {
         let mut status =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
         let exp_slot_status = (cap_offset + PCI_EXP_SLTSTA) as usize;
-        if ranges_overlap(offset, end, exp_slot_status, exp_slot_status + 2) {
+        if ranges_overlap(offset, size, exp_slot_status, 2) {
             let new_status = le_read_u16(data, 0).unwrap();
             if new_status & !old_status & PCI_EXP_SLOTSTA_EVENTS != 0 {
                 status = (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);

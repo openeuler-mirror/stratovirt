@@ -456,12 +456,7 @@ impl Msix {
         let len = data.len();
         let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
         // Only care about the bits Masked(14) & Enabled(15) in msix control register.
-        if !ranges_overlap(
-            offset,
-            offset + len,
-            msix_cap_control_off + 1,
-            msix_cap_control_off + 2,
-        ) {
+        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1) {
             return;
         }
 
@@ -652,16 +647,12 @@ pub fn init_msix(
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
     let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
     let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
-    let (table_offset, pba_offset) = if let Some((table, pba)) = offset_opt {
-        (table, pba)
-    } else {
-        (0, table_size)
-    };
+    let (table_offset, pba_offset) = offset_opt.unwrap_or((0, table_size));
     if ranges_overlap(
-        table_offset.try_into().unwrap(),
-        table_size.try_into().unwrap(),
-        pba_offset.try_into().unwrap(),
-        pba_size.try_into().unwrap(),
+        table_offset as usize,
+        table_size as usize,
+        pba_offset as usize,
+        pba_size as usize,
     ) {
         bail!("msix table and pba table overlapped.");
     }

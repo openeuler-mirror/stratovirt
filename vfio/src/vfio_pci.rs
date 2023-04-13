@@ -900,14 +900,11 @@ impl PciDevOps for VfioPciDevice {
         }
 
         // BAR, header_type and extended caps are always controlled by StratoVirt.
-        if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE)
-            || ranges_overlap(
-                offset,
-                end,
-                HEADER_TYPE as usize,
-                (HEADER_TYPE as usize) + 2,
-            )
-            || ranges_overlap(offset, end, PCI_CONFIG_SPACE_SIZE, PCIE_CONFIG_SPACE_SIZE)
+        let bars_size = (BAR_5 - BAR_0) as usize + REG_SIZE;
+        let ext_cfg_size = PCIE_CONFIG_SPACE_SIZE - PCI_CONFIG_SPACE_SIZE;
+        if ranges_overlap(offset, size, BAR_0 as usize, bars_size)
+            || ranges_overlap(offset, size, HEADER_TYPE as usize, 2)
+            || ranges_overlap(offset, size, PCI_CONFIG_SPACE_SIZE, ext_cfg_size)
         {
             self.pci_config.read(offset, data);
             return;
@@ -970,7 +967,7 @@ impl PciDevOps for VfioPciDevice {
             Some(&locked_parent_bus.mem_region),
         );
 
-        if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + REG_SIZE) {
+        if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE) {
             if le_read_u32(&self.pci_config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
                 != 0
             {
@@ -978,7 +975,7 @@ impl PciDevOps for VfioPciDevice {
                     error!("Failed to map bar regions, error is {:?}", e);
                 }
             }
-        } else if ranges_overlap(offset, end, cap_offset, cap_offset + MSIX_CAP_SIZE as usize) {
+        } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize) {
             let is_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
 
             if !was_enable && is_enable {

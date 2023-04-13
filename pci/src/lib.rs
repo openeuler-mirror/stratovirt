@@ -322,11 +322,10 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
 /// * `end` - End address of the first region.
 /// * `region_start` - Start address of the second region.
 /// * `region_end` - End address of the second region.
-pub fn ranges_overlap(start: usize, end: usize, range_start: usize, range_end: usize) -> bool {
-    if start >= range_end || range_start >= end {
-        return false;
-    }
-    true
+pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size: usize) -> bool {
+    let end = start + size;
+    let range_end = range_start + range_size;
+    !(start >= range_end || range_start >= end)
 }
 
 #[cfg(test)]
@@ -374,12 +373,12 @@ mod tests {
 
     #[test]
     fn test_ranges_overlap() {
-        assert!(ranges_overlap(100, 200, 150, 250));
-        assert!(ranges_overlap(100, 200, 150, 200));
-        assert!(!ranges_overlap(100, 200, 200, 250));
-        assert!(ranges_overlap(100, 200, 100, 150));
-        assert!(!ranges_overlap(100, 200, 50, 100));
-        assert!(ranges_overlap(100, 200, 50, 150));
+        assert!(ranges_overlap(100, 100, 150, 100));
+        assert!(ranges_overlap(100, 100, 150, 50));
+        assert!(!ranges_overlap(100, 100, 200, 50));
+        assert!(ranges_overlap(100, 100, 100, 50));
+        assert!(!ranges_overlap(100, 100, 50, 50));
+        assert!(ranges_overlap(100, 100, 50, 100));
     }
 
     #[test]
