@@ -48,7 +48,7 @@ const XHCI_PCI_CAP_LENGTH: u32 = XHCI_CAP_LENGTH;
 const XHCI_PCI_OPER_OFFSET: u32 = XHCI_PCI_CAP_LENGTH;
 const XHCI_PCI_OPER_LENGTH: u32 = 0x400;
 const XHCI_PCI_RUNTIME_OFFSET: u32 = XHCI_OFF_RUNTIME;
-const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS as u32 + 1) * 0x20;
+const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS + 1) * 0x20;
 const XHCI_PCI_DOORBELL_OFFSET: u32 = XHCI_OFF_DOORBELL;
 const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS + 1) * 0x20;
 const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
@@ -234,8 +234,10 @@ impl PciDevOps for XhciPciDevice {
         let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
-        self.xhci.lock().unwrap().send_interrupt_ops =
-            Some(Box::new(move |n: u32, level: u8| -> bool {
+        self.xhci
+            .lock()
+            .unwrap()
+            .set_interrupt_ops(Arc::new(move |n: u32, level: u8| -> bool {
                 let mut locked_msix = cloned_msix.lock().unwrap();
                 if locked_msix.enabled && level != 0 {
                     locked_msix.notify(n as u16, cloned_dev_id.load(Ordering::Acquire));

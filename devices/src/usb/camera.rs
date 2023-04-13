@@ -492,11 +492,12 @@ impl Default for UsbCamera {
 impl UsbDeviceOps for UsbCamera {
     fn reset(&mut self) {}
 
-    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         debug!("Into camera handle_control");
+        let mut locked_packet = packet.lock().unwrap();
         match self
             .usb_device
-            .handle_control_for_descriptor(packet, device_req)
+            .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
                 if handled {
@@ -507,12 +508,12 @@ impl UsbDeviceOps for UsbCamera {
             }
             Err(e) => {
                 error!("Camera descriptor error {:?}", e);
-                packet.status = UsbPacketStatus::Stall;
+                locked_packet.status = UsbPacketStatus::Stall;
             }
         }
     }
 
-    fn handle_data(&mut self, _p: &mut UsbPacket) {}
+    fn handle_data(&mut self, _p: &Arc<Mutex<UsbPacket>>) {}
 
     fn device_id(&self) -> String {
         self.id.clone()

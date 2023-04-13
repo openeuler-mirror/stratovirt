@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -19,8 +20,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::debug;
 
 use super::super::UsbError;
-use super::xhci_controller::dma_read_bytes;
+use super::xhci_controller::{dma_read_u32, dma_write_u32, DwordOrder, XhciEpCtx};
 use super::{TRBType, TRB_C, TRB_LK_TC, TRB_SIZE, TRB_TR_CH, TRB_TYPE_MASK, TRB_TYPE_SHIFT};
+use crate::usb::xhci::xhci_controller::dma_read_bytes;
 
 const TRB_LINK_LIMIT: u32 = 32;
 /// The max size of a ring segment in bytes is 64k.
@@ -52,16 +54,16 @@ impl XhciTRB {
     }
 }
 
-/// XHCI Ring
+/// XHCI Command Ring
 #[derive(Clone)]
-pub struct XhciRing {
+pub struct XhciCommandRing {
     mem: Arc<AddressSpace>,
     pub dequeue: u64,
     /// Consumer Cycle State
     pub ccs: bool,
 }
 
-impl XhciRing {
+impl XhciCommandRing {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: mem.clone(),
@@ -122,14 +124,68 @@ impl XhciRing {
         };
         Ok(trb)
     }
+}
+
+/// XHCI Transfer Ring
+pub struct XhciTransferRing {
+    pub mem: Arc<AddressSpace>,
+    pub dequeue: AtomicU64,
+    /// Consumer Cycle State
+    pub ccs: AtomicBool,
+    pub output_ctx_addr: Arc<AtomicU64>,
+}
+
+impl XhciTransferRing {
+    pub fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>) -> Self {
+        Self {
+            mem: mem.clone(),
+            dequeue: AtomicU64::new(0),
+            ccs: AtomicBool::new(true),
+            output_ctx_addr: addr.clone(),
+        }
+    }
+
+    pub fn init(&self, addr: u64) {
+        self.set_dequeue_ptr(addr);
+        self.set_cycle_bit(true);
+    }
+
+    pub fn get_dequeue_ptr(&self) -> u64 {
+        self.dequeue.load(Ordering::Acquire)
+    }
+
+    pub fn set_dequeue_ptr(&self, addr: u64) {
+        self.dequeue.store(addr, Ordering::SeqCst);
+    }
+
+    pub fn get_cycle_bit(&self) -> bool {
+        self.ccs.load(Ordering::Acquire)
+    }
+
+    pub fn set_cycle_bit(&self, v: bool) {
+        self.ccs.store(v, Ordering::SeqCst);
+    }
+
+    fn read_trb(&self, addr: u64) -> Result<XhciTRB> {
+        let mut buf = [0; TRB_SIZE as usize];
+        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
+        let trb = XhciTRB {
+            parameter: LittleEndian::read_u64(&buf),
+            status: LittleEndian::read_u32(&buf[8..]),
+            control: LittleEndian::read_u32(&buf[12..]),
+            addr: 0,
+            ccs: true,
+        };
+        Ok(trb)
+    }
 
     /// Get the transfer descriptor which includes one or more TRBs.
     /// Return None if the td is not ready.
     /// Return Vec if the td is ok.
     /// Return Error if read trb failed.
-    pub fn fetch_td(&mut self) -> Result<Option<Vec<XhciTRB>>> {
-        let mut dequeue = self.dequeue;
-        let mut ccs = self.ccs;
+    pub fn fetch_td(&self) -> Result<Option<Vec<XhciTRB>>> {
+        let mut dequeue = self.get_dequeue_ptr();
+        let mut ccs = self.get_cycle_bit();
         let mut ctrl_td = false;
         let mut link_cnt = 0;
         let mut td = Vec::new();
@@ -164,13 +220,29 @@ impl XhciRing {
                 }
                 if !ctrl_td && (trb.control & TRB_TR_CH != TRB_TR_CH) {
                     // Update the dequeue pointer and ccs flag.
-                    self.dequeue = dequeue;
-                    self.ccs = ccs;
+                    self.set_dequeue_ptr(dequeue);
+                    self.set_cycle_bit(ccs);
                     return Ok(Some(td));
                 }
             }
         }
         bail!("Transfer TRB length over limit");
+    }
+
+    /// Refresh dequeue pointer to output context.
+    pub fn refresh_dequeue_ptr(&self) -> Result<()> {
+        let mut ep_ctx = XhciEpCtx::default();
+        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
+        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        self.update_dequeue_to_ctx(&mut ep_ctx);
+        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        Ok(())
+    }
+
+    pub fn update_dequeue_to_ctx(&self, ep_ctx: &mut XhciEpCtx) {
+        let dequeue = self.get_dequeue_ptr();
+        ep_ctx.deq_lo = dequeue as u32 | self.get_cycle_bit() as u32;
+        ep_ctx.deq_hi = (dequeue >> 32) as u32;
     }
 }
 

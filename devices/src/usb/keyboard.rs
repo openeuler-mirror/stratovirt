@@ -196,11 +196,12 @@ impl UsbDeviceOps for UsbKeyboard {
         self.hid.reset();
     }
 
-    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         debug!("handle_control request {:?}", device_req);
+        let mut locked_packet = packet.lock().unwrap();
         match self
             .usb_device
-            .handle_control_for_descriptor(packet, device_req)
+            .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
                 if handled {
@@ -210,16 +211,20 @@ impl UsbDeviceOps for UsbKeyboard {
             }
             Err(e) => {
                 error!("Keyboard descriptor error {:?}", e);
-                packet.status = UsbPacketStatus::Stall;
+                locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
         }
-        self.hid
-            .handle_control_packet(packet, device_req, &mut self.usb_device.data_buf);
+        self.hid.handle_control_packet(
+            &mut locked_packet,
+            device_req,
+            &mut self.usb_device.data_buf,
+        );
     }
 
-    fn handle_data(&mut self, p: &mut UsbPacket) {
-        self.hid.handle_data_packet(p);
+    fn handle_data(&mut self, p: &Arc<Mutex<UsbPacket>>) {
+        let mut locked_p = p.lock().unwrap();
+        self.hid.handle_data_packet(&mut locked_p);
     }
 
     fn device_id(&self) -> String {
