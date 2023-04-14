@@ -17,12 +17,16 @@ pub use crate::error::MachineError;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use log::{error, info};
 use machine_manager::config::ShutdownAction;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::UiContext;
 use machine_manager::event_loop::EventLoop;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(not(target_env = "musl"))]
+use ui::{gtk::gtk_display_init, vnc::vnc_init};
 use vmm_sys_util::eventfd::EventFd;
 
 use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
@@ -66,8 +70,6 @@ use pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use pci_host_root::PciHostRoot;
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
-#[cfg(not(target_env = "musl"))]
-use ui::vnc;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
@@ -148,7 +150,7 @@ pub struct StdMachine {
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
-    power_button: Arc<EventFd>,
+    pub power_button: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// Reset request, handle VM `Reset` event.
@@ -546,9 +548,6 @@ impl MachineOps for StdMachine {
             .init_pci_host()
             .with_context(|| StdErrorKind::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
-        #[cfg(not(target_env = "musl"))]
-        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
-            .with_context(|| "Failed to init VNC server!")?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
@@ -607,6 +606,11 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
+        #[cfg(not(target_env = "musl"))]
+        locked_vm
+            .display_init(vm_config)
+            .with_context(|| "Fail to init display")?;
+
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
@@ -639,6 +643,28 @@ impl MachineOps for StdMachine {
             flash_base += flash_size;
         }
 
+        Ok(())
+    }
+
+    /// Create display.
+    #[cfg(not(target_env = "musl"))]
+    fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
+        // GTK display init.
+        match vm_config.display {
+            Some(ref ds_cfg) if ds_cfg.gtk => {
+                let ui_context = UiContext {
+                    vm_name: vm_config.guest_name.clone(),
+                    power_button: self.power_button.clone(),
+                };
+                gtk_display_init(ds_cfg, ui_context)
+                    .with_context(|| "Failed to init GTK display!")?;
+            }
+            _ => {}
+        };
+
+        // VNC display init.
+        vnc_init(&vm_config.vnc, &vm_config.object)
+            .with_context(|| "Failed to init VNC server!")?;
         Ok(())
     }
 

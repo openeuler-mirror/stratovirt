@@ -60,6 +60,7 @@ impl LPCBridge {
         parent_bus: Weak<Mutex<PciBus>>,
         sys_io: Arc<AddressSpace>,
         reset_req: Arc<EventFd>,
+        shutdown_req: Arc<EventFd>,
     ) -> Result<Self> {
         Ok(Self {
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
@@ -70,7 +71,7 @@ impl LPCBridge {
             pm_ctrl: Arc::new(Mutex::new(AcpiPmCtrl::new())),
             rst_ctrl: Arc::new(AtomicU8::new(0)),
             reset_req,
-            shutdown_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            shutdown_req,
         })
     }
 
