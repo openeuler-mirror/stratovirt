@@ -501,8 +501,7 @@ impl ClientIoHandler {
     fn handle_version(&mut self) -> Result<()> {
         let client = self.client.clone();
         let buf = self.read_incoming_msg();
-        let res = String::from_utf8_lossy(&buf);
-        let ver_str = &res[0..12].to_string();
+        let ver_str = String::from_utf8_lossy(&buf).to_string();
         let ver = match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
             Ok(v) => v,
             Err(_e) => {
