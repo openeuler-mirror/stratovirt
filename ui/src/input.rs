@@ -255,6 +255,17 @@ pub fn key_event(keycode: u16, down: bool) -> Result<()> {
     Ok(())
 }
 
+/// A complete mouse click event.
+pub fn press_mouse(button: u32, x: u32, y: u32) -> Result<()> {
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        let mut locked_mouse = m.lock().unwrap();
+        locked_mouse.do_point_event(button, x, y)?;
+        locked_mouse.do_point_event(0, x, y)?
+    }
+    Ok(())
+}
+
 pub fn point_event(button: u32, x: u32, y: u32) -> Result<()> {
     let mouse = INPUTS.lock().unwrap().get_active_mouse();
     if let Some(m) = mouse {
