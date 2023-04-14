@@ -10,43 +10,821 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::console::{DEFAULT_SURFACE_HEIGHT, DEFAULT_SURFACE_WIDTH};
-use anyhow::{Context, Result};
+mod draw;
+mod menu;
+
+use std::{
+    cell::RefCell,
+    cmp,
+    collections::HashMap,
+    ptr,
+    rc::Rc,
+    sync::{Arc, Mutex, Weak},
+    thread,
+};
+
+use anyhow::{bail, Context, Result};
 use gtk::{
-    prelude::{ApplicationExt, ApplicationExtManual},
-    traits::WidgetExt,
-    Application, ApplicationWindow,
+    cairo::{Format, ImageSurface},
+    gdk::{self, Geometry, Gravity, Screen, WindowHints},
+    gdk_pixbuf::Colorspace,
+    glib::{self, Priority, SyncSender},
+    prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
+    traits::{GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt},
+    Application, ApplicationWindow, DrawingArea, RadioMenuItem,
+};
+use log::error;
+
+use crate::{
+    console::{
+        create_msg_surface, get_active_console, graphic_hardware_update, register_display,
+        DisplayChangeListener, DisplayChangeListenerOperations, DisplayConsole, DisplayMouse,
+        DisplaySurface, DEFAULT_SURFACE_HEIGHT, DEFAULT_SURFACE_WIDTH,
+    },
+    data::keycode::KEYSYM2KEYCODE,
+    gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
+    pixman::{
+        create_pixman_image, get_image_data, get_image_height, get_image_width, unref_pixman_image,
+    },
 };
 use machine_manager::config::{DisplayConfig, UiContext};
-use std::thread;
+use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_image_t, pixman_op_t};
+use vmm_sys_util::eventfd::EventFd;
+
+const CHANNEL_BOUND: usize = 1024;
+pub(crate) const GTK_SCALE_MIN: f64 = 0.25;
+pub(crate) const GTK_ZOOM_STEP: f64 = 0.25;
+
+/// Gtk window display mode.
+#[derive(Clone, PartialEq)]
+pub struct ScaleMode {
+    /// Display fill desktop.
+    full_screen: bool,
+    /// Scaling operation does not change the aspect ratio.
+    free_scale: bool,
+}
+
+impl ScaleMode {
+    fn is_full_screen(&self) -> bool {
+        self.full_screen
+    }
+
+    fn is_free_scale(&self) -> bool {
+        self.free_scale
+    }
+}
+
+/// Display zoom operation.
+/// Zoom in the display.
+/// Zoom out the display.
+/// Window adapt to display.
+#[derive(PartialEq)]
+pub enum ZoomOperate {
+    ZoomIn,
+    ZoomOut,
+    BestFit,
+}
+
+#[derive(Default)]
+pub struct ClickState {
+    pub button_mask: u8,
+    pub last_x: f64,
+    pub last_y: f64,
+}
+
+#[derive(Debug, PartialEq)]
+enum DisplayEventType {
+    DisplaySwitch,
+    DisplayUpdate,
+    CursorDefine,
+    DisplayRefresh,
+}
+
+impl Default for DisplayEventType {
+    fn default() -> Self {
+        Self::DisplayRefresh
+    }
+}
+
+#[derive(Default)]
+pub struct DisplayChangeEvent {
+    dev_name: String,
+    event_type: DisplayEventType,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    cursor: Option<DisplayMouse>,
+}
+
+impl DisplayChangeEvent {
+    fn new(dev_name: String, event_type: DisplayEventType) -> Self {
+        Self {
+            dev_name,
+            event_type,
+            ..Default::default()
+        }
+    }
+}
+
+pub struct GtkInterface {
+    dev_name: String,
+    dce_sender: SyncSender<DisplayChangeEvent>,
+}
+
+impl GtkInterface {
+    pub fn new(dev_name: String, dce_sender: SyncSender<DisplayChangeEvent>) -> Self {
+        Self {
+            dev_name,
+            dce_sender,
+        }
+    }
+}
+
+impl DisplayChangeListenerOperations for GtkInterface {
+    fn dpy_switch(&self, _surface: &crate::console::DisplaySurface) -> Result<()> {
+        let event = DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplaySwitch);
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
+
+    fn dpy_refresh(
+        &self,
+        dcl: &std::sync::Arc<std::sync::Mutex<DisplayChangeListener>>,
+    ) -> Result<()> {
+        let event =
+            DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplayRefresh);
+        let con_id = dcl.lock().unwrap().con_id;
+        graphic_hardware_update(con_id);
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
+
+    fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        let mut event =
+            DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplayUpdate);
+        event.x = x;
+        event.y = y;
+        event.w = w;
+        event.h = h;
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
+
+    fn dpy_cursor_update(&self, cursor_data: &mut DisplayMouse) -> Result<()> {
+        let mut event =
+            DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::CursorDefine);
+        event.cursor = Some(cursor_data.clone());
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
+}
+
+pub(crate) struct GtkDisplay {
+    gtk_menu: GtkMenu,
+    scale_mode: Rc<RefCell<ScaleMode>>,
+    pagenum2ds: HashMap<u32, Rc<RefCell<GtkDisplayScreen>>>,
+    power_button: Arc<EventFd>,
+    keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
+}
+
+impl GtkDisplay {
+    fn create(gtk_menu: GtkMenu, gtk_cfg: &GtkConfig) -> Self {
+        // Window scale mode.
+        let scale_mode = Rc::new(RefCell::new(ScaleMode {
+            full_screen: gtk_cfg.full_screen,
+            free_scale: gtk_cfg.zoom_fit,
+        }));
+        // Mapping ASCII to keycode.
+        let keysym2keycode: Rc<RefCell<HashMap<u16, u16>>> = Rc::new(RefCell::new(HashMap::new()));
+        let mut borrow_keysym2keycode = keysym2keycode.borrow_mut();
+        for &(k, v) in KEYSYM2KEYCODE.iter() {
+            borrow_keysym2keycode.insert(k, v);
+        }
+        drop(borrow_keysym2keycode);
+        Self {
+            gtk_menu,
+            scale_mode,
+            pagenum2ds: HashMap::new(),
+            power_button: gtk_cfg.power_button.clone(),
+            keysym2keycode,
+        }
+    }
+
+    // Get the current active drawing_area in note_book.
+    fn get_current_display(&self) -> Result<Rc<RefCell<GtkDisplayScreen>>> {
+        let page_num = self.gtk_menu.note_book.current_page();
+        let gs = match page_num {
+            Some(num) if self.pagenum2ds.get(&num).is_some() => self.pagenum2ds.get(&num).unwrap(),
+            _ => bail!("No active display"),
+        };
+        Ok(gs.clone())
+    }
+
+    // Get the displays based on device name.
+    fn get_ds_by_pagenum(&self, page_num: Option<u32>) -> Option<Rc<RefCell<GtkDisplayScreen>>> {
+        let ds = self.pagenum2ds.get(&page_num?)?;
+        Some(ds.clone())
+    }
+
+    // Get the display base the page number in notebook.
+    fn get_ds_by_devname(&self, dev_name: &str) -> Option<Rc<RefCell<GtkDisplayScreen>>> {
+        for ds in self.pagenum2ds.values() {
+            if ds.borrow().dev_name.eq(dev_name) {
+                return Some(ds.clone());
+            }
+        }
+        None
+    }
+
+    fn set_draw_area(&mut self, gs: Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+        let draw_area = DrawingArea::new();
+        draw_area.set_size_request(DEFAULT_SURFACE_WIDTH, DEFAULT_SURFACE_HEIGHT);
+        draw_area.set_can_focus(true);
+        set_callback_for_draw_area(&draw_area, gs.clone())?;
+
+        // Add notebook page.
+        let active_con = gs.borrow().con.upgrade();
+        let con = match active_con {
+            Some(con) => con,
+            None => bail!("No active console!"),
+        };
+        let label_name = con.lock().unwrap().dev_name.clone();
+        let label = gtk::Label::new(Some(&label_name));
+        let page_num = self
+            .gtk_menu
+            .note_book
+            .append_page(&draw_area, Some(&label));
+        self.pagenum2ds.insert(page_num, gs.clone());
+        draw_area.grab_focus();
+
+        // Create a radio button.
+        // Only one screen can be displayed at a time.
+        let gs_show_menu = RadioMenuItem::with_label(&label_name);
+        if !self.gtk_menu.radio_group.is_empty() {
+            let first_radio = &self.gtk_menu.radio_group[0];
+            gs_show_menu.join_group(Some(first_radio));
+        }
+        let note_book = self.gtk_menu.note_book.clone();
+        gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |_| {
+            gs_show_menu_callback(&gs, note_book).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
+        }));
+        self.gtk_menu.view_menu.append(&gs_show_menu);
+        self.gtk_menu.radio_group.push(gs_show_menu);
+        gs.borrow_mut().draw_area = draw_area;
+
+        Ok(())
+    }
+}
+
+pub struct GtkDisplayScreen {
+    window: ApplicationWindow,
+    dev_name: String,
+    draw_area: DrawingArea,
+    cairo_image: Option<ImageSurface>,
+    transfer_image: *mut pixman_image_t,
+    click_state: ClickState,
+    con: Weak<Mutex<DisplayConsole>>,
+    dcl: Weak<Mutex<DisplayChangeListener>>,
+    scale_mode: Rc<RefCell<ScaleMode>>,
+    scale_x: f64,
+    scale_y: f64,
+    keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
+}
+
+/// A displayscreen corresponds to a display area.
+impl GtkDisplayScreen {
+    fn create(
+        window: ApplicationWindow,
+        con: Weak<Mutex<DisplayConsole>>,
+        dcl: Weak<Mutex<DisplayChangeListener>>,
+        keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
+        scale_mode: Rc<RefCell<ScaleMode>>,
+    ) -> Self {
+        let surface = create_msg_surface(
+            DEFAULT_SURFACE_WIDTH,
+            DEFAULT_SURFACE_HEIGHT,
+            "Please wait a moment".to_string(),
+        )
+        .map_or(DisplaySurface::default(), |s| s);
+
+        // SAFETY: The image is created within the function, it can be ensure
+        // that the data ptr is not nullptr and the image size matchs the image data.
+        let cairo_image = unsafe {
+            ImageSurface::create_for_data_unsafe(
+                surface.data() as *mut u8,
+                Format::Rgb24,
+                surface.width(),
+                surface.height(),
+                surface.stride(),
+            )
+        }
+        .ok();
+
+        let dev_name = match con.upgrade() {
+            Some(c) => c.lock().unwrap().dev_name.clone(),
+            None => "default".to_string(),
+        };
+
+        Self {
+            window,
+            dev_name,
+            draw_area: DrawingArea::default(),
+            cairo_image,
+            transfer_image: surface.image,
+            click_state: ClickState::default(),
+            con,
+            dcl,
+            scale_mode,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            keysym2keycode,
+        }
+    }
+
+    fn get_window_size(&self) -> Result<(f64, f64)> {
+        let (mut w_width, mut w_height) = (0.0, 0.0);
+        if let Some(win) = self.draw_area.window() {
+            w_width = win.width() as f64;
+            w_height = win.height() as f64;
+        };
+
+        if self.scale_mode.borrow().is_full_screen() {
+            // Get the size of desktop.
+            if let Some(screen) = Screen::default() {
+                w_width = screen.width() as f64;
+                w_height = screen.height() as f64;
+            }
+        }
+
+        if w_width.eq(&0.0) || w_height.eq(&0.0) {
+            bail!("The window size can not be zero!");
+        }
+        Ok((w_width, w_height))
+    }
+
+    /// Convert coordinates of the window to relative coordinates of the image.
+    /// In some situation:
+    /// 1. Image is scaled.
+    /// 2. There may be unfilled areas between the window and the image.
+    /// Input: relative coordinates of window.
+    /// Output: relative coordinates of images.
+    fn convert_coord(&mut self, x: f64, y: f64) -> Result<(f64, f64)> {
+        let (surface_width, surface_height) = match &self.cairo_image {
+            Some(image) => (image.width(), image.height()),
+            None => bail!("No display image."),
+        };
+        let (scale_width, scale_height) = (
+            (surface_width as f64) * self.scale_x,
+            (surface_height as f64) * self.scale_y,
+        );
+
+        let (window_width, window_height) = self.get_window_size()?;
+        let scale_factor = match self.draw_area.window() {
+            Some(window) => window.scale_factor() as f64,
+            None => bail!("No display window."),
+        };
+
+        // There may be unfilled areas between the window and the image.
+        let (mut mx, mut my) = (0.0, 0.0);
+        if window_width > scale_width {
+            mx = (window_width - scale_width) / (2.0);
+        }
+        if window_height > scale_height {
+            my = (window_height - scale_height) / (2.0);
+        }
+        let real_x = ((x - mx) / self.scale_x) * scale_factor;
+        let real_y = ((y - my) / self.scale_y) * scale_factor;
+        self.click_state.last_x = real_x;
+        self.click_state.last_y = real_y;
+
+        Ok((real_x, real_y))
+    }
+}
+
+/// Args for creating gtk thread.
+#[derive(Clone)]
+struct GtkConfig {
+    full_screen: bool,
+    zoom_fit: bool,
+    vm_name: String,
+    power_button: Arc<EventFd>,
+    gtk_args: Vec<String>,
+}
 
 /// Gtk display init.
-pub fn gtk_display_init(_ds_cfg: &DisplayConfig, _ui_context: UiContext) -> Result<()> {
-    let args: Vec<String> = vec![];
+pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result<()> {
+    let gtk_cfg = GtkConfig {
+        full_screen: ds_cfg.full_screen,
+        zoom_fit: ds_cfg.fix_size,
+        vm_name: ui_context.vm_name,
+        power_button: ui_context.power_button,
+        gtk_args: vec![],
+    };
     let _handle = thread::Builder::new()
         .name("gtk display".to_string())
-        .spawn(move || create_gtk_thread(args))
-        .with_context(|| "Fail to create gtk display thread!");
+        .spawn(move || create_gtk_thread(&gtk_cfg))
+        .with_context(|| "Fail to create gtk display thread!")?;
     Ok(())
 }
 
 /// Create a gtk thread.
-pub fn create_gtk_thread(gtk_args: Vec<String>) {
+fn create_gtk_thread(gtk_cfg: &GtkConfig) {
     let application = Application::builder()
         .application_id("stratovirt.gtk")
         .build();
-    application.connect_activate(build_ui);
-    application.run_with_args(&gtk_args);
+    let gtk_cfg_clone = gtk_cfg.clone();
+    application.connect_activate(move |app| build_ui(app, &gtk_cfg_clone));
+    application.run_with_args(&gtk_cfg.gtk_args);
 }
 
 // Create window.
-fn build_ui(app: &Application) {
+fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("Stratovirt")
+        .title(&gtk_cfg.vm_name)
         .default_width(DEFAULT_SURFACE_WIDTH)
         .default_height(DEFAULT_SURFACE_HEIGHT)
         .build();
 
-    window.show_all();
+    // Create menu.
+    let mut gtk_menu = GtkMenu::new(window);
+    let gd = Rc::new(RefCell::new(GtkDisplay::create(gtk_menu.clone(), gtk_cfg)));
+    gtk_menu.set_menu();
+    gtk_menu.set_signal(&gd);
+
+    // Gtk display init.
+    graphic_display_init(gd)
+        .with_context(|| "Gtk display init failed!")
+        .unwrap();
+
+    gtk_menu.show_window(gtk_cfg.full_screen);
+}
+
+fn graphic_display_init(gd: Rc<RefCell<GtkDisplay>>) -> Result<()> {
+    let console_list = get_active_console();
+    let mut borrowed_gd = gd.borrow_mut();
+    let keysym2keycode = borrowed_gd.keysym2keycode.clone();
+    let window = borrowed_gd.gtk_menu.window.clone();
+    let scale_mode = borrowed_gd.scale_mode.clone();
+    let (dce_sender, dce_receiver) =
+        glib::MainContext::sync_channel::<DisplayChangeEvent>(Priority::default(), CHANNEL_BOUND);
+    // Create a display area for each console.
+    for con in console_list {
+        let c = match con.upgrade() {
+            Some(c) => c,
+            None => continue,
+        };
+        let locked_con = c.lock().unwrap();
+        let dev_name = locked_con.dev_name.clone();
+        let con_id = locked_con.con_id;
+        drop(locked_con);
+        // Register displaychangelistener in the console.
+        let gtk_opts = Arc::new(GtkInterface::new(dev_name, dce_sender.clone()));
+        let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(
+            Some(con_id),
+            gtk_opts,
+        )));
+        register_display(&dcl)?;
+        let gs = Rc::new(RefCell::new(GtkDisplayScreen::create(
+            window.clone(),
+            con.clone(),
+            Arc::downgrade(&dcl),
+            keysym2keycode.clone(),
+            scale_mode.clone(),
+        )));
+        borrowed_gd.set_draw_area(gs)?;
+    }
+    drop(borrowed_gd);
+
+    dce_receiver.attach(
+        None,
+        glib::clone!(@strong gd => @default-return Continue(true), move |event| {
+            gd_handle_event(&gd, event).unwrap_or_else(|e| error!("gd_handle_event: {:?}", e));
+            Continue(true)
+        }),
+    );
+
+    Ok(())
+}
+
+/// Receive display update events from the mainloop of Stratovirt ,
+/// assigns the event to the corresponding draw display by the field
+/// of device name. And then update the specific gtk display.
+fn gd_handle_event(gd: &Rc<RefCell<GtkDisplay>>, event: DisplayChangeEvent) -> Result<()> {
+    let ds = match gd.borrow().get_ds_by_devname(&event.dev_name) {
+        Some(display) => display,
+        None => return Ok(()),
+    };
+    match event.event_type {
+        DisplayEventType::DisplaySwitch => do_switch_event(&ds),
+        DisplayEventType::DisplayUpdate => do_update_event(&ds, event),
+        DisplayEventType::CursorDefine => do_cursor_define(&ds, event),
+        DisplayEventType::DisplayRefresh => do_refresh_event(&ds),
+    }
+}
+
+// Select the specified display area.
+fn gs_show_menu_callback(
+    gs: &Rc<RefCell<GtkDisplayScreen>>,
+    note_book: gtk::Notebook,
+) -> Result<()> {
+    let page_num = note_book.page_num(&gs.borrow().draw_area);
+    note_book.set_current_page(page_num);
+    gs.borrow().draw_area.grab_focus();
+    Ok(())
+}
+
+/// Refresh image.
+/// There is a situation:
+/// 1. Switch operation 1, the gtk display should change the image from a to b.
+/// 2. Switch operation 2, the gtk display should change the image from b to c, but
+/// the channel between stratovirt mainloop and gtk mainloop lost the event.
+/// 3. The gtk display always show th image a.
+/// So, the refresh operation will always check if the image has been switched, if
+/// the result is yes, then use the switch operation to switch the  latest image.
+fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    let active_con = borrowed_gs.con.upgrade();
+    let con = match active_con {
+        Some(con) => con,
+        None => return Ok(()),
+    };
+    let locked_con = con.lock().unwrap();
+    let surface = match locked_con.surface {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    if let Some(dcl) = borrowed_gs.dcl.upgrade() {
+        dcl.lock().unwrap().update_interval = 30;
+    };
+
+    let width = get_image_width(borrowed_gs.transfer_image);
+    let height = get_image_height(borrowed_gs.transfer_image);
+    let surface_width = surface.width();
+    let surface_height = surface.height();
+    if width == 0 || height == 0 || width != surface_width || height != surface_height {
+        drop(locked_con);
+        drop(borrowed_gs);
+        do_switch_event(gs)?;
+    }
+    Ok(())
+}
+
+/// Update cursor image.
+fn do_cursor_define(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent) -> Result<()> {
+    let c: DisplayMouse = match event.cursor {
+        Some(c) => c,
+        None => bail!("Invalid Cursor image"),
+    };
+
+    if c.data.len() < ((c.width * c.height) as usize) * 4 {
+        bail!("Invalid Cursor image");
+    }
+
+    let borrowed_gs = gs.borrow();
+    if !borrowed_gs.draw_area.is_realized() {
+        bail!("The draw_area is not realized");
+    }
+    let display = borrowed_gs.draw_area.display();
+
+    let pixbuf = gdk::gdk_pixbuf::Pixbuf::from_mut_slice(
+        c.data,
+        Colorspace::Rgb,
+        true,
+        8,
+        c.width as i32,
+        c.height as i32,
+        (c.width as i32) * 4,
+    );
+    let gtk_cursor = gdk::Cursor::from_pixbuf(&display, &pixbuf, c.hot_x as i32, c.hot_y as i32);
+    if let Some(win) = &borrowed_gs.draw_area.window() {
+        win.set_cursor(Some(&gtk_cursor));
+    }
+    Ok(())
+}
+
+// Update dirty area of image.
+fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    let active_con = borrowed_gs.con.upgrade();
+    let con = match active_con {
+        Some(con) => con,
+        None => return Ok(()),
+    };
+    let locked_con = con.lock().unwrap();
+    let surface = match locked_con.surface {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // drea_area is hidden behind the screen.
+    if !borrowed_gs.draw_area.is_realized() {
+        return Ok(());
+    }
+
+    if surface.image.is_null() || borrowed_gs.transfer_image.is_null() {
+        bail!("Image is null");
+    }
+
+    let src_width = get_image_width(surface.image);
+    let src_height = get_image_height(surface.image);
+    let dest_width = get_image_width(borrowed_gs.transfer_image);
+    let dest_height = get_image_height(borrowed_gs.transfer_image);
+
+    let surface_width = cmp::min(src_width, dest_width);
+    let surface_height = cmp::min(src_height, dest_height);
+
+    let (x, y) = (event.x, event.y);
+    let x1 = cmp::min(x + event.w, surface_width);
+    let y1 = cmp::min(y + event.h, surface_height);
+    let w = (x1 - x).abs();
+    let h = (y1 - y).abs();
+
+    // SAFETY: Verified that the pointer of source image and dest image
+    // is not empty, and the copied data will not exceed the image area
+    unsafe {
+        pixman_image_composite(
+            pixman_op_t::PIXMAN_OP_SRC,
+            surface.image,
+            ptr::null_mut(),
+            borrowed_gs.transfer_image,
+            x as i16,
+            y as i16,
+            0,
+            0,
+            x as i16,
+            y as i16,
+            w as u16,
+            h as u16,
+        )
+    };
+    drop(locked_con);
+
+    // Image scalling.
+    let x1 = ((x as f64) * borrowed_gs.scale_x).floor();
+    let y1 = ((y as f64) * borrowed_gs.scale_y).floor();
+    let x2 = ((x as f64) * borrowed_gs.scale_x + (w as f64) * borrowed_gs.scale_x).ceil();
+    let y2 = ((y as f64) * borrowed_gs.scale_y + (h as f64) * borrowed_gs.scale_y).ceil();
+
+    let scale_width = (surface_width as f64) * borrowed_gs.scale_x;
+    let scale_height = (surface_height as f64) * borrowed_gs.scale_y;
+    let (window_width, window_height) = borrowed_gs.get_window_size()?;
+
+    let mut mx: f64 = 0.0;
+    let mut my: f64 = 0.0;
+    if window_width > scale_width {
+        mx = ((window_width - scale_width) as f64) / (2.0);
+    }
+    if window_height > scale_height {
+        my = ((window_height - scale_height) as f64) / (2.0);
+    }
+
+    borrowed_gs.draw_area.queue_draw_area(
+        (mx + x1) as i32,
+        (my + y1) as i32,
+        (x2 - x1) as i32,
+        (y2 - y1) as i32,
+    );
+
+    Ok(())
+}
+
+/// Switch display image.
+fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    let mut borrowed_gs = gs.borrow_mut();
+    let active_con = borrowed_gs.con.upgrade();
+    let con = match active_con {
+        Some(con) => con,
+        None => return Ok(()),
+    };
+    let locked_con = con.lock().unwrap();
+    let surface = match locked_con.surface {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    let mut need_resize: bool = true;
+
+    let width = get_image_width(borrowed_gs.transfer_image);
+    let height = get_image_height(borrowed_gs.transfer_image);
+    let surface_width = surface.width();
+    let surface_height = surface.height();
+    let surface_stride = surface.stride();
+    if width != 0 && height != 0 && width == surface_width && height == surface_height {
+        need_resize = false;
+    }
+
+    if need_resize {
+        unref_pixman_image(borrowed_gs.transfer_image);
+        borrowed_gs.transfer_image = create_pixman_image(
+            pixman_format_code_t::PIXMAN_x8r8g8b8,
+            surface_width,
+            surface_height,
+            ptr::null_mut(),
+            surface_stride,
+        );
+    }
+    if surface.image.is_null() || borrowed_gs.transfer_image.is_null() {
+        bail!("Image data is invalid.");
+    }
+
+    // SAFETY:
+    // 1. It can be sure that source ptr and dest ptr is not nullptr.
+    // 2. The copy range will not exceed the image area.
+    unsafe {
+        pixman_image_composite(
+            pixman_op_t::PIXMAN_OP_SRC,
+            surface.image,
+            ptr::null_mut(),
+            borrowed_gs.transfer_image,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            surface_width as u16,
+            surface_height as u16,
+        )
+    };
+    drop(locked_con);
+
+    if need_resize {
+        // SAFETY:
+        // 1. It can be sure that the ptr of data is not nullptr.
+        // 2. The copy range will not exceed the image data.
+        let data = get_image_data(borrowed_gs.transfer_image) as *mut u8;
+        borrowed_gs.cairo_image = unsafe {
+            ImageSurface::create_for_data_unsafe(
+                data as *mut u8,
+                Format::Rgb24,
+                surface_width,
+                surface_height,
+                surface_stride,
+            )
+        }
+        .ok()
+    }
+    drop(borrowed_gs);
+
+    if need_resize {
+        update_window_size(gs)
+    } else {
+        renew_image(gs)
+    }
+}
+
+pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    let scale_mode = borrowed_gs.scale_mode.borrow().clone();
+    let (width, height) = match &borrowed_gs.cairo_image {
+        Some(image) => (image.width() as f64, image.height() as f64),
+        None => (0.0, 0.0),
+    };
+    let (scale_width, scale_height) = if scale_mode.is_free_scale() {
+        (width * GTK_SCALE_MIN, height * GTK_SCALE_MIN)
+    } else {
+        (width * borrowed_gs.scale_x, height * borrowed_gs.scale_y)
+    };
+
+    let geo: Geometry = Geometry {
+        min_width: scale_width as i32,
+        min_height: scale_height as i32,
+        max_width: 0,
+        max_height: 0,
+        base_width: 0,
+        base_height: 0,
+        width_inc: 0,
+        height_inc: 0,
+        min_aspect: 0.0,
+        max_aspect: 0.0,
+        win_gravity: Gravity::Center,
+    };
+    let geo_mask = WindowHints::MIN_SIZE;
+
+    borrowed_gs
+        .draw_area
+        .set_size_request(geo.min_width, geo.min_height);
+    if let Some(window) = borrowed_gs.draw_area.window() {
+        window.set_geometry_hints(&geo, geo_mask)
+    }
+
+    if !scale_mode.is_full_screen() && !scale_mode.is_free_scale() {
+        borrowed_gs
+            .window
+            .resize(DEFAULT_SURFACE_WIDTH, DEFAULT_SURFACE_HEIGHT);
+    }
+    Ok(())
+}
+
+/// Ask the gtk display to update the display.
+pub(crate) fn renew_image(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    let (width, height) = borrowed_gs.get_window_size()?;
+    borrowed_gs
+        .draw_area
+        .queue_draw_area(0, 0, width as i32, height as i32);
+    Ok(())
 }
