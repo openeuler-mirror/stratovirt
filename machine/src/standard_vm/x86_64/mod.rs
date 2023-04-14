@@ -37,6 +37,8 @@ use devices::legacy::{
 };
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
     NumaNodes, PFlashConfig, SerialConfig, VmConfig,
@@ -63,7 +65,7 @@ use super::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineOps};
 use anyhow::{bail, Context, Result};
 #[cfg(not(target_env = "musl"))]
-use ui::vnc;
+use ui::{gtk::gtk_display_init, vnc::vnc_init};
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -129,6 +131,8 @@ pub struct StdMachine {
     boot_source: Arc<Mutex<BootSource>>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
+    /// Shutdown_req, handle VM 'ShutDown' event.
+    shutdown_req: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
@@ -189,6 +193,11 @@ impl StdMachine {
             reset_req: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("reset request".to_string()))?,
+            ),
+            shutdown_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                    MachineError::InitEventFdErr("shutdown request".to_string())
+                })?,
             ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
@@ -270,7 +279,12 @@ impl StdMachine {
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone(), self.reset_req.clone())?;
+        let ich = ich9_lpc::LPCBridge::new(
+            root_bus,
+            self.sys_io.clone(),
+            self.reset_req.clone(),
+            self.shutdown_req.clone(),
+        )?;
         self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
@@ -459,9 +473,7 @@ impl MachineOps for StdMachine {
             .init_ich9_lpc(clone_vm)
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
-        #[cfg(not(target_env = "musl"))]
-        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
-            .with_context(|| "Failed to init VNC server!")?;
+
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
@@ -491,6 +503,11 @@ impl MachineOps for StdMachine {
         locked_vm
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
+
+        #[cfg(not(target_env = "musl"))]
+        locked_vm
+            .display_init(vm_config)
+            .with_context(|| "Fail to init display")?;
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
@@ -562,6 +579,28 @@ impl MachineOps for StdMachine {
             flash_end -= pfl_size;
         }
 
+        Ok(())
+    }
+
+    /// Create display.
+    #[cfg(not(target_env = "musl"))]
+    fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
+        // GTK display init.
+        match vm_config.display {
+            Some(ref ds_cfg) if ds_cfg.gtk => {
+                let ui_context = UiContext {
+                    vm_name: vm_config.guest_name.clone(),
+                    power_button: self.shutdown_req.clone(),
+                };
+                gtk_display_init(ds_cfg, ui_context)
+                    .with_context(|| "Failed to init GTK display!")?;
+            }
+            _ => {}
+        };
+
+        // VNC display init.
+        vnc_init(&vm_config.vnc, &vm_config.object)
+            .with_context(|| "Failed to init VNC server!")?;
         Ok(())
     }
 

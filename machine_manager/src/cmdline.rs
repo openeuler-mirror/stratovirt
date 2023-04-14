@@ -442,6 +442,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("specify the ip and port for vnc")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("display")
+            .multiple(false)
+            .long("display")
+            .value_name("gtk")
+            .help("set display for virtual machine: currently only supports gtk")
+            .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -476,6 +484,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
+    add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
     add_args_to_config!(
         (args.is_present("no-shutdown")),
         vm_cfg,
