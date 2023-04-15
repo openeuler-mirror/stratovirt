@@ -733,7 +733,7 @@ impl TestXhciPciDevice {
         let hcsparams1 = self
             .pci_dev
             .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x4) as u64);
-        assert_eq!(hcsparams1, 0x08001040);
+        assert_eq!(hcsparams1, 0x08000140);
         // HCSPARAMS2
         let hcsparams2 = self
             .pci_dev
