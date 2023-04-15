@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{fence, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
@@ -338,11 +338,21 @@ impl XhciInterrupter {
                 self.er_start,
                 (TRB_SIZE * self.er_ep_idx) as u64,
             ))?;
+        let cycle = trb.control as u8;
+        // Toggle the cycle bit to avoid driver read it.
+        let control = if trb.control & TRB_C == TRB_C {
+            trb.control & !TRB_C
+        } else {
+            trb.control | TRB_C
+        };
         let mut buf = [0_u8; TRB_SIZE as usize];
         LittleEndian::write_u64(&mut buf, trb.parameter);
         LittleEndian::write_u32(&mut buf[8..], trb.status);
-        LittleEndian::write_u32(&mut buf[12..], trb.control);
-        dma_write_bytes(&self.mem, GuestAddress(addr), &buf, TRB_SIZE as u64)?;
+        LittleEndian::write_u32(&mut buf[12..], control);
+        dma_write_bytes(&self.mem, GuestAddress(addr), &buf)?;
+        // Write the cycle bit at last.
+        fence(Ordering::SeqCst);
+        dma_write_bytes(&self.mem, GuestAddress(addr + 12), &[cycle])?;
         Ok(())
     }
 }
