@@ -446,6 +446,7 @@ impl<T: Clone + 'static> Aio<T> {
             }
             OpCode::Pwritev => {
                 // Load the head from file before fill iovec to buffer.
+                let mut head_loaded = false;
                 if cb.offset as u64 > offset_align {
                     let len = raw_read(
                         cb.file_fd,
@@ -456,10 +457,11 @@ impl<T: Clone + 'static> Aio<T> {
                     if len < 0 || len as u32 != cb.req_align {
                         bail!("Failed to load head for misaligned write.");
                     }
+                    head_loaded = true;
                 }
                 // Is head and tail in the same alignment section?
-                let tail_loaded = (offset_align + cb.req_align as u64) >= high;
-                let need_tail = !tail_loaded && (high_align > high);
+                let same_section = (offset_align + cb.req_align as u64) >= high;
+                let need_tail = !(same_section && head_loaded) && (high_align > high);
 
                 let mut offset = offset_align;
                 let mut iovecs = &mut cb.iovec[..];
