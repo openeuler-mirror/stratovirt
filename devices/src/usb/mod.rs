@@ -485,27 +485,33 @@ impl UsbPacket {
         let mut copied = 0;
         if to_host {
             for iov in &self.iovecs {
+                if iov.iov_len == 0 {
+                    continue;
+                }
+                if len == copied {
+                    break;
+                }
                 let cnt = min(iov.iov_len as usize, len - copied);
                 let tmp = &vec[copied..(copied + cnt)];
                 if let Err(e) = mem_from_buf(tmp, iov.iov_base) {
                     error!("Failed to write mem: {:?}", e);
                 }
                 copied += cnt;
-                if len == copied {
-                    break;
-                }
             }
         } else {
             for iov in &self.iovecs {
+                if iov.iov_len == 0 {
+                    continue;
+                }
+                if len == copied {
+                    break;
+                }
                 let cnt = min(iov.iov_len as usize, len - copied);
                 let tmp = &mut vec[copied..(copied + cnt)];
                 if let Err(e) = mem_to_buf(tmp, iov.iov_base) {
                     error!("Failed to read mem {:?}", e);
                 }
                 copied += cnt;
-                if len == copied {
-                    break;
-                }
             }
         }
         self.actual_length = copied as u32;

@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
@@ -46,11 +46,6 @@ impl XhciTRB {
     /// Get TRB type
     pub fn get_type(&self) -> TRBType {
         ((self.control >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK).into()
-    }
-
-    // Get Cycle bit
-    pub fn get_cycle_bit(&self) -> bool {
-        self.control & TRB_C == TRB_C
     }
 }
 
@@ -85,13 +80,14 @@ impl XhciCommandRing {
     pub fn fetch_trb(&mut self) -> Result<Option<XhciTRB>> {
         let mut link_cnt = 0;
         loop {
-            let mut trb = self.read_trb(self.dequeue)?;
-            trb.addr = self.dequeue;
-            trb.ccs = self.ccs;
-            if trb.get_cycle_bit() != self.ccs {
+            if read_cycle_bit(&self.mem, self.dequeue)? != self.ccs {
                 debug!("TRB cycle bit not matched");
                 return Ok(None);
             }
+            fence(Ordering::Acquire);
+            let mut trb = read_trb(&self.mem, self.dequeue)?;
+            trb.addr = self.dequeue;
+            trb.ccs = self.ccs;
             let trb_type = trb.get_type();
             debug!("Fetch TRB: type {:?} trb {:?}", trb_type, trb);
             if trb_type == TRBType::TrLink {
@@ -110,19 +106,6 @@ impl XhciCommandRing {
                 return Ok(Some(trb));
             }
         }
-    }
-
-    fn read_trb(&self, addr: u64) -> Result<XhciTRB> {
-        let mut buf = [0; TRB_SIZE as usize];
-        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
-        let trb = XhciTRB {
-            parameter: LittleEndian::read_u64(&buf),
-            status: LittleEndian::read_u32(&buf[8..]),
-            control: LittleEndian::read_u32(&buf[12..]),
-            addr: 0,
-            ccs: true,
-        };
-        Ok(trb)
     }
 }
 
@@ -166,19 +149,6 @@ impl XhciTransferRing {
         self.ccs.store(v, Ordering::SeqCst);
     }
 
-    fn read_trb(&self, addr: u64) -> Result<XhciTRB> {
-        let mut buf = [0; TRB_SIZE as usize];
-        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
-        let trb = XhciTRB {
-            parameter: LittleEndian::read_u64(&buf),
-            status: LittleEndian::read_u32(&buf[8..]),
-            control: LittleEndian::read_u32(&buf[12..]),
-            addr: 0,
-            ccs: true,
-        };
-        Ok(trb)
-    }
-
     /// Get the transfer descriptor which includes one or more TRBs.
     /// Return None if the td is not ready.
     /// Return Vec if the td is ok.
@@ -190,14 +160,14 @@ impl XhciTransferRing {
         let mut link_cnt = 0;
         let mut td = Vec::new();
         for _ in 0..RING_LEN_LIMIT {
-            let mut trb = self.read_trb(dequeue)?;
-            trb.addr = dequeue;
-            trb.ccs = ccs;
-            if trb.get_cycle_bit() != ccs {
-                // TRB is not ready.
+            if read_cycle_bit(&self.mem, dequeue)? != ccs {
                 debug!("TRB cycle bit not matched");
                 return Ok(None);
             }
+            fence(Ordering::Acquire);
+            let mut trb = read_trb(&self.mem, dequeue)?;
+            trb.addr = dequeue;
+            trb.ccs = ccs;
             let trb_type = trb.get_type();
             if trb_type == TRBType::TrLink {
                 link_cnt += 1;
@@ -246,6 +216,28 @@ impl XhciTransferRing {
     }
 }
 
+fn read_trb(mem: &Arc<AddressSpace>, addr: u64) -> Result<XhciTRB> {
+    let mut buf = [0; TRB_SIZE as usize];
+    dma_read_bytes(mem, GuestAddress(addr), &mut buf)?;
+    let trb = XhciTRB {
+        parameter: LittleEndian::read_u64(&buf),
+        status: LittleEndian::read_u32(&buf[8..]),
+        control: LittleEndian::read_u32(&buf[12..]),
+        addr: 0,
+        ccs: true,
+    };
+    Ok(trb)
+}
+
+fn read_cycle_bit(mem: &Arc<AddressSpace>, addr: u64) -> Result<bool> {
+    let addr = addr
+        .checked_add(12)
+        .with_context(|| format!("Ring address overflow, {:x}", addr))?;
+    let mut buf = [0];
+    dma_read_u32(mem, GuestAddress(addr), &mut buf)?;
+    Ok(buf[0] & TRB_C == TRB_C)
+}
+
 /// Event Ring Segment Table Entry. See in the specs 6.5 Event Ring Segment Table.
 pub struct XhciEventRingSeg {
     mem: Arc<AddressSpace>,
@@ -269,7 +261,7 @@ impl XhciEventRingSeg {
     /// Fetch the event ring segment.
     pub fn fetch_event_ring_seg(&mut self, addr: u64) -> Result<()> {
         let mut buf = [0_u8; TRB_SIZE as usize];
-        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
+        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf)?;
         self.addr_lo = LittleEndian::read_u32(&buf);
         self.addr_hi = LittleEndian::read_u32(&buf[4..]);
         self.size = LittleEndian::read_u32(&buf[8..]);

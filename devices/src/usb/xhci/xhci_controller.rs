@@ -1693,6 +1693,16 @@ impl XhciDevice {
                 } else {
                     trb.parameter
                 };
+                if !self
+                    .mem_space
+                    .address_in_memory(GuestAddress(dma_addr), chunk as u64)
+                {
+                    bail!(
+                        "Invalid Address for transfer: base 0x{:X}, size {}",
+                        dma_addr,
+                        chunk
+                    );
+                }
                 if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
                     vec.push(Iovec::new(hva, chunk as u64));
                 } else {
@@ -1864,8 +1874,8 @@ pub fn dma_read_bytes(
     addr_space: &Arc<AddressSpace>,
     addr: GuestAddress,
     mut buf: &mut [u8],
-    len: u64,
 ) -> Result<()> {
+    let len = buf.len() as u64;
     addr_space.read(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to read dma memory at gpa=0x{:x} len=0x{:x}",
@@ -1879,8 +1889,8 @@ pub fn dma_write_bytes(
     addr_space: &Arc<AddressSpace>,
     addr: GuestAddress,
     mut buf: &[u8],
-    len: u64,
 ) -> Result<()> {
+    let len = buf.len() as u64;
     addr_space.write(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
@@ -1892,7 +1902,7 @@ pub fn dma_write_bytes(
 
 fn dma_read_u64(addr_space: &Arc<AddressSpace>, addr: GuestAddress, data: &mut u64) -> Result<()> {
     let mut tmp = [0_u8; 8];
-    dma_read_bytes(addr_space, addr, &mut tmp, 8)?;
+    dma_read_bytes(addr_space, addr, &mut tmp)?;
     *data = LittleEndian::read_u64(&tmp);
     Ok(())
 }
@@ -1905,7 +1915,7 @@ pub fn dma_read_u32(
     let vec_len = size_of::<u32>() * buf.len();
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
-    dma_read_bytes(addr_space, addr, tmp, vec_len as u64)?;
+    dma_read_bytes(addr_space, addr, tmp)?;
     for i in 0..buf.len() {
         buf[i] = LittleEndian::read_u32(&tmp[(size_of::<u32>() * i)..]);
     }
@@ -1923,7 +1933,7 @@ pub fn dma_write_u32(
     for i in 0..buf.len() {
         LittleEndian::write_u32(&mut tmp[(size_of::<u32>() * i)..], buf[i]);
     }
-    dma_write_bytes(addr_space, addr, tmp, vec_len as u64)?;
+    dma_write_bytes(addr_space, addr, tmp)?;
     Ok(())
 }
 
