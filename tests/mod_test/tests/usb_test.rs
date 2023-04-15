@@ -734,9 +734,9 @@ fn test_xhci_keyboard_invalid_value() {
     let mut trb = TestNormalTRB::generate_normal_td(100, HID_KEYBOARD_LEN as u32);
     xhci.queue_trb(slot_id, HID_DEVICE_ENDPOINT_ID, &mut trb);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
-    // Host Controller Error
+    // NOTE: no HCE, only primary interrupter supported now.
     let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
-    assert!(status & USB_STS_HCE == USB_STS_HCE);
+    assert!(status & USB_STS_HCE != USB_STS_HCE);
 
     test_state.borrow_mut().stop();
 }
