@@ -44,11 +44,12 @@ use crate::{
     data::keycode::KEYSYM2KEYCODE,
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
     pixman::{
-        create_pixman_image, get_image_data, get_image_height, get_image_width, unref_pixman_image,
+        create_pixman_image, get_image_data, get_image_height, get_image_width, ref_pixman_image,
+        unref_pixman_image,
     },
 };
 use machine_manager::config::{DisplayConfig, UiContext};
-use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_image_t, pixman_op_t};
+use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
 use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
@@ -281,8 +282,9 @@ pub struct GtkDisplayScreen {
     window: ApplicationWindow,
     dev_name: String,
     draw_area: DrawingArea,
+    source_surface: DisplaySurface,
+    transfer_surface: Option<DisplaySurface>,
     cairo_image: Option<ImageSurface>,
-    transfer_image: *mut pixman_image_t,
     click_state: ClickState,
     con: Weak<Mutex<DisplayConsole>>,
     dcl: Weak<Mutex<DisplayChangeListener>>,
@@ -330,8 +332,9 @@ impl GtkDisplayScreen {
             window,
             dev_name,
             draw_area: DrawingArea::default(),
+            source_surface: surface,
+            transfer_surface: None,
             cairo_image,
-            transfer_image: surface.image,
             click_state: ClickState::default(),
             con,
             dcl,
@@ -560,8 +563,8 @@ fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         dcl.lock().unwrap().update_interval = 30;
     };
 
-    let width = get_image_width(borrowed_gs.transfer_image);
-    let height = get_image_height(borrowed_gs.transfer_image);
+    let width = borrowed_gs.source_surface.width();
+    let height = borrowed_gs.source_surface.height();
     let surface_width = surface.width();
     let surface_height = surface.height();
     if width == 0 || height == 0 || width != surface_width || height != surface_height {
@@ -624,14 +627,14 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
         return Ok(());
     }
 
-    if surface.image.is_null() || borrowed_gs.transfer_image.is_null() {
+    if surface.image.is_null() {
         bail!("Image is null");
     }
 
     let src_width = get_image_width(surface.image);
     let src_height = get_image_height(surface.image);
-    let dest_width = get_image_width(borrowed_gs.transfer_image);
-    let dest_height = get_image_height(borrowed_gs.transfer_image);
+    let dest_width = get_image_width(borrowed_gs.source_surface.image);
+    let dest_height = get_image_height(borrowed_gs.source_surface.image);
 
     let surface_width = cmp::min(src_width, dest_width);
     let surface_height = cmp::min(src_height, dest_height);
@@ -642,23 +645,31 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
     let w = (x1 - x).abs();
     let h = (y1 - y).abs();
 
-    // SAFETY: Verified that the pointer of source image and dest image
-    // is not empty, and the copied data will not exceed the image area
-    unsafe {
-        pixman_image_composite(
-            pixman_op_t::PIXMAN_OP_SRC,
-            surface.image,
-            ptr::null_mut(),
-            borrowed_gs.transfer_image,
-            x as i16,
-            y as i16,
-            0,
-            0,
-            x as i16,
-            y as i16,
-            w as u16,
-            h as u16,
-        )
+    match borrowed_gs.transfer_surface {
+        Some(s) if borrowed_gs.source_surface.format != pixman_format_code_t::PIXMAN_x8r8g8b8 => {
+            if src_width != s.width() || src_height != s.height() {
+                bail!("Wrong format of image format.");
+            }
+            // SAFETY: Verified that the pointer of source image and dest image
+            // is not empty, and the copied data will not exceed the image area
+            unsafe {
+                pixman_image_composite(
+                    pixman_op_t::PIXMAN_OP_SRC,
+                    surface.image,
+                    ptr::null_mut(),
+                    s.image,
+                    x as i16,
+                    y as i16,
+                    0,
+                    0,
+                    x as i16,
+                    y as i16,
+                    w as u16,
+                    h as u16,
+                )
+            };
+        }
+        _ => {}
     };
     drop(locked_con);
 
@@ -707,8 +718,8 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
 
     let mut need_resize: bool = true;
 
-    let width = get_image_width(borrowed_gs.transfer_image);
-    let height = get_image_height(borrowed_gs.transfer_image);
+    let width = borrowed_gs.source_surface.width();
+    let height = borrowed_gs.source_surface.height();
     let surface_width = surface.width();
     let surface_height = surface.height();
     let surface_stride = surface.stride();
@@ -716,46 +727,27 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         need_resize = false;
     }
 
-    if need_resize {
-        unref_pixman_image(borrowed_gs.transfer_image);
-        borrowed_gs.transfer_image = create_pixman_image(
-            pixman_format_code_t::PIXMAN_x8r8g8b8,
-            surface_width,
-            surface_height,
-            ptr::null_mut(),
-            surface_stride,
-        );
-    }
-    if surface.image.is_null() || borrowed_gs.transfer_image.is_null() {
+    if surface.image.is_null() {
         bail!("Image data is invalid.");
     }
 
-    // SAFETY:
-    // 1. It can be sure that source ptr and dest ptr is not nullptr.
-    // 2. The copy range will not exceed the image area.
-    unsafe {
-        pixman_image_composite(
-            pixman_op_t::PIXMAN_OP_SRC,
-            surface.image,
-            ptr::null_mut(),
-            borrowed_gs.transfer_image,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            surface_width as u16,
-            surface_height as u16,
-        )
+    let source_suface = DisplaySurface {
+        format: surface.format,
+        image: ref_pixman_image(surface.image),
     };
+    unref_pixman_image(borrowed_gs.source_surface.image);
+    borrowed_gs.source_surface = source_suface;
+    if let Some(s) = borrowed_gs.transfer_surface {
+        unref_pixman_image(s.image);
+        borrowed_gs.transfer_surface = None;
+    }
     drop(locked_con);
 
-    if need_resize {
+    if borrowed_gs.source_surface.format == pixman_format_code_t::PIXMAN_x8r8g8b8 {
+        let data = get_image_data(borrowed_gs.source_surface.image) as *mut u8;
         // SAFETY:
         // 1. It can be sure that the ptr of data is not nullptr.
         // 2. The copy range will not exceed the image data.
-        let data = get_image_data(borrowed_gs.transfer_image) as *mut u8;
         borrowed_gs.cairo_image = unsafe {
             ImageSurface::create_for_data_unsafe(
                 data as *mut u8,
@@ -766,7 +758,54 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
             )
         }
         .ok()
-    }
+    } else {
+        let transfer_image = create_pixman_image(
+            pixman_format_code_t::PIXMAN_x8r8g8b8,
+            surface_width,
+            surface_height,
+            ptr::null_mut(),
+            surface_stride,
+        );
+
+        // SAFETY:
+        // 1. It can be sure that the ptr of data is not nullptr.
+        // 2. The copy range will not exceed the image data.
+        let data = get_image_data(transfer_image) as *mut u8;
+        borrowed_gs.cairo_image = unsafe {
+            ImageSurface::create_for_data_unsafe(
+                data as *mut u8,
+                Format::Rgb24,
+                surface_width,
+                surface_height,
+                surface_stride,
+            )
+        }
+        .ok();
+
+        // SAFETY:
+        // 1. It can be sure that source ptr and dest ptr is not nullptr.
+        // 2. The copy range will not exceed the image area.
+        unsafe {
+            pixman_image_composite(
+                pixman_op_t::PIXMAN_OP_SRC,
+                borrowed_gs.source_surface.image,
+                ptr::null_mut(),
+                transfer_image,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                surface_width as u16,
+                surface_height as u16,
+            )
+        };
+        borrowed_gs.transfer_surface = Some(DisplaySurface {
+            format: pixman_format_code_t::PIXMAN_x8r8g8b8,
+            image: transfer_image,
+        });
+    };
     drop(borrowed_gs);
 
     if need_resize {
