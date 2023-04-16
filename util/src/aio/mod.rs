@@ -641,3 +641,131 @@ fn iovec_is_zero(iovecs: &[Iovec]) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::prelude::AsRawFd;
+    use vmm_sys_util::tempfile::TempFile;
+
+    fn perform_sync_rw(
+        fsize: usize,
+        offset: usize,
+        nbytes: u64,
+        opcode: OpCode,
+        direct: bool,
+        align: u32,
+    ) {
+        assert!(opcode == OpCode::Preadv || opcode == OpCode::Pwritev);
+        // Init a file with special content.
+        let mut content = vec![0u8; fsize];
+        for (index, elem) in content.as_mut_slice().into_iter().enumerate() {
+            *elem = index as u8;
+        }
+        let tmp_file = TempFile::new().unwrap();
+        let mut file = tmp_file.into_file();
+        file.write_all(&content).unwrap();
+
+        // Prepare rw buf.
+        let mut buf = vec![0xEF; nbytes as usize / 3];
+        let mut buf2 = vec![0xFE; nbytes as usize - buf.len()];
+        let iovec = vec![
+            Iovec {
+                iov_base: buf.as_mut_ptr() as u64,
+                iov_len: buf.len() as u64,
+            },
+            Iovec {
+                iov_base: buf2.as_mut_ptr() as u64,
+                iov_len: buf2.len() as u64,
+            },
+        ];
+
+        // Perform aio rw.
+        let file_fd = file.as_raw_fd();
+        let aiocb = AioCb {
+            direct,
+            req_align: align,
+            buf_align: align,
+            file_fd,
+            opcode,
+            iovec,
+            offset,
+            nbytes,
+            user_data: 0,
+            iocompletecb: 0,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            write_zeroes_unmap: false,
+        };
+        let mut aio = Aio::new(
+            Arc::new(|_: &AioCb<i32>, _: i64| -> Result<()> { Ok(()) }),
+            AioEngine::Off,
+        )
+        .unwrap();
+        aio.submit_request(aiocb).unwrap();
+
+        // Get actual file content.
+        let mut new_content = vec![0u8; fsize];
+        let ret = raw_read(
+            file_fd,
+            new_content.as_mut_ptr() as u64,
+            new_content.len(),
+            0,
+        );
+        assert_eq!(ret, fsize as i64);
+        if opcode == OpCode::Pwritev {
+            // The expected file content.
+            let ret = (&mut content[offset..]).write(&buf).unwrap();
+            assert_eq!(ret, buf.len());
+            let ret = (&mut content[offset + buf.len()..]).write(&buf2).unwrap();
+            assert_eq!(ret, buf2.len());
+            for index in 0..fsize {
+                assert_eq!(new_content[index], content[index]);
+            }
+        } else {
+            for index in 0..buf.len() {
+                assert_eq!(buf[index], new_content[offset + index]);
+            }
+            for index in 0..buf2.len() {
+                assert_eq!(buf2[index], new_content[offset + buf.len() + index]);
+            }
+        }
+    }
+
+    fn test_sync_rw(opcode: OpCode, direct: bool, align: u32) {
+        assert!(align >= 512);
+        let fsize: usize = 2 << 20;
+
+        // perform sync rw in the same alignment section.
+        let minor_align = align as u64 - 100;
+        perform_sync_rw(fsize, 0, minor_align, opcode, direct, align);
+        perform_sync_rw(fsize, 50, minor_align, opcode, direct, align);
+        perform_sync_rw(fsize, 100, minor_align, opcode, direct, align);
+
+        // perform sync rw across alignment sections.
+        let minor_size = fsize as u64 - 100;
+        perform_sync_rw(fsize, 0, minor_size, opcode, direct, align);
+        perform_sync_rw(fsize, 50, minor_size, opcode, direct, align);
+        perform_sync_rw(fsize, 100, minor_size, opcode, direct, align);
+    }
+
+    fn test_sync_rw_all_align(opcode: OpCode, direct: bool) {
+        let basic_align = 512;
+        test_sync_rw(opcode, direct, basic_align << 0);
+        test_sync_rw(opcode, direct, basic_align << 1);
+        test_sync_rw(opcode, direct, basic_align << 2);
+        test_sync_rw(opcode, direct, basic_align << 3);
+    }
+
+    #[test]
+    fn test_direct_sync_rw() {
+        test_sync_rw_all_align(OpCode::Preadv, true);
+        test_sync_rw_all_align(OpCode::Pwritev, true);
+    }
+
+    #[test]
+    fn test_indirect_sync_rw() {
+        test_sync_rw_all_align(OpCode::Preadv, false);
+        test_sync_rw_all_align(OpCode::Pwritev, false);
+    }
+}
