@@ -128,8 +128,8 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
         None => return Ok(()),
     };
     let (real_x, real_y) = borrowed_gs.convert_coord(x, y)?;
-    let standard_x = (((real_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y = (((real_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
+    let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
 
     point_event(
         borrowed_gs.click_state.button_mask as u32,
@@ -158,8 +158,8 @@ fn da_pointer_callback(
     let (x, y) = button_event.position();
     let (real_x, real_y) = borrowed_gs.convert_coord(x, y)?;
 
-    let standard_x = (((real_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y = (((real_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
+    let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
 
     match button_event.event_type() {
         gdk::EventType::ButtonRelease => {
