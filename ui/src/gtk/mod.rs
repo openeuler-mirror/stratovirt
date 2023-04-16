@@ -99,6 +99,7 @@ enum DisplayEventType {
     DisplayUpdate,
     CursorDefine,
     DisplayRefresh,
+    DisplaySetMajor,
 }
 
 impl Default for DisplayEventType {
@@ -176,6 +177,13 @@ impl DisplayChangeListenerOperations for GtkInterface {
         let mut event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::CursorDefine);
         event.cursor = Some(cursor_data.clone());
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
+
+    fn dpy_set_major(&self) -> Result<()> {
+        let event =
+            DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplaySetMajor);
         self.dce_sender.send(event)?;
         Ok(())
     }
@@ -275,7 +283,8 @@ impl GtkDisplay {
             gs_show_menu.activate();
         }
 
-        self.gtk_menu.radio_group.push(gs_show_menu);
+        self.gtk_menu.radio_group.push(gs_show_menu.clone());
+        gs.borrow_mut().show_menu = gs_show_menu;
         gs.borrow_mut().draw_area = draw_area;
 
         Ok(())
@@ -285,6 +294,7 @@ impl GtkDisplay {
 pub struct GtkDisplayScreen {
     window: ApplicationWindow,
     dev_name: String,
+    show_menu: RadioMenuItem,
     draw_area: DrawingArea,
     source_surface: DisplaySurface,
     transfer_surface: Option<DisplaySurface>,
@@ -336,6 +346,7 @@ impl GtkDisplayScreen {
             window,
             dev_name,
             draw_area: DrawingArea::default(),
+            show_menu: RadioMenuItem::default(),
             source_surface: surface,
             transfer_surface: None,
             cairo_image,
@@ -532,6 +543,7 @@ fn gd_handle_event(gd: &Rc<RefCell<GtkDisplay>>, event: DisplayChangeEvent) -> R
         DisplayEventType::DisplayUpdate => do_update_event(&ds, event),
         DisplayEventType::CursorDefine => do_cursor_define(&ds, event),
         DisplayEventType::DisplayRefresh => do_refresh_event(&ds),
+        DisplayEventType::DisplaySetMajor => do_set_major_event(&ds),
     }
 }
 
@@ -829,6 +841,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     } else {
         renew_image(gs)
     }
+}
+
+/// Activate the current screen.
+fn do_set_major_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    gs.borrow().show_menu.activate();
+    Ok(())
 }
 
 pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
