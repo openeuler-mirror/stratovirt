@@ -262,15 +262,19 @@ impl GtkDisplay {
         // Create a radio button.
         // Only one screen can be displayed at a time.
         let gs_show_menu = RadioMenuItem::with_label(&label_name);
-        if !self.gtk_menu.radio_group.is_empty() {
-            let first_radio = &self.gtk_menu.radio_group[0];
-            gs_show_menu.join_group(Some(first_radio));
-        }
         let note_book = self.gtk_menu.note_book.clone();
         gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |_| {
             gs_show_menu_callback(&gs, note_book).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
         }));
         self.gtk_menu.view_menu.append(&gs_show_menu);
+
+        if !self.gtk_menu.radio_group.is_empty() {
+            let first_radio = &self.gtk_menu.radio_group[0];
+            gs_show_menu.join_group(Some(first_radio));
+        } else {
+            gs_show_menu.activate();
+        }
+
         self.gtk_menu.radio_group.push(gs_show_menu);
         gs.borrow_mut().draw_area = draw_area;
 
@@ -536,9 +540,20 @@ fn gs_show_menu_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     note_book: gtk::Notebook,
 ) -> Result<()> {
-    let page_num = note_book.page_num(&gs.borrow().draw_area);
+    let borrowed_gs = gs.borrow();
+    let page_num = note_book.page_num(&borrowed_gs.draw_area);
     note_book.set_current_page(page_num);
-    gs.borrow().draw_area.grab_focus();
+
+    if let Some(dcl) = borrowed_gs.dcl.upgrade() {
+        if borrowed_gs.dev_name == "ramfb" {
+            dcl.lock().unwrap().update_interval = 30;
+        } else {
+            dcl.lock().unwrap().update_interval = 0;
+        }
+    }
+
+    borrowed_gs.draw_area.grab_focus();
+    drop(borrowed_gs);
     update_window_size(gs)?;
     update_cursor_display(gs)
 }
@@ -562,10 +577,6 @@ fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let surface = match locked_con.surface {
         Some(s) => s,
         None => return Ok(()),
-    };
-
-    if let Some(dcl) = borrowed_gs.dcl.upgrade() {
-        dcl.lock().unwrap().update_interval = 30;
     };
 
     let width = borrowed_gs.source_surface.width();
