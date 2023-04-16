@@ -734,9 +734,9 @@ fn test_xhci_keyboard_invalid_value() {
     let mut trb = TestNormalTRB::generate_normal_td(100, HID_KEYBOARD_LEN as u32);
     xhci.queue_trb(slot_id, HID_DEVICE_ENDPOINT_ID, &mut trb);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
-    // Host Controller Error
+    // NOTE: no HCE, only primary interrupter supported now.
     let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
-    assert!(status & USB_STS_HCE == USB_STS_HCE);
+    assert!(status & USB_STS_HCE != USB_STS_HCE);
 
     test_state.borrow_mut().stop();
 }
@@ -2550,6 +2550,39 @@ fn test_xhci_keyboard_tablet_basic() {
     xhci.device_config.insert(String::from("keyboard"), false);
     xhci.device_config.insert(String::from("tablet"), true);
     let slot_id = xhci.init_device(port_id);
+    xhci.test_pointer_event(slot_id, test_state.clone());
+    test_state.borrow_mut().stop();
+}
+
+#[test]
+fn test_xhci_tablet_invalid_trb() {
+    let (xhci, test_state, _) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_usb_tablet("tbt")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+    let mut xhci = xhci.borrow_mut();
+    let port_id = 1;
+    let slot_id = xhci.init_device(port_id);
+
+    qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0);
+    // Invalid address in TRB.
+    let mut trb = TestNormalTRB::generate_normal_td(0, 6);
+    trb.set_pointer(0);
+    trb.set_idt_flag(false);
+    xhci.queue_trb(slot_id, HID_DEVICE_ENDPOINT_ID, &mut trb);
+    xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::TrbError as u32);
+    // Fetch the remaining data.
+    xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
+    xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
+    assert_eq!(buf, [0, 100, 0, 200, 0, 0]);
+
     xhci.test_pointer_event(slot_id, test_state.clone());
     test_state.borrow_mut().stop();
 }
