@@ -38,8 +38,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 use ui::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, ConsoleType, DisplayConsole, DisplayMouse, DisplaySurface,
-    HardWareOperations,
+    display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
+    DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::pixman::unref_pixman_image;
 use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
@@ -1330,7 +1330,19 @@ impl GpuIoHandler {
                 VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D => self.cmd_transfer_to_host_2d(req),
                 VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => self.cmd_resource_attach_backing(req),
                 VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => self.cmd_resource_detach_backing(req),
-                VIRTIO_GPU_CMD_GET_EDID => self.cmd_get_edid(req),
+                VIRTIO_GPU_CMD_GET_EDID => {
+                    if get_run_stage() == VmRunningStage::Bios && !self.scanouts.is_empty() {
+                        match &self.scanouts[0].con.as_ref().and_then(|c| c.upgrade()) {
+                            Some(con) => {
+                                let dev_name = con.lock().unwrap().dev_name.clone();
+                                display_set_major_screen(&dev_name)?;
+                                set_run_stage(VmRunningStage::Os);
+                            }
+                            None => {}
+                        };
+                    }
+                    self.cmd_get_edid(req)
+                }
                 _ => self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req),
             } {
                 error!("Fail to handle GPU request, {:?}.", e);
@@ -1709,6 +1721,10 @@ impl VirtioDevice for Gpu {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        if get_run_stage() == VmRunningStage::Os {
+            display_set_major_screen("ramfb")?;
+            set_run_stage(VmRunningStage::Bios);
+        }
         unregister_event_helper(None, &mut self.deactivate_evts)
     }
 }
