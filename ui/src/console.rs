@@ -210,6 +210,25 @@ impl DisplayState {
             refresh_num: 0,
         }
     }
+
+    // Get all related display by con_id.
+    fn get_related_display(&self, con_id: usize) -> Result<Vec<Arc<Mutex<DisplayChangeListener>>>> {
+        let mut related_dpys: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+        let active_id = CONSOLES.lock().unwrap().activate_id;
+        for dcl in self.listeners.iter().flatten() {
+            match dcl.lock().unwrap().con_id {
+                Some(id) if con_id == id => {
+                    related_dpys.push(dcl.clone());
+                }
+                None if Some(con_id) == active_id => {
+                    related_dpys.push(dcl.clone());
+                }
+                _ => {}
+            }
+        }
+
+        Ok(related_dpys)
+    }
 }
 
 /// The registered console will be inserted in the console list.
@@ -336,21 +355,7 @@ pub fn display_replace_surface(
     }
     drop(locked_con);
 
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
-
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Some(s) = &con.lock().unwrap().surface.clone() {
@@ -389,21 +394,7 @@ pub fn display_graphic_update(
     let con_id = locked_con.con_id;
     drop(locked_con);
 
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
-
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         (*dcl_opts).dpy_image_update(x, y, w, h)?;
@@ -425,21 +416,8 @@ pub fn display_cursor_define(
         Some(c) => c,
         None => return Ok(()),
     };
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
     let con_id = con.lock().unwrap().con_id;
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
 
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
