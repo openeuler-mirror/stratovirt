@@ -16,8 +16,10 @@ use anyhow::{anyhow, Context, Result};
 use std::fs::File;
 use std::os::unix::io::{IntoRawFd, RawFd};
 
-use super::CamFmt;
-use super::CameraHostdevOps;
+use super::{
+    CamBasicFmt, CamFmt, CameraBrokenCallback, CameraFormatList, CameraHostdevOps,
+    CameraNotifyCallback,
+};
 
 #[allow(dead_code)]
 pub struct V4l2HostDev {
@@ -101,7 +103,7 @@ impl CameraHostdevOps for V4l2HostDev {
     fn get_fmt(&self) -> Result<()> {
         Ok(())
     }
-    fn set_fmt(&self, _fmt: u64) -> Result<()> {
+    fn set_fmt(&mut self, _fmt: &CamBasicFmt) -> Result<()> {
         Ok(())
     }
     fn set_ctl(&self) -> Result<()> {
@@ -111,10 +113,41 @@ impl CameraHostdevOps for V4l2HostDev {
     fn video_stream_on(&self) -> Result<()> {
         Ok(())
     }
-    fn video_stream_run(&self) -> Result<()> {
-        Ok(())
-    }
+
     fn video_stream_off(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn list_format(&mut self) -> Result<Vec<CameraFormatList>> {
+        todo!()
+    }
+
+    fn reset(&mut self) {
+        todo!()
+    }
+
+    fn get_frame_size(&self) -> usize {
+        todo!()
+    }
+
+    fn get_frame(
+        &self,
+        _iovecs: &[util::aio::Iovec],
+        _frame_offset: usize,
+        _len: usize,
+    ) -> Result<usize> {
+        todo!()
+    }
+
+    fn next_frame(&mut self) -> Result<()> {
+        todo!()
+    }
+
+    fn register_notify_cb(&mut self, _cb: CameraNotifyCallback) {
+        todo!()
+    }
+
+    fn register_broken_cb(&mut self, _cb: CameraBrokenCallback) {
+        todo!()
     }
 }

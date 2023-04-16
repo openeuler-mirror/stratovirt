@@ -16,7 +16,11 @@
 pub mod demo;
 pub mod v4l2;
 
+use std::sync::Arc;
+
 use anyhow::Result;
+
+use util::aio::Iovec;
 
 #[allow(dead_code)]
 #[derive(Default)]
@@ -37,12 +41,11 @@ impl CamFmt {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct CamBasicFmt {
-    width: u16,
-    height: u16,
-    fps: u16,
+    width: u32,
+    height: u32,
+    fps: u32,
     fmttype: FmtType,
 }
 
@@ -64,8 +67,7 @@ pub struct CamLensFmt {
     // TODO: to be extended.
 }
 
-#[allow(dead_code)]
-enum FmtType {
+pub enum FmtType {
     Uncompressed = 0,
     Mjpg,
 }
@@ -76,17 +78,55 @@ impl Default for FmtType {
     }
 }
 
+pub struct CameraFrame {
+    pub width: u32,
+    pub height: u32,
+    pub interval: u32,
+}
+
+pub struct CameraFormatList {
+    pub format: FmtType,
+    pub frame: Vec<CameraFrame>,
+}
+
+/// Callback function which is called when frame data is coming.
+pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
+
+/// Callback function which is called when backend is broken.
+pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
+
 pub trait CameraHostdevOps: Send + Sync {
     fn init(&self) -> Result<()>;
     fn is_camera(&self) -> Result<bool>;
     fn get_fmt(&self) -> Result<()>;
-    fn set_fmt(&self, fmt: u64) -> Result<()>;
+    /// Set a specific format.
+    fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
     fn set_ctl(&self) -> Result<()>;
 
     // Turn stream on to start to receive frame buffer.
     fn video_stream_on(&self) -> Result<()>;
-    // The callback function used to poll on backend video devices, such as /dev/video0.
-    fn video_stream_run(&self) -> Result<()>;
+
     // Turn stream off to end receiving frame buffer.
     fn video_stream_off(&self) -> Result<()>;
+
+    /// List all formats supported by backend.
+    fn list_format(&mut self) -> Result<Vec<CameraFormatList>>;
+
+    /// Reset the device.
+    fn reset(&mut self);
+
+    /// Get the total size of current frame.
+    fn get_frame_size(&self) -> usize;
+
+    /// Copy frame data to iovecs.
+    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
+
+    /// Get next frame when current frame is read complete.
+    fn next_frame(&mut self) -> Result<()>;
+
+    /// Register notify callback which is called when data is coming.
+    fn register_notify_cb(&mut self, cb: CameraNotifyCallback);
+
+    /// Register broken callback which is called when backend is broken.
+    fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
