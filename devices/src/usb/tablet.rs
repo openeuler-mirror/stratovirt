@@ -28,7 +28,7 @@ use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
-use ui::input::{register_pointer, PointerOpts};
+use ui::input::{register_pointer, unregister_pointer, PointerOpts};
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
@@ -128,20 +128,6 @@ impl UsbTablet {
             cntlr: None,
         }
     }
-
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_FULL;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-        self.usb_device
-            .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
-        let tablet = Arc::new(Mutex::new(self));
-        let tablet_adapter = Arc::new(Mutex::new(UsbTabletAdapter {
-            tablet: tablet.clone(),
-        }));
-        register_pointer("UsbTablet", tablet_adapter);
-        Ok(tablet)
-    }
 }
 
 pub struct UsbTabletAdapter {
@@ -176,6 +162,26 @@ impl PointerOpts for UsbTabletAdapter {
 }
 
 impl UsbDeviceOps for UsbTablet {
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.speed = USB_SPEED_FULL;
+        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
+        let id = self.id.clone();
+        let tablet = Arc::new(Mutex::new(self));
+        let tablet_adapter = Arc::new(Mutex::new(UsbTabletAdapter {
+            tablet: tablet.clone(),
+        }));
+        register_pointer(&id, tablet_adapter);
+        Ok(tablet)
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
+        unregister_pointer(&self.id.clone());
+        Ok(())
+    }
+
     fn reset(&mut self) {
         info!("Tablet device reset");
         self.usb_device.remote_wakeup = 0;

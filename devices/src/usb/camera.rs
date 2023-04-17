@@ -440,21 +440,6 @@ impl UsbCamera {
         }
     }
 
-    pub fn realize(mut self) -> Result<Arc<Mutex<UsbCamera>>> {
-        self.set_hostdev()?;
-
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_HIGH;
-        let s = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
-        self.usb_device
-            .init_descriptor(DESC_DEVICE_CAMERA.clone(), s)?;
-        self.usb_device
-            .init_device_qualifier_descriptor(DESC_DEVICE_QUALIFIER_CAMERA.clone())?;
-        let camera = Arc::new(Mutex::new(self));
-
-        Ok(camera)
-    }
-
     fn set_hostdev(&mut self) -> Result<()> {
         match self.backend_type {
             CamBackendType::V4l2 => {
@@ -490,6 +475,21 @@ impl Default for UsbCamera {
 }
 
 impl UsbDeviceOps for UsbCamera {
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
+        self.set_hostdev()?;
+
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.speed = USB_SPEED_HIGH;
+        let s = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_CAMERA.clone(), s)?;
+        self.usb_device
+            .init_device_qualifier_descriptor(DESC_DEVICE_QUALIFIER_CAMERA.clone())?;
+        let camera = Arc::new(Mutex::new(self));
+
+        Ok(camera)
+    }
+
     fn reset(&mut self) {}
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {

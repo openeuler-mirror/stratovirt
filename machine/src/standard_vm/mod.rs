@@ -65,7 +65,7 @@ use machine_manager::config::{
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::MigrationManager;
-use pci::hotplug::{handle_plug, handle_unplug_request};
+use pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
@@ -951,6 +951,36 @@ impl StdMachine {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
+    fn plug_usb_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
+        let driver = args.driver.as_str();
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let cfg_args = format!("id={}", args.id);
+        match driver {
+            "usb-kbd" => {
+                self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
+            }
+            "usb-tablet" => {
+                self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
+            }
+            _ => {
+                bail!("Invalid usb device driver '{}'", driver);
+            }
+        };
+
+        Ok(())
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)?;
+
+        Ok(())
+    }
+
     fn plug_vfio_pci_device(
         &mut self,
         bdf: &PciBdf,
@@ -1145,6 +1175,17 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(not(target_env = "musl"))]
+            "usb-kbd" | "usb-tablet" => {
+                if let Err(e) = self.plug_usb_device(args.as_ref()) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+                return Response::create_empty_response();
+            }
             _ => {
                 let err_str = format!("Failed to add device: Driver {} is not support", driver);
                 return Response::create_error_response(
@@ -1194,7 +1235,7 @@ impl DeviceInterface for StdMachine {
 
         let locked_pci_host = pci_host.lock().unwrap();
         if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
-            match handle_unplug_request(&bus, &dev) {
+            return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();
                     let dev_id = locked_dev.name();
@@ -1210,8 +1251,22 @@ impl DeviceInterface for StdMachine {
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
                 ),
-            }
-        } else {
+            };
+        }
+        drop(locked_pci_host);
+
+        // The device is not a pci device, assume it is a usb device.
+        #[cfg(not(target_env = "musl"))]
+        return match self.handle_unplug_usb_request(device_id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        };
+
+        #[cfg(target_env = "musl")]
+        {
             let err_str = format!("Failed to remove device: id {} not found", &device_id);
             Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
         }

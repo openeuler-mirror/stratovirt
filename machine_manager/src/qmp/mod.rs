@@ -582,6 +582,19 @@ impl QmpChannel {
     }
 }
 
+/// Send device deleted message to qmp client.
+pub fn send_device_deleted_msg(id: &str) {
+    if QmpChannel::is_connected() {
+        let deleted_event = schema::DeviceDeleted {
+            device: Some(id.to_string()),
+            path: format!("/machine/peripheral/{}", id),
+        };
+        event!(DeviceDeleted; deleted_event);
+    } else {
+        warn!("Qmp channel is not connected while sending device deleted message");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

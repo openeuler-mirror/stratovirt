@@ -63,7 +63,7 @@ pub fn handle_plug(bus: &Arc<Mutex<PciBus>>, dev: &Arc<Mutex<dyn PciDevOps>>) ->
 /// Return Error if
 /// * No hot plug controller found.
 /// * Device unplug request failed.
-pub fn handle_unplug_request(
+pub fn handle_unplug_pci_request(
     bus: &Arc<Mutex<PciBus>>,
     dev: &Arc<Mutex<dyn PciDevOps>>,
 ) -> Result<()> {
