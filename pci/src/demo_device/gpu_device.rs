@@ -30,7 +30,8 @@ use std::{
 use ui::{
     console::{
         console_close, console_init, display_cursor_define, display_graphic_update,
-        display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
+        display_replace_surface, ConsoleType, DisplayConsole, DisplayMouse, DisplaySurface,
+        HardWareOperations,
     },
     pixman::{
         create_pixman_image, get_image_data, get_image_format, get_image_stride, ref_pixman_image,
@@ -208,7 +209,7 @@ impl DeviceTypeOperation for DemoGpu {
 
     fn realize(&mut self) -> Result<()> {
         let con_opts = Arc::new(HwOpts {});
-        self.con = console_init(con_opts);
+        self.con = console_init("demo-gpu".to_string(), ConsoleType::Graphic, con_opts);
 
         // Create Image.
         self.width = 640;
