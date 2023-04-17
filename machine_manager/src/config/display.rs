@@ -20,8 +20,12 @@ use crate::config::{CmdParser, ExBool, VmConfig};
 
 /// Event fd related to power button in gtk.
 pub struct UiContext {
+    /// Name of virtual machine.
     pub vm_name: String,
-    pub power_button: Arc<EventFd>,
+    /// Gracefully Shutdown.
+    pub power_button: Option<Arc<EventFd>>,
+    /// Forced Shutdown.
+    pub shutdown_req: Option<Arc<EventFd>>,
 }
 
 /// GTK related configuration.

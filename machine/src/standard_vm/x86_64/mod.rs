@@ -577,7 +577,8 @@ impl MachineOps for StdMachine {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
-                    power_button: self.shutdown_req.clone(),
+                    power_button: None,
+                    shutdown_req: Some(self.shutdown_req.clone()),
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;

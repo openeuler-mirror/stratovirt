@@ -20,19 +20,22 @@ use gtk::{
         ModifierType,
     },
     glib,
-    prelude::{AccelGroupExtManual, NotebookExtManual},
+    prelude::{AccelGroupExtManual, NotebookExtManual, WidgetExtManual},
     traits::{
-        BoxExt, CheckMenuItemExt, ContainerExt, GtkMenuExt, GtkMenuItemExt, GtkWindowExt,
-        MenuShellExt, NotebookExt, WidgetExt,
+        BoxExt, CheckMenuItemExt, ContainerExt, DialogExt, GtkMenuExt, GtkMenuItemExt,
+        GtkWindowExt, MenuShellExt, NotebookExt, WidgetExt,
     },
-    AccelFlags, AccelGroup, ApplicationWindow, CheckMenuItem, Inhibit, Menu, MenuBar, MenuItem,
-    Orientation, RadioMenuItem,
+    AccelFlags, AccelGroup, ApplicationWindow, ButtonsType, CheckMenuItem, DialogFlags, Inhibit,
+    Menu, MenuBar, MenuItem, MessageDialog, MessageType, Orientation, RadioMenuItem,
 };
 use log::error;
 
-use crate::gtk::{
-    renew_image, update_cursor_display, update_window_size, GtkDisplay, ZoomOperate, GTK_SCALE_MIN,
-    GTK_ZOOM_STEP,
+use crate::{
+    console::{get_run_stage, VmRunningStage},
+    gtk::{
+        renew_image, update_cursor_display, update_window_size, GtkDisplay, ZoomOperate,
+        GTK_SCALE_MIN, GTK_ZOOM_STEP,
+    },
 };
 
 #[derive(Clone)]
@@ -190,8 +193,8 @@ impl GtkMenu {
         // Connect delete for window.
         self.window.connect_delete_event(
             glib::clone!(@weak gd => @default-return Inhibit(false), move |_, _| {
-                power_down_callback(&gd).unwrap_or_else(|e| error!("Standard vm write power button failed: {:?}", e));
-                Inhibit(false)
+                window_close_callback(&gd).unwrap_or_else(|e| error!("Standard vm shut down failed: {:?}", e));
+                Inhibit(true)
             }),
         );
 
@@ -244,8 +247,13 @@ impl GtkMenu {
 
 /// Fixed the window size.
 fn power_down_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
-    let power_button = gd.borrow().power_button.clone();
-    power_button.write(1)?;
+    let borrowed_gd = gd.borrow();
+    if borrowed_gd.powerdown_button.is_some() {
+        borrowed_gd.vm_powerdown();
+    } else {
+        drop(borrowed_gd);
+        window_close_callback(gd)?;
+    }
     Ok(())
 }
 
@@ -346,4 +354,33 @@ fn zoom_fit_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
 
     update_window_size(&gs)?;
     renew_image(&gs)
+}
+
+/// Close window.
+fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
+    let borrowed_gd = gd.borrow();
+    if get_run_stage() != VmRunningStage::Os || borrowed_gd.powerdown_button.is_none() {
+        let dialog = MessageDialog::new(
+            Some(&borrowed_gd.gtk_menu.window),
+            DialogFlags::DESTROY_WITH_PARENT,
+            MessageType::Question,
+            ButtonsType::YesNo,
+            "Forced shutdown may cause installation failure, blue screen, unusable and other abnormalities.",
+        );
+        dialog.set_title("Please confirm whether to exit the virtual machine");
+        let answer = dialog.run();
+        // SAFETY: Dialog is created in the current function and can be guaranteed not to be empty.
+        unsafe { dialog.destroy() };
+        if answer != gtk::ResponseType::Yes {
+            return Ok(());
+        }
+    }
+
+    if get_run_stage() == VmRunningStage::Os && borrowed_gd.powerdown_button.is_some() {
+        borrowed_gd.vm_powerdown();
+    } else {
+        borrowed_gd.vm_shutdown();
+    }
+
+    Ok(())
 }
