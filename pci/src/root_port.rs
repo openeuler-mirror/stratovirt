@@ -16,8 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::Region;
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
-use machine_manager::event;
-use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
+use machine_manager::qmp::send_device_deleted_msg;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -209,13 +208,7 @@ impl RootPort {
             info!("Device {} unplug from {}", locked_dev.name(), self.name);
 
             // Send QMP event for successful hot unplugging.
-            if QmpChannel::is_connected() {
-                let device_del = schema::DeviceDeleted {
-                    device: Some(locked_dev.name()),
-                    path: format!("/machine/peripheral/{}", &locked_dev.name()),
-                };
-                event!(DeviceDeleted; device_del);
-            }
+            send_device_deleted_msg(&locked_dev.name());
         }
         self.sec_bus.lock().unwrap().devices.clear();
     }

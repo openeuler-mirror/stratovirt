@@ -529,6 +529,23 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
+    fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(&mut locked_vmconfig, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        let mut locked_xhci = xhci_pci.xhci.lock().unwrap();
+        let port = locked_xhci.find_usb_port_by_id(id);
+        Ok(port.is_some())
+    }
+
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
@@ -538,6 +555,10 @@ pub trait MachineOps {
             }
             if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
                 bail!("Device id {} existed", name);
+            }
+            #[cfg(not(target_env = "musl"))]
+            if self.check_id_existed_in_xhci(name).unwrap_or_default() {
+                bail!("Device id {} existed in xhci", name);
             }
         }
         Ok(())
@@ -1173,6 +1194,31 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Detach usb device from xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `id` - id of the usb device.
+    #[cfg(not(target_env = "musl"))]
+    fn detach_usb_from_xhci_controller(
+        &mut self,
+        vm_config: &mut VmConfig,
+        id: String,
+    ) -> Result<()> {
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        xhci_pci.detach_device(id)?;
+
+        Ok(())
+    }
+
     /// Add usb keyboard.
     ///
     /// # Arguments
@@ -1186,8 +1232,7 @@ pub trait MachineOps {
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
-
-        self.attach_usb_to_xhci_controller(vm_config, kbd as Arc<Mutex<dyn UsbDeviceOps>>)?;
+        self.attach_usb_to_xhci_controller(vm_config, kbd)?;
         Ok(())
     }
 
@@ -1205,7 +1250,7 @@ pub trait MachineOps {
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
 
-        self.attach_usb_to_xhci_controller(vm_config, tbt as Arc<Mutex<dyn UsbDeviceOps>>)?;
+        self.attach_usb_to_xhci_controller(vm_config, tbt)?;
 
         Ok(())
     }
@@ -1221,7 +1266,7 @@ pub trait MachineOps {
         let camera = UsbCamera::new(device_cfg);
         let camera = camera.realize()?;
 
-        self.attach_usb_to_xhci_controller(vm_config, camera as Arc<Mutex<dyn UsbDeviceOps>>)?;
+        self.attach_usb_to_xhci_controller(vm_config, camera)?;
 
         Ok(())
     }
@@ -1239,7 +1284,7 @@ pub trait MachineOps {
             .realize()
             .with_context(|| "Failed to realize usb storage device")?;
 
-        self.attach_usb_to_xhci_controller(vm_config, stg as Arc<Mutex<dyn UsbDeviceOps>>)?;
+        self.attach_usb_to_xhci_controller(vm_config, stg)?;
 
         Ok(())
     }

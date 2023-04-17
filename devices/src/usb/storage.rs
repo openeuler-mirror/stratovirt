@@ -330,29 +330,6 @@ impl UsbStorage {
         }
     }
 
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_HIGH;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-        self.usb_device
-            .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
-
-        let aio = Aio::new(Arc::new(aio_complete_cb), AioEngine::Off)
-            .with_context(|| format!("USB-storage {}: aio creation error!", self.id))?;
-        let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
-        locked_scsi_dev.aio = Some(Arc::new(Mutex::new(aio)));
-        locked_scsi_dev.realize()?;
-        drop(locked_scsi_dev);
-        self.scsi_bus
-            .lock()
-            .unwrap()
-            .devices
-            .insert((0, 0), self.scsi_dev.clone());
-
-        let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
-        Ok(storage)
-    }
-
     fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         match device_req.request_type {
             USB_ENDPOINT_OUT_REQUEST => {
@@ -536,6 +513,29 @@ impl UsbStorage {
 }
 
 impl UsbDeviceOps for UsbStorage {
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.speed = USB_SPEED_HIGH;
+        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+
+        let aio = Aio::new(Arc::new(aio_complete_cb), AioEngine::Off)
+            .with_context(|| format!("USB-storage {}: aio creation error!", self.id))?;
+        let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
+        locked_scsi_dev.aio = Some(Arc::new(Mutex::new(aio)));
+        locked_scsi_dev.realize()?;
+        drop(locked_scsi_dev);
+        self.scsi_bus
+            .lock()
+            .unwrap()
+            .devices
+            .insert((0, 0), self.scsi_dev.clone());
+
+        let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
+        Ok(storage)
+    }
+
     fn reset(&mut self) {
         info!("Storage device reset");
         self.usb_device.remote_wakeup = 0;

@@ -27,7 +27,7 @@ use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
-use ui::input::{register_keyboard, KeyboardOpts};
+use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -171,24 +171,30 @@ impl UsbKeyboard {
             cntlr: None,
         }
     }
+}
 
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+impl UsbDeviceOps for UsbKeyboard {
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_FULL;
         let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
             .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
+        let id = self.id.clone();
         let kbd = Arc::new(Mutex::new(self));
         let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
             usb_kbd: kbd.clone(),
         }));
-        register_keyboard("UsbKeyboard", kbd_adapter);
+        register_keyboard(&id, kbd_adapter);
 
         Ok(kbd)
     }
-}
 
-impl UsbDeviceOps for UsbKeyboard {
+    fn unrealize(&mut self) -> Result<()> {
+        unregister_keyboard(&self.id.clone());
+        Ok(())
+    }
+
     fn reset(&mut self) {
         info!("Keyboard device reset");
         self.usb_device.remote_wakeup = 0;

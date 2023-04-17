@@ -35,6 +35,7 @@ use crate::usb::{
     UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
 };
 
+const INVALID_SLOT_ID: u32 = 0;
 pub const MAX_INTRS: u32 = 1;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
@@ -443,6 +444,7 @@ pub struct UsbPort {
     pub speed_mask: u32,
     pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
     pub used: bool,
+    pub slot_id: u32,
 }
 
 impl UsbPort {
@@ -454,6 +456,7 @@ impl UsbPort {
             speed_mask: 0,
             dev: None,
             used: false,
+            slot_id: INVALID_SLOT_ID,
         }
     }
 
@@ -762,7 +765,7 @@ impl XhciDevice {
         }
         for i in 0..self.usb_ports.len() {
             let port = self.usb_ports[i].clone();
-            if let Err(e) = self.port_update(&port) {
+            if let Err(e) = self.port_update(&port, false) {
                 error!("Failed to update port: {:?}", e);
             }
         }
@@ -819,26 +822,28 @@ impl XhciDevice {
     }
 
     /// Update the xhci port status and then notify the driver.
-    pub fn port_update(&mut self, port: &Arc<Mutex<UsbPort>>) -> Result<()> {
+    pub fn port_update(&mut self, port: &Arc<Mutex<UsbPort>>, detach: bool) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
         locked_port.portsc = PORTSC_PP;
         let mut pls = PLS_RX_DETECT;
-        if let Some(dev) = &locked_port.dev {
-            let speed = dev.lock().unwrap().speed();
-            locked_port.portsc |= PORTSC_CCS;
-            if speed == USB_SPEED_SUPER {
-                locked_port.portsc |= PORTSC_SPEED_SUPER;
-                locked_port.portsc |= PORTSC_PED;
-                pls = PLS_U0;
-            } else if speed == USB_SPEED_FULL {
-                locked_port.portsc |= PORTSC_SPEED_FULL;
-                pls = PLS_POLLING;
-            } else if speed == USB_SPEED_HIGH {
-                locked_port.portsc |= PORTSC_SPEED_HIGH;
-                pls = PLS_POLLING;
-            } else if speed == USB_SPEED_LOW {
-                locked_port.portsc |= PORTSC_SPEED_LOW;
-                pls = PLS_POLLING;
+        if !detach {
+            if let Some(dev) = &locked_port.dev {
+                let speed = dev.lock().unwrap().speed();
+                locked_port.portsc |= PORTSC_CCS;
+                if speed == USB_SPEED_SUPER {
+                    locked_port.portsc |= PORTSC_SPEED_SUPER;
+                    locked_port.portsc |= PORTSC_PED;
+                    pls = PLS_U0;
+                } else if speed == USB_SPEED_FULL {
+                    locked_port.portsc |= PORTSC_SPEED_FULL;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_HIGH {
+                    locked_port.portsc |= PORTSC_SPEED_HIGH;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_LOW {
+                    locked_port.portsc |= PORTSC_SPEED_LOW;
+                    pls = PLS_POLLING;
+                }
             }
         }
         locked_port.set_port_link_state(pls);
@@ -995,6 +1000,20 @@ impl XhciDevice {
         Ok(TRBCCode::Success)
     }
 
+    pub fn detach_slot(&mut self, slot_id: u32) -> Result<()> {
+        if slot_id < 1 || slot_id > self.slots.len() as u32 {
+            bail!("Invalid slot id {} while detaching slot", slot_id);
+        }
+        for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
+            let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(i - 1) as usize];
+            if epctx.enabled {
+                self.flush_ep_transfer(slot_id, i, TRBCCode::Invalid)?;
+            }
+        }
+        self.slots[(slot_id - 1) as usize].usb_port = None;
+        Ok(())
+    }
+
     fn address_device(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
         ictx.checked_add(INPUT_CONTEXT_SIZE).with_context(|| {
@@ -1027,10 +1046,7 @@ impl XhciDevice {
             error!("Failed to found usb port");
             return Ok(TRBCCode::TrbError);
         };
-        let lock_port = usb_port.lock().unwrap();
-        let dev = if let Some(dev) = lock_port.dev.as_ref() {
-            dev
-        } else {
+        if usb_port.lock().unwrap().dev.is_none() {
             error!("No device found in usb port.");
             return Ok(TRBCCode::UsbTransactionError);
         };
@@ -1043,8 +1059,11 @@ impl XhciDevice {
                 octx, DEVICE_CONTEXT_SIZE
             )
         })?;
+        let mut locked_port = usb_port.lock().unwrap();
+        locked_port.slot_id = slot_id;
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
         self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
+        let dev = locked_port.dev.as_ref().unwrap();
         dev.lock().unwrap().reset();
         if bsr {
             slot_ctx.dev_state = SLOT_DEFAULT << SLOT_STATE_SHIFT;
@@ -1849,6 +1868,28 @@ impl XhciDevice {
                 locked_port.dev = Some(dev.clone());
                 let mut locked_dev = dev.lock().unwrap();
                 locked_dev.set_usb_port(Some(Arc::downgrade(port)));
+                return Some(port.clone());
+            }
+        }
+        None
+    }
+
+    pub fn discharge_usb_port(&mut self, port: &mut UsbPort) {
+        if port.used {
+            port.used = false;
+            port.dev = None;
+            port.slot_id = INVALID_SLOT_ID;
+        }
+    }
+
+    pub fn find_usb_port_by_id(&mut self, id: &str) -> Option<Arc<Mutex<UsbPort>>> {
+        for port in &self.usb_ports {
+            let locked_port = port.lock().unwrap();
+            if !locked_port.used || locked_port.dev.is_none() {
+                continue;
+            }
+            let dev = locked_port.dev.as_ref().unwrap();
+            if dev.lock().unwrap().device_id() == id {
                 return Some(port.clone());
             }
         }
