@@ -197,16 +197,8 @@ impl QmpGreeting {
     /// * `minor` - Minor version number.
     /// * `major` - Major version number.
     pub fn create_greeting(micro: u8, minor: u8, major: u8) -> Self {
-        let version_number = VersionNumber {
-            micro,
-            minor,
-            major,
-        };
+        let version = Version::new(micro, minor, major);
         let cap: Vec<String> = Default::default();
-        let version = Version {
-            application: version_number,
-            package: "".to_string(),
-        };
         let greeting = Greeting {
             version,
             capabilities: cap,
@@ -609,7 +601,7 @@ mod tests {
                             "minor": 0,
                             "major": 5
                         },
-                        "package": ""
+                        "package": "StratoVirt-2.2.0"
                     },
                     "capabilities": []
                 }
