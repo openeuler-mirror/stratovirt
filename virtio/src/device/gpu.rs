@@ -41,6 +41,7 @@ use ui::console::{
     display_replace_surface, ConsoleType, DisplayConsole, DisplayMouse, DisplaySurface,
     HardWareOperations,
 };
+use ui::pixman::unref_pixman_image;
 use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
 use util::byte_code::ByteCode;
 use util::loop_context::{
@@ -775,21 +776,17 @@ impl GpuIoHandler {
     fn resource_destroy(&mut self, res_index: usize) {
         let res = &mut self.resources_list[res_index];
 
-        if res.scanouts_bitmask == 0 {
-            return;
-        }
-
-        for i in 0..self.num_scanouts {
-            if (res.scanouts_bitmask & (1 << i)) != 0 {
-                let scanout = &mut self.scanouts[i as usize];
-                res.scanouts_bitmask &= !(1 << i);
-                disable_scanout(scanout);
+        if res.scanouts_bitmask != 0 {
+            for i in 0..self.num_scanouts {
+                if (res.scanouts_bitmask & (1 << i)) != 0 {
+                    let scanout = &mut self.scanouts[i as usize];
+                    res.scanouts_bitmask &= !(1 << i);
+                    disable_scanout(scanout);
+                }
             }
         }
 
-        unsafe {
-            pixman_image_unref(res.pixman_image);
-        }
+        unref_pixman_image(res.pixman_image);
         self.used_hostmem -= res.host_mem;
         res.iov.clear();
     }
