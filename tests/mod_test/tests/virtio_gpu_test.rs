@@ -318,9 +318,35 @@ fn resource_destroy_dfx() {
     gpu_cfg.max_hostmem = image_size;
     let (dpy, gpu) = set_up(&gpu_cfg);
 
+    // release resource which doesn't exist
     assert_eq!(
         VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
         resource_unref(&gpu, VirtioGpuResourceUnref::new(D_RES_ID)).hdr_type
+    );
+
+    // release and check
+    // create resource first
+    assert_eq!(
+        VIRTIO_GPU_RESP_OK_NODATA,
+        resource_create(
+            &gpu,
+            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH, D_HEIGHT)
+        )
+        .hdr_type
+    );
+    // release it
+    assert_eq!(
+        VIRTIO_GPU_RESP_OK_NODATA,
+        resource_unref(&gpu, VirtioGpuResourceUnref::new(D_RES_ID)).hdr_type
+    );
+    // check if it release, expect can create again
+    assert_eq!(
+        VIRTIO_GPU_RESP_OK_NODATA,
+        resource_create(
+            &gpu,
+            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH, D_HEIGHT)
+        )
+        .hdr_type
     );
 
     tear_down(dpy, gpu);
