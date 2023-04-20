@@ -64,7 +64,7 @@ const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
 pub struct XhciPciDevice {
     pci_config: PciConfig,
     devfn: u8,
-    xhci: Arc<Mutex<XhciDevice>>,
+    pub xhci: Arc<Mutex<XhciDevice>>,
     dev_id: Arc<AtomicU16>,
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
@@ -146,7 +146,7 @@ impl XhciPciDevice {
         let usb_port = locked_xhci
             .assign_usb_port(dev)
             .with_context(|| "No available USB port.")?;
-        locked_xhci.port_update(&usb_port)?;
+        locked_xhci.port_update(&usb_port, false)?;
         let mut locked_dev = dev.lock().unwrap();
         debug!(
             "Attach usb device: xhci port id {} device id {}",
@@ -155,6 +155,29 @@ impl XhciPciDevice {
         );
         locked_dev.handle_attach()?;
         locked_dev.set_controller(Arc::downgrade(&self.xhci));
+        Ok(())
+    }
+
+    pub fn detach_device(&self, id: String) -> Result<()> {
+        let mut locked_xhci = self.xhci.lock().unwrap();
+        let usb_port = locked_xhci.find_usb_port_by_id(&id);
+        if usb_port.is_none() {
+            bail!("Failed to detach device: id {} not found", id);
+        }
+        let usb_port = usb_port.unwrap();
+        let slot_id = usb_port.lock().unwrap().slot_id;
+        locked_xhci.detach_slot(slot_id as u32)?;
+        locked_xhci.port_update(&usb_port, true)?;
+
+        // Unrealize device and discharge usb port.
+        let mut locked_port = usb_port.lock().unwrap();
+        let dev = locked_port.dev.as_ref().unwrap();
+        let mut locked_dev = dev.lock().unwrap();
+        locked_dev.get_mut_usb_device().unplugged_id = Some(id);
+        locked_dev.unrealize()?;
+        drop(locked_dev);
+        locked_xhci.discharge_usb_port(&mut locked_port);
+
         Ok(())
     }
 }

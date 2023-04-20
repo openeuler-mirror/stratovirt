@@ -37,6 +37,7 @@ use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
+use machine_manager::qmp::send_device_deleted_msg;
 use xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
@@ -95,6 +96,8 @@ pub struct UsbDevice {
     pub ep_out: Vec<UsbEndpoint>,
     /// USB descriptor
     pub descriptor: UsbDescriptor,
+    /// The usb device id which is hot unplugged.
+    pub unplugged_id: Option<String>,
 }
 
 impl UsbDevice {
@@ -109,6 +112,7 @@ impl UsbDevice {
             data_buf: vec![0_u8; 4096],
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
+            unplugged_id: None,
         };
 
         for i in 0..USB_MAX_ENDPOINTS as u8 {
@@ -280,9 +284,24 @@ impl Default for UsbDevice {
     }
 }
 
+impl Drop for UsbDevice {
+    fn drop(&mut self) {
+        if let Some(id) = &self.unplugged_id {
+            send_device_deleted_msg(id);
+        }
+    }
+}
+
 /// UsbDeviceOps is the interface for USB device.
 /// Include device handle attach/detach and the transfer between controller and device.
 pub trait UsbDeviceOps: Send + Sync {
+    /// Realize the USB device.
+    fn realize(self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>>;
+
+    /// Unrealize the USB device.
+    fn unrealize(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
