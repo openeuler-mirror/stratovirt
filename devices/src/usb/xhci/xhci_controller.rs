@@ -1385,7 +1385,7 @@ impl XhciDevice {
             return Ok(TRBCCode::ContextStateError);
         }
         if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
-            warn!("endpoint stop when xfers running!");
+            debug!("endpoint stop when xfers running!");
         }
         self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].set_state(EP_STOPPED)?;
         Ok(TRBCCode::Success)
@@ -1826,6 +1826,10 @@ impl XhciDevice {
 
     /// Used for device to wakeup endpoint
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
+        if slot_id == INVALID_SLOT_ID {
+            debug!("Invalid slot id, maybe device not activated.");
+            return Ok(());
+        }
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         self.kick_endpoint(slot_id, ep_id as u32)?;
         Ok(())
