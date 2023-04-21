@@ -714,6 +714,12 @@ impl UsbDeviceOps for UsbCamera {
         Ok(camera)
     }
 
+    fn unrealize(&mut self) -> Result<()> {
+        info!("Camera {} unrealize", self.id);
+        self.camera_dev.lock().unwrap().reset();
+        Ok(())
+    }
+
     fn reset(&mut self) {
         info!("Camera {} device reset", self.id);
         self.usb_device.addr = 0;

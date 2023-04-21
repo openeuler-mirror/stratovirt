@@ -602,6 +602,8 @@ pub struct device_add {
     #[serde(rename = "queue-size")]
     pub queue_size: Option<u16>,
     pub port: Option<String>,
+    pub backend: Option<String>,
+    pub path: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;
