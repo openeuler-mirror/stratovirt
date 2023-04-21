@@ -964,6 +964,22 @@ impl StdMachine {
             "usb-tablet" => {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
             }
+            "usb-camera" => {
+                let mut cfg_args = format!(
+                    "id={},backend={},path={}",
+                    args.id,
+                    args.backend
+                        .as_ref()
+                        .with_context(|| "No backend for usb camera.")?,
+                    args.path
+                        .as_ref()
+                        .with_context(|| "No path for usb camera.")?,
+                );
+                if let Some(iothread) = args.iothread.as_ref() {
+                    cfg_args = format!("{},iothread={}", cfg_args, iothread);
+                };
+                self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
+            }
             _ => {
                 bail!("Invalid usb device driver '{}'", driver);
             }
@@ -1176,7 +1192,7 @@ impl DeviceInterface for StdMachine {
                 }
             }
             #[cfg(not(target_env = "musl"))]
-            "usb-kbd" | "usb-tablet" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
                     error!("{:?}", e);
                     return Response::create_error_response(

@@ -152,14 +152,14 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     Ok(dev)
 }
 
-#[derive(Clone, Copy, Debug, EnumCountMacro, EnumIter)]
+#[derive(Clone, Copy, Debug, EnumCountMacro, EnumIter, PartialEq, Eq)]
 pub enum CamBackendType {
     V4l2,
     Demo,
 }
 
 impl FromStr for CamBackendType {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         for i in CamBackendType::iter() {
@@ -168,7 +168,7 @@ impl FromStr for CamBackendType {
             }
         }
 
-        Err(())
+        Err(anyhow!("Unknown camera backend type"))
     }
 }
 
