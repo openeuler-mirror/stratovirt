@@ -12,7 +12,7 @@
 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use log::{debug, error, warn};
+use log::{debug, error};
 
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
@@ -457,7 +457,7 @@ impl Hid {
         match device_req.request {
             HID_SET_REPORT => match self.kind {
                 HidType::Keyboard => {
-                    warn!("Keyboard set report not implemented");
+                    debug!("Keyboard set report not implemented");
                 }
                 _ => {
                     error!("Unsupported to set report");
