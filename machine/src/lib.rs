@@ -1397,7 +1397,7 @@ pub trait MachineOps {
                 }
                 #[cfg(not(target_env = "musl"))]
                 "ramfb" => {
-                    self.add_ramfb()?;
+                    self.add_ramfb(cfg_args)?;
                 }
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
@@ -1419,7 +1419,7 @@ pub trait MachineOps {
         bail!("Pflash device is not supported!");
     }
 
-    fn add_ramfb(&mut self) -> Result<()> {
+    fn add_ramfb(&mut self, _cfg_args: &str) -> Result<()> {
         bail!("ramfb device is not supported!");
     }
 

@@ -23,7 +23,6 @@ use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::test_helper::{get_test_time, is_test_enabled};
-use crate::time::NANOSECONDS_PER_SECOND;
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -178,10 +177,8 @@ impl Timer {
     ///
     /// * `func` - the function will be called later.
     /// * `nsec` - delay time in nanosecond.
-    pub fn new(func: Box<dyn Fn()>, nsec: u64) -> Self {
-        let secs = nsec / NANOSECONDS_PER_SECOND;
-        let nsecs = (nsec % NANOSECONDS_PER_SECOND) as u32;
-        let expire_time = get_current_time() + Duration::new(secs, nsecs);
+    pub fn new(func: Box<dyn Fn()>, delay: Duration) -> Self {
+        let expire_time = get_current_time() + delay;
 
         Timer { func, expire_time }
     }
@@ -508,8 +505,8 @@ impl EventLoopContext {
     ///
     /// * `func` - the function will be called later.
     /// * `nsec` - delay time in nanoseconds.
-    pub fn delay_call(&mut self, func: Box<dyn Fn()>, nsec: u64) {
-        let timer = Timer::new(func, nsec);
+    pub fn delay_call(&mut self, func: Box<dyn Fn()>, delay: Duration) {
+        let timer = Timer::new(func, delay);
 
         // insert in order of expire_time
         let mut timers = self.timers.lock().unwrap();

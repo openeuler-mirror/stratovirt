@@ -990,6 +990,20 @@ Sample Configuration:
 -object memory-backend-ram,id=<object_id>,share=on,size=2M
 ```
 
+### 2.20 ramfb
+Ramfb is a simple display device. It is used in the Windows system on aarch64.
+
+Two properties are supported for ramfb device.
+* id: unique device id.
+* install: when install the Windows system, setting true will automatically press enter key to skip the stage which needs to manually press any key boot from cd or dvd.
+
+Sample Configuration：
+```shell
+-device ramfb,id=<ramfb id>[,install=true|false]
+```
+
+Note: Only supported on aarch64.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.

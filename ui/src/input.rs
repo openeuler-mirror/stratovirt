@@ -34,6 +34,7 @@ const BIT_PER_BYTE: u32 = 8;
 pub const KEYCODE_1: u16 = 2;
 pub const KEYCODE_9: u16 = 10;
 const KEYCODE_CTRL: u16 = 29;
+pub const KEYCODE_RET: u16 = 38;
 const KEYCODE_SHIFT: u16 = 42;
 const KEYCODE_SHIFT_R: u16 = 54;
 const KEYCODE_ALT: u16 = 56;
