@@ -50,9 +50,14 @@ const PSR_D_BIT: u64 = 0x0000_0200;
 // MPIDR is Multiprocessor Affinity Register
 // [40:63] bit reserved on AArch64 Architecture,
 const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
-// MPIDR - Multiprocessor Affinity Register.
+
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
+// MPIDR - Multiprocessor Affinity Register.
 const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
+// Counter-timer Virtual Count register: Due to the API interface problem, the encode of
+// this register is SYS_CNTV_CVAL_EL0.
+const SYS_CNTV_CNT_EL0: u64 = 0x6030_0000_0013_df1a;
+
 const KVM_MAX_CPREG_ENTRIES: usize = 500;
 
 /// Interrupt ID for pmu.
@@ -112,6 +117,8 @@ pub struct ArmCPUState {
     cpreg_list: [CpregListEntry; 512],
     /// Vcpu features
     features: ArmCPUFeatures,
+    /// Virtual timer count.
+    vtimer_cnt: u64,
 }
 
 impl ArmCPUState {
@@ -256,6 +263,29 @@ impl ArmCPUState {
             self.core_regs.regs.regs[0] = boot_config.fdt_addr;
             self.core_regs.regs.pc = boot_config.boot_pc;
         }
+    }
+
+    /// Set virtual timer Count register value to `Kvm` with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
+    pub fn set_virtual_timer_cnt(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        vcpu_fd
+            .set_one_reg(SYS_CNTV_CNT_EL0, self.vtimer_cnt as u128)
+            .with_context(|| "Failed to set virtual timer count")
+    }
+
+    /// Get virtual timer Count register value from `Kvm` with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
+    pub fn get_virtual_timer_cnt(&mut self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        self.vtimer_cnt = vcpu_fd
+            .get_one_reg(SYS_CNTV_CNT_EL0)
+            .with_context(|| "Failed to get virtual timer count")? as u64;
+        Ok(())
     }
 }
 
