@@ -16,6 +16,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
@@ -28,7 +29,6 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::time::NANOSECONDS_PER_SECOND;
 use util::unix::do_mmap;
 
 use super::super::VhostOps;
@@ -114,7 +114,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     {
         if let Some(ctx) = EventLoop::get_ctx(None) {
             // Default reconnecting time: 3s.
-            ctx.delay_call(func, 3 * NANOSECONDS_PER_SECOND);
+            ctx.delay_call(func, Duration::from_secs(3));
         } else {
             error!("Failed to get ctx to delay vhost-user reconnecting");
         }

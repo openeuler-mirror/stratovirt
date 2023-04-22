@@ -56,8 +56,8 @@ use devices::legacy::{
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
-    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, parse_ramfb, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode,
+    NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -669,12 +669,13 @@ impl MachineOps for StdMachine {
     }
 
     #[cfg(not(target_env = "musl"))]
-    fn add_ramfb(&mut self) -> Result<()> {
+    fn add_ramfb(&mut self, cfg_args: &str) -> Result<()> {
+        let install = parse_ramfb(cfg_args)?;
         let fwcfg_dev = self
             .get_fwcfg_dev()
             .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
-        let mut ramfb = Ramfb::new(sys_mem.clone());
+        let mut ramfb = Ramfb::new(sys_mem.clone(), install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
         ramfb.realize(&mut self.sysbus)?;

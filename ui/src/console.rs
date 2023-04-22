@@ -22,6 +22,7 @@ use once_cell::sync::Lazy;
 use std::{
     cmp, ptr,
     sync::{Arc, Mutex, Weak},
+    time::Duration,
 };
 use util::pixman::{pixman_format_code_t, pixman_image_t};
 
@@ -49,8 +50,6 @@ pub const DISPLAY_UPDATE_INTERVAL_DEFAULT: u64 = 30;
 pub const DISPLAY_UPDATE_INTERVAL_INC: u64 = 50;
 /// Maximum refresh interval in ms.
 pub const DISPLAY_UPDATE_INTERVAL_MAX: u64 = 3_000;
-/// Millisecond to nanosecond.
-pub const MILLI_PER_SEC: u64 = 1_000_000;
 
 pub enum ConsoleType {
     Graphic,
@@ -299,7 +298,7 @@ pub fn setup_refresh(update_interval: u64) {
 
     if update_interval != 0 {
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(func, update_interval * MILLI_PER_SEC);
+            ctx.delay_call(func, Duration::from_millis(update_interval));
         }
     }
 }
