@@ -302,6 +302,12 @@ impl CPUInterface for CPU {
     }
 
     fn resume(&self) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        self.arch()
+            .lock()
+            .unwrap()
+            .set_virtual_timer_cnt(self.fd())?;
+
         let (cpu_state_locked, cvar) = &*self.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
         if *cpu_state == CpuLifecycleState::Running {
@@ -399,6 +405,12 @@ impl CPUInterface for CPU {
                 break;
             }
         }
+
+        #[cfg(target_arch = "aarch64")]
+        self.arch()
+            .lock()
+            .unwrap()
+            .get_virtual_timer_cnt(self.fd())?;
 
         Ok(())
     }
