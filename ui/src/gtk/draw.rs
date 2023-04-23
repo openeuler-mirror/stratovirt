@@ -26,8 +26,8 @@ use log::error;
 use crate::{
     gtk::GtkDisplayScreen,
     input::{
-        self, point_event, press_mouse, ABS_MAX, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
-        INPUT_POINT_RIGHT,
+        self, point_event, press_mouse, update_key_state, ABS_MAX, INPUT_POINT_LEFT,
+        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
     },
 };
 
@@ -96,11 +96,13 @@ fn da_key_callback(
     press: bool,
 ) -> Result<()> {
     let keysym2keycode = gs.borrow().keysym2keycode.clone();
+    let org_key_value = key_event.keyval().into_glib() as i32;
     let key_value: u16 = key_event.keyval().to_lower().into_glib() as u16;
     let keycode: u16 = match keysym2keycode.borrow().get(&(key_value as u16)) {
         Some(k) => *k,
         None => 0,
     };
+    update_key_state(press, org_key_value, keycode)?;
     input::key_event(keycode, press)?;
     Ok(())
 }

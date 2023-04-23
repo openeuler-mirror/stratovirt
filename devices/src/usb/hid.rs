@@ -14,6 +14,8 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use log::{debug, error};
 
+use ui::input::set_kbd_led_state;
+
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 
@@ -366,7 +368,7 @@ impl Hid {
                 self.do_interface_class_in_request(packet, device_req, data);
             }
             USB_INTERFACE_CLASS_OUT_REQUEST => {
-                self.do_interface_class_out_request(packet, device_req);
+                self.do_interface_class_out_request(packet, device_req, data);
             }
             _ => {
                 error!("Unhandled request {}", device_req.request);
@@ -453,11 +455,13 @@ impl Hid {
         &mut self,
         packet: &mut UsbPacket,
         device_req: &UsbDeviceRequest,
+        data: &[u8],
     ) {
         match device_req.request {
             HID_SET_REPORT => match self.kind {
                 HidType::Keyboard => {
-                    debug!("Keyboard set report not implemented");
+                    debug!("Keyboard set report {}", data[0]);
+                    set_kbd_led_state(data[0]);
                 }
                 _ => {
                     error!("Unsupported to set report");
