@@ -92,7 +92,7 @@ const UVC_FID: u8 = 1;
 const VS_PROBE_CONTROL: u8 = 1;
 const VS_COMMIT_CONTROL: u8 = 2;
 
-const MAX_PAYLOAD: u32 = 1024 * 3 - 2;
+const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
 const FPS_30_INTERVAL: u32 = 333333;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 
