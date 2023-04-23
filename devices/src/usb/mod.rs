@@ -18,6 +18,7 @@ pub use error::UsbError;
 pub mod camera;
 pub mod config;
 mod descriptor;
+#[cfg(not(target_env = "musl"))]
 pub mod hid;
 
 #[cfg(not(target_env = "musl"))]
