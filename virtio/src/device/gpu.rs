@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::{
+use crate::{iov_discard_front, iov_to_buf, VirtioError, VIRTIO_GPU_F_EDID};
+use crate::{
     Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
     VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
@@ -22,7 +23,6 @@ use super::{
     VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
     VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
-use crate::{iov_discard_front, iov_to_buf, VirtioError, VIRTIO_GPU_F_EDID};
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Result};
 use log::{error, warn};

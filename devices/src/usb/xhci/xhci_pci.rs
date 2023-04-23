@@ -14,6 +14,8 @@ use std::cmp::max;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::{bail, Context, Result};
+
 use address_space::{AddressSpace, Region};
 use log::debug;
 use machine_manager::config::XhciConfig;
@@ -24,13 +26,12 @@ use pci::config::{
 use pci::msix::update_dev_id;
 use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
-use crate::usb::UsbDeviceOps;
-use crate::xhci::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
-use crate::xhci::xhci_regs::{
+use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
+use super::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
 };
-use anyhow::{bail, Context, Result};
+use crate::usb::UsbDeviceOps;
 
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;

@@ -22,7 +22,7 @@ use crate::{
     vnc::{
         auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
         auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
-        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState, IoChannel, RectInfo},
         round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
         VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
@@ -70,6 +70,10 @@ pub struct VncServer {
     pub vnc_cursor: Arc<Mutex<VncCursor>>,
     /// Display Change Listener.
     pub display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
+    /// Saves all image regions that need to be updated.
+    /// It will be sent to vnc_worker thread, and be transfered into byte stream,
+    /// which will be sent to vnc client in main loop.
+    pub rect_jobs: Arc<Mutex<Vec<RectInfo>>>,
     /// Connection limit.
     pub conn_limits: usize,
 }
@@ -97,6 +101,7 @@ impl VncServer {
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
             display_listener,
+            rect_jobs: Arc::new(Mutex::new(Vec::new())),
             conn_limits: CONNECTION_LIMIT,
         }
     }
@@ -156,17 +161,6 @@ pub struct ImageInfo {
     length: i32,
     /// Middle pointer.
     ptr: *mut u8,
-}
-
-impl Default for ImageInfo {
-    fn default() -> Self {
-        ImageInfo {
-            data: ptr::null_mut(),
-            stride: 0,
-            length: 0,
-            ptr: ptr::null_mut(),
-        }
-    }
 }
 
 impl ImageInfo {
@@ -501,13 +495,16 @@ pub fn handle_connection(
         .set_nonblocking(true)
         .expect("set nonblocking failed");
 
+    let io_channel = Rc::new(RefCell::new(IoChannel::new(stream.try_clone().unwrap())));
     // Register event notifier for vnc client.
     let client = Arc::new(ClientState::new(addr.to_string()));
     let client_io = Arc::new(Mutex::new(ClientIoHandler::new(
         stream,
+        io_channel,
         client.clone(),
         server.clone(),
     )));
+    client.conn_state.lock().unwrap().client_io = Some(Arc::downgrade(&client_io));
     vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
     vnc_flush(&client);
     server

@@ -44,6 +44,10 @@ use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 
+#[cfg(not(target_env = "musl"))]
+use devices::usb::{
+    keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
@@ -62,10 +66,6 @@ use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
-#[cfg(not(target_env = "musl"))]
-use usb::{
-    keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps, xhci::xhci_pci::XhciPciDevice,
-};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},

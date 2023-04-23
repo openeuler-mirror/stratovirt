@@ -10,6 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use devices::usb::config::*;
+use devices::usb::xhci::xhci_controller::{
+    DwordOrder, XhciInputCtrlCtx, XhciSlotCtx, EP_RUNNING, SLOT_ADDRESSED,
+};
+use devices::usb::xhci::xhci_regs::{
+    XHCI_INTR_REG_ERSTBA_LO, XHCI_INTR_REG_ERSTSZ, XHCI_OPER_REG_CONFIG, XHCI_OPER_REG_USBSTS,
+};
+use devices::usb::xhci::{TRBCCode, TRBType, TRB_SIZE};
+use devices::usb::UsbDeviceRequest;
 use mod_test::libdriver::pci::{PCI_DEVICE_ID, PCI_VENDOR_ID};
 use mod_test::libdriver::usb::{
     clear_iovec, qmp_send_key_event, qmp_send_multi_key_event, qmp_send_pointer_event, TestIovec,
@@ -17,15 +26,6 @@ use mod_test::libdriver::usb::{
     HID_POINTER_LEN, KEYCODE_NUM1, KEYCODE_SPACE, PCI_CLASS_PI, PRIMARY_INTERRUPTER_ID,
     TD_TRB_LIMIT, XHCI_PCI_OPER_OFFSET, XHCI_PORTSC_OFFSET,
 };
-use usb::config::*;
-use usb::usb::UsbDeviceRequest;
-use usb::xhci::xhci_controller::{
-    DwordOrder, XhciInputCtrlCtx, XhciSlotCtx, EP_RUNNING, SLOT_ADDRESSED,
-};
-use usb::xhci::xhci_regs::{
-    XHCI_INTR_REG_ERSTBA_LO, XHCI_INTR_REG_ERSTSZ, XHCI_OPER_REG_CONFIG, XHCI_OPER_REG_USBSTS,
-};
-use usb::xhci::{TRBCCode, TRBType, TRB_SIZE};
 
 #[test]
 fn test_xhci_keyboard_basic() {

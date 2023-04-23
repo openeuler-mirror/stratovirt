@@ -216,6 +216,8 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
+ "once_cell",
+ "pci",
  "serde",
  "serial_test",
  "sysbus",
@@ -429,7 +431,6 @@ dependencies = [
  "sysbus",
  "thiserror",
  "ui",
- "usb",
  "util",
  "vfio",
  "vfio-bindings",
@@ -512,7 +513,6 @@ dependencies = [
  "machine",
  "rand",
  "serde_json",
- "usb",
  "util",
  "virtio",
  "vmm-sys-util",
@@ -980,23 +980,6 @@ name = "untrusted"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
-
-[[package]]
-name = "usb"
-version = "2.2.0"
-dependencies = [
- "address_space",
- "anyhow",
- "byteorder",
- "libc",
- "log",
- "machine_manager",
- "once_cell",
- "pci",
- "thiserror",
- "ui",
- "util",
-]
 
 [[package]]
 name = "util"

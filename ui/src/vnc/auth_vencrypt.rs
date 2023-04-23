@@ -14,11 +14,12 @@ use crate::{
     error::VncError,
     vnc::{
         auth_sasl::SubAuthState,
-        client_io::{vnc_flush, vnc_write, ClientIoHandler},
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, IoOperations},
     },
 };
-use anyhow::{anyhow, Result};
-use log::info;
+use anyhow::{anyhow, bail, Result};
+use log::error;
+use machine_manager::event_loop::EventLoop;
 use rustls::{
     self,
     cipher_suite::{
@@ -35,7 +36,19 @@ use rustls::{
     Certificate, KeyLogFile, PrivateKey, RootCertStore, ServerConfig, ServerConnection,
     SupportedCipherSuite, SupportedKxGroup, SupportedProtocolVersion, Ticketer,
 };
-use std::{fs::File, io::BufReader, sync::Arc};
+use std::{
+    cell::RefCell,
+    fs::File,
+    io::{BufReader, ErrorKind, Read, Write},
+    net::TcpStream,
+    os::unix::prelude::{AsRawFd, RawFd},
+    rc::Rc,
+    sync::Arc,
+};
+use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use vmm_sys_util::epoll::EventSet;
+
+use super::client_io::vnc_disconnect_start;
 
 const TLS_CREDS_SERVER_CACERT: &str = "cacert.pem";
 const TLS_CREDS_SERVERCERT: &str = "servercert.pem";
@@ -137,7 +150,50 @@ impl ClientIoHandler {
             .clone()
             .unwrap();
         let tls_conn = ServerConnection::new(tls_config)?;
-        self.tls_conn = Some(tls_conn);
+        let tls_io_channel = Rc::new(RefCell::new(TlsIoChannel::new(
+            self.stream.try_clone().unwrap(),
+            tls_conn,
+        )));
+
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _fd: RawFd| {
+            let mut dis_conn = false;
+            if event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP {
+                dis_conn = true;
+            } else if event & EventSet::IN == EventSet::IN {
+                if let Err(e) = tls_io_channel.borrow_mut().tls_handshake() {
+                    error!("Tls handle shake error: {}", e);
+                    dis_conn = true;
+                }
+            }
+
+            if !dis_conn && !tls_io_channel.borrow().tls_conn.is_handshaking() {
+                let client_io = client.conn_state.lock().unwrap().client_io.clone();
+                let client_io = client_io.and_then(|c| c.upgrade()).unwrap();
+                let mut locked_client = client_io.lock().unwrap();
+                locked_client.io_channel = tls_io_channel.clone();
+                if let Err(_e) = locked_client.tls_handshake_done() {
+                    dis_conn = true;
+                }
+            }
+            if dis_conn {
+                client.conn_state.lock().unwrap().dis_conn = true;
+                vnc_disconnect_start(&client);
+            }
+            None
+        });
+        self.handlers
+            .insert("vnc_tls_io".to_string(), handler.clone());
+        let handlers = vec![handler];
+        EventLoop::update_event(
+            vec![EventNotifier::new(
+                NotifierOperation::Modify,
+                self.stream.as_raw_fd(),
+                None,
+                EventSet::IN | EventSet::READ_HANG_UP,
+                handlers,
+            )],
+            None,
+        )?;
 
         self.client
             .in_buffer
@@ -145,66 +201,23 @@ impl ClientIoHandler {
             .unwrap()
             .remove_front(self.expect);
         self.expect = 0;
-        self.msg_handler = ClientIoHandler::tls_handshake;
         Ok(())
     }
 
-    /// Tls handshake.
-    pub fn tls_handshake(&mut self) -> Result<()> {
-        if let Some(tc) = &mut self.tls_conn {
-            match tc.read_tls(&mut self.stream) {
-                Err(err) => {
-                    return Err(anyhow!(VncError::AuthFailed(
-                        "tls_handshake".to_string(),
-                        format!("{:?}", err)
-                    )));
-                }
-                Ok(0) => {
-                    return Err(anyhow!(VncError::AuthFailed(
-                        "tls_handshake".to_string(),
-                        "EOF".to_string()
-                    )));
-                }
-                Ok(_) => {}
-            }
-
-            if let Err(err) = tc.process_new_packets() {
-                let rc = tc.write_tls(&mut self.stream);
-                if rc.is_err() {
-                    return Err(anyhow!(VncError::AuthFailed(
-                        "tls_handshake".to_string(),
-                        format!("{:?}", rc)
-                    )));
-                }
-                return Err(anyhow!(VncError::AuthFailed(
-                    "tls_handshake".to_string(),
-                    format!("{:?}", err)
-                )));
-            }
-
-            if tc.wants_write() {
-                if let Err(err) = tc.write_tls(&mut self.stream) {
-                    return Err(anyhow!(VncError::AuthFailed(
-                        "tls_handshake".to_string(),
-                        format!("{:?}", err)
-                    )));
-                }
-            }
-
-            if tc.is_handshaking() {
-                // Tls handshake continue.
-                self.msg_handler = ClientIoHandler::tls_handshake;
-            } else {
-                info!("Finished tls handshaking");
-                // Tls handshake finished.
-                self.handle_vencrypt_subauth()?;
-            }
-        } else {
-            return Err(anyhow!(VncError::AuthFailed(
-                "tls_handshake".to_string(),
-                "Handshake failed".to_string()
-            )));
-        }
+    pub fn tls_handshake_done(&mut self) -> Result<()> {
+        let handler = self.handlers.get("vnc_client_io").unwrap().clone();
+        let handlers = vec![handler];
+        EventLoop::update_event(
+            vec![EventNotifier::new(
+                NotifierOperation::Modify,
+                self.stream.as_raw_fd(),
+                None,
+                EventSet::IN | EventSet::READ_HANG_UP,
+                handlers,
+            )],
+            None,
+        )?;
+        self.handle_vencrypt_subauth()?;
         Ok(())
     }
 
@@ -337,4 +350,78 @@ fn load_certs(filepath: &str) -> Result<Vec<Certificate>> {
         .map(|v| Certificate(v.clone()))
         .collect();
     Ok(certs)
+}
+
+pub struct TlsIoChannel {
+    /// TcpStream connected with client.
+    pub stream: TcpStream,
+    /// Tls server connection.
+    pub tls_conn: ServerConnection,
+}
+
+impl TlsIoChannel {
+    pub fn new(stream: TcpStream, tls_conn: ServerConnection) -> Self {
+        Self { stream, tls_conn }
+    }
+
+    pub fn tls_handshake(&mut self) -> Result<()> {
+        if self.tls_conn.read_tls(&mut self.stream)? == 0 {
+            bail!("Tls hand shake failed: EOF");
+        }
+        self.tls_conn.process_new_packets()?;
+        if self.tls_conn.wants_write() {
+            self.tls_conn.write_tls(&mut self.stream)?;
+        }
+        Ok(())
+    }
+}
+
+impl IoOperations for TlsIoChannel {
+    fn channel_write(&mut self, buf: &[u8]) -> Result<usize> {
+        let buf_size = buf.len();
+        let mut offset = 0;
+        while offset < buf_size {
+            let tmp_buf = &buf[offset..];
+            match self.tls_conn.writer().write(tmp_buf) {
+                Ok(0) => {
+                    bail!("Failed to write tls message!");
+                }
+                Ok(n) => offset += n,
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => {
+                    bail!("Internal error: {}", e);
+                }
+            }
+
+            while self.tls_conn.wants_write() {
+                match self.tls_conn.write_tls(&mut self.stream) {
+                    Ok(_) => {}
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        continue;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        continue;
+                    }
+                    Err(e) => {
+                        bail!("Unable to write msg on tls socket: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(buf_size)
+    }
+
+    fn channel_read(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let mut len = 0_usize;
+        self.tls_conn.read_tls(&mut self.stream)?;
+
+        let io_state = self.tls_conn.process_new_packets()?;
+        if io_state.plaintext_bytes_to_read() > 0 {
+            len = io_state.plaintext_bytes_to_read();
+            buf.resize(len, 0u8);
+            self.tls_conn.reader().read_exact(buf)?;
+        }
+        Ok(len)
+    }
 }
