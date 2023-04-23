@@ -15,6 +15,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use demo_dev::*;
 pub use devices::*;
+pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
 pub use fs::*;
@@ -38,6 +39,7 @@ mod boot_source;
 mod chardev;
 mod demo_dev;
 mod devices;
+pub mod display;
 mod drive;
 pub mod error;
 mod fs;
@@ -116,6 +118,7 @@ pub struct VmConfig {
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
+    pub display: Option<DisplayConfig>,
 }
 
 impl VmConfig {

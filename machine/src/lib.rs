@@ -1423,6 +1423,10 @@ pub trait MachineOps {
         bail!("ramfb device is not supported!");
     }
 
+    fn display_init(&mut self, _vm_config: &mut VmConfig) -> Result<()> {
+        bail!("Display is not supported.");
+    }
+
     fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;

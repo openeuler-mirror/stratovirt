@@ -11,8 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::pixman::{
-    create_pixman_image, get_image_height, get_image_width, pixman_glyph_from_vgafont,
-    pixman_glyph_render, unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
+    create_pixman_image, get_image_data, get_image_height, get_image_stride, get_image_width,
+    pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, ColorNames,
+    COLOR_TABLE_RGB,
 };
 use anyhow::Result;
 use log::error;
@@ -71,6 +72,24 @@ impl Default for DisplaySurface {
             format: pixman_format_code_t::PIXMAN_a8r8g8b8,
             image: ptr::null_mut(),
         }
+    }
+}
+
+impl DisplaySurface {
+    pub fn width(&self) -> i32 {
+        get_image_width(self.image)
+    }
+
+    pub fn height(&self) -> i32 {
+        get_image_height(self.image)
+    }
+
+    pub fn stride(&self) -> i32 {
+        get_image_stride(self.image)
+    }
+
+    pub fn data(&self) -> *mut u32 {
+        get_image_data(self.image)
     }
 }
 
@@ -652,7 +671,7 @@ pub fn console_select(con_id: Option<usize>) -> Result<()> {
 /// * `width` - width of image.
 /// * `height` - height of image.
 /// * `msg` - test messages showed in display.
-fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySurface> {
+pub fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySurface> {
     if !(0..MAX_WINDOW_WIDTH as i32).contains(&width)
         || !(0..MAX_WINDOW_HEIGHT as i32).contains(&height)
     {

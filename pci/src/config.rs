@@ -1155,7 +1155,7 @@ impl PciConfig {
 
     fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
         if !size.is_power_of_two()
-            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO.try_into().unwrap())
+            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO as u64)
             || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
             || (bar_type == RegionType::Io && size > u16::MAX as u64)
         {

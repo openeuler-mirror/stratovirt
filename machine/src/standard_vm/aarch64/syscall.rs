@@ -56,7 +56,7 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 87 syscalls
+/// * aarch64-unknown-gnu: 98 syscalls
 /// * aarch64-unknown-musl: 60 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
@@ -184,6 +184,28 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_futex),
         BpfRule::new(libc::SYS_fallocate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresuid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresgid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fstatfs),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(223),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_listen),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fchmodat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmget),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmctl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmdt),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_lremovexattr),
     ]
 }
 
