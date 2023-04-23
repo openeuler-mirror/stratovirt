@@ -13,7 +13,7 @@
 /// We use Leaky Bucket Algorithm to limit iops of block device and qmp.
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
@@ -93,7 +93,9 @@ impl LeakBucket {
 
             loop_context.delay_call(
                 func,
-                (self.level - self.capacity) * NANOSECONDS_PER_SECOND / self.capacity,
+                Duration::from_nanos(
+                    (self.level - self.capacity) * NANOSECONDS_PER_SECOND / self.capacity,
+                ),
             );
 
             self.timer_started = true;
