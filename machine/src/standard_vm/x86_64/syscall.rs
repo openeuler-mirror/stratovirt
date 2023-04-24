@@ -19,6 +19,11 @@ use vfio::{
     VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS, VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA,
     VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
 };
+use util::v4l2::{
+    VIDIOC_DQBUF, VIDIOC_ENUM_FMT, VIDIOC_ENUM_FRAMEINTERVALS, VIDIOC_ENUM_FRAMESIZES,
+    VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
+    VIDIOC_STREAMON, VIDIOC_S_FMT, VIDIOC_S_PARM,
+};
 use virtio::VhostKern::*;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/futex.h
@@ -286,6 +291,19 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYCAP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_G_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_REQBUFS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_DQBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMON() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMOFF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32)
 }
 
 fn madvise_rule() -> BpfRule {
