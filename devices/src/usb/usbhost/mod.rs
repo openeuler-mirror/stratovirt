@@ -10,20 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex, Weak};
+use std::{
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
 
 use anyhow::{bail, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use rusb::{
-    constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction,
+    constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
     UsbContext,
 };
 
 use crate::usb::{
-    config::{USB_ENDPOINT_ATTR_INVALID, USB_TOKEN_IN, USB_TOKEN_OUT},
+    config::{
+        USB_DEVICE_OUT_REQUEST, USB_ENDPOINT_ATTR_INVALID, USB_ENDPOINT_OUT_REQUEST,
+        USB_INTERFACE_OUT_REQUEST, USB_REQUEST_CLEAR_FEATURE, USB_REQUEST_SET_ADDRESS,
+        USB_REQUEST_SET_CONFIGURATION, USB_REQUEST_SET_INTERFACE, USB_TOKEN_IN, USB_TOKEN_OUT,
+    },
     descriptor::USB_MAX_INTERFACES,
     xhci::xhci_controller::XhciDevice,
-    UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
 use machine_manager::config::UsbHostConfig;
 
@@ -279,6 +286,150 @@ impl UsbHost {
         }
     }
 
+    fn claim_interfaces(&mut self) -> UsbPacketStatus {
+        self.usb_device.altsetting = [0; USB_MAX_INTERFACES as usize];
+        if self.detach_kernel().is_err() {
+            return UsbPacketStatus::Stall;
+        }
+
+        let conf = match self.libdev.as_ref().unwrap().active_config_descriptor() {
+            Ok(conf) => conf,
+            Err(e) => {
+                if e == Error::NotFound {
+                    // Ignore address state
+                    return UsbPacketStatus::Success;
+                }
+                return UsbPacketStatus::Stall;
+            }
+        };
+
+        let mut claimed = 0;
+        for i in 0..self.ifs_num {
+            if self
+                .handle
+                .as_mut()
+                .unwrap()
+                .claim_interface(i as u8)
+                .is_ok()
+            {
+                self.ifs[i as usize].claimed = true;
+                claimed += 1;
+                if claimed == conf.num_interfaces() {
+                    break;
+                }
+            }
+        }
+
+        if claimed != conf.num_interfaces() {
+            return UsbPacketStatus::Stall;
+        }
+
+        UsbPacketStatus::Success
+    }
+
+    fn set_config(&mut self, config: u8, packet: &mut UsbPacket) {
+        self.release_interfaces();
+
+        if self.ddesc.is_some() && self.ddesc.as_ref().unwrap().num_configurations() != 1 {
+            if let Err(e) = self
+                .handle
+                .as_mut()
+                .unwrap()
+                .set_active_configuration(config)
+            {
+                error!("Failed to set active configuration: {:?}", e);
+                if e == Error::NoDevice {
+                    packet.status = UsbPacketStatus::NoDev
+                } else {
+                    packet.status = UsbPacketStatus::Stall;
+                }
+                return;
+            }
+        }
+
+        packet.status = self.claim_interfaces();
+        if packet.status == UsbPacketStatus::Success {
+            self.ep_update();
+        }
+    }
+
+    fn set_interface(&mut self, iface: u16, alt: u16, packet: &mut UsbPacket) {
+        if iface > USB_MAX_INTERFACES as u16 {
+            packet.status = UsbPacketStatus::Stall;
+            return;
+        }
+        match self
+            .handle
+            .as_mut()
+            .unwrap()
+            .set_alternate_setting(iface as u8, alt as u8)
+        {
+            Ok(_) => {
+                self.usb_device.altsetting[iface as usize] = alt as u32;
+                self.ep_update();
+            }
+            Err(e) => {
+                if e == Error::NoDevice {
+                    packet.status = UsbPacketStatus::NoDev
+                } else {
+                    packet.status = UsbPacketStatus::Stall;
+                }
+            }
+        }
+    }
+
+    fn clear_halt(&mut self, pid: u8, index: u8) {
+        if self
+            .handle
+            .as_mut()
+            .unwrap()
+            .clear_halt(index as u8)
+            .is_err()
+        {
+            warn!("Failed to clear halt");
+        }
+        self.usb_device
+            .get_mut_endpoint(pid == USB_TOKEN_IN, index & 0x0f)
+            .halted = false;
+    }
+
+    fn control_transfer_pass_through(
+        &mut self,
+        packet: &mut UsbPacket,
+        device_req: &UsbDeviceRequest,
+    ) {
+        if packet.pid as u8 == USB_TOKEN_OUT {
+            if let Err(e) = self.handle.as_ref().unwrap().write_control(
+                device_req.request_type,
+                device_req.request,
+                device_req.value,
+                device_req.index,
+                &self.usb_device.data_buf[..device_req.length as usize],
+                Duration::from_millis(10),
+            ) {
+                error!("Failed to write control by usb host: {:?}", e);
+                packet.status = UsbPacketStatus::Stall;
+                return;
+            }
+        } else {
+            packet.actual_length = match self.handle.as_ref().unwrap().read_control(
+                device_req.request_type,
+                device_req.request,
+                device_req.value,
+                device_req.index,
+                &mut self.usb_device.data_buf[..device_req.length as usize],
+                Duration::from_millis(10),
+            ) {
+                Ok(n) => n as u32,
+                Err(e) => {
+                    error!("Failed to read control by usb host: {:?}", e);
+                    0
+                }
+            };
+        };
+        packet.status = UsbPacketStatus::Success;
+    }
+
     fn release_dev_to_host(&mut self) {
         if self.handle.is_none() {
             return;
@@ -336,7 +487,38 @@ impl UsbDeviceOps for UsbHost {
         self.usb_device.get_endpoint(true, 1)
     }
 
-    fn handle_control(&mut self, _packet: &Arc<Mutex<UsbPacket>>, _device_req: &UsbDeviceRequest) {}
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
+        let mut locked_packet = packet.lock().unwrap();
+        if self.handle.is_none() {
+            locked_packet.status = UsbPacketStatus::NoDev;
+            return;
+        }
+        match device_req.request_type {
+            USB_DEVICE_OUT_REQUEST => {
+                if device_req.request == USB_REQUEST_SET_ADDRESS {
+                    self.usb_device.addr = device_req.value as u8;
+                    return;
+                } else if device_req.request == USB_REQUEST_SET_CONFIGURATION {
+                    self.set_config(device_req.value as u8, &mut locked_packet);
+                    return;
+                }
+            }
+            USB_INTERFACE_OUT_REQUEST => {
+                if device_req.request == USB_REQUEST_SET_INTERFACE {
+                    self.set_interface(device_req.index, device_req.value, &mut locked_packet);
+                    return;
+                }
+            }
+            USB_ENDPOINT_OUT_REQUEST => {
+                if device_req.request == USB_REQUEST_CLEAR_FEATURE && device_req.value == 0 {
+                    self.clear_halt(locked_packet.pid as u8, device_req.index as u8);
+                    return;
+                }
+            }
+            _ => {}
+        }
+        self.control_transfer_pass_through(&mut locked_packet, device_req);
+    }
 
     fn handle_data(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
 
