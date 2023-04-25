@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{CmdParser, ConfigCheck};
+use super::{CmdParser, ConfigCheck, UnsignedInteger};
 use crate::config::{check_arg_too_long, ExBool};
 use util::num_ops::str_to_usize;
 
@@ -143,22 +143,22 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
         .push("id");
     cmd_parser.parse(rootport_cfg)?;
 
-    let mut root_port = RootPortConfig::default();
-
-    let port = cmd_parser
-        .get_value::<String>("port")?
-        .with_context(|| ConfigError::FieldIsMissing("port".to_string(), "rootport".to_string()))?;
-    root_port.port = str_to_usize(port)? as u8;
+    let root_port = RootPortConfig {
+        port: cmd_parser
+            .get_value::<UnsignedInteger>("port")?
+            .with_context(|| {
+                ConfigError::FieldIsMissing("port".to_string(), "rootport".to_string())
+            })?
+            .0 as u8,
+        id: cmd_parser.get_value::<String>("id")?.with_context(|| {
+            ConfigError::FieldIsMissing("id".to_string(), "rootport".to_string())
+        })?,
+        multifunction: cmd_parser
+            .get_value::<ExBool>("multifunction")?
+            .map_or(false, bool::from),
+    };
 
     let _ = cmd_parser.get_value::<u8>("chassis")?;
-
-    root_port.id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "rootport".to_string()))?;
-
-    root_port.multifunction = cmd_parser
-        .get_value::<ExBool>("multifunction")?
-        .map_or(false, bool::from);
 
     root_port.check()?;
     Ok(root_port)

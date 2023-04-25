@@ -807,6 +807,40 @@ Three properties can be set for USB Storage.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
+### 2.13.6 USB Host
+USB Host Device that based on USB protocol. It should be attached to USB controller.
+
+Six properties can be set for USB Host.
+
+* id: unique device id.
+* hostbus: the bus number of the usb host device.
+* hostaddr: the addr number of the usb host device.
+* hostport: the physical number of the usb host device.
+* vendorid: the vendor ID of the usb host device.
+* productid: the product ID of the usb host device.
+
+Pass through the host device identified by bus and addr:
+
+```shell
+-device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>
+```
+
+Pass through the host device identified by bus and physical port:
+
+```shell
+-device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>
+```
+
+Pass through the host device identified by the vendor and product ID:
+
+```shell
+-device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>
+```
+
+Note:
+1. The combination of vendor and product ID takes precedence over the combination of bus number and physical port number.
+2. The combination of bus and physical port takes precedence over the combination of bus number and addr number.
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 

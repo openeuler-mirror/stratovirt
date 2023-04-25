@@ -28,6 +28,8 @@ pub mod keyboard;
 pub mod storage;
 #[cfg(not(target_env = "musl"))]
 pub mod tablet;
+#[cfg(not(target_env = "musl"))]
+pub mod usbhost;
 pub mod xhci;
 
 use std::cmp::min;
