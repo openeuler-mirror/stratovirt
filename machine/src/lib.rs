@@ -1297,7 +1297,7 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_host(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_host(cfg_args)?;
-        let usbhost = UsbHost::new(device_cfg);
+        let usbhost = UsbHost::new(device_cfg)?;
 
         let usbhost = usbhost
             .realize()
