@@ -11,11 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    collections::LinkedList,
+    os::unix::io::RawFd,
+    rc::Rc,
     sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 
 use anyhow::{bail, Result};
+use libc::c_int;
+use libusb1_sys::libusb_transfer;
 use log::{error, info, warn};
 use rusb::{
     constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
@@ -24,7 +29,8 @@ use rusb::{
 
 use crate::usb::{
     config::{
-        USB_DEVICE_OUT_REQUEST, USB_ENDPOINT_ATTR_INVALID, USB_ENDPOINT_OUT_REQUEST,
+        USB_DEVICE_OUT_REQUEST, USB_DIRECTION_DEVICE_TO_HOST, USB_ENDPOINT_ATTR_BULK,
+        USB_ENDPOINT_ATTR_INT, USB_ENDPOINT_ATTR_INVALID, USB_ENDPOINT_OUT_REQUEST,
         USB_INTERFACE_OUT_REQUEST, USB_REQUEST_CLEAR_FEATURE, USB_REQUEST_SET_ADDRESS,
         USB_REQUEST_SET_CONFIGURATION, USB_REQUEST_SET_INTERFACE, USB_TOKEN_IN, USB_TOKEN_OUT,
     },
@@ -32,16 +38,86 @@ use crate::usb::{
     xhci::xhci_controller::XhciDevice,
     UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
+use host_usblib::*;
 use machine_manager::{
     config::UsbHostConfig,
+    event_loop::{register_event_helper, unregister_event_helper},
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback};
+
+mod host_usblib;
+
+const NON_ISO_PACKETS_NUMS: c_int = 0;
+const COMPLETE_LIMIT: u32 = 200;
+const HANDLE_TIMEOUT_MS: u64 = 2;
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
     detached: bool,
     claimed: bool,
 }
+
+pub struct UsbHostRequest {
+    pub packet: Arc<Mutex<UsbPacket>>,
+    pub host_transfer: *mut libusb_transfer,
+    /// Async data buffer.
+    pub buffer: Vec<u8>,
+    pub completed: Arc<Mutex<u32>>,
+}
+
+impl UsbHostRequest {
+    pub fn new(
+        packet: Arc<Mutex<UsbPacket>>,
+        host_transfer: *mut libusb_transfer,
+        completed: Arc<Mutex<u32>>,
+    ) -> Self {
+        Self {
+            packet,
+            host_transfer,
+            buffer: Vec::new(),
+            completed,
+        }
+    }
+
+    pub fn setup_buffer(&mut self) {
+        let mut locked_packet = self.packet.lock().unwrap();
+        let size = locked_packet.get_iovecs_size();
+        self.buffer = vec![0; size as usize];
+        if locked_packet.pid as u8 == USB_TOKEN_OUT {
+            locked_packet.transfer_packet(self.buffer.as_mut(), size as usize);
+        }
+    }
+
+    pub fn complete(&mut self) {
+        free_host_transfer(self.host_transfer);
+        self.buffer.clear();
+        self.host_transfer = std::ptr::null_mut();
+        let mut completed = self.completed.lock().unwrap();
+        *completed += 1;
+    }
+
+    pub fn abort_req(&mut self) -> Result<()> {
+        let mut locked_packet = self.packet.lock().unwrap();
+        if locked_packet.is_async {
+            locked_packet.status = UsbPacketStatus::NoDev;
+            locked_packet.is_async = false;
+            cancel_host_transfer(self.host_transfer)?;
+
+            if let Some(transfer) = locked_packet.xfer_ops.as_ref() {
+                if let Some(ops) = transfer.clone().upgrade() {
+                    drop(locked_packet);
+                    ops.lock().unwrap().submit_transfer();
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+unsafe impl Sync for UsbHostRequest {}
+unsafe impl Send for UsbHostRequest {}
 
 /// Abstract object of the host USB device.
 pub struct UsbHost {
@@ -55,12 +131,17 @@ pub struct UsbHost {
     handle: Option<DeviceHandle<Context>>,
     /// Describes a device.
     ddesc: Option<DeviceDescriptor>,
+    /// /// EventFd for libusb.
+    libevt: Vec<RawFd>,
     /// Configuration interface number.
     ifs_num: u8,
     ifs: [InterfaceStatus; USB_MAX_INTERFACES as usize],
     usb_device: UsbDevice,
     /// Callback for release dev to Host afer the vm exited.
     exit: Option<Arc<ExitNotifier>>,
+    /// All pending asynchronous usb request.
+    requests: Arc<Mutex<LinkedList<Arc<Mutex<UsbHostRequest>>>>>,
+    completed: Arc<Mutex<u32>>,
 }
 
 impl UsbHost {
@@ -74,10 +155,13 @@ impl UsbHost {
             libdev: None,
             handle: None,
             ddesc: None,
+            libevt: Vec::new(),
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
             usb_device: UsbDevice::new(),
             exit: None,
+            requests: Arc::new(Mutex::new(LinkedList::new())),
+            completed: Arc::new(Mutex::new(0)),
         })
     }
 
@@ -454,6 +538,8 @@ impl UsbHost {
             return;
         }
 
+        self.abort_host_transfers()
+            .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
         self.release_interfaces();
         self.handle.as_mut().unwrap().reset().unwrap_or_else(|e| {
             error!(
@@ -462,6 +548,86 @@ impl UsbHost {
             )
         });
         self.attach_kernel();
+    }
+
+    pub fn clear_succ_requests(&mut self) {
+        let mut updated_requests: LinkedList<Arc<Mutex<UsbHostRequest>>> = LinkedList::new();
+        let mut locked_request = self.requests.lock().unwrap();
+        let mut completed = self.completed.lock().unwrap();
+
+        while !locked_request.is_empty() {
+            let request = locked_request.front();
+            if let Some(request) = request {
+                if request.lock().unwrap().host_transfer.is_null() {
+                    locked_request.pop_front();
+                    *completed -= 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if *completed > COMPLETE_LIMIT {
+            loop {
+                let request = locked_request.pop_front();
+                if let Some(request) = request {
+                    if request.lock().unwrap().host_transfer.is_null() {
+                        continue;
+                    }
+                    updated_requests.push_back(request);
+                } else {
+                    break;
+                }
+            }
+        }
+        *locked_request = updated_requests;
+        *completed = 0;
+    }
+
+    pub fn abort_host_transfers(&mut self) -> Result<()> {
+        // Max counts of uncompleted request to be handled.
+        let mut limit = 100;
+        for request in self.requests.lock().unwrap().iter_mut() {
+            request.lock().unwrap().abort_req()?;
+        }
+
+        loop {
+            if self.requests.lock().unwrap().is_empty() {
+                return Ok(());
+            }
+            let timeout = Some(Duration::from_millis(HANDLE_TIMEOUT_MS));
+            self.context.handle_events(timeout)?;
+            if limit == 0 {
+                self.requests.lock().unwrap().clear();
+                return Ok(());
+            }
+            limit -= 1;
+        }
+    }
+}
+
+impl EventNotifierHelper for UsbHost {
+    fn internal_notifiers(usbhost: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_usbhost = usbhost.clone();
+        let mut notifiers = Vec::new();
+
+        let poll = get_libusb_pollfds(usbhost);
+        let timeout = Some(Duration::from_micros(500));
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, _fd: RawFd| {
+            cloned_usbhost
+                .lock()
+                .unwrap()
+                .context
+                .handle_events(timeout)
+                .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
+            None
+        });
+
+        set_pollfd_notifiers(poll, &mut notifiers, handler);
+
+        notifiers
     }
 }
 
@@ -475,6 +641,8 @@ impl UsbDeviceOps for UsbHost {
         self.open_and_init()?;
 
         let usbhost = Arc::new(Mutex::new(self));
+        let notifiers = EventNotifierHelper::internal_notifiers(usbhost.clone());
+        register_event_helper(notifiers, None, &mut usbhost.lock().unwrap().libevt)?;
         // UsbHost addr is changed after Arc::new, so so the registration must be here.
         usbhost.lock().unwrap().register_exit();
 
@@ -484,6 +652,8 @@ impl UsbDeviceOps for UsbHost {
     fn unrealize(&mut self) -> Result<()> {
         TempCleaner::remove_exit_notifier(&self.id);
         self.release_dev_to_host();
+        unregister_event_helper(None, &mut self.libevt)?;
+        info!("Usb Host device {} is unrealized", self.id);
         Ok(())
     }
 
@@ -492,6 +662,8 @@ impl UsbDeviceOps for UsbHost {
         if self.handle.is_none() {
             return;
         }
+        self.abort_host_transfers()
+            .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
 
         self.handle
             .as_mut()
@@ -543,7 +715,83 @@ impl UsbDeviceOps for UsbHost {
         self.control_transfer_pass_through(&mut locked_packet, device_req);
     }
 
-    fn handle_data(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+    fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        let cloned_packet = packet.clone();
+        let mut locked_packet = packet.lock().unwrap();
+
+        if self.handle.is_none() {
+            locked_packet.status = UsbPacketStatus::NoDev;
+            return;
+        }
+        let in_direction = locked_packet.pid as u8 == USB_TOKEN_IN;
+        if self
+            .usb_device
+            .get_endpoint(in_direction, locked_packet.ep_number)
+            .halted
+        {
+            locked_packet.status = UsbPacketStatus::Stall;
+            return;
+        }
+
+        drop(locked_packet);
+        let mut ep_number = packet.lock().unwrap().ep_number;
+        let host_transfer: *mut libusb_transfer;
+
+        match self
+            .usb_device
+            .get_endpoint(in_direction, ep_number)
+            .ep_type
+        {
+            USB_ENDPOINT_ATTR_BULK => {
+                host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
+                let request = Arc::new(Mutex::new(UsbHostRequest::new(
+                    cloned_packet,
+                    host_transfer,
+                    self.completed.clone(),
+                )));
+                request.lock().unwrap().setup_buffer();
+                self.requests.lock().unwrap().push_back(request.clone());
+                if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
+                    ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
+                }
+                fill_bulk_transfer(host_transfer, self.handle.as_mut(), ep_number, request);
+            }
+            USB_ENDPOINT_ATTR_INT => {
+                host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
+                let request = Arc::new(Mutex::new(UsbHostRequest::new(
+                    cloned_packet,
+                    host_transfer,
+                    self.completed.clone(),
+                )));
+                request.lock().unwrap().setup_buffer();
+                self.requests.lock().unwrap().push_back(request.clone());
+                if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
+                    ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
+                }
+                fill_interrupt_transfer(host_transfer, self.handle.as_mut(), ep_number, request);
+            }
+            _ => {
+                error!("Isochronous transmission is not supported by host USB passthrough.");
+                packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                return;
+            }
+        };
+
+        match submit_host_transfer(host_transfer) {
+            Ok(()) => {}
+            Err(Error::NoDevice) => {
+                packet.lock().unwrap().status = UsbPacketStatus::NoDev;
+                return;
+            }
+            _ => {
+                packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                return;
+            }
+        };
+
+        packet.lock().unwrap().is_async = true;
+        self.clear_succ_requests();
+    }
 
     fn device_id(&self) -> String {
         self.id.clone()

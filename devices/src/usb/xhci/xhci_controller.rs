@@ -155,6 +155,7 @@ impl XhciTransfer {
     }
 
     pub fn complete_transfer(&mut self) -> Result<()> {
+        self.packet.lock().unwrap().is_async = false;
         // NOTE: When entry this function, the transfer must be completed.
         self.complete = true;
 
