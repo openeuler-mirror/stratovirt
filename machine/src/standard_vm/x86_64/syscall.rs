@@ -56,8 +56,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 82 syscalls
-/// * x86_64-unknown-musl: 62 syscalls
+/// * x86_64-unknown-gnu: 96 syscalls
+/// * x86_64-unknown-musl: 63 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -181,6 +181,33 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_set_robust_list),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_sched_getaffinity),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_pipe2),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fcntl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_memfd_create),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_ftruncate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_futex),
+        BpfRule::new(libc::SYS_fallocate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_poll),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_access),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sched_setattr),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresuid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresgid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fstatfs),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fadvise64),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmget),
     ]
 }
 

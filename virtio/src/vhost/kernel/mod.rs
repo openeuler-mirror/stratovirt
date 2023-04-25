@@ -19,25 +19,19 @@ pub use vsock::{Vsock, VsockState};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use log::{debug, error};
+use log::debug;
 use util::byte_code::ByteCode;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
-use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
-use super::{VhostNotify, VhostOps};
+use super::super::QueueConfig;
+use super::VhostOps;
 use crate::VirtioError;
 use anyhow::{anyhow, Context, Result};
 
@@ -357,24 +351,24 @@ impl VhostOps for VhostBackend {
         let locked_mem_info = self.mem_info.lock().unwrap();
         let desc_user_addr = locked_mem_info
             .addr_to_host(queue_config.desc_table)
-            .ok_or_else(|| {
-                anyhow!(anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform desc-table address {}",
                     queue_config.desc_table.0
-                ))
+                )
             })?;
         let used_user_addr = locked_mem_info
             .addr_to_host(queue_config.used_ring)
-            .ok_or_else(|| {
-                anyhow!(anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform used ring address {}",
                     queue_config.used_ring.0
-                ))
+                )
             })?;
         let avail_user_addr = locked_mem_info
             .addr_to_host(queue_config.avail_ring)
-            .ok_or_else(|| {
-                anyhow!(
+            .with_context(|| {
+                format!(
                     "Failed to transform avail ring address {}",
                     queue_config.avail_ring.0
                 )
@@ -453,50 +447,5 @@ impl VhostOps for VhostBackend {
             )));
         }
         Ok(())
-    }
-}
-
-pub struct VhostIoHandler {
-    interrupt_cb: Arc<VirtioInterrupt>,
-    host_notifies: Vec<VhostNotify>,
-    device_broken: Arc<AtomicBool>,
-}
-
-impl EventNotifierHelper for VhostIoHandler {
-    fn internal_notifiers(vhost_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-
-        let vhost = vhost_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            let locked_vhost_handler = vhost.lock().unwrap();
-            if locked_vhost_handler.device_broken.load(Ordering::SeqCst) {
-                return None;
-            }
-            for host_notify in locked_vhost_handler.host_notifies.iter() {
-                if let Err(e) = (locked_vhost_handler.interrupt_cb)(
-                    &VirtioInterruptType::Vring,
-                    Some(&host_notify.queue.lock().unwrap()),
-                    false,
-                ) {
-                    error!(
-                        "Failed to trigger interrupt for vhost device, error is {:?}",
-                        e
-                    );
-                }
-            }
-            None as Option<Vec<EventNotifier>>
-        });
-        for host_notify in vhost_handler.lock().unwrap().host_notifies.iter() {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::AddShared,
-                host_notify.notify_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![handler.clone()],
-            ));
-        }
-
-        notifiers
     }
 }

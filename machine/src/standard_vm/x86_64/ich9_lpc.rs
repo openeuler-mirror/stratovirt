@@ -50,7 +50,7 @@ pub struct LPCBridge {
     rst_ctrl: Arc<AtomicU8>,
     pm_evt: Arc<Mutex<AcpiPmEvent>>,
     pm_ctrl: Arc<Mutex<AcpiPmCtrl>>,
-    /// Reset request trigged by ACPI PM1 Control Registers.
+    /// Reset request triggered by ACPI PM1 Control Registers.
     pub reset_req: Arc<EventFd>,
     pub shutdown_req: Arc<EventFd>,
 }
@@ -60,6 +60,7 @@ impl LPCBridge {
         parent_bus: Weak<Mutex<PciBus>>,
         sys_io: Arc<AddressSpace>,
         reset_req: Arc<EventFd>,
+        shutdown_req: Arc<EventFd>,
     ) -> Result<Self> {
         Ok(Self {
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
@@ -70,11 +71,11 @@ impl LPCBridge {
             pm_ctrl: Arc::new(Mutex::new(AcpiPmCtrl::new())),
             rst_ctrl: Arc::new(AtomicU8::new(0)),
             reset_req,
-            shutdown_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            shutdown_req,
         })
     }
 
-    fn update_pm_base(&self) -> Result<()> {
+    fn update_pm_base(&mut self) -> Result<()> {
         let cloned_pmtmr = self.pm_timer.clone();
         let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
             cloned_pmtmr.lock().unwrap().read(data, addr, offset)
@@ -281,15 +282,8 @@ impl PciDevOps for LPCBridge {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let end = offset + data.len();
-
         self.config.write(offset, data, 0, None, None);
-        if ranges_overlap(
-            offset,
-            end,
-            PM_BASE_OFFSET as usize,
-            PM_BASE_OFFSET as usize + 4,
-        ) {
+        if ranges_overlap(offset, data.len(), PM_BASE_OFFSET as usize, 4) {
             if let Err(e) = self.update_pm_base() {
                 error!("Failed to update PM base addr: {:?}", e);
             }

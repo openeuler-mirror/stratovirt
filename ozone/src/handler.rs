@@ -81,7 +81,7 @@ impl OzoneHandler {
         if let Some(uid) = args.value_of("uid") {
             let user_id = (uid)
                 .parse::<u32>()
-                .map_err(|_| anyhow!(OzoneError::DigitalParseError("uid", uid)))?;
+                .with_context(|| OzoneError::DigitalParseError("uid", uid))?;
             if user_id > MAX_ID_NUMBER {
                 bail!("Input uid should be no more than 65535");
             }
@@ -90,7 +90,7 @@ impl OzoneHandler {
         if let Some(gid) = args.value_of("gid") {
             let group_id = (gid)
                 .parse::<u32>()
-                .map_err(|_| anyhow!(OzoneError::DigitalParseError("gid", gid)))?;
+                .with_context(|| OzoneError::DigitalParseError("gid", gid))?;
             if group_id > MAX_ID_NUMBER {
                 bail!("Input gid should be no more than 65535");
             }
@@ -113,7 +113,7 @@ impl OzoneHandler {
             handler.node = Some(
                 (node)
                     .parse::<String>()
-                    .map_err(|_| anyhow!(OzoneError::DigitalParseError("numa", node)))?,
+                    .with_context(|| OzoneError::DigitalParseError("numa", node))?,
             );
         }
         if let Some(config) = args.values_of("cgroup") {
@@ -163,11 +163,7 @@ impl OzoneHandler {
     ///
     /// * `file_path` - args parser.
     fn bind_mount_file(&self, file_path: &Path) -> Result<()> {
-        let file_name = if let Some(file) = file_path.file_name() {
-            file
-        } else {
-            bail!("Empty file path");
-        };
+        let file_name = file_path.file_name().with_context(|| "Empty file path")?;
         let mut new_root_dir = self.chroot_dir.clone();
         new_root_dir.push(file_name);
         if file_path.is_dir() {
@@ -300,11 +296,7 @@ impl OzoneHandler {
         for source_file_path in self.source_file_paths.clone().into_iter() {
             let mut chroot_path = self.chroot_dir.clone();
             let source_file_name = source_file_path.file_name();
-            let file_name = if let Some(file_name) = source_file_name {
-                file_name
-            } else {
-                bail!("Source file is empty")
-            };
+            let file_name = source_file_name.with_context(|| "Source file is empty")?;
             chroot_path.push(file_name);
 
             if chroot_path.exists() {

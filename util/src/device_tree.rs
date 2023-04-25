@@ -225,17 +225,17 @@ impl FdtBuilder {
         // The string property should end with null('\0').
         val_array.push(0x0_u8);
         self.set_property(prop, &val_array)
-            .with_context(|| anyhow!(UtilError::SetPropertyErr("string".to_string())))
+            .with_context(|| UtilError::SetPropertyErr("string".to_string()))
     }
 
     pub fn set_property_u32(&mut self, prop: &str, val: u32) -> Result<()> {
         self.set_property(prop, &val.to_be_bytes()[..])
-            .with_context(|| anyhow!(UtilError::SetPropertyErr("u32".to_string())))
+            .with_context(|| UtilError::SetPropertyErr("u32".to_string()))
     }
 
     pub fn set_property_u64(&mut self, prop: &str, val: u64) -> Result<()> {
         self.set_property(prop, &val.to_be_bytes()[..])
-            .with_context(|| anyhow!(UtilError::SetPropertyErr("u64".to_string())))
+            .with_context(|| UtilError::SetPropertyErr("u64".to_string()))
     }
 
     pub fn set_property_array_u32(&mut self, prop: &str, array: &[u32]) -> Result<()> {
@@ -244,7 +244,7 @@ impl FdtBuilder {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }
         self.set_property(prop, &prop_array)
-            .with_context(|| anyhow!(UtilError::SetPropertyErr("u32 array".to_string())))
+            .with_context(|| UtilError::SetPropertyErr("u32 array".to_string()))
     }
 
     pub fn set_property_array_u64(&mut self, prop: &str, array: &[u64]) -> Result<()> {
@@ -253,7 +253,7 @@ impl FdtBuilder {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }
         self.set_property(prop, &prop_array)
-            .with_context(|| anyhow!(UtilError::SetPropertyErr("u64 array".to_string())))
+            .with_context(|| UtilError::SetPropertyErr("u64 array".to_string()))
     }
 
     pub fn set_property(&mut self, property_name: &str, property_val: &[u8]) -> Result<()> {

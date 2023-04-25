@@ -13,23 +13,20 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{Arc, Mutex, Weak};
+use std::os::unix::io::AsRawFd;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{BigEndian, ByteOrder};
+use log::{debug, error, info};
 
-use crate::ScsiCntlr::{
-    ScsiCntlr, ScsiCompleteCb, ScsiXferMode, VirtioScsiCmdReq, VirtioScsiCmdResp,
-    VirtioScsiRequest, VIRTIO_SCSI_CDB_DEFAULT_SIZE, VIRTIO_SCSI_S_OK,
-};
 use crate::ScsiDisk::{
     ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use address_space::AddressSpace;
-use byteorder::{BigEndian, ByteOrder};
-use log::{debug, error, info};
-use util::aio::{Aio, AioCb, Iovec, OpCode};
+use util::aio::{AioCb, Iovec, OpCode, WriteZeroesState};
+use util::AsAny;
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -93,7 +90,7 @@ pub const WRITE_LONG_10: u8 = 0x3f;
 pub const CHANGE_DEFINITION: u8 = 0x40;
 pub const WRITE_SAME_10: u8 = 0x41;
 pub const UNMAP: u8 = 0x42;
-/// The Read TOC command requests that the Drive read data from a table of contets.
+/// The Read TOC command requests that the Drive read data from a table of contexts.
 pub const READ_TOC: u8 = 0x43;
 pub const REPORT_DENSITY_SUPPORT: u8 = 0x44;
 pub const GET_CONFIGURATION: u8 = 0x46;
@@ -171,6 +168,7 @@ pub const TASK_ABORTED: u8 = 0x40;
 
 pub const STATUS_MASK: u8 = 0x3e;
 
+/// Scsi cdb length will be 6/10/12/16 bytes.
 pub const SCSI_CMD_BUF_SIZE: usize = 16;
 pub const SCSI_SENSE_BUF_SIZE: usize = 252;
 
@@ -356,21 +354,28 @@ const GC_FC_CORE: u16 = 0x0001;
 /// The medium may be removed from the device.
 const GC_FC_REMOVEABLE_MEDIUM: u16 = 0x0003;
 
+#[derive(Clone, PartialEq, Eq)]
+pub enum ScsiXferMode {
+    /// TEST_UNIT_READY, ...
+    ScsiXferNone,
+    /// READ, INQUIRY, MODE_SENSE, ...
+    ScsiXferFromDev,
+    /// WRITE, MODE_SELECT, ...
+    ScsiXferToDev,
+}
+
 pub struct ScsiBus {
     /// Bus name.
     pub name: String,
     /// Scsi Devices attached to the bus.
     pub devices: HashMap<(u8, u16), Arc<Mutex<ScsiDevice>>>,
-    /// Scsi Controller which the bus orignates from.
-    pub parent_cntlr: Weak<Mutex<ScsiCntlr>>,
 }
 
 impl ScsiBus {
-    pub fn new(bus_name: String, parent_cntlr: Weak<Mutex<ScsiCntlr>>) -> ScsiBus {
+    pub fn new(bus_name: String) -> ScsiBus {
         ScsiBus {
             name: bus_name,
             devices: HashMap::new(),
-            parent_cntlr,
         }
     }
 
@@ -405,47 +410,31 @@ impl ScsiBus {
         debug!("Can't find scsi device target {} lun {}", target, lun);
         None
     }
-
-    pub fn scsi_bus_parse_req_cdb(
-        &self,
-        cdb: [u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE],
-        dev: Arc<Mutex<ScsiDevice>>,
-    ) -> Option<ScsiCommand> {
-        let buf: [u8; SCSI_CMD_BUF_SIZE] = (cdb[0..SCSI_CMD_BUF_SIZE])
-            .try_into()
-            .expect("incorrect length");
-        let command = cdb[0];
-        let len = scsi_cdb_length(&cdb);
-        if len < 0 {
-            return None;
-        }
-
-        let xfer = scsi_cdb_xfer(&cdb, dev);
-        if xfer < 0 {
-            return None;
-        }
-
-        let lba = scsi_cdb_lba(&cdb);
-        if lba < 0 {
-            return None;
-        }
-
-        Some(ScsiCommand {
-            buf,
-            command,
-            len: len as u32,
-            xfer: xfer as u32,
-            lba: lba as u64,
-            mode: scsi_cdb_xfer_mode(&cdb),
-        })
-    }
 }
 
-pub fn create_scsi_bus(bus_name: &str, scsi_cntlr: &Arc<Mutex<ScsiCntlr>>) -> Result<()> {
-    let mut locked_scsi_cntlr = scsi_cntlr.lock().unwrap();
-    let bus = ScsiBus::new(bus_name.to_string(), Arc::downgrade(scsi_cntlr));
-    locked_scsi_cntlr.bus = Some(Arc::new(Mutex::new(bus)));
-    Ok(())
+fn scsi_bus_parse_req_cdb(
+    cdb: [u8; SCSI_CMD_BUF_SIZE],
+    dev: Arc<Mutex<ScsiDevice>>,
+) -> Option<ScsiCommand> {
+    let op = cdb[0];
+    let len = scsi_cdb_length(&cdb);
+    if len < 0 {
+        return None;
+    }
+
+    // When CDB's Group Code is vendor specific or reserved, len/xfer/lba will be negative.
+    // So, don't need to check again afer checking in cdb length.
+    let xfer = scsi_cdb_xfer(&cdb, dev);
+    let lba = scsi_cdb_lba(&cdb);
+
+    Some(ScsiCommand {
+        buf: cdb,
+        op,
+        len: len as u32,
+        xfer: xfer as u32,
+        lba: lba as u64,
+        mode: scsi_cdb_xfer_mode(&cdb),
+    })
 }
 
 #[derive(Clone)]
@@ -453,7 +442,7 @@ pub struct ScsiCommand {
     /// The Command Descriptor Block(CDB).
     pub buf: [u8; SCSI_CMD_BUF_SIZE],
     /// Scsi Operation Code.
-    pub command: u8,
+    pub op: u8,
     /// Length of CDB.
     pub len: u32,
     /// Transfer length.
@@ -461,110 +450,136 @@ pub struct ScsiCommand {
     /// Logical Block Address.
     pub lba: u64,
     /// Transfer direction.
-    mode: ScsiXferMode,
+    pub mode: ScsiXferMode,
 }
 
 #[derive(Clone)]
+pub struct ScsiCompleteCb {
+    pub req: Arc<Mutex<ScsiRequest>>,
+}
+
+pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
+    let (status, sense) = if ret < 0 {
+        (CHECK_CONDITION, Some(SCSI_SENSE_IO_ERROR))
+    } else {
+        (GOOD, None)
+    };
+
+    let sreq = &mut aiocb.iocompletecb.req.lock().unwrap();
+    sreq.upper_req
+        .as_mut()
+        .scsi_request_complete_cb(status, sense)?;
+    Ok(())
+}
+
+pub trait ScsiRequestOps: AsAny {
+    // Will be called in the end of this scsi instruction execution.
+    fn scsi_request_complete_cb(&mut self, status: u8, scsisense: Option<ScsiSense>) -> Result<()>;
+}
+
 pub struct ScsiRequest {
-    cmd: ScsiCommand,
-    _sense: [u8; SCSI_SENSE_BUF_SIZE],
-    _sense_size: u32,
-    _resid: u32,
+    pub cmd: ScsiCommand,
+    // Requested lun id for scsi request. It may be not equal to scsi device's lun id when it's a scsi target request.
+    pub req_lun: u16,
     pub opstype: u32,
-    pub virtioscsireq: Arc<Mutex<VirtioScsiRequest<VirtioScsiCmdReq, VirtioScsiCmdResp>>>,
-    dev: Arc<Mutex<ScsiDevice>>,
+    // For datain and dataout. Can be empty when it's a ScsiXferMode::ScsiXferNone request.
+    pub iovec: Vec<Iovec>,
+    // Provided buffer's length.
+    pub datalen: u32,
+    pub dev: Arc<Mutex<ScsiDevice>>,
+    // Upper level request which contains this ScsiRequest.
+    pub upper_req: Box<dyn ScsiRequestOps>,
 }
 
 impl ScsiRequest {
     pub fn new(
-        req: Arc<Mutex<VirtioScsiRequest<VirtioScsiCmdReq, VirtioScsiCmdResp>>>,
-        scsibus: Arc<Mutex<ScsiBus>>,
+        cdb: [u8; SCSI_CMD_BUF_SIZE],
+        req_lun: u16,
+        iovec: Vec<Iovec>,
+        datalen: u32,
         scsidevice: Arc<Mutex<ScsiDevice>>,
+        upper_req: Box<dyn ScsiRequestOps>,
     ) -> Result<Self> {
-        let req_lock = req.lock().unwrap();
-        let cdb = req_lock.req.cdb;
-        let req_size = req_lock.data_len;
+        let cmd = scsi_bus_parse_req_cdb(cdb, scsidevice.clone()).with_context(|| "Error cdb!")?;
+        let op = cmd.op;
+        let opstype = scsi_operation_type(op);
 
-        if let Some(cmd) = scsibus
-            .lock()
-            .unwrap()
-            .scsi_bus_parse_req_cdb(cdb, scsidevice.clone())
-        {
-            let ops = cmd.command;
-            let opstype = scsi_operation_type(ops);
-            let _resid = cmd.xfer;
+        if op == WRITE_10 || op == READ_10 {
+            let dev_lock = scsidevice.lock().unwrap();
+            let disk_size = dev_lock.disk_sectors << SECTOR_SHIFT;
+            let disk_type = dev_lock.scsi_type;
+            drop(dev_lock);
+            let offset_shift = match disk_type {
+                SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
+                _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+            };
+            let offset = cmd
+                .lba
+                .checked_shl(offset_shift)
+                .with_context(|| "Too large offset IO!")?;
 
-            if ops == WRITE_10 || ops == READ_10 {
-                let dev_lock = scsidevice.lock().unwrap();
-                let disk_size = dev_lock.disk_sectors << SECTOR_SHIFT;
-                let disk_type = dev_lock.scsi_type;
-                drop(dev_lock);
-                let offset_shift = match disk_type {
-                    SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
-                    _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
-                };
-                let offset = if let Some(off) = cmd.lba.checked_shl(offset_shift) {
-                    off
-                } else {
-                    bail!("Too large offset IO!");
-                };
-
-                if offset
-                    .checked_add(req_size as u64)
-                    .filter(|&off| off <= disk_size)
-                    .is_none()
-                {
-                    bail!(
-                        "Error CDB! ops {}, read/write length {} from {} is larger than disk size {}",
-                        ops, req_size, offset, disk_size,
-                    );
-                }
-            }
-
-            Ok(ScsiRequest {
-                cmd,
-                _sense: [0; SCSI_SENSE_BUF_SIZE],
-                _sense_size: 0,
-                _resid,
-                opstype,
-                virtioscsireq: req.clone(),
-                dev: scsidevice,
-            })
-        } else {
-            bail!("Error CDB!");
+            offset
+                .checked_add(datalen as u64)
+                .filter(|&off| off <= disk_size)
+                .with_context(|| {
+                    format!(
+                        "op 0x{:x} read/write length {} from {} is larger than disk size {}",
+                        op, datalen, offset, disk_size
+                    )
+                })?;
         }
+
+        Ok(ScsiRequest {
+            cmd,
+            req_lun,
+            opstype,
+            iovec,
+            datalen,
+            dev: scsidevice,
+            upper_req,
+        })
     }
 
-    pub fn execute(
-        &self,
-        aio: &mut Box<Aio<ScsiCompleteCb>>,
-        mut aiocb: AioCb<ScsiCompleteCb>,
-    ) -> Result<u32> {
-        let dev_lock = self.dev.lock().unwrap();
-        let offset = match dev_lock.scsi_type {
+    pub fn execute(self) -> Result<Arc<Mutex<ScsiRequest>>> {
+        let mode = self.cmd.mode.clone();
+        let op = self.cmd.op;
+        let dev = self.dev.clone();
+        let locked_dev = dev.lock().unwrap();
+        let mut aio = locked_dev.aio.as_ref().unwrap().lock().unwrap();
+        let s_req = Arc::new(Mutex::new(self));
+
+        let offset = match locked_dev.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
-        aiocb.offset = (self.cmd.lba << offset) as usize;
+        let locked_req = s_req.lock().unwrap();
 
-        for iov in self.virtioscsireq.lock().unwrap().iovec.iter() {
-            let iovec = Iovec {
-                iov_base: iov.iov_base,
-                iov_len: iov.iov_len,
-            };
-            aiocb.iovec.push(iovec);
-            // Note: total len of each req is no more than DESC_CHAIN_MAX_TOTAL_LEN (1 << 32).
-            aiocb.nbytes += iov.iov_len;
-        }
+        let mut aiocb = AioCb {
+            direct: locked_dev.config.direct,
+            req_align: locked_dev.req_align,
+            buf_align: locked_dev.buf_align,
+            file_fd: locked_dev.disk_image.as_ref().unwrap().as_raw_fd(),
+            opcode: OpCode::Noop,
+            iovec: locked_req.iovec.clone(),
+            offset: (locked_req.cmd.lba << offset) as usize,
+            nbytes: locked_req.cmd.xfer as u64,
+            user_data: 0,
+            iocompletecb: ScsiCompleteCb { req: s_req.clone() },
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            write_zeroes_unmap: false,
+        };
+        drop(locked_req);
 
-        if self.cmd.command == SYNCHRONIZE_CACHE {
+        if op == SYNCHRONIZE_CACHE {
             aiocb.opcode = OpCode::Fdsync;
             aio.submit_request(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
-            return Ok(0);
+            aio.flush_request()?;
+            return Ok(s_req);
         }
 
-        match self.cmd.mode {
+        match mode {
             ScsiXferMode::ScsiXferFromDev => {
                 aiocb.opcode = OpCode::Preadv;
                 aio.submit_request(aiocb)
@@ -579,164 +594,151 @@ impl ScsiRequest {
                 info!("xfer none");
             }
         }
-        Ok(0)
+
+        aio.flush_request()?;
+        Ok(s_req)
     }
 
-    pub fn emulate_execute(
+    fn emulate_target_execute(
         &self,
-        iocompletecb: ScsiCompleteCb,
-        req_lun_id: u16,
-        found_lun_id: u16,
-    ) -> Result<()> {
-        debug!("scsi command is {:#x}", self.cmd.command);
+        not_supported_flag: &mut bool,
+        sense: &mut Option<ScsiSense>,
+    ) -> Result<Vec<u8>> {
+        match self.cmd.op {
+            REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
+            INQUIRY => scsi_command_emulate_target_inquiry(self.req_lun, &self.cmd),
+            REQUEST_SENSE => {
+                if self.req_lun != 0 {
+                    *sense = Some(SCSI_SENSE_LUN_NOT_SUPPORTED);
+                }
+                // Scsi Device does not realize sense buffer now, so just return.
+                Ok(Vec::new())
+            }
+            TEST_UNIT_READY => Ok(Vec::new()),
+            _ => {
+                *not_supported_flag = true;
+                *sense = Some(SCSI_SENSE_INVALID_OPCODE);
+                Err(anyhow!("Invalid emulation target scsi command"))
+            }
+        }
+    }
+
+    fn emulate_device_execute(
+        &self,
+        not_supported_flag: &mut bool,
+        sense: &mut Option<ScsiSense>,
+    ) -> Result<Vec<u8>> {
+        match self.cmd.op {
+            REQUEST_SENSE => {
+                *sense = Some(SCSI_SENSE_NO_SENSE);
+                Ok(Vec::new())
+            }
+            TEST_UNIT_READY => {
+                let dev_lock = self.dev.lock().unwrap();
+                if dev_lock.disk_image.is_none() {
+                    Err(anyhow!("No scsi backend!"))
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            // Do not support SCSI_DISK_F_REMOVABLE now.
+            // Return Ok is enough for START_STOP/ALLOW_MEDIUM_REMOVAL.
+            // TODO: implement SCSI_DISK_F_REMOVABLE.
+            START_STOP => Ok(Vec::new()),
+            ALLOW_MEDIUM_REMOVAL => Ok(Vec::new()),
+            INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
+            READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
+            MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
+            SERVICE_ACTION_IN_16 => scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev),
+            READ_DISC_INFORMATION => {
+                scsi_command_emulate_read_disc_information(&self.cmd, &self.dev)
+            }
+            GET_EVENT_STATUS_NOTIFICATION => {
+                scsi_command_emulate_get_event_status_notification(&self.cmd, &self.dev)
+            }
+            READ_TOC => scsi_command_emulate_read_toc(&self.cmd, &self.dev),
+            GET_CONFIGURATION => scsi_command_emulate_get_configuration(&self.cmd, &self.dev),
+            _ => {
+                *not_supported_flag = true;
+                Err(anyhow!("Emulation scsi command is not supported now!"))
+            }
+        }
+    }
+
+    pub fn emulate_execute(mut self) -> Result<Arc<Mutex<ScsiRequest>>> {
+        debug!("emulate scsi command is {:#x}", self.cmd.op);
         let mut not_supported_flag = false;
         let mut sense = None;
+        let mut status = GOOD;
+        let found_lun = self.dev.lock().unwrap().config.lun;
 
         // Requested lun id is not equal to found device id means it may be a target request.
         // REPORT LUNS is also a target request command.
-        let result = if req_lun_id != found_lun_id || self.cmd.command == REPORT_LUNS {
-            match self.cmd.command {
-                REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
-                INQUIRY => scsi_command_emulate_target_inquiry(req_lun_id, &self.cmd),
-                REQUEST_SENSE => {
-                    if req_lun_id != 0 {
-                        sense = Some(SCSI_SENSE_LUN_NOT_SUPPORTED);
-                    }
-                    // Scsi Device does not realize sense buffer now, so just return.
-                    Ok(Vec::new())
-                }
-                TEST_UNIT_READY => Ok(Vec::new()),
-                _ => {
-                    not_supported_flag = true;
-                    sense = Some(SCSI_SENSE_INVALID_OPCODE);
-                    Err(anyhow!("Invalid emulation target scsi command"))
-                }
-            }
+        let result = if self.req_lun != found_lun || self.cmd.op == REPORT_LUNS {
+            self.emulate_target_execute(&mut not_supported_flag, &mut sense)
         } else {
             // It's not a target request.
-            match self.cmd.command {
-                REQUEST_SENSE => {
-                    sense = Some(SCSI_SENSE_NO_SENSE);
-                    Ok(Vec::new())
-                }
-                TEST_UNIT_READY => {
-                    let dev_lock = self.dev.lock().unwrap();
-                    if dev_lock.disk_image.is_none() {
-                        Err(anyhow!("No scsi backend!"))
-                    } else {
-                        Ok(Vec::new())
-                    }
-                }
-                INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
-                READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
-                MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
-                SERVICE_ACTION_IN_16 => {
-                    scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev)
-                }
-                READ_DISC_INFORMATION => {
-                    scsi_command_emulate_read_disc_information(&self.cmd, &self.dev)
-                }
-                GET_EVENT_STATUS_NOTIFICATION => {
-                    scsi_command_emulate_get_event_status_notification(&self.cmd, &self.dev)
-                }
-                READ_TOC => scsi_command_emulate_read_toc(&self.cmd, &self.dev),
-                GET_CONFIGURATION => scsi_command_emulate_get_configuration(&self.cmd, &self.dev),
-                _ => {
-                    not_supported_flag = true;
-                    Err(anyhow!("Emulation scsi command is not supported now!"))
-                }
-            }
+            self.emulate_device_execute(&mut not_supported_flag, &mut sense)
         };
 
         match result {
             Ok(outbuf) => {
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    sense,
-                    &outbuf,
-                )?;
+                outbuf_to_iov(self.cmd.op, &outbuf, &self.iovec)?;
             }
             Err(ref e) => {
                 if not_supported_flag {
-                    info!(
-                        "emulation scsi command {:#x} is no supported",
-                        self.cmd.command
-                    );
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_OPCODE),
-                        &Vec::new(),
-                    )?;
+                    info!("emulation scsi command {:#x} is no supported", self.cmd.op);
+                    status = CHECK_CONDITION;
+                    sense = Some(SCSI_SENSE_INVALID_OPCODE);
                 } else {
                     error!(
                         "Error in processing scsi command {:#x}, err is {:?}",
-                        self.cmd.command, e
+                        self.cmd.op, e
                     );
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
+                    status = CHECK_CONDITION;
+                    sense = Some(SCSI_SENSE_INVALID_FIELD);
                 }
             }
         }
 
-        Ok(())
-    }
+        self.upper_req
+            .as_mut()
+            .scsi_request_complete_cb(status, sense)?;
 
-    fn cmd_complete(
-        &self,
-        mem_space: &Arc<AddressSpace>,
-        response: u8,
-        status: u8,
-        scsisense: Option<ScsiSense>,
-        outbuf: &[u8],
-    ) -> Result<()> {
-        let mut req = self.virtioscsireq.lock().unwrap();
-
-        if let Some(sense) = scsisense {
-            req.resp.set_scsi_sense(sense);
-        }
-        req.resp.response = response;
-        req.resp.status = status;
-        req.resp.resid = 0;
-
-        if !outbuf.is_empty() {
-            for (idx, iov) in req.iovec.iter().enumerate() {
-                if outbuf.len() as u64 > iov.iov_len {
-                    debug!(
-                        "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}",
-                        self.cmd.command,
-                        outbuf.len(),
-                        iov.iov_len,
-                        idx,
-                        req.iovec.len()
-                    );
-                }
-
-                write_buf_mem(outbuf, iov.iov_len, iov.iov_base)
-                    .with_context(|| "Failed to write buf for virtio scsi iov")?;
-            }
-        }
-
-        req.complete(mem_space)?;
-        Ok(())
+        Ok(Arc::new(Mutex::new(self)))
     }
 }
 
-fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<()> {
+fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<usize> {
     let mut slice = unsafe {
         std::slice::from_raw_parts_mut(hva as *mut u8, cmp::min(buf.len(), max as usize))
     };
-    (&mut slice)
+    let size = (&mut slice)
         .write(buf)
         .with_context(|| format!("Failed to write buf(hva:{})", hva))?;
+
+    Ok(size)
+}
+
+fn outbuf_to_iov(command: u8, outbuf: &[u8], iovec: &[Iovec]) -> Result<()> {
+    let mut start = 0;
+    for (idx, iov) in iovec.iter().enumerate() {
+        if start >= outbuf.len() {
+            return Ok(());
+        }
+
+        debug!(
+            "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}",
+            command,
+            outbuf.len(),
+            iov.iov_len,
+            idx,
+            iovec.len()
+        );
+
+        start += write_buf_mem(&outbuf[start..], iov.iov_len, iov.iov_base)
+            .with_context(|| "Failed to write buf for scsi command result iov")?;
+    }
 
     Ok(())
 }
@@ -756,14 +758,7 @@ fn scsi_operation_type(op: u8) -> u32 {
     }
 }
 
-//   lun: [u8, 8]
-//   | Byte 0 | Byte 1 | Byte 2 | Byte 3 | Byte 4 | Byte 5 | Byte 6 | Byte 7 |
-//   |    1   | target |       lun       |                 0                 |
-pub fn virtio_scsi_get_lun(lun: [u8; 8]) -> u16 {
-    (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
-}
-
-fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
+fn scsi_cdb_length(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i32 {
     match cdb[0] >> 5 {
         // CDB[0]: Operation Code Byte. Bits[0-4]: Command Code. Bits[5-7]: Group Code.
         // Group Code |  Meaning            |
@@ -783,7 +778,7 @@ fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
     }
 }
 
-fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
+fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
     let dev_lock = dev.lock().unwrap();
     let block_size = dev_lock.block_size as i32;
     drop(dev_lock);
@@ -826,7 +821,7 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDe
     xfer
 }
 
-fn scsi_cdb_lba(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i64 {
+fn scsi_cdb_lba(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i64 {
     match cdb[0] >> 5 {
         // Group Code  |  Logical Block Address.       |
         // 000b        |  Byte[1].bits[0-4]~Byte[3].   |
@@ -841,7 +836,7 @@ fn scsi_cdb_lba(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i64 {
     }
 }
 
-fn scsi_cdb_xfer_mode(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> ScsiXferMode {
+fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
     match cdb[0] {
         WRITE_6
         | WRITE_10
@@ -972,7 +967,7 @@ fn scsi_command_emulate_vpd_page(
             // Byte[6-7] = 0: Optimal transfer length granularity.
             // Byte[8-11]: Maximum transfer length.
             // Byte[12-15] = 0: Optimal Transfer Length.
-            // Byte[16-19] = 0: Maxium Prefetch Length.
+            // Byte[16-19] = 0: Maximum Prefetch Length.
             // Byte[20-23]: Maximum unmap lba count.
             // Byte[24-27]: Maximum unmap block descriptor count.
             // Byte[28-31]: Optimal unmap granulatity.
@@ -1044,7 +1039,7 @@ fn scsi_command_emulate_target_inquiry(lun: u16, cmd: &ScsiCommand) -> Result<Ve
     // EVPD = 0 means it's a Standard INQUIRY command.
     // Byte2: page code.
     if cmd.buf[2] != 0 {
-        bail!("Invalid standatd inquiry command!");
+        bail!("Invalid standard inquiry command!");
     }
 
     outbuf.resize(SCSI_TARGET_INQUIRY_LEN as usize, 0);
@@ -1199,7 +1194,7 @@ fn scsi_command_emulate_mode_sense(
     }
     drop(dev_lock);
 
-    if cmd.command == MODE_SENSE {
+    if cmd.op == MODE_SENSE {
         outbuf.resize(4, 0);
         // Device Specific Parameter.
         outbuf[2] = dev_specific_parameter;
@@ -1211,7 +1206,7 @@ fn scsi_command_emulate_mode_sense(
     }
 
     if !dbd && nb_sectors > 0 {
-        if cmd.command == MODE_SENSE {
+        if cmd.op == MODE_SENSE {
             // Block Descriptor Length.
             outbuf[3] = 8;
         } else {
@@ -1247,7 +1242,7 @@ fn scsi_command_emulate_mode_sense(
     // that is available to be transferred. The Mode data length does not include the
     // number of bytes in the Mode Data Length field.
     let buflen = outbuf.len();
-    if cmd.command == MODE_SENSE {
+    if cmd.op == MODE_SENSE {
         outbuf[0] = (buflen - 1) as u8;
     } else {
         outbuf[0] = (((buflen - 2) >> 8) & 0xff) as u8;
@@ -1630,7 +1625,7 @@ fn scsi_command_emulate_get_event_status_notification(
     let dev_lock = dev.lock().unwrap();
 
     if dev_lock.scsi_type != SCSI_TYPE_ROM {
-        bail!("Invalid scsi tye {}", dev_lock.scsi_type);
+        bail!("Invalid scsi type {}", dev_lock.scsi_type);
     }
 
     // Byte1: Bit0: Polled.

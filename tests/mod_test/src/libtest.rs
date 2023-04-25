@@ -25,6 +25,8 @@ use hex;
 
 use crate::utils::get_tmp_dir;
 
+const MAX_SOCKET_MSG_LENGTH: usize = 8192;
+
 pub struct StreamHandler {
     stream: UnixStream,
 }
@@ -35,6 +37,7 @@ impl StreamHandler {
     }
 
     fn write_line(&self, cmd: &str) {
+        assert!(cmd.len() <= MAX_SOCKET_MSG_LENGTH);
         self.stream
             .try_clone()
             .unwrap()
@@ -262,6 +265,37 @@ impl TestState {
 
     pub fn query_msix(&self, addr: u64, data: u32) -> bool {
         let cmd = format!("query_msix {} {}", addr, data);
+        let buf = self.send_test_cmd(&cmd);
+        let resp: Vec<&str> = buf.split(' ').collect();
+        assert_eq!(resp.len(), 2);
+        match resp[0] {
+            "OK" => match resp[1] {
+                "TRUE" => true,
+                "FALSE" => false,
+                _ => panic!("Failed to execute {}.", cmd),
+            },
+            _ => panic!("Failed to execute {}.", cmd),
+        }
+    }
+
+    pub fn query_intx(&self, irq: u32) -> bool {
+        let cmd = format!("query_intx {}", irq);
+        let buf = self.send_test_cmd(&cmd);
+        let resp: Vec<&str> = buf.split(' ').collect();
+        assert_eq!(resp.len(), 2);
+
+        match resp[0] {
+            "OK" => match resp[1] {
+                "TRUE" => true,
+                "FALSE" => false,
+                _ => panic!("Failed to execute {}.", cmd),
+            },
+            _ => panic!("Failed to execute {}.", cmd),
+        }
+    }
+
+    pub fn eoi_intx(&self, irq: u32) -> bool {
+        let cmd = format!("eoi_intx {}", irq);
         let buf = self.send_test_cmd(&cmd);
         let resp: Vec<&str> = buf.split(' ').collect();
         assert_eq!(resp.len(), 2);

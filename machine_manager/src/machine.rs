@@ -18,9 +18,10 @@ use strum::VariantNames;
 
 use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
-    DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
-    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists, UpdateRegionArgument,
+    BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter,
+    DeviceAddArgument, DeviceProps, Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo,
+    MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass,
+    QmpEvent, Target, TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -307,6 +308,7 @@ pub trait DeviceInterface {
             ("nec-usb-xhci", "base-xhci"),
             ("usb-tablet", "usb-hid"),
             ("usb-kbd", "usb-hid"),
+            ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
         ];
 
@@ -352,7 +354,22 @@ pub trait DeviceInterface {
     }
 
     fn query_command_line_options(&self) -> Response {
-        let cmd_lines = Vec::<CmdLine>::new();
+        let parameters = vec![
+            CmdParameter {
+                name: "discard".to_string(),
+                help: "discard operation (unmap|ignore)".to_string(),
+                paramter_type: "string".to_string(),
+            },
+            CmdParameter {
+                name: "detect-zeroes".to_string(),
+                help: "optimize zero writes (unmap|on|off)".to_string(),
+                paramter_type: "string".to_string(),
+            },
+        ];
+        let cmd_lines = vec![CmdLine {
+            parameters,
+            option: "drive".to_string(),
+        }];
         Response::create_response(serde_json::to_value(cmd_lines).unwrap(), None)
     }
 
@@ -435,6 +452,13 @@ pub trait DeviceInterface {
     // Send event to input device for testing only.
     fn input_event(&self, _k: String, _v: String) -> Response {
         Response::create_empty_response()
+    }
+
+    fn human_monitor_command(&self, _args: HumanMonitorCmdArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("human-monitor-command is not supported yet".to_string()),
+            None,
+        )
     }
 }
 

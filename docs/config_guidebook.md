@@ -134,7 +134,7 @@ Each NUMA node is given a list of command lines option, there will be described 
 1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
-   The optional policies are default, preferred, bind and interleave.
+   The optional policies are default, preferred, bind and interleave. If it is not configured, `default` is used.
 2. -numa node,cpus=0-1,memdev=mem0
    It describes id and cpu set of the NUMA node, and the id belongs to which memory zone.
 3. -numa dist,src=0,dst=0,val=10
@@ -227,6 +227,7 @@ You can enable StratoVirt's logging by:
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
+If "-D" parameter is not set, logs are output to stderr by default.
 
 ### 1.10 Daemonize
 
@@ -259,7 +260,7 @@ root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
 Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration, and these threads can be used by devices exclusively improving performance.
 
-Note: iothread is strongly recommanded if a specific device supports it, otherwise the main thread has the risk of getting stuck.
+Note: iothread is strongly recommended if a specific device supports it, otherwise the main thread has the risk of getting stuck.
 
 There is only one argument for iothread:
 
@@ -274,7 +275,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-twelve properties are supported for virtio block device.
+fourteen properties are supported for virtio block device.
 
 * id: unique device-id in StratoVirt.
 * file: the path of backend file on host.
@@ -283,6 +284,8 @@ twelve properties are supported for virtio block device.
 * direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
 * iothread: indicate which iothread will be used. (optional) if not set, the main thread will be used.
 * throttling.iops-total: used to limit IO operations for block device. (optional)
+* discard: free up unused disk space. (optional) `unmap/ignore` means `on/off`. If not set, default is `ignore`.
+* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If dicard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
 * if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
 * format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
@@ -303,10 +306,10 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```shell
 # virtio mmio block device.
--drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>][,discard={unmap|ignore}][,detect-zeroes={unmap|on|off}]
 -device virtio-blk-device,drive=<drive_id>,id=<blkid>[,iothread=<iothread1>][,serial=<serial_num>]
 # virtio pci block device.
--drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
+-drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>][,discard={unmap|ignore}][,detect-zeroes={unmap|on|off}]
 -device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 
 ```
@@ -592,7 +595,7 @@ To use the first method, chardev for redirection will be required. See [section 
 
 Or you can simply use `-serial dev` to bind serial with character device.
 ```shell
-# simplifed redirect methods
+# simplified redirect methods
 -serial stdio
 -serial pty
 -serial socket,path=<socket_path>,server,nowait
@@ -728,7 +731,10 @@ Five properties can be set for chardev.
 -chardev file,id=<chardev_id>,path=<file_path>
 ```
 
-### 2.13 USB controller
+### 2.13 USB
+StratoVirt supports XHCI USB controller, you can attach USB devices under XHCI USB controller.
+
+#### 2.13.1 USB controller
 USB controller is a pci device which can be attached USB device.
 
 Three properties can be set for USB controller.
@@ -743,7 +749,7 @@ Three properties can be set for USB controller.
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
 
-### 2.14 USB Keyboard
+#### 2.13.2 USB Keyboard
 The USB keyboard is a keyboard that uses the USB protocol. It should be attached to USB controller. Keypad and led are not supported yet.
 
 One property can be set for USB Keyboard.
@@ -756,7 +762,7 @@ One property can be set for USB Keyboard.
 
 Note: Only one keyboard can be configured.
 
-### 2.15 USB Tablet
+#### 2.13.3 USB Tablet
 Pointer Device which uses alsolute coordinates. It should be attached to USB controller.
 
 One property can be set for USB Tablet.
@@ -769,7 +775,39 @@ One property can be set for USB Tablet.
 
 Note: Only one tablet can be configured.
 
-### 2.16 Virtio Scsi Controller
+### 2.13.4 USB Camera
+Video Camera Device that based on USB video class protocol. It should be attached to USB controller.
+
+3 properties can be set for USB Camera.
+
+* id: unique device id.
+* backend: backend device type, either `v4l2` or `demo`.
+* path: the file path used to connect to the backend, required for `v4l2`, but not for `demo`. eg. `/dev/video0`.
+
+```shell
+-device usb-camera,id=<camera>,backend="v4l2",path="/dev/video0"
+-device usb-camera,id=<camera>,backend="demo"
+```
+
+Note: Only one camera can be configured.
+
+#### 2.13.5 USB Storage
+USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
+
+Three properties can be set for USB Storage.
+
+* id: unique device id.
+* file: the path of backend image file.
+* media: the media type of storage. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
+
+```shell
+-device usb-storage,drive=<drive_id>,id=<storage_id>
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}],aio=off,direct=false
+```
+
+Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
+
+### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
 Six properties can be set for Virtio-Scsi controller.
@@ -783,7 +821,7 @@ Six properties can be set for Virtio-Scsi controller.
 ```shell
 -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
 ```
-### 2.17 Virtio Scsi HardDisk
+### 2.15 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
 
 Note: Only support using raw image file as backend now.
@@ -808,7 +846,7 @@ It determines the order of bootable devices which firmware will use for booting 
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-### 2.18 VNC
+### 2.16 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
 In order to use VNC, the ip and port value must be configured. The IP address can be set to a specified value or `0.0.0.0`, which means that all IP addresses on the host network card are monitored
@@ -858,10 +896,10 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
-### 2.19 Virtio-fs
+### 2.17 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
-#### 2.19.1 virtio fs device
+#### 2.17.1 virtio fs device
 Three properties can be set for virtio fs device.
 * chardevid: id for char device
 * device_id: the unique id for device
@@ -872,13 +910,13 @@ Three properties can be set for virtio fs device.
 -device vhost-user-fs-pci,id=<device id>,chardev=<chardevid>,tag=<mount tag>
 ```
 
-#### 2.19.2 vhost_user_fs
+#### 2.17.2 vhost_user_fs
 The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
 Seven properties are supported for vhost_user_fs.
 * source: Shared directory path.
 * socket-path: vhost user socket path.
-* rlimit-nofile: Set maxinum number of file descriptors, The limit of file resources which can be opened for the process.
+* rlimit-nofile: Set maximum number of file descriptors, The limit of file resources which can be opened for the process.
 * D: log file path.
 * seccomp: Action to take when seccomp finds a not allowed syscall (allow, kill, log, trap).
   - **allow**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule.
@@ -911,7 +949,7 @@ host# stratovirt \
 guest# mount -t virtiofs myfs /mnt
 ```
 
-### 2.20 virtio-gpu
+### 2.18 virtio-gpu
 virtio-gpu is an virtualized graphics card that lets virtual machines can display with it. 
 Usually used in conjunction with VNC, the final images is rendered to the VNC client.
 
@@ -921,14 +959,50 @@ Sample Configuration：
 ```
 
 In addition to the required slot information, five optional properties are supported for virtio-gpu.
-* max_outputs: Number of screens supported by the current graphics card. The maximun value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
+* max_outputs: Number of screens supported by the current graphics card. The maximum value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
 * edid: Edid feature, the virtual machine's kernel may checks this feature for HiDPi. You are advised to set to true.
 * xres/yres: The size of the login windows.
-* max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resoltuion is affected.
+* max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resolutions is affected.
 
 Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
+
+### 2.19 ivshmem-scream
+
+ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
+
+Nine properties are supported for ivshmem-scream device.
+* id: unique device id.
+* memdev: configuration of the back-end memory device used by the ivshmem.
+* interface: configuring audio playback and recording interfaces, currently can be set to `PulseAudio` or `Demo`.
+* playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
+* record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
+* bus: bus number of the device.
+* addr: including slot number and function number.
+* share: the shared memory must be set to `on`.
+* size: size of th shared memory, 2M is suggested.
+
+Sample Configuration:
+
+```shell
+-device ivshmem-scream,id=<scream_id>,memdev=<object_id>[,interface=<interfaces>][,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
+-object memory-backend-ram,id=<object_id>,share=on,size=2M
+```
+
+### 2.20 ramfb
+Ramfb is a simple display device. It is used in the Windows system on aarch64.
+
+Two properties are supported for ramfb device.
+* id: unique device id.
+* install: when install the Windows system, setting true will automatically press enter key to skip the stage which needs to manually press any key boot from cd or dvd.
+
+Sample Configuration：
+```shell
+-device ramfb,id=<ramfb id>[,install=true|false]
+```
+
+Note: Only supported on aarch64.
 
 ## 3. Trace
 
@@ -1022,7 +1096,7 @@ About the arguments:
 * `clean-resource` : a flag to clean resource.
 * `numa` : numa node, this argument must be configured if `cpuset.cpus` is set.
 * `cgroup` : set cgroup controller value. supported controller: `cpuset.cpus` and `memory.limit_in_bytes`.
-* `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
+* `--` : these two dashes are used to split args, the args followed are used to launched StratoVirt.
 
 ### 6.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.

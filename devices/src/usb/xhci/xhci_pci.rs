@@ -24,7 +24,7 @@ use pci::config::{
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::update_dev_id;
-use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
+use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevOps};
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
@@ -35,7 +35,6 @@ use crate::usb::UsbDeviceOps;
 
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;
-const PCI_INTERRUPT_PIN: u16 = 0x3d;
 const PCI_CACHE_LINE_SIZE: u16 = 0x0c;
 const PCI_SERIAL_BUS_RELEASE_NUMBER: u8 = 0x60;
 const PCI_FRAME_LENGTH_ADJUSTMENT: u8 = 0x61;
@@ -49,7 +48,7 @@ const XHCI_PCI_CAP_LENGTH: u32 = XHCI_CAP_LENGTH;
 const XHCI_PCI_OPER_OFFSET: u32 = XHCI_PCI_CAP_LENGTH;
 const XHCI_PCI_OPER_LENGTH: u32 = 0x400;
 const XHCI_PCI_RUNTIME_OFFSET: u32 = XHCI_OFF_RUNTIME;
-const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS as u32 + 1) * 0x20;
+const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS + 1) * 0x20;
 const XHCI_PCI_DOORBELL_OFFSET: u32 = XHCI_OFF_DOORBELL;
 const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS + 1) * 0x20;
 const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
@@ -65,7 +64,7 @@ const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
 pub struct XhciPciDevice {
     pci_config: PciConfig,
     devfn: u8,
-    xhci: Arc<Mutex<XhciDevice>>,
+    pub xhci: Arc<Mutex<XhciDevice>>,
     dev_id: Arc<AtomicU16>,
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
@@ -84,7 +83,7 @@ impl XhciPciDevice {
             devfn,
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
-            name: config.id.to_string(),
+            name: config.id.clone().unwrap(),
             parent_bus,
             mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
         }
@@ -144,12 +143,10 @@ impl XhciPciDevice {
 
     pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
         let mut locked_xhci = self.xhci.lock().unwrap();
-        let usb_port = if let Some(usb_port) = locked_xhci.assign_usb_port(dev) {
-            usb_port
-        } else {
-            bail!("No available USB port.");
-        };
-        locked_xhci.port_update(&usb_port)?;
+        let usb_port = locked_xhci
+            .assign_usb_port(dev)
+            .with_context(|| "No available USB port.")?;
+        locked_xhci.port_update(&usb_port, false)?;
         let mut locked_dev = dev.lock().unwrap();
         debug!(
             "Attach usb device: xhci port id {} device id {}",
@@ -158,6 +155,29 @@ impl XhciPciDevice {
         );
         locked_dev.handle_attach()?;
         locked_dev.set_controller(Arc::downgrade(&self.xhci));
+        Ok(())
+    }
+
+    pub fn detach_device(&self, id: String) -> Result<()> {
+        let mut locked_xhci = self.xhci.lock().unwrap();
+        let usb_port = locked_xhci.find_usb_port_by_id(&id);
+        if usb_port.is_none() {
+            bail!("Failed to detach device: id {} not found", id);
+        }
+        let usb_port = usb_port.unwrap();
+        let slot_id = usb_port.lock().unwrap().slot_id;
+        locked_xhci.detach_slot(slot_id as u32)?;
+        locked_xhci.port_update(&usb_port, true)?;
+
+        // Unrealize device and discharge usb port.
+        let mut locked_port = usb_port.lock().unwrap();
+        let dev = locked_port.dev.as_ref().unwrap();
+        let mut locked_dev = dev.lock().unwrap();
+        locked_dev.get_mut_usb_device().unplugged_id = Some(id);
+        locked_dev.unrealize()?;
+        drop(locked_dev);
+        locked_xhci.discharge_usb_port(&mut locked_port);
+
         Ok(())
     }
 }
@@ -191,7 +211,10 @@ impl PciDevOps for XhciPciDevice {
             PCI_CLASS_SERIAL_USB,
         )?;
         self.pci_config.config[PCI_CLASS_PI as usize] = 0x30;
-        self.pci_config.config[PCI_INTERRUPT_PIN as usize] = 0x01;
+
+        #[cfg(target_arch = "aarch64")]
+        self.pci_config.set_interrupt_pin();
+
         self.pci_config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
         self.pci_config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
@@ -211,6 +234,13 @@ impl PciDevOps for XhciPciDevice {
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
+        init_intx(
+            self.name.clone(),
+            &mut self.pci_config,
+            self.parent_bus.clone(),
+            self.devfn,
+        )?;
+
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
         mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         self.pci_config.register_bar(
@@ -224,14 +254,24 @@ impl PciDevOps for XhciPciDevice {
         let devfn = self.devfn;
         // It is safe to unwrap, because it is initialized in init_msix.
         let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
-        self.xhci.lock().unwrap().send_interrupt_ops = Some(Box::new(move |n: u32| {
-            cloned_msix
-                .lock()
-                .unwrap()
-                .notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
-        }));
+        self.xhci
+            .lock()
+            .unwrap()
+            .set_interrupt_ops(Arc::new(move |n: u32, level: u8| -> bool {
+                let mut locked_msix = cloned_msix.lock().unwrap();
+                if locked_msix.enabled && level != 0 {
+                    locked_msix.notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
+                    return true;
+                }
+                if n == 0 && !locked_msix.enabled {
+                    cloned_intx.lock().unwrap().notify(level);
+                }
+
+                false
+            }));
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();

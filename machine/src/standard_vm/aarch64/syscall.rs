@@ -56,8 +56,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 81 syscalls
-/// * aarch64-unknown-musl: 59 syscalls
+/// * aarch64-unknown-gnu: 98 syscalls
+/// * aarch64-unknown-musl: 60 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -173,6 +173,39 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sched_getaffinity),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_rseq),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_pipe2),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fcntl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_memfd_create),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_ftruncate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_futex),
+        BpfRule::new(libc::SYS_fallocate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresuid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getresgid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fstatfs),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(223),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_listen),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fchmodat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmget),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmctl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmdt),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_lremovexattr),
     ]
 }
 
@@ -233,6 +266,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
 }
 
 fn madvise_rule() -> BpfRule {

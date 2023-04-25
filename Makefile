@@ -18,3 +18,4 @@ yum-deps:
 	@yum install pixman-devel
 	@yum install libcap-ng-devel
 	@yum install cyrus-sasl-devel
+	@yum install pulseaudio

@@ -13,7 +13,7 @@
 use super::{
     machine::TestStdMachine,
     malloc::GuestAllocator,
-    pci::{PCIBarAddr, TestPciDev, PCI_VENDOR_ID},
+    pci::{PCIBarAddr, TestPciDev},
     pci_bus::TestPciBus,
 };
 use crate::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
@@ -378,21 +378,9 @@ impl TestDemoDpyDevice {
         return test_state.borrow_mut().memread(addr, size);
     }
 
-    pub fn set_devfn(&mut self, devfn: u8) {
-        self.pci_dev.devfn = devfn;
-    }
-
-    pub fn find_pci_device(&mut self, devfn: u8) -> bool {
-        self.set_devfn(devfn);
-        if self.pci_dev.config_readw(PCI_VENDOR_ID) == 0xFFFF {
-            return false;
-        }
-        true
-    }
-
     pub fn init(&mut self, pci_slot: u8) {
         let devfn = pci_slot << 3;
-        assert!(self.find_pci_device(devfn));
+        assert!(self.pci_dev.find_pci_device(devfn));
 
         self.pci_dev.enable();
         self.bar_addr = self.pci_dev.io_map(self.bar_idx);

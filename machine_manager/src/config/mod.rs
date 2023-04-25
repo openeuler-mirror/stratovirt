@@ -15,6 +15,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use demo_dev::*;
 pub use devices::*;
+pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
 pub use fs::*;
@@ -25,6 +26,7 @@ pub use machine_config::*;
 pub use network::*;
 pub use numa::*;
 pub use pci::*;
+pub use ramfb::*;
 pub use rng::*;
 pub use sasl_auth::*;
 pub use scsi::*;
@@ -38,6 +40,7 @@ mod boot_source;
 mod chardev;
 mod demo_dev;
 mod devices;
+pub mod display;
 mod drive;
 pub mod error;
 mod fs;
@@ -48,8 +51,10 @@ mod machine_config;
 mod network;
 mod numa;
 mod pci;
+mod ramfb;
 mod rng;
 mod sasl_auth;
+pub mod scream;
 mod scsi;
 mod tls_creds;
 mod usb;
@@ -115,6 +120,7 @@ pub struct VmConfig {
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
+    pub display: Option<DisplayConfig>,
 }
 
 impl VmConfig {
@@ -123,12 +129,8 @@ impl VmConfig {
         self.boot_source.check()?;
         self.machine_config.check()?;
 
-        if self.guest_name.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.guest_name, "name")?;
+
         if self.boot_source.kernel_file.is_none()
             && self.machine_config.mach_type == MachineType::MicroVm
         {
@@ -184,11 +186,9 @@ impl VmConfig {
         cmd_params.push("");
 
         cmd_params.get_parameters(object_args)?;
-        let obj_type = cmd_params.get_value::<String>("")?;
-        if obj_type.is_none() {
-            bail!("Object type not specified");
-        }
-        let device_type = obj_type.unwrap();
+        let device_type = cmd_params
+            .get_value::<String>("")?
+            .with_context(|| "Object type not specified")?;
         match device_type.as_str() {
             "iothread" => {
                 self.add_iothread(object_args)
@@ -204,10 +204,10 @@ impl VmConfig {
                 }
             }
             "memory-backend-ram" => {
-                let zone_config = self.add_mem_zone(object_args)?;
-                let id = zone_config.id.clone();
+                let config = self.add_mem_zone(object_args)?;
+                let id = config.id.clone();
                 if self.object.mem_object.get(&id).is_none() {
-                    self.object.mem_object.insert(id, zone_config);
+                    self.object.mem_object.insert(id, config);
                 } else {
                     bail!("Object: {} has been added", id);
                 }
@@ -554,8 +554,8 @@ impl FromStr for ExBool {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "true" | "on" | "yes" => Ok(ExBool { inner: true }),
-            "false" | "off" | "no" => Ok(ExBool { inner: false }),
+            "true" | "on" | "yes" | "unmap" => Ok(ExBool { inner: true }),
+            "false" | "off" | "no" | "ignore" => Ok(ExBool { inner: false }),
             _ => Err(()),
         }
     }
@@ -599,12 +599,12 @@ impl FromStr for IntegerList {
 
             let start = items[0]
                 .parse::<u64>()
-                .map_err(|_| error!("Invalid value {}", items[0]))?;
+                .map_err(|e| error!("Invalid value {}, error is {:?}", items[0], e))?;
             integer_list.push(start);
             if items.len() == 2 {
                 let end = items[1]
                     .parse::<u64>()
-                    .map_err(|_| error!("Invalid value {}", items[1]))?;
+                    .map_err(|e| error!("Invalid value {}, error is {:?}", items[1], e))?;
                 if start >= end {
                     return Err(());
                 }
@@ -617,6 +617,22 @@ impl FromStr for IntegerList {
 
         Ok(IntegerList(integer_list))
     }
+}
+
+pub fn check_arg_too_long(arg: &str, name: &str) -> Result<()> {
+    if arg.len() > MAX_STRING_LENGTH {
+        bail!(ConfigError::StringLengthTooLong(
+            name.to_string(),
+            MAX_STRING_LENGTH
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Result<()> {
+    arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
+
+    Ok(())
 }
 
 #[cfg(test)]

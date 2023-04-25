@@ -16,12 +16,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use super::error::LegacyError;
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 use migration::{
-    snapshot::PL031_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+    snapshot::PL031_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
+    MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
@@ -105,7 +105,7 @@ impl PL031 {
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| anyhow!(LegacyError::SetSysResErr))?;
+            .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
@@ -127,7 +127,7 @@ impl PL031 {
     fn inject_interrupt(&self) {
         if let Some(evt_fd) = self.interrupt_evt() {
             if let Err(e) = evt_fd.write(1) {
-                error!("pl031: failed to write interrupt eventfd ({}).", e);
+                error!("pl031: failed to write interrupt eventfd ({:?}).", e);
             }
             return;
         }
@@ -164,7 +164,7 @@ impl SysBusDevOps for PL031 {
 
         match offset {
             RTC_MR => {
-                // TODO: The MR register is used for implemeting the RTC alarm. A RTC alarm is a feature
+                // TODO: The MR register is used for implementing the RTC alarm. A RTC alarm is a feature
                 // that can be used to allow a computer to 'wake up' after shut down to execute tasks
                 // every day or on a certain day. It can sometimes be found in the 'Power Management'
                 // section of motherboard's BIOS setup. This RTC alarm function is not implemented yet,
@@ -218,17 +218,13 @@ impl StateTransfer for PL031 {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *PL031State::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("PL031")))?;
+            .with_context(|| MigrationError::FromBytesError("PL031"))?;
 
         Ok(())
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&PL031State::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&PL031State::descriptor().name).unwrap_or(!0)
     }
 }
 

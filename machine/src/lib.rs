@@ -25,7 +25,11 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
+#[cfg(not(target_env = "musl"))]
+use devices::misc::scream::Scream;
 use log::warn;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::scream::parse_scream;
 use util::file::{lock_file, unlock_file};
 
 pub use micro_vm::LightMachine;
@@ -46,8 +50,10 @@ use devices::InterruptController;
 
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
-    keyboard::UsbKeyboard, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+    camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
+    xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
 };
+use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
@@ -59,7 +65,10 @@ use machine_manager::config::{
     MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
-use machine_manager::config::{parse_gpu, parse_usb_keyboard, parse_usb_tablet, parse_xhci};
+use machine_manager::config::{
+    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_storage, parse_usb_tablet,
+    parse_xhci,
+};
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
@@ -74,12 +83,11 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiBus,
-    ScsiCntlr, ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
-    VirtioMmioState, VirtioNetState, VirtioPciDevice,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState,
+    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
+    VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice,
 };
-use ScsiCntlr::ScsiCntlrMap;
-use ScsiDisk::{SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -146,7 +154,7 @@ pub trait MachineOps {
                 sys_mem
                     .root()
                     .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                    .with_context(|| anyhow!(MachineError::RegMemRegionErr(base, size)))?;
+                    .with_context(|| MachineError::RegMemRegionErr(base, size))?;
             }
         }
 
@@ -263,14 +271,14 @@ pub trait MachineOps {
             MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
-                    .with_context(|| anyhow!(MachineError::RlzVirtioMmioErr))?,
+                    .with_context(|| MachineError::RlzVirtioMmioErr)?,
                 &device_cfg.id,
             );
         } else {
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let virtio_pci_device = VirtioPciDevice::new(
+            let mut virtio_pci_device = VirtioPciDevice::new(
                 device_cfg.id.clone(),
                 devfn,
                 sys_mem,
@@ -278,6 +286,7 @@ pub trait MachineOps {
                 parent_bus,
                 multi_func,
             );
+            virtio_pci_device.enable_need_irqfd();
             virtio_pci_device
                 .realize()
                 .with_context(|| "Failed to add virtio pci vsock device")?;
@@ -307,11 +316,6 @@ pub trait MachineOps {
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
-
-    /// Get the Scsi Controller list. The map stores the mapping between scsi bus name and scsi controller.
-    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
-        None
-    }
 
     /// Add net device.
     ///
@@ -367,15 +371,14 @@ pub trait MachineOps {
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
                     self.realize_virtio_mmio_device(device)
-                        .with_context(|| anyhow!(MachineError::RlzVirtioMmioErr))?,
+                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
                     &device_cfg.id,
                 );
             } else {
-                let virtio_serial_info = if let Some(serial_info) = &vm_config.virtio_serial {
-                    serial_info
-                } else {
-                    bail!("No virtio-serial-pci device configured for virtconsole");
-                };
+                let virtio_serial_info = vm_config
+                    .virtio_serial
+                    .as_ref()
+                    .with_context(|| "No virtio-serial-pci device configured for virtconsole")?;
                 // Reasonable, because for virtio-serial-pci device, the bdf has been checked.
                 let bdf = virtio_serial_info.pci_bdf.clone().unwrap();
                 let multi_func = virtio_serial_info.multifunction;
@@ -526,6 +529,23 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
+    fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(&mut locked_vmconfig, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        let mut locked_xhci = xhci_pci.xhci.lock().unwrap();
+        let port = locked_xhci.find_usb_port_by_id(id);
+        Ok(port.is_some())
+    }
+
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
@@ -535,6 +555,10 @@ pub trait MachineOps {
             }
             if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
                 bail!("Device id {} existed", name);
+            }
+            #[cfg(not(target_env = "musl"))]
+            if self.check_id_existed_in_xhci(name).unwrap_or_default() {
+                bail!("Device id {} existed in xhci", name);
             }
         }
         Ok(())
@@ -671,16 +695,10 @@ pub trait MachineOps {
             MAX_VIRTIO_QUEUE,
         ));
         let device_cfg = parse_scsi_controller(cfg_args, queues_auto)?;
-        let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
+        let device = Arc::new(Mutex::new(ScsiCntlr::new(device_cfg.clone())));
 
         let bus_name = format!("{}.0", device_cfg.id);
-        ScsiBus::create_scsi_bus(&bus_name, &device)?;
-        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
-            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
-            lock_cntlr_list.insert(bus_name, device.clone());
-        } else {
-            bail!("No scsi controller list found!");
-        }
+        scsi_cntlr_create_scsi_bus(&bus_name, &device)?;
 
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
@@ -701,44 +719,46 @@ pub trait MachineOps {
             self.check_bootindex(bootindex)
                 .with_context(|| "Failed to add scsi device for invalid bootindex")?;
         }
-        let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
+        let device = Arc::new(Mutex::new(ScsiDevice::new(
             device_cfg.clone(),
             scsi_type,
             self.get_drive_files(),
         )));
 
-        let cntlr_list = self
-            .get_scsi_cntlr_list()
-            .ok_or_else(|| anyhow!("Wrong! No scsi controller list found!"))?;
-        let cntlr_list_clone = cntlr_list.clone();
-        let cntlr_list_lock = cntlr_list_clone.lock().unwrap();
+        let pci_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, Some(&device_cfg.cntlr), "virtio-scsi-pci")
+            .with_context(|| {
+                format!(
+                    "Can not find scsi controller from pci bus {}",
+                    device_cfg.cntlr
+                )
+            })?;
+        let locked_pcidev = pci_dev.lock().unwrap();
+        let virtio_pcidev = locked_pcidev
+            .as_any()
+            .downcast_ref::<VirtioPciDevice>()
+            .unwrap();
+        let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
+        let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
 
-        let cntlr = cntlr_list_lock
-            .get(&device_cfg.bus)
-            .ok_or_else(|| anyhow!("Wrong! Bus {} not found in list", &device_cfg.bus))?;
-
-        if let Some(bus) = &cntlr.lock().unwrap().bus {
-            if bus
-                .lock()
-                .unwrap()
-                .devices
-                .contains_key(&(device_cfg.target, device_cfg.lun))
-            {
-                bail!("Wrong! Two scsi devices have the same scsi-id and lun");
-            }
-            bus.lock()
-                .unwrap()
-                .devices
-                .insert((device_cfg.target, device_cfg.lun), device.clone());
-            device.lock().unwrap().parent_bus = Arc::downgrade(bus);
-        } else {
-            bail!("Wrong! Controller has no bus {} !", &device_cfg.bus);
+        let bus = cntlr.bus.as_ref().unwrap();
+        if bus
+            .lock()
+            .unwrap()
+            .devices
+            .contains_key(&(device_cfg.target, device_cfg.lun))
+        {
+            bail!("Wrong! Two scsi devices have the same scsi-id and lun");
         }
+        bus.lock()
+            .unwrap()
+            .devices
+            .insert((device_cfg.target, device_cfg.lun), device.clone());
+        device.lock().unwrap().parent_bus = Arc::downgrade(bus);
 
         device.lock().unwrap().realize()?;
 
         if let Some(bootindex) = device_cfg.boot_index {
-            let mut cntlr_locked = cntlr.lock().unwrap();
             // Eg: OpenFirmware device path(virtio-scsi disk):
             // /pci@i0cf8/scsi@7[,3]/channel@0/disk@2,3
             //   |             |  |      |          | |
@@ -746,10 +766,10 @@ pub trait MachineOps {
             //   |             |  |   channel(unused, fixed 0).
             //   |         PCI slot,[function] holding SCSI controller.
             //  PCI root as system bus port.
-            let dev_path = cntlr_locked.config.boot_prefix.as_mut().unwrap();
-            let str = format! {"/channel@0/disk@{:x},{:x}", device_cfg.target, device_cfg.lun};
-            dev_path.push_str(&str);
-            self.add_bootindex_devices(bootindex, dev_path, &device_cfg.id);
+            let prefix = cntlr.config.boot_prefix.as_ref().unwrap();
+            let dev_path =
+                format! {"{}/channel@0/disk@{:x},{:x}", prefix, device_cfg.target, device_cfg.lun};
+            self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
         }
         Ok(())
     }
@@ -760,13 +780,13 @@ pub trait MachineOps {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         let mut need_irqfd = false;
         let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
+            need_irqfd = true;
             if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
                 Arc::new(Mutex::new(VhostKern::Net::new(
                     &device_cfg,
                     self.get_sys_mem(),
                 )))
             } else {
-                need_irqfd = true;
                 Arc::new(Mutex::new(VhostUser::Net::new(
                     &device_cfg,
                     self.get_sys_mem(),
@@ -935,22 +955,18 @@ pub trait MachineOps {
     fn reset_bus(&mut self, dev_id: &str) -> Result<()> {
         let pci_host = self.get_pci_host()?;
         let locked_pci_host = pci_host.lock().unwrap();
-        let bus =
-            if let Some((bus, _)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id) {
-                bus
-            } else {
-                bail!("Bus not found, dev id {}", dev_id);
-            };
+        let bus = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id)
+            .with_context(|| format!("Bus not found, dev id {}", dev_id))?
+            .0;
         let locked_bus = bus.lock().unwrap();
         if locked_bus.name == "pcie.0" {
             // No need to reset root bus
             return Ok(());
         }
-        let parent_bridge = if let Some(bridge) = locked_bus.parent_bridge.as_ref() {
-            bridge
-        } else {
-            bail!("Parent bridge does not exist, dev id {}", dev_id);
-        };
+        let parent_bridge = locked_bus
+            .parent_bridge
+            .as_ref()
+            .with_context(|| format!("Parent bridge does not exist, dev id {}", dev_id))?;
         let dev = parent_bridge.upgrade().unwrap();
         let locked_dev = dev.lock().unwrap();
         let name = locked_dev.name();
@@ -1014,15 +1030,17 @@ pub trait MachineOps {
                         ..Default::default()
                     };
 
-                    if let Some(mem_cfg) = vm_config.object.mem_object.remove(&numa_config.mem_dev)
-                    {
-                        numa_node.size = mem_cfg.size;
-                    } else {
-                        bail!(
-                            "Object for memory-backend-ram {} config not found",
-                            numa_config.mem_dev
-                        );
-                    }
+                    numa_node.size = vm_config
+                        .object
+                        .mem_object
+                        .remove(&numa_config.mem_dev)
+                        .map(|mem_conf| mem_conf.size)
+                        .with_context(|| {
+                            format!(
+                                "Object for memory-backend-ram {} config not found",
+                                numa_config.mem_dev
+                            )
+                        })?;
                     numa_nodes.insert(numa_config.numa_id, numa_node);
                 }
                 "dist" => {
@@ -1079,32 +1097,126 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Get the corresponding device from the PCI bus based on the device name.
+    /// Add scream sound based on ivshmem.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - scream configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+        let dev_cfg =
+            parse_scream(cfg_args).with_context(|| "Failed to parse cmdline for ivshmem")?;
+
+        let mem_cfg = vm_config
+            .object
+            .mem_object
+            .remove(&dev_cfg.memdev)
+            .with_context(|| {
+                format!(
+                    "Object for memory-backend-ram {} config not found",
+                    dev_cfg.memdev
+                )
+            })?;
+
+        if !mem_cfg.share {
+            bail!("Object for share config is not on");
+        }
+
+        let scream = Scream::new(mem_cfg.size, &dev_cfg);
+        scream
+            .realize(devfn, parent_bus)
+            .with_context(|| "Failed to realize scream device")
+    }
+
+    /// Get the corresponding device from the PCI bus based on the device id and device type name.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
-    /// * `name` - Device Name.
-    fn get_pci_dev_by_name(
+    /// * `id` - Device id.
+    /// * `dev_type` - Device type name.
+    fn get_pci_dev_by_id_and_type(
         &mut self,
         vm_config: &mut VmConfig,
-        name: &str,
+        id: Option<&str>,
+        dev_type: &str,
     ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+        let (id_check, id_str) = if id.is_some() {
+            (true, format! {"id={}", id.unwrap()})
+        } else {
+            (false, "".to_string())
+        };
+
         for dev in &vm_config.devices {
-            if dev.0.as_str() == name {
-                let cfg_args = dev.1.as_str();
-                let bdf = get_pci_bdf(cfg_args).ok()?;
-                let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
-                let pci_host = self.get_pci_host().ok()?;
-                let root_bus = pci_host.lock().unwrap().root_bus.clone();
-                if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
-                    return pci_bus.lock().unwrap().get_device(0, devfn);
-                } else {
-                    return None;
-                }
+            if dev.0.as_str() != dev_type || id_check && !dev.1.contains(&id_str) {
+                continue;
+            }
+
+            let cfg_args = dev.1.as_str();
+            let bdf = get_pci_bdf(cfg_args).ok()?;
+            let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
+            let pci_host = self.get_pci_host().ok()?;
+            let root_bus = pci_host.lock().unwrap().root_bus.clone();
+            if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
+                return pci_bus.lock().unwrap().get_device(0, devfn);
+            } else {
+                return None;
             }
         }
         None
+    }
+
+    /// Attach usb device to xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `usb_dev` - Usb device.
+    #[cfg(not(target_env = "musl"))]
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        vm_config: &mut VmConfig,
+        usb_dev: Arc<Mutex<dyn UsbDeviceOps>>,
+    ) -> Result<()> {
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        xhci_pci.attach_device(&(usb_dev))?;
+
+        Ok(())
+    }
+
+    /// Detach usb device from xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `id` - id of the usb device.
+    #[cfg(not(target_env = "musl"))]
+    fn detach_usb_from_xhci_controller(
+        &mut self,
+        vm_config: &mut VmConfig,
+        id: String,
+    ) -> Result<()> {
+        let parent_dev = self
+            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .with_context(|| "Can not find parent device from pci bus")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        xhci_pci.detach_device(id)?;
+
+        Ok(())
     }
 
     /// Add usb keyboard.
@@ -1115,23 +1227,12 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
-        let keyboard = UsbKeyboard::new(device_cfg.id);
+        // SAFETY: id is already checked not none in parse_usb_keyboard().
+        let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
-        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))?;
+        self.attach_usb_to_xhci_controller(vm_config, kbd)?;
         Ok(())
     }
 
@@ -1143,23 +1244,48 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
-        let tablet = UsbTablet::new(device_cfg.id);
+        // SAFETY: id is already checked not none in parse_usb_tablet().
+        let tablet = UsbTablet::new(device_cfg.id.unwrap());
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
-        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
-        if parent_dev_op.is_none() {
-            bail!("Can not find parent device from pci bus");
-        }
-        let parent_dev = parent_dev_op.unwrap();
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
-        if xhci_pci.is_none() {
-            bail!("PciDevOps can not downcast to XhciPciDevice");
-        }
-        xhci_pci
-            .unwrap()
-            .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))?;
+
+        self.attach_usb_to_xhci_controller(vm_config, tbt)?;
+
+        Ok(())
+    }
+
+    /// Add usb camera.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Camera Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_camera(cfg_args)?;
+        let camera = UsbCamera::new(device_cfg);
+        let camera = camera.realize()?;
+
+        self.attach_usb_to_xhci_controller(vm_config, camera)?;
+
+        Ok(())
+    }
+
+    /// Add usb storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - USB Storage Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_storage(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
+        let storage = UsbStorage::new(device_cfg, self.get_drive_files());
+        let stg = storage
+            .realize()
+            .with_context(|| "Failed to realize usb storage device")?;
+
+        self.attach_usb_to_xhci_controller(vm_config, stg)?;
+
         Ok(())
     }
 
@@ -1173,21 +1299,21 @@ pub trait MachineOps {
             #[cfg(target_arch = "x86_64")]
             vm_config.machine_config.mem_config.mem_size,
         )
-        .with_context(|| anyhow!(MachineError::AddDevErr("RTC".to_string())))?;
+        .with_context(|| MachineError::AddDevErr("RTC".to_string()))?;
 
         #[cfg(target_arch = "aarch64")]
         self.add_ged_device()
-            .with_context(|| anyhow!(MachineError::AddDevErr("Ged".to_string())))?;
+            .with_context(|| MachineError::AddDevErr("Ged".to_string()))?;
 
         let cloned_vm_config = vm_config.clone();
         if let Some(serial) = cloned_vm_config.serial.as_ref() {
             self.add_serial_device(serial)
-                .with_context(|| anyhow!(MachineError::AddDevErr("serial".to_string())))?;
+                .with_context(|| MachineError::AddDevErr("serial".to_string()))?;
         }
 
         if let Some(pflashs) = cloned_vm_config.pflashs.as_ref() {
             self.add_pflash_device(pflashs)
-                .with_context(|| anyhow!(MachineError::AddDevErr("pflash".to_string())))?;
+                .with_context(|| MachineError::AddDevErr("pflash".to_string()))?;
         }
 
         for dev in &cloned_vm_config.devices {
@@ -1258,15 +1384,27 @@ pub trait MachineOps {
                     self.add_usb_tablet(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
+                "usb-camera" => {
+                    self.add_usb_camera(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "usb-storage" => {
+                    self.add_usb_storage(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "ramfb" => {
-                    self.add_ramfb()?;
+                    self.add_ramfb(cfg_args)?;
                 }
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "ivshmem-scream" => {
+                    self.add_ivshmem_scream(vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
@@ -1281,8 +1419,12 @@ pub trait MachineOps {
         bail!("Pflash device is not supported!");
     }
 
-    fn add_ramfb(&mut self) -> Result<()> {
+    fn add_ramfb(&mut self, _cfg_args: &str) -> Result<()> {
         bail!("ramfb device is not supported!");
+    }
+
+    fn display_init(&mut self, _vm_config: &mut VmConfig) -> Result<()> {
+        bail!("Display is not supported.");
     }
 
     fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {

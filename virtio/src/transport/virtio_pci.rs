@@ -23,14 +23,15 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID,
-    SUB_CLASS_CODE, VENDOR_ID,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
+    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
+
 use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
 use pci::Result as PciResult;
 use pci::{
-    config::PciConfig, init_msix, init_multifunction, le_write_u16, le_write_u32, ranges_overlap,
-    PciBus, PciDevOps, PciError,
+    config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
+    ranges_overlap, PciBus, PciDevOps, PciError,
 };
 use util::byte_code::ByteCode;
 use util::num_ops::{read_data_u32, write_data_u32};
@@ -51,7 +52,7 @@ use crate::{
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
-const VIRTIO_PCI_VENDOR_ID: u16 = 0x1af4;
+const VIRTIO_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const VIRTIO_PCI_DEVICE_ID_BASE: u16 = 0x1040;
 const VIRTIO_PCI_ABI_VERSION: u8 = 1;
 const VIRTIO_PCI_CLASS_ID_NET: u16 = 0x0280;
@@ -171,11 +172,6 @@ struct VirtioPciCommonConfig {
 
 impl VirtioPciCommonConfig {
     fn new(queue_size: u16, queue_num: usize) -> Self {
-        let mut queues_config = Vec::new();
-        for _ in 0..queue_num {
-            queues_config.push(QueueConfig::new(queue_size))
-        }
-
         VirtioPciCommonConfig {
             features_select: 0,
             acked_features_select: 0,
@@ -184,7 +180,7 @@ impl VirtioPciCommonConfig {
             config_generation: 0,
             queue_select: 0,
             msix_config: INVALID_VECTOR_NUM,
-            queues_config,
+            queues_config: vec![QueueConfig::new(queue_size); queue_num],
             queue_type: QUEUE_TYPE_SPLIT_VRING,
         }
     }
@@ -210,7 +206,7 @@ impl VirtioPciCommonConfig {
             return self
                 .queues_config
                 .get_mut(self.queue_select as usize)
-                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"));
+                .with_context(|| "pci-reg queue_select overflows");
         }
         if self.check_device_status(
             CONFIG_STATUS_FEATURES_OK,
@@ -218,7 +214,7 @@ impl VirtioPciCommonConfig {
         ) {
             self.queues_config
                 .get_mut(self.queue_select as usize)
-                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
+                .with_context(|| "pci-reg queue_select overflows")
         } else {
             Err(anyhow!(PciError::DeviceStatus(self.device_status)))
         }
@@ -227,7 +223,7 @@ impl VirtioPciCommonConfig {
     fn get_queue_config(&self) -> PciResult<&QueueConfig> {
         self.queues_config
             .get(self.queue_select as usize)
-            .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
+            .with_context(|| "pci-reg queue_select overflows")
     }
 
     fn revise_queue_vector(&self, vector_nr: u32, virtio_pci_dev: &VirtioPciDevice) -> u32 {
@@ -396,11 +392,9 @@ impl VirtioPciCommonConfig {
                         | CONFIG_STATUS_FEATURES_OK,
                     CONFIG_STATUS_FAILED,
                 ) {
-                    // FIXME: handle activation failure.
                     virtio_pci_dev.activate_device(self);
                 } else if old_status != 0 && self.device_status == 0 {
                     self.reset();
-                    // FIXME: handle deactivation failure.
                     virtio_pci_dev.deactivate_device();
                 }
             }
@@ -651,7 +645,8 @@ impl VirtioPciDevice {
 
     fn assign_interrupt_cb(&mut self) {
         let cloned_common_cfg = self.common_config.clone();
-        let cloned_msix = self.config.msix.clone();
+        let cloned_msix = self.config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.config.intx.as_ref().unwrap().clone();
         let dev_id = self.dev_id.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>, needs_reset: bool| {
@@ -672,17 +667,19 @@ impl VirtioPciDevice {
                         locked_common_cfg.msix_config
                     }
                     VirtioInterruptType::Vring => {
+                        let mut locked_common_cfg = cloned_common_cfg.lock().unwrap();
+                        locked_common_cfg.interrupt_status |= VIRTIO_MMIO_INT_VRING;
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
                     }
                 };
 
-                if let Some(msix) = &cloned_msix {
-                    msix.lock()
-                        .unwrap()
-                        .notify(vector, dev_id.load(Ordering::Acquire));
+                let mut locked_msix = cloned_msix.lock().unwrap();
+                if locked_msix.enabled {
+                    locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
                 } else {
-                    bail!("Failed to send interrupt, msix does not exist");
+                    cloned_intx.lock().unwrap().notify(1);
                 }
+
                 Ok(())
             },
         ) as VirtioInterrupt);
@@ -752,65 +749,53 @@ impl VirtioPciDevice {
             let arc_queue = Arc::new(Mutex::new(queue));
             locked_queues.push(arc_queue.clone());
         }
-
-        let mut queue_num = self.device.lock().unwrap().queue_num();
-        // No need to create call event for control queue.
-        // It will be polled in StratoVirt when activating the device.
-        if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
-            queue_num -= 1;
-        }
-        let call_evts = NotifyEventFds::new(queue_num);
-        let queue_evts = (*self.notify_eventfds).clone().events;
-        if let Some(cb) = self.interrupt_cb.clone() {
-            if self.need_irqfd {
-                if let Err(e) = self
-                    .device
-                    .lock()
-                    .unwrap()
-                    .set_guest_notifiers(&call_evts.events)
-                {
-                    error!("Failed to set guest notifiers, error is {:?}", e);
-                    return false;
-                }
-            }
-            if let Err(e) = self.device.lock().unwrap().activate(
-                self.sys_mem.clone(),
-                cb,
-                &locked_queues,
-                queue_evts,
-            ) {
-                error!("Failed to activate device, error is {:?}", e);
-                return false;
-            }
-        } else {
-            error!("Failed to activate device: No interrupt callback");
-            return false;
-        }
         drop(locked_queues);
-        self.device_activated.store(true, Ordering::Release);
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
+        if self.need_irqfd {
+            let mut queue_num = self.device.lock().unwrap().queue_num();
+            // No need to create call event for control queue.
+            // It will be polled in StratoVirt when activating the device.
+            if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
+                queue_num -= 1;
+            }
+            let call_evts = NotifyEventFds::new(queue_num);
+            if let Err(e) = self
+                .device
+                .lock()
+                .unwrap()
+                .set_guest_notifiers(&call_evts.events)
+            {
+                error!("Failed to set guest notifiers, error is {:?}", e);
+                return false;
+            }
+            if !self.queues_register_irqfd(&call_evts.events) {
+                error!("Failed to register queues irqfd.");
+                return false;
+            }
+        }
 
-        if self.need_irqfd && !self.queues_register_irqfd(&call_evts.events) {
+        let queue_evts = (*self.notify_eventfds).clone().events;
+        if let Err(e) = self.device.lock().unwrap().activate(
+            self.sys_mem.clone(),
+            self.interrupt_cb.clone().unwrap(),
+            &self.queues.lock().unwrap(),
+            queue_evts,
+        ) {
+            error!("Failed to activate device, error is {:?}", e);
             return false;
         }
+
+        self.device_activated.store(true, Ordering::Release);
         true
     }
 
     fn deactivate_device(&self) -> bool {
-        if self.need_irqfd
-            && self.config.msix.is_some()
-            && self
-                .config
-                .msix
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .unregister_irqfd()
-                .is_err()
-        {
-            return false;
+        if self.need_irqfd && self.config.msix.is_some() {
+            let msix = self.config.msix.as_ref().unwrap();
+            if msix.lock().unwrap().unregister_irqfd().is_err() {
+                return false;
+            }
         }
 
         self.queues.lock().unwrap().clear();
@@ -885,11 +870,13 @@ impl VirtioPciDevice {
 
         // 2. PCI ISR cap sub-region.
         let cloned_common_cfg = self.common_config.clone();
+        let cloned_intx = self.config.intx.as_ref().unwrap().clone();
         let isr_read = move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
             if let Some(val) = data.get_mut(0) {
                 let mut common_cfg_lock = cloned_common_cfg.lock().unwrap();
                 *val = common_cfg_lock.interrupt_status as u8;
                 common_cfg_lock.interrupt_status = 0;
+                cloned_intx.lock().unwrap().notify(0);
             }
             true
         };
@@ -953,8 +940,8 @@ impl VirtioPciDevice {
     fn do_cfg_access(&mut self, start: usize, end: usize, is_write: bool) {
         let pci_cfg_data_offset =
             self.cfg_cap_offset + offset_of!(VirtioPciCfgAccessCap, pci_cfg_data);
-        let pci_cfg_data_end = self.cfg_cap_offset + size_of::<VirtioPciCfgAccessCap>();
-        if !ranges_overlap(start, end, pci_cfg_data_offset, pci_cfg_data_end) {
+        let cap_size = size_of::<VirtioPciCfgAccessCap>();
+        if !ranges_overlap(start, end - start, pci_cfg_data_offset, cap_size) {
             return;
         }
 
@@ -1045,6 +1032,10 @@ impl VirtioPciDevice {
 
         true
     }
+
+    pub fn get_virtio_device(&self) -> &Arc<Mutex<dyn VirtioDevice>> {
+        &self.device
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {
@@ -1090,6 +1081,8 @@ impl PciDevOps for VirtioPciDevice {
             self.devfn,
             self.parent_bus.clone(),
         )?;
+        #[cfg(target_arch = "aarch64")]
+        self.config.set_interrupt_pin();
 
         let common_cap = VirtioPciCap::new(
             size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
@@ -1155,6 +1148,13 @@ impl PciDevOps for VirtioPciDevice {
             &self.name,
             None,
             None,
+        )?;
+
+        init_intx(
+            self.name.clone(),
+            &mut self.config,
+            self.parent_bus.clone(),
+            self.devfn,
         )?;
 
         self.assign_interrupt_cb();
@@ -1272,7 +1272,7 @@ impl PciDevOps for VirtioPciDevice {
         match self.device.lock().unwrap().device_type() {
             VIRTIO_TYPE_BLOCK => {
                 // The virtio blk device is identified as a single-channel SCSI device,
-                // so add scsi controler indetification without channel, scsi-id and lun.
+                // so add scsi controller identification without channel, scsi-id and lun.
                 let parent_dev_path = self.get_parent_dev_path(parent_bus);
                 let mut dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/scsi@");
                 dev_path.push_str("/disk@0,0");
@@ -1338,11 +1338,8 @@ impl StateTransfer for VirtioPciDevice {
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        let mut pci_state = *VirtioPciState::from_bytes(state).ok_or_else(|| {
-            anyhow!(migration::error::MigrationError::FromBytesError(
-                "PCI_DEVICE"
-            ),)
-        })?;
+        let mut pci_state = *VirtioPciState::from_bytes(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
         // Set virtio pci config state.
         let config_length = self.config.config.len();
@@ -1393,11 +1390,7 @@ impl StateTransfer for VirtioPciDevice {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioPciState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&VirtioPciState::descriptor().name).unwrap_or(!0)
     }
 }
 
@@ -1423,7 +1416,7 @@ impl MigrationHook for VirtioPciDevice {
                     &self.queues.lock().unwrap(),
                     queue_evts,
                 ) {
-                    error!("Failed to resume device, error is {}", e);
+                    error!("Failed to resume device, error is {:?}", e);
                 }
             } else {
                 error!("Failed to resume device: No interrupt callback");
@@ -1760,9 +1753,9 @@ mod tests {
             Arc::downgrade(&parent_bus),
             false,
         );
+        #[cfg(target_arch = "aarch64")]
+        virtio_pci.config.set_interrupt_pin();
 
-        // Prepare msix and interrupt callback
-        virtio_pci.assign_interrupt_cb();
         init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
@@ -1773,6 +1766,17 @@ mod tests {
             None,
         )
         .unwrap();
+
+        init_intx(
+            virtio_pci.name.clone(),
+            &mut virtio_pci.config,
+            virtio_pci.parent_bus.clone(),
+            virtio_pci.devfn,
+        )
+        .unwrap();
+        // Prepare msix and interrupt callback
+        virtio_pci.assign_interrupt_cb();
+
         // Prepare valid queue config
         for queue_cfg in virtio_pci
             .common_config

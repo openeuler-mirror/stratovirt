@@ -27,7 +27,7 @@ use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
-use ui::input::{register_keyboard, KeyboardOpts};
+use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -59,6 +59,7 @@ static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_REMOTE_WAKEUP,
                 bMaxPower: 50,
             },
+            iad_desc: vec![],
             interfaces: vec![DESC_IFACE_KEYBOARD.clone()],
         })],
     })
@@ -123,7 +124,7 @@ pub struct UsbKeyboard {
     usb_device: UsbDevice,
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
-    ctrl: Option<Weak<Mutex<XhciDevice>>>,
+    cntlr: Option<Weak<Mutex<XhciDevice>>>,
 }
 
 pub struct UsbKeyboardAdapter {
@@ -167,27 +168,33 @@ impl UsbKeyboard {
             id,
             usb_device: UsbDevice::new(),
             hid: Hid::new(HidType::Keyboard),
-            ctrl: None,
+            cntlr: None,
         }
     }
+}
 
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+impl UsbDeviceOps for UsbKeyboard {
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_FULL;
         let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
             .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
+        let id = self.id.clone();
         let kbd = Arc::new(Mutex::new(self));
         let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
             usb_kbd: kbd.clone(),
         }));
-        register_keyboard("UsbKeyboard", kbd_adapter);
+        register_keyboard(&id, kbd_adapter);
 
         Ok(kbd)
     }
-}
 
-impl UsbDeviceOps for UsbKeyboard {
+    fn unrealize(&mut self) -> Result<()> {
+        unregister_keyboard(&self.id.clone());
+        Ok(())
+    }
+
     fn reset(&mut self) {
         info!("Keyboard device reset");
         self.usb_device.remote_wakeup = 0;
@@ -195,11 +202,12 @@ impl UsbDeviceOps for UsbKeyboard {
         self.hid.reset();
     }
 
-    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         debug!("handle_control request {:?}", device_req);
+        let mut locked_packet = packet.lock().unwrap();
         match self
             .usb_device
-            .handle_control_for_descriptor(packet, device_req)
+            .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
                 if handled {
@@ -208,17 +216,21 @@ impl UsbDeviceOps for UsbKeyboard {
                 }
             }
             Err(e) => {
-                error!("Keyboard descriptor error {}", e);
-                packet.status = UsbPacketStatus::Stall;
+                error!("Keyboard descriptor error {:?}", e);
+                locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
         }
-        self.hid
-            .handle_control_packet(packet, device_req, &mut self.usb_device.data_buf);
+        self.hid.handle_control_packet(
+            &mut locked_packet,
+            device_req,
+            &mut self.usb_device.data_buf,
+        );
     }
 
-    fn handle_data(&mut self, p: &mut UsbPacket) {
-        self.hid.handle_data_packet(p);
+    fn handle_data(&mut self, p: &Arc<Mutex<UsbPacket>>) {
+        let mut locked_p = p.lock().unwrap();
+        self.hid.handle_data_packet(&mut locked_p);
     }
 
     fn device_id(&self) -> String {
@@ -233,12 +245,12 @@ impl UsbDeviceOps for UsbKeyboard {
         &mut self.usb_device
     }
 
-    fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>) {
-        self.ctrl = Some(ctrl);
+    fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>) {
+        self.cntlr = Some(cntlr);
     }
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
-        self.ctrl.clone()
+        self.cntlr.clone()
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {

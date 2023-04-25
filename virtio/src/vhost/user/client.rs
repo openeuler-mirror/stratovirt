@@ -16,6 +16,10 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{
     AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
@@ -25,10 +29,8 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::time::NANOSECONDS_PER_SECOND;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use util::unix::do_mmap;
 
-use super::super::super::{Queue, QueueConfig, VIRTIO_NET_F_CTRL_VQ};
 use super::super::VhostOps;
 use super::message::{
     RegionMemInfo, VhostUserHdrFlag, VhostUserMemContext, VhostUserMemHdr, VhostUserMsgHdr,
@@ -36,10 +38,8 @@ use super::message::{
 };
 use super::sock::VhostUserSock;
 use crate::device::block::VirtioBlkConfig;
-use crate::virtio_has_feature;
 use crate::VhostUser::message::VhostUserConfig;
-use anyhow::{anyhow, bail, Context, Result};
-use util::unix::do_mmap;
+use crate::{virtio_has_feature, Queue, QueueConfig};
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
@@ -114,7 +114,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     {
         if let Some(ctx) = EventLoop::get_ctx(None) {
             // Default reconnecting time: 3s.
-            ctx.delay_call(func, 3 * NANOSECONDS_PER_SECOND);
+            ctx.delay_call(func, Duration::from_secs(3));
         } else {
             error!("Failed to get ctx to delay vhost-user reconnecting");
         }
@@ -197,8 +197,8 @@ impl VhostUserMemInfo {
                 .region
                 .guest_phys_addr
                 .checked_add(reg_info.region.memory_size)
-                .ok_or_else(|| {
-                    anyhow!(
+                .with_context(|| {
+                    format!(
                         "Overflow when adding gpa with memory_size in region {:x?}",
                         reg_info.region
                     )
@@ -251,7 +251,7 @@ impl VhostUserMemInfo {
         let file_back = fr
             .owner
             .get_file_backend()
-            .ok_or_else(|| anyhow!("Failed to get file backend"))?;
+            .with_context(|| "Failed to get file backend")?;
         let mut mem_regions = self.regions.lock().unwrap();
         let host_address = match fr.owner.get_host_address() {
             Some(addr) => addr,
@@ -307,12 +307,12 @@ impl Listener for VhostUserMemInfo {
         match req_type {
             ListenerReqType::AddRegion => {
                 self.add_mem_range(
-                    range.ok_or_else(|| anyhow!("Flat range is None when adding region"))?,
+                    range.with_context(|| "Flat range is None when adding region")?,
                 )?;
             }
             ListenerReqType::DeleteRegion => {
                 self.delete_mem_range(
-                    range.ok_or_else(|| anyhow!("Flat range is None when deleting region"))?,
+                    range.with_context(|| "Flat range is None when deleting region")?,
                 )?;
             }
             _ => {}
@@ -406,8 +406,8 @@ impl VhostUserClient {
 
     /// Save queue info used for reconnection.
     pub fn set_queues(&mut self, queues: &[Arc<Mutex<Queue>>]) {
-        for (queue_index, _) in queues.iter().enumerate() {
-            self.queues.push(queues[queue_index].clone());
+        for queue in queues.iter() {
+            self.queues.push(queue.clone());
         }
     }
 
@@ -480,11 +480,6 @@ impl VhostUserClient {
         self.set_mem_table()
             .with_context(|| "Failed to set mem table for vhost-user")?;
 
-        let mut queue_num = self.queues.len();
-        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
-            queue_num -= 1;
-        }
-
         let queue_size = self
             .queues
             .first()
@@ -493,10 +488,10 @@ impl VhostUserClient {
             .unwrap()
             .vring
             .actual_size();
-        self.set_inflight(queue_num as u16, queue_size)?;
+        self.set_inflight(self.queues.len() as u16, queue_size)?;
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
-        for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             let actual_size = queue_mutex.lock().unwrap().vring.actual_size();
             self.set_vring_num(queue_index, actual_size)
                 .with_context(|| {
@@ -507,7 +502,7 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
             let queue_config = queue.vring.get_queue_config();
 
@@ -542,25 +537,22 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
-            self.set_vring_enable(queue_index, true).with_context(|| {
-                format!(
-                    "Failed to set vring enable for vhost-user, index: {}",
-                    queue_index,
-                )
-            })?;
+        for (queue_index, queue) in self.queues.iter().enumerate() {
+            let enabled = queue.lock().unwrap().is_enabled();
+            self.set_vring_enable(queue_index, enabled)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring enable for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
         }
 
         Ok(())
     }
 
     pub fn reset_vhost_user(&mut self) -> Result<()> {
-        let mut queue_num = self.queues.len();
-        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
-            queue_num -= 1;
-        }
-
-        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
+        for (queue_index, _) in self.queues.iter().enumerate() {
             self.set_vring_enable(queue_index, false)
                 .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
             self.get_vring_base(queue_index)
@@ -807,7 +799,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring num",
+                "The queue index {} is invalid {} for setting vring num",
                 queue_idx,
                 client.max_queue_num
             );
@@ -838,26 +830,29 @@ impl VhostOps for VhostUserClient {
         let desc_user_addr = self
             .mem_info
             .addr_to_host(queue.desc_table)
-            .ok_or_else(|| {
-                anyhow!(format!(
+            .with_context(|| {
+                format!(
                     "Failed to transform desc-table address {}",
                     queue.desc_table.0
-                ))
+                )
             })?;
-        let used_user_addr = self.mem_info.addr_to_host(queue.used_ring).ok_or_else(|| {
-            anyhow!(format!(
-                "Failed to transform used ring address {}",
-                queue.used_ring.0
-            ))
-        })?;
+        let used_user_addr = self
+            .mem_info
+            .addr_to_host(queue.used_ring)
+            .with_context(|| {
+                format!(
+                    "Failed to transform used ring address {}",
+                    queue.used_ring.0
+                )
+            })?;
         let avail_user_addr = self
             .mem_info
             .addr_to_host(queue.avail_ring)
-            .ok_or_else(|| {
-                anyhow!(format!(
+            .with_context(|| {
+                format!(
                     "Failed to transform avail ring address {}",
                     queue.avail_ring.0
-                ))
+                )
             })?;
         let _vring_addr = VhostUserVringAddr {
             index: index as u32,
@@ -930,7 +925,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring kick",
+                "The queue index {} is invalid {} for setting vring kick",
                 queue_idx,
                 client.max_queue_num
             );
@@ -954,7 +949,7 @@ impl VhostOps for VhostUserClient {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
-                "The queue index {} is invaild {} for setting vring enable",
+                "The queue index {} is invalid {} for setting vring enable",
                 queue_idx,
                 client.max_queue_num
             );

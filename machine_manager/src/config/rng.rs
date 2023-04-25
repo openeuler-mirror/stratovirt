@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
@@ -81,30 +81,20 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     cmd_parser.parse(rng_config)?;
     pci_args_check(&cmd_parser)?;
     let mut rng_cfg = RngConfig::default();
-    let rng = if let Some(rng_id) = cmd_parser.get_value::<String>("rng")? {
-        rng_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("rng", "rng")));
-    };
+    let rng = cmd_parser
+        .get_value::<String>("rng")?
+        .with_context(|| ConfigError::FieldIsMissing("rng".to_string(), "rng".to_string()))?;
 
-    rng_cfg.id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
-        rng_id
-    } else {
-        "".to_string()
-    };
+    rng_cfg.id = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
 
     if let Some(max) = cmd_parser.get_value::<u64>("max-bytes")? {
         if let Some(peri) = cmd_parser.get_value::<u64>("period")? {
-            let mul = if let Some(res) = max.checked_mul(1000) {
-                res
-            } else {
-                bail!("Illegal max-bytes arguments: {:?}", max)
-            };
-            let div = if let Some(res) = mul.checked_div(peri) {
-                res
-            } else {
-                bail!("Illegal period arguments: {:?}", peri)
-            };
+            let mul = max
+                .checked_mul(1000)
+                .with_context(|| format!("Illegal max-bytes arguments: {:?}", max))?;
+            let div = mul
+                .checked_div(peri)
+                .with_context(|| format!("Illegal period arguments: {:?}", peri))?;
             rng_cfg.bytes_per_sec = Some(div);
         } else {
             bail!("Argument 'period' is missing");
@@ -113,11 +103,12 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
         bail!("Argument 'max-bytes' is missing");
     }
 
-    if let Some(rng_object) = vm_config.object.rng_object.remove(&rng) {
-        rng_cfg.random_file = rng_object.filename;
-    } else {
-        bail!("Object for rng-random device not found");
-    }
+    rng_cfg.random_file = vm_config
+        .object
+        .rng_object
+        .remove(&rng)
+        .map(|rng_object| rng_object.filename)
+        .with_context(|| "Object for rng-random device not found")?;
 
     rng_cfg.check()?;
     Ok(rng_cfg)
@@ -128,19 +119,14 @@ pub fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
     cmd_params.push("").push("id").push("filename");
 
     cmd_params.parse(object_args)?;
-    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
-        obj_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
-    };
-    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
-        name
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "filename",
-            "rng-object"
-        )));
-    };
+    let id = cmd_params
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "rng-object".to_string()))?;
+    let filename = cmd_params
+        .get_value::<String>("filename")?
+        .with_context(|| {
+            ConfigError::FieldIsMissing("filename".to_string(), "rng-object".to_string())
+        })?;
     let rng_obj_cfg = RngObjConfig { id, filename };
 
     Ok(rng_obj_cfg)

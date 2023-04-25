@@ -19,6 +19,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::{Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
     kvm_device_attr, kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList,
@@ -31,7 +32,6 @@ use self::caps::CpregListEntry;
 pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 use self::core_regs::{get_core_regs, set_core_regs};
 use crate::CPU;
-use anyhow::{anyhow, Context, Result};
 
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
@@ -50,9 +50,14 @@ const PSR_D_BIT: u64 = 0x0000_0200;
 // MPIDR is Multiprocessor Affinity Register
 // [40:63] bit reserved on AArch64 Architecture,
 const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
-// MPIDR - Multiprocessor Affinity Register.
+
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
+// MPIDR - Multiprocessor Affinity Register.
 const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
+// Counter-timer Virtual Count register: Due to the API interface problem, the encode of
+// this register is SYS_CNTV_CVAL_EL0.
+const SYS_CNTV_CNT_EL0: u64 = 0x6030_0000_0013_df1a;
+
 const KVM_MAX_CPREG_ENTRIES: usize = 500;
 
 /// Interrupt ID for pmu.
@@ -112,6 +117,8 @@ pub struct ArmCPUState {
     cpreg_list: [CpregListEntry; 512],
     /// Vcpu features
     features: ArmCPUFeatures,
+    /// Virtual timer count.
+    vtimer_cnt: u64,
 }
 
 impl ArmCPUState {
@@ -257,6 +264,29 @@ impl ArmCPUState {
             self.core_regs.regs.pc = boot_config.boot_pc;
         }
     }
+
+    /// Set virtual timer Count register value to `Kvm` with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
+    pub fn set_virtual_timer_cnt(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        vcpu_fd
+            .set_one_reg(SYS_CNTV_CNT_EL0, self.vtimer_cnt as u128)
+            .with_context(|| "Failed to set virtual timer count")
+    }
+
+    /// Get virtual timer Count register value from `Kvm` with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
+    pub fn get_virtual_timer_cnt(&mut self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        self.vtimer_cnt = vcpu_fd
+            .get_one_reg(SYS_CNTV_CNT_EL0)
+            .with_context(|| "Failed to get virtual timer count")? as u64;
+        Ok(())
+    }
 }
 
 impl CPU {
@@ -329,7 +359,7 @@ impl StateTransfer for CPU {
 
     fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("CPU")))?;
+            .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;
@@ -338,17 +368,13 @@ impl StateTransfer for CPU {
 
         if cpu_state.features.pmu {
             self.init_pmu()
-                .map_err(|_| migration::MigrationError::FromBytesError("failed to init pmu."))?;
+                .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
         }
         Ok(())
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&ArmCPUState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&ArmCPUState::descriptor().name).unwrap_or(!0)
     }
 }
 

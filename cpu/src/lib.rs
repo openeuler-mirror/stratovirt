@@ -302,6 +302,12 @@ impl CPUInterface for CPU {
     }
 
     fn resume(&self) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        self.arch()
+            .lock()
+            .unwrap()
+            .set_virtual_timer_cnt(self.fd())?;
+
         let (cpu_state_locked, cvar) = &*self.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
         if *cpu_state == CpuLifecycleState::Running {
@@ -336,11 +342,8 @@ impl CPUInterface for CPU {
             .spawn(move || {
                 if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
                     error!(
-                        "{}",
-                        format!(
-                            "Some error occurred in cpu{} thread: {:?}",
-                            cpu_thread_worker.thread_cpu.id, e
-                        )
+                        "Some error occurred in cpu{} thread: {:?}",
+                        cpu_thread_worker.thread_cpu.id, e
                     );
                 }
             })
@@ -354,7 +357,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_RESET_SIGNAL)
-                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to reset vcpu".to_string()))),
+                .with_context(|| CpuError::KickVcpu("Fail to reset vcpu".to_string())),
             None => {
                 warn!("VCPU thread not started, no need to reset");
                 Ok(())
@@ -367,7 +370,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_TASK_SIGNAL)
-                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to kick vcpu".to_string()))),
+                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
             None => {
                 warn!("VCPU thread not started, no need to kick");
                 Ok(())
@@ -402,6 +405,12 @@ impl CPUInterface for CPU {
                 break;
             }
         }
+
+        #[cfg(target_arch = "aarch64")]
+        self.arch()
+            .lock()
+            .unwrap()
+            .get_virtual_timer_cnt(self.fd())?;
 
         Ok(())
     }
@@ -474,11 +483,10 @@ impl CPUInterface for CPU {
     }
 
     fn kvm_vcpu_exec(&self) -> Result<bool> {
-        let vm = if let Some(vm) = self.vm.upgrade() {
-            vm
-        } else {
-            return Err(anyhow!(CpuError::NoMachineInterface));
-        };
+        let vm = self
+            .vm
+            .upgrade()
+            .with_context(|| CpuError::NoMachineInterface)?;
 
         match self.fd.run() {
             Ok(run) => match run {
@@ -632,7 +640,7 @@ impl CPUThreadWorker {
                             #[cfg(target_arch = "x86_64")]
                             &vcpu.caps,
                         ) {
-                            error!("Failed to reset vcpu state: {}", e.to_string())
+                            error!("Failed to reset vcpu state: {:?}", e)
                         }
                     });
                 }
@@ -682,10 +690,7 @@ impl CPUThreadWorker {
     fn handle(&self, thread_barrier: Arc<Barrier>) -> Result<()> {
         self.init_local_thread_vcpu();
         if let Err(e) = Self::init_signals() {
-            error!(
-                "{}",
-                format!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e)
-            );
+            error!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e);
         }
 
         self.thread_cpu.set_tid();

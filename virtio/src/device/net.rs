@@ -23,13 +23,10 @@ use std::{cmp, fs, mem};
 
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
-    Element, VirtioError,
-};
-use crate::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
-    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
+    VirtioTrace, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET,
+    VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
     VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
     VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
@@ -77,7 +74,7 @@ const CTRL_MAX_VLAN: u16 = 1 << 12;
 const MAX_MAC_ADDR_NUM: usize = 0xff;
 /// The header length of virtio net packet.
 const NET_HDR_LENGTH: usize = mem::size_of::<VirtioNetHdr>();
-/// The legnth of vlan tag.
+/// The length of vlan tag.
 const VLAN_TAG_LENGTH: usize = 4;
 /// The offset of vlan tpid for 802.1Q tag.
 const VLAN_TPID_LENGTH: usize = 2;
@@ -286,7 +283,7 @@ impl CtrlInfo {
                 let mut mac = [0; MAC_ADDR_LEN];
                 *data_iovec =
                     get_buf_and_discard(mem_space, data_iovec, &mut mac).unwrap_or_else(|e| {
-                        error!("Failed to get MAC address, error is {}", e);
+                        error!("Failed to get MAC address, error is {:?}", e);
                         ack = VIRTIO_NET_ERR;
                         Vec::new()
                     });
@@ -304,7 +301,7 @@ impl CtrlInfo {
                 ack = self
                     .set_mac_table(mem_space, data_iovec)
                     .unwrap_or_else(|e| {
-                        error!("Failed to get Unicast Mac address, error is {}", e);
+                        error!("Failed to get Unicast Mac address, error is {:?}", e);
                         VIRTIO_NET_ERR
                     });
             }
@@ -328,7 +325,7 @@ impl CtrlInfo {
 
         *data_iovec = get_buf_and_discard(mem_space, data_iovec, vid.as_mut_bytes())
             .unwrap_or_else(|e| {
-                error!("Failed to get vlan id, error is {}", e);
+                error!("Failed to get vlan id, error is {:?}", e);
                 ack = VIRTIO_NET_ERR;
                 Vec::new()
             });
@@ -371,7 +368,7 @@ impl CtrlInfo {
             let mut queue_pairs: u16 = 0;
             *data_iovec = get_buf_and_discard(mem_space, data_iovec, queue_pairs.as_mut_bytes())
                 .unwrap_or_else(|e| {
-                    error!("Failed to get queue pairs {}", e);
+                    error!("Failed to get queue pairs {:?}", e);
                     ack = VIRTIO_NET_ERR;
                     Vec::new()
                 });
@@ -567,7 +564,7 @@ impl NetCtrlHandler {
                         .unwrap()
                         .handle_rx_mode(&self.mem_space, ctrl_hdr.cmd, &mut data_iovec)
                         .unwrap_or_else(|e| {
-                            error!("Failed to handle rx mode, error is {}", e);
+                            error!("Failed to handle rx mode, error is {:?}", e);
                             VIRTIO_NET_ERR
                         });
                 }
@@ -619,10 +616,7 @@ impl NetCtrlHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "ctrl",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("ctrl", VirtioInterruptType::Vring)
                     })?;
             }
         }
@@ -644,7 +638,7 @@ impl EventNotifierHelper for NetCtrlHandler {
                 return None;
             }
             locked_net_io.handle_ctrl().unwrap_or_else(|e| {
-                error!("Failed to handle ctrl queue, error is {}.", e);
+                error!("Failed to handle ctrl queue, error is {:?}.", e);
                 report_virtio_error(
                     locked_net_io.interrupt_cb.clone(),
                     locked_net_io.driver_features,
@@ -731,10 +725,10 @@ impl NetIoHandler {
                 Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
                 Err(e) => {
                     // When the backend tap device is abnormally removed, read return EBADFD.
-                    error!("Failed to read tap: {}", e);
+                    error!("Failed to read tap: {:?}", e);
                 }
             }
-            error!("Failed to call readv for net handle_rx: {}", e);
+            error!("Failed to call readv for net handle_rx: {:?}", e);
         }
 
         size
@@ -763,9 +757,6 @@ impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
-        if !queue.is_enabled() {
-            return Ok(());
-        }
 
         let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
@@ -777,7 +768,7 @@ impl NetIoHandler {
                 self.rx.queue_full = true;
                 break;
             } else if elem.in_iovec.is_empty() {
-                bail!("The lengh of in iovec is 0");
+                bail!("The length of in iovec is 0");
             }
             let iovecs = NetIoHandler::get_libc_iovecs(
                 &self.mem_space,
@@ -837,10 +828,7 @@ impl NetIoHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "net",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
                 self.trace_send_interrupt("Net".to_string());
             }
@@ -874,7 +862,7 @@ impl NetIoHandler {
                     ErrorKind::Interrupted => continue,
                     ErrorKind::WouldBlock => return -1_i8,
                     // Ignore other errors which can not be handled.
-                    _ => error!("Failed to call writev for net handle_tx: {}", e),
+                    _ => error!("Failed to call writev for net handle_tx: {:?}", e),
                 }
             }
             break;
@@ -885,9 +873,7 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-        if !queue.is_enabled() {
-            return Ok(());
-        }
+
         let mut tx_packets = 0;
         loop {
             let elem = queue
@@ -897,7 +883,7 @@ impl NetIoHandler {
             if elem.desc_num == 0 {
                 break;
             } else if elem.out_iovec.is_empty() {
-                bail!("The lengh of out iovec is 0");
+                bail!("The length of out iovec is 0");
             }
 
             let iovecs = NetIoHandler::get_libc_iovecs(
@@ -929,10 +915,7 @@ impl NetIoHandler {
             {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "net",
-                            VirtioInterruptType::Vring
-                        ))
+                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
                 self.trace_send_interrupt("Net".to_string());
             }
@@ -954,7 +937,7 @@ impl NetIoHandler {
         locked_net_io.tap = match locked_net_io.receiver.recv() {
             Ok(tap) => tap,
             Err(e) => {
-                error!("Failed to receive the tap {}", e);
+                error!("Failed to receive the tap {:?}", e);
                 None
             }
         };
@@ -987,7 +970,7 @@ fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
     for elem in iovec {
         end = start
             .checked_add(elem.iov_len)
-            .ok_or_else(|| anyhow!("Overflow when getting the net header"))?;
+            .with_context(|| "Overflow when getting the net header")?;
         end = cmp::min(end, buf.len());
         mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
         if end >= buf.len() {
@@ -1545,7 +1528,7 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
@@ -1553,7 +1536,7 @@ impl VirtioDevice for Net {
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
-            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
+            let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 
             let ctrl_handler = NetCtrlHandler {
                 ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, ctrl_info.clone()),
@@ -1580,9 +1563,9 @@ impl VirtioDevice for Net {
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
             let rx_queue = queues[index * 2].clone();
-            let rx_queue_evt = queue_evts.remove(0);
+            let rx_queue_evt = queue_evts[index * 2].clone();
             let tx_queue = queues[index * 2 + 1].clone();
-            let tx_queue_evt = queue_evts.remove(0);
+            let tx_queue_evt = queue_evts[index * 2 + 1].clone();
 
             let (sender, receiver) = channel();
             senders.push(sender);
@@ -1658,9 +1641,9 @@ impl VirtioDevice for Net {
                             .get(index)
                             .cloned()
                             .with_context(|| format!("Failed to get index {} tap", index))?;
-                        sender.send(Some(tap)).with_context(|| {
-                            anyhow!(VirtioError::ChannelSend("tap fd".to_string()))
-                        })?;
+                        sender
+                            .send(Some(tap))
+                            .with_context(|| VirtioError::ChannelSend("tap fd".to_string()))?;
                     }
                     None => sender
                         .send(None)
@@ -1671,7 +1654,7 @@ impl VirtioDevice for Net {
             for update_evt in &self.update_evts {
                 update_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                    .with_context(|| VirtioError::EventFdWrite)?;
             }
         }
 
@@ -1710,11 +1693,7 @@ impl StateTransfer for Net {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name).unwrap_or(!0)
     }
 }
 

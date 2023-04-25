@@ -28,16 +28,15 @@ use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use super::super::{VhostNotify, VhostOps};
-use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
-use crate::virtio_has_feature;
+use super::super::VhostOps;
+use super::{VhostBackend, VhostVringFile, VHOST_NET_SET_BACKEND};
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
-    CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM,
-    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt,
+    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -93,6 +92,8 @@ pub struct Net {
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
+    /// Save irqfd used for vhost-net.
+    call_events: Vec<Arc<EventFd>>,
 }
 
 impl Net {
@@ -106,6 +107,7 @@ impl Net {
             mem_space: mem_space.clone(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
+            call_events: Vec::new(),
         }
     }
 }
@@ -245,6 +247,14 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
+    fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
+        for fd in queue_evts.iter() {
+            self.call_events.push(fd.clone());
+        }
+
+        Ok(())
+    }
+
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
@@ -252,13 +262,13 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
-            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
+            let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
 
             let ctrl_handler = NetCtrlHandler {
@@ -280,7 +290,6 @@ impl VirtioDevice for Net {
 
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
-            let mut host_notifies = Vec::new();
             let backend = match &self.backends {
                 None => return Err(anyhow!("Failed to get backend for vhost net")),
                 Some(backends) => backends
@@ -334,22 +343,14 @@ impl VirtioDevice for Net {
 
                 drop(queue);
 
-                let host_notify = VhostNotify {
-                    notify_evt: Arc::new(
-                        EventFd::new(libc::EFD_NONBLOCK)
-                            .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
-                    ),
-                    queue: queue_mutex.clone(),
-                };
                 backend
-                    .set_vring_call(queue_index, host_notify.notify_evt.clone())
+                    .set_vring_call(queue_index, self.call_events[queue_index].clone())
                     .with_context(|| {
                         format!(
                             "Failed to set vring call for vhost net, index: {}",
                             queue_index,
                         )
                     })?;
-                host_notifies.push(host_notify);
 
                 let tap = match &self.taps {
                     None => bail!("Failed to get tap for vhost net"),
@@ -364,19 +365,6 @@ impl VirtioDevice for Net {
                         )
                     })?;
             }
-
-            let handler = VhostIoHandler {
-                interrupt_cb: interrupt_cb.clone(),
-                host_notifies,
-                device_broken: self.broken.clone(),
-            };
-
-            let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-            register_event_helper(
-                notifiers,
-                self.net_cfg.iothread.as_ref(),
-                &mut self.deactivate_evts,
-            )?;
         }
         self.broken.store(false, Ordering::SeqCst);
 
@@ -384,7 +372,9 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)
+        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        self.call_events.clear();
+        Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {

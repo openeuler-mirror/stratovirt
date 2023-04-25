@@ -16,10 +16,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
-use crate::VirtioError;
 use crate::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+    Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
@@ -142,7 +141,7 @@ impl InputReceiver for ConsoleHandler {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
         {
             error!(
-                "Failed to trigger interrupt for console, int-type {:?} {:?} ",
+                "Failed to trigger interrupt for console, int-type {:?} {:?}",
                 VirtioInterruptType::Vring,
                 e
             )
@@ -353,14 +352,13 @@ impl VirtioDevice for Console {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        queue_evts.remove(0); // input_queue_evt never used
-
         let handler = ConsoleHandler {
             input_queue: queues[0].clone(),
             output_queue: queues[1].clone(),
-            output_queue_evt: queue_evts.remove(0),
+            // input_queue_evt never used
+            output_queue_evt: queue_evts[1].clone(),
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,
@@ -389,19 +387,13 @@ impl StateTransfer for Console {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioConsoleState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("CONSOLE")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("CONSOLE"))?;
 
         Ok(())
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) =
-            MigrationManager::get_desc_alias(&VirtioConsoleState::descriptor().name)
-        {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&VirtioConsoleState::descriptor().name).unwrap_or(!0)
     }
 }
 

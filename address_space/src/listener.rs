@@ -183,12 +183,10 @@ impl KvmMemoryListener {
     ///
     /// Return Error if Memslot size is zero after aligned.
     fn align_mem_slot(range: AddressRange, alignment: u64) -> Result<AddressRange> {
-        let aligned_addr = range.base.align_up(alignment).with_context(|| {
-            anyhow!(AddressSpaceError::AddrAlignUp(
-                range.base.raw_value(),
-                alignment
-            ))
-        })?;
+        let aligned_addr = range
+            .base
+            .align_up(alignment)
+            .with_context(|| AddressSpaceError::AddrAlignUp(range.base.raw_value(), alignment))?;
 
         let aligned_size = range
             .size
@@ -473,7 +471,7 @@ impl Listener for KvmMemoryListener {
                 ),
             };
 
-        req_ret.with_context(|| anyhow!(AddressSpaceError::ListenerRequest(req_type)))
+        req_ret.with_context(|| AddressSpaceError::ListenerRequest(req_type))
     }
 }
 
@@ -611,7 +609,7 @@ impl Listener for KvmIoListener {
             _ => return Ok(()),
         };
 
-        handle_ret.with_context(|| anyhow!(AddressSpaceError::ListenerRequest(req_type)))
+        handle_ret.with_context(|| AddressSpaceError::ListenerRequest(req_type))
     }
 }
 

@@ -245,7 +245,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd vfio pci: -device vfio-pci,id=<vfio_id>,host=<0000:1a:00.3>,bus=<pcie.0>,addr=<0x03>[,multifunction=on|off]; \
                    \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \
                    \n\t\tadd usb keyboard: -device usb-kbd,id=<kbd>; \
-                   \n\t\tadd usb tablet-device usb-tablet,id=<tablet>; \
+                   \n\t\tadd usb tablet: -device usb-tablet,id=<tablet>; \
+                   \n\t\tadd usb storage: -device usb-storage,id=<storage>,drive=<drive_id>; \
                    \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
                    \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \
                    \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>")
@@ -441,6 +442,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("specify the ip and port for vnc")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("display")
+            .multiple(false)
+            .long("display")
+            .value_name("gtk")
+            .help("set display for virtual machine: currently only supports gtk")
+            .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -475,6 +484,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
+    add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
     add_args_to_config!(
         (args.is_present("no-shutdown")),
         vm_cfg,
@@ -547,14 +557,11 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
     if let Some(mon_config) = args.value_of("mon") {
         let mut cmd_parser = CmdParser::new("monitor");
         cmd_parser.push("id").push("mode").push("chardev");
-
         cmd_parser.parse(&mon_config)?;
 
-        let chardev = if let Some(dev) = cmd_parser.get_value::<String>("chardev")? {
-            dev
-        } else {
-            bail!("Argument \'chardev\'  is missing for \'mon\'");
-        };
+        let chardev = cmd_parser
+            .get_value::<String>("chardev")?
+            .with_context(|| "Argument \'chardev\' is missing for \'mon\'")?;
 
         if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
             if mode != *"control" {

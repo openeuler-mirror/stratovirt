@@ -10,11 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use util::aio::AioEngine;
 
@@ -63,18 +63,10 @@ impl Default for ScsiCntlrConfig {
 
 impl ConfigCheck for ScsiCntlrConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "virtio-scsi-pci device id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(&self.id, "virtio-scsi-pci device id")?;
 
-        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
         }
 
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u32 {
@@ -130,14 +122,9 @@ pub fn parse_scsi_controller(
         cntlr_cfg.iothread = Some(iothread);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        cntlr_cfg.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "id",
-            "virtio scsi pci"
-        )));
-    }
+    cntlr_cfg.id = cmd_parser.get_value::<String>("id")?.with_context(|| {
+        ConfigError::FieldIsMissing("id".to_string(), "virtio scsi pci".to_string())
+    })?;
 
     if let Some(queues) = cmd_parser.get_value::<u32>("num-queues")? {
         cntlr_cfg.queues = queues;
@@ -153,7 +140,7 @@ pub fn parse_scsi_controller(
     Ok(cntlr_cfg)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ScsiDevConfig {
     /// Scsi Device id.
     pub id: String,
@@ -161,8 +148,8 @@ pub struct ScsiDevConfig {
     pub path_on_host: String,
     /// Serial number of the scsi device.
     pub serial: Option<String>,
-    /// Scsi bus which the scsi device attaches to.
-    pub bus: String,
+    /// Scsi controller which the scsi device attaches to.
+    pub cntlr: String,
     /// Scsi device can not do write operation.
     pub read_only: bool,
     /// If true, use direct access io.
@@ -183,7 +170,7 @@ impl Default for ScsiDevConfig {
             id: "".to_string(),
             path_on_host: "".to_string(),
             serial: None,
-            bus: "".to_string(),
+            cntlr: "".to_string(),
             read_only: false,
             direct: true,
             aio_type: AioEngine::Native,
@@ -211,11 +198,9 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
 
     let mut scsi_dev_cfg = ScsiDevConfig::default();
 
-    let scsi_drive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
-        drive
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "scsi device")));
-    };
+    let scsi_drive = cmd_parser.get_value::<String>("drive")?.with_context(|| {
+        ConfigError::FieldIsMissing("drive".to_string(), "scsi device".to_string())
+    })?;
 
     if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
         scsi_dev_cfg.boot_index = Some(boot_index);
@@ -225,16 +210,22 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         scsi_dev_cfg.serial = Some(serial);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        scsi_dev_cfg.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "scsi device")));
-    }
+    scsi_dev_cfg.id = cmd_parser.get_value::<String>("id")?.with_context(|| {
+        ConfigError::FieldIsMissing("id".to_string(), "scsi device".to_string())
+    })?;
 
     if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
-        scsi_dev_cfg.bus = bus;
+        // Format "$parent_cntlr_name.0" is required by scsi bus.
+        let strs = bus.split('.').collect::<Vec<&str>>();
+        if strs.len() != 2 || strs[1] != "0" {
+            bail!("Invalid scsi bus {}", bus);
+        }
+        scsi_dev_cfg.cntlr = strs[0].to_string();
     } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("bus", "scsi device")));
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "bus".to_string(),
+            "scsi device".to_string()
+        )));
     }
 
     if let Some(target) = cmd_parser.get_value::<u8>("scsi-id")? {

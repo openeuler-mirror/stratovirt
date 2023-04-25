@@ -23,8 +23,8 @@ use std::{cell::RefCell, mem, rc::Rc};
 use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libtest::{test_init, TestState};
 
-// Now dsdt table data length is 877.
-const DSDT_TABLE_DATA_LENGTH: u32 = 877;
+// Now dsdt table data length is 3482.
+const DSDT_TABLE_DATA_LENGTH: u32 = 3482;
 // Now fadt table data length is 276.
 const FADT_TABLE_DATA_LENGTH: u32 = 276;
 // Now madt table data length is 744.
@@ -37,10 +37,10 @@ const IORT_TABLE_DATA_LENGTH: u32 = 128;
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 3005(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 3005;
-// Now acpi tables data length is 29354(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 29354;
+// Now acpi tables data length is 5610(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 5610;
+// Now acpi tables data length is 31953(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 31953;
 
 fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     let file_name = "etc/acpi/rsdp";
@@ -57,7 +57,7 @@ fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     assert_eq!(file_size, mem::size_of::<AcpiRsdp>() as u32);
     // Check RSDP signature: "RSD PTR".
     assert_eq!(String::from_utf8_lossy(&read_data[..8]), "RSD PTR ");
-    // Check RSDP revison: 2.
+    // Check RSDP revision: 2.
     assert_eq!(read_data[15], 2);
 
     // Check 32-bit address of RSDT table: 0
@@ -99,7 +99,7 @@ fn check_madt(data: &[u8], cpu: u8) {
     let gicd_addr = LittleEndian::read_u64(&data[(offset + 8)..]);
     assert_eq!(gicd_addr, MEM_LAYOUT[LayoutEntryType::GicDist as usize].0);
 
-    // Check GIC verison
+    // Check GIC version
     assert_eq!(data[offset + 20], 3);
 
     // Check GIC CPU
@@ -171,7 +171,7 @@ fn check_spcr(data: &[u8]) {
         MEM_LAYOUT[LayoutEntryType::Uart as usize].0
     );
     assert_eq!(data[52], 1_u8 << 3); // Interrupt Type: Arm GIC interrupu
-    assert_eq!(LittleEndian::read_u32(&data[54..]), 66); // Irq number used by the UART
+    assert_eq!(LittleEndian::read_u32(&data[54..]), 39); // Irq number used by the UART
     assert_eq!(data[58], 3); // Set baud rate: 3 = 9600
     assert_eq!(data[60], 1); // Stop bit
     assert_eq!(data[61], 2); // Hardware flow control
@@ -205,8 +205,8 @@ fn check_srat(data: &[u8]) {
     // -numa node,nodeid=1,cpus=4-7,memdev=mem1
     for i in 0..2 {
         for j in 0..4 {
-            let proximity_domian = LittleEndian::read_u32(&data[(offset + 2)..]);
-            assert_eq!(proximity_domian, i);
+            let proximity_domain = LittleEndian::read_u32(&data[(offset + 2)..]);
+            assert_eq!(proximity_domain, i);
             let process_uid = LittleEndian::read_u32(&data[(offset + 6)..]);
             assert_eq!(process_uid, (i * 4) + j);
             offset = offset + mem::size_of::<AcpiSratGiccAffinity>();

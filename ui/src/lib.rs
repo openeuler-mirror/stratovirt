@@ -13,6 +13,7 @@
 pub mod console;
 mod data;
 pub mod error;
+pub mod gtk;
 pub mod input;
 pub mod pixman;
 pub mod utils;

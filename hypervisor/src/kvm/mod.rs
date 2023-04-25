@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::mem::{align_of, size_of};
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -23,9 +24,9 @@ use vmm_sys_util::{
     eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 pub use interrupt::MsiVector;
-use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
+use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
 
 mod interrupt;
 
@@ -92,6 +93,7 @@ ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 #[cfg(target_arch = "aarch64")]
 ioctl_iow_nr!(KVM_ARM_VCPU_INIT, KVMIO, 0xae, kvm_vcpu_init);
 ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
+ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
@@ -109,7 +111,7 @@ impl KVMFds {
                 let vm_fd = match fd.create_vm() {
                     Ok(vm_fd) => vm_fd,
                     Err(e) => {
-                        error!("Failed to create VM in KVM: {}", e);
+                        error!("Failed to create VM in KVM: {:?}", e);
                         return KVMFds::default();
                     }
                 };
@@ -122,7 +124,7 @@ impl KVMFds {
                 }
             }
             Err(e) => {
-                error!("Failed to open /dev/kvm: {}", e);
+                error!("Failed to open /dev/kvm: {:?}", e);
                 KVMFds::default()
             }
         }
@@ -132,19 +134,31 @@ impl KVMFds {
     pub fn commit_irq_routing(&self) -> Result<()> {
         let routes = self.irq_route_table.lock().unwrap().irq_routes.clone();
 
+        let layout = std::alloc::Layout::from_size_align(
+            size_of::<IrqRoute>() + routes.len() * size_of::<IrqRouteEntry>(),
+            std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
+        )?;
+
         // Safe because data in `routes` is reliable.
         unsafe {
-            let mut irq_routing = refact_vec_with_field::<IrqRoute, IrqRouteEntry>(routes.len());
+            let mut irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            if irq_routing.is_null() {
+                bail!("Failed to alloc irq routing");
+            }
             (*irq_routing).nr = routes.len() as u32;
             (*irq_routing).flags = 0;
             let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
             entries.copy_from_slice(&routes);
 
-            self.vm_fd
+            let ret = self
+                .vm_fd
                 .as_ref()
                 .unwrap()
                 .set_gsi_routing(&*irq_routing)
-                .with_context(|| "Failed to set gsi routing")
+                .with_context(|| "Failed to set gsi routing");
+
+            std::alloc::dealloc(irq_routing as *mut u8, layout);
+            ret
         }
     }
 
@@ -162,6 +176,14 @@ impl KVMFds {
             .unwrap()
             .unregister_irqfd(fd, gsi)
             .with_context(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
+    }
+
+    pub fn set_irq_line(&self, irq: u32, level: bool) -> Result<()> {
+        self.vm_fd
+            .as_ref()
+            .unwrap()
+            .set_irq_line(irq, level)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", irq, level))
     }
 
     /// Start dirty page tracking in kvm.

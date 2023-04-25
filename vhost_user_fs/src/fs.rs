@@ -1115,7 +1115,7 @@ impl FileSystem {
         FUSE_OK
     }
 
-    /// Read the file descriptor by file hander in the management of filesystem.
+    /// Read the file descriptor by file handler in the management of filesystem.
     ///
     /// # Arguments
     ///
@@ -1134,7 +1134,7 @@ impl FileSystem {
         FUSE_OK
     }
 
-    /// write the file descriptor by file hander in the management of filesystem.
+    /// write the file descriptor by file handler in the management of filesystem.
     ///
     /// # Arguments
     ///
@@ -1284,7 +1284,7 @@ impl FileSystem {
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
-                panic!("setxattr: failed to change process directoy");
+                panic!("setxattr: failed to change process directory");
             }
 
             let ret_ = set_xattr(
@@ -1296,7 +1296,7 @@ impl FileSystem {
             );
 
             if fchdir(&self.root_inode.file) != FUSE_OK {
-                panic!("setxattr: failed to change directoy of root inode");
+                panic!("setxattr: failed to change directory of root inode");
             }
 
             ret_
@@ -1344,7 +1344,7 @@ impl FileSystem {
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
-                panic!("getxattr: failed to change process directoy");
+                panic!("getxattr: failed to change process directory");
             }
 
             let (buf_opt, ret) = get_xattr(
@@ -1354,7 +1354,7 @@ impl FileSystem {
             );
 
             if fchdir(&self.root_inode.file) != FUSE_OK {
-                panic!("getxattr: failed to change directoy of root inode");
+                panic!("getxattr: failed to change directory of root inode");
             }
             if ret != FUSE_OK {
                 return ret;
@@ -1407,7 +1407,7 @@ impl FileSystem {
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
-                panic!("listxattr: failed to change process directoy");
+                panic!("listxattr: failed to change process directory");
             }
 
             let (buf_opt, ret) = list_xattr(
@@ -1416,7 +1416,7 @@ impl FileSystem {
             );
 
             if fchdir(&self.root_inode.file) != FUSE_OK {
-                panic!("listxattr: failed to change directoy of root inode");
+                panic!("listxattr: failed to change directory of root inode");
             }
             if ret != FUSE_OK {
                 return ret;
@@ -1465,7 +1465,7 @@ impl FileSystem {
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
-                panic!("removexattr: failed to change process directoy");
+                panic!("removexattr: failed to change process directory");
             }
 
             let ret = remove_xattr(
@@ -1474,7 +1474,7 @@ impl FileSystem {
             );
 
             if fchdir(&self.root_inode.file) != FUSE_OK {
-                panic!("removexattr: failed to change directoy of root inode");
+                panic!("removexattr: failed to change directory of root inode");
             }
             if ret != FUSE_OK {
                 return ret;

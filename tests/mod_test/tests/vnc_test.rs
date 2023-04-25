@@ -300,6 +300,8 @@ fn test_send_cursor_image() {
 /// 3. Demo GPU replace the surface of VNC server. -> expect 1.
 /// 4. VNC client setting feature of Raw.
 /// 5. Demo GPU replace the surface of VNC server. -> expect 2.
+/// 6. VNC client setting feature of All.
+/// 7. Demo GPU replace the surface of VNC server. -> expect 2.
 /// ExpectOutput
 /// 1. VNC client received a desktop resize request from VNC server.
 /// 2. VNC client not received any desktop resize request from VNC server.
@@ -348,6 +350,17 @@ fn test_desktop_resize() {
     let pf = RfbPixelFormat::new(8, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
     let res = vnc_client.test_recv_server_data(pf);
     assert!(!res.unwrap().contains(&(
+        RfbServerMsg::FramebufferUpdate,
+        EncodingType::EncodingDesktopresize
+    )));
+
+    assert!(vnc_client.test_setup_encodings(None, None).is_ok());
+    demo_gpu
+        .borrow_mut()
+        .replace_surface(1920, 1080, PIXMAN_A8B8G8R8);
+    let pf = RfbPixelFormat::new(8, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
+    let res = vnc_client.test_recv_server_data(pf);
+    assert!(res.unwrap().contains(&(
         RfbServerMsg::FramebufferUpdate,
         EncodingType::EncodingDesktopresize
     )));
@@ -556,7 +569,7 @@ fn test_vnc_kbd_mouse() {
     for &(button_mask, x, y) in POINTEVENTLIST[1..].iter() {
         assert!(vnc_client.test_point_event(button_mask, x, y).is_ok());
         let msg = input.borrow_mut().read_input_event();
-        // After sending the pointer event, the coordinate shoule be changed
+        // After sending the pointer event, the coordinate should be changed
         assert!(!(old_msg.button == msg.button && old_msg.x == msg.x && old_msg.y == msg.y));
         old_msg = msg;
         println!("msg: {:?}", msg);
@@ -713,7 +726,7 @@ fn test_rfb_version_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> R
     Ok(())
 }
 
-fn test_unsupport_sec_type(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
+fn test_unsupported_sec_type(test_state: Rc<RefCell<TestState>>, port: u16) -> Result<()> {
     let mut buf: Vec<u8> = Vec::new();
     let mut vnc_client = create_new_client(test_state, port).unwrap();
     println!("Connect to server.");
@@ -818,8 +831,8 @@ fn test_client_rand_bytes(test_state: Rc<RefCell<TestState>>, port: u16) -> Resu
 /// 3. VNC client send framebuffer request + NotIncremental.
 /// 4. VNC client check the image data from VNC server.
 /// Abnormal Situation:
-///     1. Unsupport RFB version -> expect 1 + 2.
-///     2. Unsupport security type -> expect 1 + 2.
+///     1. Unsupported RFB version -> expect 1 + 2.
+///     2. Unsupported security type -> expect 1 + 2.
 ///     3. The message of set pixel formal is abnormal -> expect 1 + 2.
 ///     4. Send the rand bytes from the client -> expect 2.
 ///     5. Send set encoding event: encoding number abnormal -> expect 2.
@@ -843,7 +856,7 @@ fn test_rfb_abnormal() {
     let (gpu_list, input, test_state) = set_up(gpu_list, input_conf, port);
 
     assert!(test_rfb_version_abnormal(test_state.clone(), port).is_ok());
-    assert!(test_unsupport_sec_type(test_state.clone(), port).is_ok());
+    assert!(test_unsupported_sec_type(test_state.clone(), port).is_ok());
     assert!(test_set_pixel_format_abnormal(test_state.clone(), port).is_ok());
     assert!(test_set_encoding_abnormal(test_state.clone(), port).is_ok());
     assert!(test_client_cut_event(test_state.clone(), port).is_ok());

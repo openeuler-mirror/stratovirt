@@ -103,7 +103,7 @@ impl Sandbox {
     ) -> Result<()> {
         // If vhost_user_fs/src/set_signal_handlers do not register SIGTERM.
         // Child process became orphan process when parent process died.
-        // Beacuse child process can not receive signal notification from parent process.
+        // Because child process can not receive signal notification from parent process.
         // This is the signal that the calling process will get when its parent died.
         if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } == -1 {
             bail!("prctl fail");
@@ -197,7 +197,7 @@ impl Sandbox {
     pub fn parent_process_wait_child(&self, fork_ans: i32) -> Result<()> {
         capng::clear(capng::Set::BOTH);
         if let Err(err) = capng::apply(capng::Set::BOTH) {
-            error!("apply fail {}", err);
+            error!("apply fail {:?}", err);
         }
 
         let mut wstatus = 0;

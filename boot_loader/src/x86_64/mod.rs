@@ -59,11 +59,11 @@ mod standard_boot;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use address_space::AddressSpace;
-use devices::legacy::FwCfgOps;
+use anyhow::{Context, Result};
 use kvm_bindings::kvm_segment;
 
-use anyhow::{bail, Result};
+use address_space::AddressSpace;
+use devices::legacy::FwCfgOps;
 
 const ZERO_PAGE_START: u64 = 0x0000_7000;
 const PML4_START: u64 = 0x0000_9000;
@@ -143,10 +143,8 @@ pub fn load_linux(
     if config.prot64_mode {
         direct_boot::load_linux(config, sys_mem)
     } else {
-        if fwcfg.is_none() {
-            bail!("Failed to load linux: No FwCfg provided");
-        }
-        let mut locked_fwcfg = fwcfg.unwrap().lock().unwrap();
+        let fwcfg = fwcfg.with_context(|| "Failed to load linux: No FwCfg provided")?;
+        let mut locked_fwcfg = fwcfg.lock().unwrap();
         standard_boot::load_linux(config, sys_mem, &mut *locked_fwcfg)?;
 
         Ok(X86BootLoader {

@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -42,9 +43,10 @@ use crate::{
     ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
+const RNG_SIZE_MAX: u32 = 1 << 20;
 
 fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
     let mut size = 0_u32;
@@ -54,6 +56,8 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
             None => bail!("The size of request for virtio rng overflows"),
         };
     }
+
+    size = min(size, RNG_SIZE_MAX);
 
     Ok(size)
 }
@@ -69,12 +73,20 @@ struct RngHandler {
 }
 
 impl RngHandler {
-    fn write_req_data(&self, in_iov: &[ElemIovec], buffer: &mut [u8]) -> Result<()> {
+    fn write_req_data(&self, in_iov: &[ElemIovec], buffer: &mut [u8], size: u32) -> Result<()> {
         let mut offset = 0_usize;
         for iov in in_iov {
+            if offset as u32 >= size {
+                break;
+            }
             self.mem_space
-                .write(&mut buffer[offset..].as_ref(), iov.addr, iov.len as u64)
+                .write(
+                    &mut buffer[offset..].as_ref(),
+                    iov.addr,
+                    min(size - offset as u32, iov.len) as u64,
+                )
                 .with_context(|| "Failed to write request data for virtio rng")?;
+
             offset += iov.len as usize;
         }
 
@@ -86,10 +98,6 @@ impl RngHandler {
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
 
-        if !queue_lock.is_enabled() {
-            return Ok(());
-        }
-
         while let Ok(elem) = queue_lock
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
@@ -97,7 +105,7 @@ impl RngHandler {
             if elem.desc_num == 0 {
                 break;
             }
-            let size =
+            let mut size =
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
@@ -118,11 +126,12 @@ impl RngHandler {
                 size as usize,
                 0,
             );
-            if ret < 0 || ret as u32 != size {
+            if ret < 0 {
                 bail!("Failed to read random file, size: {}", size);
             }
+            size = ret as u32;
 
-            self.write_req_data(&elem.in_iovec, &mut buffer)?;
+            self.write_req_data(&elem.in_iovec, &mut buffer, size)?;
 
             queue_lock
                 .vring
@@ -140,10 +149,7 @@ impl RngHandler {
         if need_interrupt {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "rng",
-                        VirtioInterruptType::Vring
-                    ))
+                    VirtioError::InterruptTrigger("rng", VirtioInterruptType::Vring)
                 })?;
             self.trace_send_interrupt("Rng".to_string());
         }
@@ -321,11 +327,11 @@ impl VirtioDevice for Rng {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<Arc<EventFd>>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let handler = RngHandler {
             queue: queues[0].clone(),
-            queue_evt: queue_evts.remove(0),
+            queue_evt: queue_evts[0].clone(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             mem_space,
@@ -359,17 +365,13 @@ impl StateTransfer for Rng {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *RngState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("RNG")))?;
+            .with_context(|| migration::error::MigrationError::FromBytesError("RNG"))?;
 
         Ok(())
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&RngState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&RngState::descriptor().name).unwrap_or(!0)
     }
 }
 
@@ -552,7 +554,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 
@@ -635,7 +637,7 @@ mod tests {
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
+                    .with_context(|| VirtioError::EventFdWrite)
             },
         ) as VirtioInterrupt);
 

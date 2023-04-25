@@ -264,7 +264,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -296,7 +296,7 @@ impl PFlash {
             // Repeat data for PFlash device which supports x16-mode but works in x8-mode.
             for i in 1..self.max_device_width {
                 resp = deposit_u32(resp, 8 * i, 8, self.cfi_table[index as usize] as u32)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
             }
         }
         // Responses are repeated for every device in bank.
@@ -304,7 +304,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| anyhow!("Failed to deposit bits to u32"))?;
+                    .with_context(|| "Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -328,7 +328,7 @@ impl PFlash {
 
         let addr: u64 = mr
             .get_host_address()
-            .ok_or_else(|| anyhow!("Failed to get host address."))?;
+            .with_context(|| "Failed to get host address.")?;
         let ret = unsafe {
             // Safe as addr and size are valid.
             libc::msync(
@@ -391,10 +391,8 @@ impl PFlash {
             0x00 | 0xf0 | 0xff => {
                 if let Err(e) = self.set_read_array_mode(false) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
-                        cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
+                        cmd, e
                     );
                     return false;
                 }
@@ -408,14 +406,11 @@ impl PFlash {
                 if !self.read_only {
                     let all_one = vec![0xff_u8; self.block_len as usize];
                     if let Err(e) = self.write_data(all_one.as_slice(), offset_mask) {
-                        error!("{}", format!("Failed to write PFlash device: {:?}.", e));
+                        error!("Failed to write PFlash device: {:?}", e);
                     }
 
                     if let Err(e) = self.update_content(offset_mask, self.block_len) {
-                        error!(
-                            "{}",
-                            format!("Failed to update content for PFlash device: {:?}.", e)
-                        );
+                        error!("Failed to update content for PFlash device: {:?}", e);
                     }
                 } else {
                     // Block erase error.
@@ -428,10 +423,8 @@ impl PFlash {
                 self.status = 0x0;
                 if let Err(e) = self.set_read_array_mode(false) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
-                        cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
+                        cmd, e
                     );
                     return false;
                 }
@@ -454,10 +447,8 @@ impl PFlash {
             _ => {
                 if let Err(e) = self.set_read_array_mode(true) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
-                        cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
+                        cmd, e
                     );
                     return false;
                 }
@@ -484,10 +475,7 @@ impl PFlash {
                         error!("Failed to write to PFlash device: {:?}.", e);
                     }
                     if let Err(e) = self.update_content(offset, data_len.into()) {
-                        error!(
-                            "{}",
-                            format!("Failed to update content for PFlash device: {:?}.", e)
-                        );
+                        error!("Failed to update content for PFlash device: {:?}", e);
                     }
                 } else {
                     self.status |= 0x10;
@@ -501,22 +489,18 @@ impl PFlash {
                     self.status |= 0x80;
                 } else if cmd == 0xff {
                     if let Err(e) = self.set_read_array_mode(false) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
                     return true;
                 } else {
                     if let Err(e) = self.set_read_array_mode(true) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             self.cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
@@ -531,8 +515,8 @@ impl PFlash {
                 } else {
                     self.bank_width * 8
                 };
-                value = if let Some(v) = extract_u32(value, 0, length) {
-                    v
+                if let Some(v) = extract_u32(value, 0, length) {
+                    value = v;
                 } else {
                     error!("Failed to extract bits from u32 value");
                     return false;
@@ -546,22 +530,18 @@ impl PFlash {
                     self.status |= 0x80;
                 } else if cmd == 0xff {
                     if let Err(e) = self.set_read_array_mode(false) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             self.cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
                     return true;
                 } else {
                     if let Err(e) = self.set_read_array_mode(true) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             self.cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
@@ -571,11 +551,9 @@ impl PFlash {
             0x98 => {
                 if cmd == 0xff {
                     if let Err(e) = self.set_read_array_mode(false) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             self.cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
@@ -585,10 +563,8 @@ impl PFlash {
             _ => {
                 if let Err(e) = self.set_read_array_mode(true) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
-                        self.cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
+                        self.cmd, e
                     );
                     return false;
                 }
@@ -603,7 +579,7 @@ impl PFlash {
             0xe8 => {
                 if !self.read_only {
                     if let Err(e) = self.write_data(data, offset) {
-                        error!("{}", format!("Failed to write to PFlash device: {:?}.", e));
+                        error!("Failed to write to PFlash device: {:?}", e);
                     }
                 } else {
                     self.status |= 0x10;
@@ -614,10 +590,7 @@ impl PFlash {
                     self.write_cycle += 1;
                     if !self.read_only {
                         if let Err(e) = self.update_content(offset & mask, self.write_blk_size) {
-                            error!(
-                                "{}",
-                                format!("Failed to update content for PFlash device: {:?}.", e)
-                            );
+                            error!("Failed to update content for PFlash device: {:?}", e);
                         }
                     } else {
                         self.status |= 0x10;
@@ -629,10 +602,8 @@ impl PFlash {
             _ => {
                 if let Err(e) = self.set_read_array_mode(true) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 2, cmd 0x{:x}, error is {:?}",
-                        self.cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 2, cmd 0x{:x}, error is {:?}",
+                        self.cmd, e
                     );
                     return false;
                 }
@@ -650,11 +621,9 @@ impl PFlash {
                     self.status |= 0x80;
                 } else {
                     if let Err(e) = self.set_read_array_mode(false) {
-                        error!(
-                            "{}", 
-                            format!("Failed to set read array mode, write cycle 3, cmd 0x{:x}, error is {:?}",
+                        error!("Failed to set read array mode, write cycle 3, cmd 0x{:x}, error is {:?}",
                             self.cmd,
-                            e)
+                            e
                         );
                         return false;
                     }
@@ -664,10 +633,8 @@ impl PFlash {
             _ => {
                 if let Err(e) = self.set_read_array_mode(true) {
                     error!(
-                        "{}", 
-                        format!("Failed to set read array mode, write cycle 3, cmd 0x{:x}, error is {:?}",
-                        self.cmd,
-                        e)
+                        "Failed to set read array mode, write cycle 3, cmd 0x{:x}, error is {:?}",
+                        self.cmd, e
                     );
                     return false;
                 }
@@ -737,7 +704,7 @@ impl SysBusDevOps for PFlash {
                     while i < data_len {
                         match self.query_devid(offset + (i * self.bank_width) as u64) {
                             Err(e) => {
-                                error!("{}", format!("Failed to query devid {:?}.", e));
+                                error!("Failed to query devid {:?}", e);
                                 break;
                             }
                             Ok(fieldval) => {
@@ -777,7 +744,7 @@ impl SysBusDevOps for PFlash {
                     while i < data_len {
                         match self.query_cfi(offset + (i * self.bank_width) as u64) {
                             Err(e) => {
-                                error!("{}", format!("Failed to query devid, {:?}.", e));
+                                error!("Failed to query devid, {:?}", e);
                                 break;
                             }
                             Ok(fieldval) => {
@@ -804,7 +771,7 @@ impl SysBusDevOps for PFlash {
                 self.write_cycle = 0;
                 self.cmd = 0x00;
                 if let Err(e) = self.read_data(data, offset) {
-                    error!("{}", format!("Failed to read data from PFlash: {:?}.", e));
+                    error!("Failed to read data from PFlash: {:?}", e);
                 }
             }
         }

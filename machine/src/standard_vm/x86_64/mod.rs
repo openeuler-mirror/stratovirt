@@ -37,6 +37,8 @@ use devices::legacy::{
 };
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
     NumaNodes, PFlashConfig, SerialConfig, VmConfig,
@@ -51,7 +53,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+use sysbus::SysBus;
 use syscall::syscall_whitelist;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
@@ -61,10 +63,9 @@ use self::ich9_lpc::SLEEP_CTRL_OFFSET;
 use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineOps};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 #[cfg(not(target_env = "musl"))]
-use ui::vnc;
-use virtio::ScsiCntlr::ScsiCntlrMap;
+use ui::{gtk::gtk_display_init, vnc::vnc_init};
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -95,6 +96,21 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
 ];
 
+/// The type of Irq entry on aarch64
+enum IrqEntryType {
+    #[allow(unused)]
+    Uart,
+    Sysbus,
+    Pcie,
+}
+
+/// IRQ MAP of x86_64
+const IRQ_MAP: &[(i32, i32)] = &[
+    (4, 4),   // Uart
+    (5, 15),  // Sysbus
+    (16, 19), // Pcie
+];
+
 /// Standard machine structure.
 pub struct StdMachine {
     /// `vCPU` topology, support sockets, cores, threads.
@@ -115,6 +131,8 @@ pub struct StdMachine {
     boot_source: Arc<Mutex<BootSource>>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
+    /// Shutdown_req, handle VM 'ShutDown' event.
+    shutdown_req: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
@@ -123,8 +141,6 @@ pub struct StdMachine {
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
-    /// Scsi Controller List.
-    scsi_cntlr_list: ScsiCntlrMap,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
@@ -141,13 +157,16 @@ impl StdMachine {
             vm_config.machine_config.max_cpus,
         );
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .with_context(|| anyhow!(MachineError::CrtMemSpaceErr))?;
+            .with_context(|| MachineError::CrtMemSpaceErr)?;
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
+            .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
-            (IRQ_BASE, IRQ_MAX),
+            (
+                IRQ_MAP[IrqEntryType::Sysbus as usize].0,
+                IRQ_MAP[IrqEntryType::Sysbus as usize].1,
+            ),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -167,17 +186,23 @@ impl StdMachine {
                 &sys_mem,
                 MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
                 MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+                IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
-                anyhow!(MachineError::InitEventFdErr("reset request".to_string()))
-            })?),
+            reset_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("reset request".to_string()))?,
+            ),
+            shutdown_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                    MachineError::InitEventFdErr("shutdown request".to_string())
+                })?,
+            ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
-            scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
@@ -234,12 +259,12 @@ impl StdMachine {
 
         vm_fd
             .set_identity_map_address(identity_addr)
-            .with_context(|| anyhow!(MachineError::SetIdentityMapAddr))?;
+            .with_context(|| MachineError::SetIdentityMapAddr)?;
 
         // Page table takes 1 page, TSS takes the following 3 pages.
         vm_fd
             .set_tss_address((identity_addr + 0x1000) as usize)
-            .with_context(|| anyhow!(MachineError::SetTssErr))?;
+            .with_context(|| MachineError::SetTssErr)?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -247,14 +272,19 @@ impl StdMachine {
         };
         vm_fd
             .create_pit2(pit_config)
-            .with_context(|| anyhow!(MachineError::CrtPitErr))?;
+            .with_context(|| MachineError::CrtPitErr)?;
         Ok(())
     }
 
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone(), self.reset_req.clone())?;
+        let ich = ich9_lpc::LPCBridge::new(
+            root_bus,
+            self.sys_io.clone(),
+            self.reset_req.clone(),
+            self.shutdown_req.clone(),
+        )?;
         self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
@@ -307,7 +337,7 @@ impl StdMachineOps for StdMachine {
         let boot_order = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bootorder", boot_order)
-            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bootorder".to_string())))?;
+            .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .with_context(|| "Failed to realize fwcfg device")?;
@@ -349,7 +379,7 @@ impl MachineOps for StdMachine {
             .as_ref()
             .unwrap()
             .create_irq_chip()
-            .with_context(|| anyhow!(MachineError::CrtIrqchipErr))?;
+            .with_context(|| MachineError::CrtIrqchipErr)?;
         KVM_FDS
             .load()
             .irq_route_table
@@ -379,7 +409,7 @@ impl MachineOps for StdMachine {
             prot64_mode: false,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
+            .with_context(|| MachineError::LoadKernErr)?;
 
         Ok(CPUBootConfig {
             prot64_mode: false,
@@ -438,14 +468,12 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| anyhow!(StandardVmError::InitPCIeHostErr))?;
+            .with_context(|| StandardVmError::InitPCIeHostErr)?;
         locked_vm
             .init_ich9_lpc(clone_vm)
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
-        #[cfg(not(target_env = "musl"))]
-        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
-            .with_context(|| "Failed to init VNC server!")?;
+
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
@@ -475,6 +503,11 @@ impl MachineOps for StdMachine {
         locked_vm
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
+
+        #[cfg(not(target_env = "musl"))]
+        locked_vm
+            .display_init(vm_config)
+            .with_context(|| "Fail to init display")?;
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
@@ -534,7 +567,7 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.read_only,
             )
-            .with_context(|| anyhow!(StandardVmError::InitPflashErr))?;
+            .with_context(|| StandardVmError::InitPflashErr)?;
             PFlash::realize(
                 pflash,
                 &mut self.sysbus,
@@ -542,10 +575,32 @@ impl MachineOps for StdMachine {
                 pfl_size,
                 backend,
             )
-            .with_context(|| anyhow!(StandardVmError::RlzPflashErr))?;
+            .with_context(|| StandardVmError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 
+        Ok(())
+    }
+
+    /// Create display.
+    #[cfg(not(target_env = "musl"))]
+    fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
+        // GTK display init.
+        match vm_config.display {
+            Some(ref ds_cfg) if ds_cfg.gtk => {
+                let ui_context = UiContext {
+                    vm_name: vm_config.guest_name.clone(),
+                    power_button: self.shutdown_req.clone(),
+                };
+                gtk_display_init(ds_cfg, ui_context)
+                    .with_context(|| "Failed to init GTK display!")?;
+            }
+            _ => {}
+        };
+
+        // VNC display init.
+        vnc_init(&vm_config.vnc, &vm_config.object)
+            .with_context(|| "Failed to init VNC server!")?;
         Ok(())
     }
 
@@ -590,10 +645,6 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
-    }
-
-    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
-        Some(&self.scsi_cntlr_list)
     }
 }
 

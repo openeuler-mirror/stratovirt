@@ -14,17 +14,17 @@ use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
-    MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig,
+    DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
-use util::aio::{aio_probe, AioEngine};
+use util::aio::{aio_probe, AioEngine, WriteZeroesState};
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
@@ -68,6 +68,8 @@ pub struct BlkDevConfig {
     pub socket_path: Option<String>,
     pub aio: AioEngine,
     pub queue_size: u16,
+    pub discard: bool,
+    pub write_zeroes: WriteZeroesState,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,8 @@ impl Default for BlkDevConfig {
             socket_path: None,
             aio: AioEngine::Native,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
         }
     }
 }
@@ -108,6 +112,9 @@ pub struct DriveConfig {
     pub direct: bool,
     pub iops: Option<u64>,
     pub aio: AioEngine,
+    pub media: String,
+    pub discard: bool,
+    pub write_zeroes: WriteZeroesState,
 }
 
 impl Default for DriveConfig {
@@ -119,6 +126,9 @@ impl Default for DriveConfig {
             direct: true,
             iops: None,
             aio: AioEngine::Native,
+            media: "disk".to_string(),
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
         }
     }
 }
@@ -165,12 +175,8 @@ impl DriveConfig {
 
 impl ConfigCheck for DriveConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "Drive id".to_string(),
-                MAX_STRING_LENGTH
-            )));
-        }
+        check_arg_too_long(&self.id, "Drive id")?;
+
         if self.path_on_host.len() > MAX_PATH_LENGTH {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "Drive device path".to_string(),
@@ -200,19 +206,21 @@ impl ConfigCheck for DriveConfig {
                 "low performance expected when use sync io with \"direct\" on".to_string(),
             )));
         }
+
+        if !["disk", "cdrom"].contains(&self.media.as_str()) {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "media".to_string(),
+                "media should be \"disk\" or \"cdrom\"".to_string(),
+            )));
+        }
+
         Ok(())
     }
 }
 
 impl ConfigCheck for BlkDevConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "drive device id".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
+        check_arg_too_long(&self.id, "drive device id")?;
         if self.serial_num.is_some() && self.serial_num.as_ref().unwrap().len() > MAX_SERIAL_NUM {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive serial number".to_string(),
@@ -277,17 +285,12 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         }
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        drive.id = id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "blk")));
-    }
-
-    if let Some(file) = cmd_parser.get_value::<String>("file")? {
-        drive.path_on_host = file;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("file", "blk")));
-    }
+    drive.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "blk".to_string()))?;
+    drive.path_on_host = cmd_parser
+        .get_value::<String>("file")?
+        .with_context(|| ConfigError::FieldIsMissing("file".to_string(), "blk".to_string()))?;
 
     if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
         drive.read_only = read_only.into();
@@ -303,6 +306,16 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
             AioEngine::Off
         }
     });
+    drive.media = cmd_parser
+        .get_value::<String>("media")?
+        .unwrap_or_else(|| "disk".to_string());
+    if let Some(discard) = cmd_parser.get_value::<ExBool>("discard")? {
+        drive.discard = discard.into();
+    }
+    drive.write_zeroes = cmd_parser
+        .get_value::<WriteZeroesState>("detect-zeroes")?
+        .unwrap_or(WriteZeroesState::Off);
+
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -337,11 +350,9 @@ pub fn parse_blk(
         blkdevcfg.boot_index = Some(boot_index);
     }
 
-    let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
-        drive
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "blk")));
-    };
+    let blkdrive = cmd_parser
+        .get_value::<String>("drive")?
+        .with_context(|| ConfigError::FieldIsMissing("drive".to_string(), "blk".to_string()))?;
 
     if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
         blkdevcfg.iothread = Some(iothread);
@@ -351,11 +362,9 @@ pub fn parse_blk(
         blkdevcfg.serial_num = Some(serial);
     }
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        blkdevcfg.id = id;
-    } else {
-        bail!("No id configured for blk device");
-    }
+    blkdevcfg.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| "No id configured for blk device")?;
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
@@ -373,6 +382,8 @@ pub fn parse_blk(
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
         blkdevcfg.aio = drive_arg.aio;
+        blkdevcfg.discard = drive_arg.discard;
+        blkdevcfg.write_zeroes = drive_arg.write_zeroes;
     } else {
         bail!("No drive configured matched for blk device");
     }
@@ -406,20 +417,16 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.boot_index = Some(boot_index);
     }
 
-    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
-        blkdevcfg.chardev = Some(chardev);
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev",
-            "vhost-user-blk-pci"
-        )));
-    };
+    blkdevcfg.chardev = cmd_parser
+        .get_value::<String>("chardev")?
+        .map(Some)
+        .with_context(|| {
+            ConfigError::FieldIsMissing("chardev".to_string(), "vhost-user-blk-pci".to_string())
+        })?;
 
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        blkdevcfg.id = id;
-    } else {
-        bail!("No id configured for blk device");
-    }
+    blkdevcfg.id = cmd_parser
+        .get_value::<String>("id")?
+        .with_context(|| "No id configured for blk device")?;
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
@@ -475,11 +482,9 @@ impl VmConfig {
         cmd_parser.push("if");
 
         cmd_parser.get_parameters(drive_config)?;
-        let drive_type = if let Some(_type) = cmd_parser.get_value::<String>("if")? {
-            _type
-        } else {
-            "none".to_string()
-        };
+        let drive_type = cmd_parser
+            .get_value::<String>("if")?
+            .unwrap_or_else(|| "none".to_string());
         match drive_type.as_str() {
             "none" => {
                 self.add_block_drive(drive_config)?;
@@ -495,7 +500,8 @@ impl VmConfig {
         Ok(())
     }
 
-    fn add_block_drive(&mut self, block_config: &str) -> Result<()> {
+    /// Add block drive config to vm and return the added drive config.
+    pub fn add_block_drive(&mut self, block_config: &str) -> Result<DriveConfig> {
         let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")
@@ -505,11 +511,15 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("aio");
+            .push("aio")
+            .push("media")
+            .push("discard")
+            .push("detect-zeroes");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
-        self.add_drive_with_config(drive_cfg)
+        self.add_drive_with_config(drive_cfg.clone())?;
+        Ok(drive_cfg)
     }
 
     /// Add drive config to vm config.
@@ -624,21 +634,17 @@ impl VmConfig {
                 bail!("Only \'raw\' type of pflash is supported");
             }
         }
-        if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
-            pflash.path_on_host = drive_path;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("file", "pflash")));
-        }
+        pflash.path_on_host = cmd_parser.get_value::<String>("file")?.with_context(|| {
+            ConfigError::FieldIsMissing("file".to_string(), "pflash".to_string())
+        })?;
 
         if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
             pflash.read_only = read_only.into();
         }
 
-        if let Some(unit_id) = cmd_parser.get_value::<u64>("unit")? {
-            pflash.unit = unit_id as usize;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing("unit", "pflash")));
-        }
+        pflash.unit = cmd_parser.get_value::<u64>("unit")?.with_context(|| {
+            ConfigError::FieldIsMissing("unit".to_string(), "pflash".to_string())
+        })? as usize;
 
         pflash.check()?;
         self.add_flashdev(pflash)
@@ -844,5 +850,53 @@ mod tests {
             assert!(vm_config.del_drive_by_id(*id).is_ok());
             assert!(vm_config.drives.get(*id).is_none());
         }
+    }
+
+    #[test]
+    fn test_drive_config_discard() {
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=ignore")
+            .unwrap();
+        assert_eq!(drive_conf.discard, false);
+
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=unmap")
+            .unwrap();
+        assert_eq!(drive_conf.discard, true);
+
+        let mut vm_config = VmConfig::default();
+        let ret = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,discard=invalid")
+            .is_err();
+        assert_eq!(ret, true);
+    }
+
+    #[test]
+    fn test_drive_config_write_zeroes() {
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,detect-zeroes=off")
+            .unwrap();
+        assert_eq!(drive_conf.write_zeroes, WriteZeroesState::Off);
+
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,detect-zeroes=on")
+            .unwrap();
+        assert_eq!(drive_conf.write_zeroes, WriteZeroesState::On);
+
+        let mut vm_config = VmConfig::default();
+        let drive_conf = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,detect-zeroes=unmap")
+            .unwrap();
+        assert_eq!(drive_conf.write_zeroes, WriteZeroesState::Unmap);
+
+        let mut vm_config = VmConfig::default();
+        let ret = vm_config
+            .add_block_drive("id=rootfs,file=/path/to/rootfs,detect-zeroes=invalid")
+            .is_err();
+        assert_eq!(ret, true);
     }
 }

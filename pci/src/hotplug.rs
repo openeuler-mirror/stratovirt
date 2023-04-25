@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{PciBus, PciDevOps};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 pub trait HotplugOps: Send {
     /// Plug device, usually called when hot plug device in device_add.
@@ -63,19 +63,21 @@ pub fn handle_plug(bus: &Arc<Mutex<PciBus>>, dev: &Arc<Mutex<dyn PciDevOps>>) ->
 /// Return Error if
 /// * No hot plug controller found.
 /// * Device unplug request failed.
-pub fn handle_unplug_request(
+pub fn handle_unplug_pci_request(
     bus: &Arc<Mutex<PciBus>>,
     dev: &Arc<Mutex<dyn PciDevOps>>,
 ) -> Result<()> {
     let locked_bus = bus.lock().unwrap();
-    let hpc = if let Some(hpc) = locked_bus.hotplug_controller.as_ref() {
-        hpc.clone()
-    } else {
-        bail!(
-            "No hot plug controller found for bus {} when unplug request",
-            locked_bus.name
-        );
-    };
+    let hpc = locked_bus
+        .hotplug_controller
+        .as_ref()
+        .cloned()
+        .with_context(|| {
+            format!(
+                "No hot plug controller found for bus {} when unplug request",
+                locked_bus.name
+            )
+        })?;
     // No need to hold the lock.
     drop(locked_bus);
     hpc.upgrade().unwrap().lock().unwrap().unplug_request(dev)

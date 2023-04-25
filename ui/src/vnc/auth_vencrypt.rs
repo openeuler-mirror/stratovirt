@@ -161,7 +161,7 @@ impl ClientIoHandler {
                 dis_conn = true;
             } else if event & EventSet::IN == EventSet::IN {
                 if let Err(e) = tls_io_channel.borrow_mut().tls_handshake() {
-                    error!("Tls handle shake error: {}", e);
+                    error!("Tls handle shake error: {:?}", e);
                     dis_conn = true;
                 }
             }

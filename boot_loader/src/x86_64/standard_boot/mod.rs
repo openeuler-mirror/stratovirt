@@ -29,7 +29,7 @@ use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::error::BootLoaderError;
 use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED, UEFI_OVMF_ID};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 fn load_image(
     image: &mut File,
@@ -103,7 +103,7 @@ fn load_initrd(
     };
 
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
-        .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
+        .with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
@@ -208,7 +208,7 @@ pub fn load_linux(
     }
 
     let mut kernel_image = File::open(config.kernel.as_ref().unwrap().clone())
-        .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenKernel))?;
+        .with_context(|| BootLoaderError::BootLoaderOpenKernel)?;
 
     let mut boot_header = RealModeKernelHeader::default();
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;

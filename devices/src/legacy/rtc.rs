@@ -274,7 +274,7 @@ impl RTC {
     fn inject_interrupt(&self) {
         if let Some(evt_fd) = self.interrupt_evt() {
             if let Err(e) = evt_fd.write(1) {
-                error!("cmos rtc: failed to write interrupt eventfd ({}).", e);
+                error!("cmos rtc: failed to write interrupt eventfd ({:?}).", e);
             }
             return;
         }

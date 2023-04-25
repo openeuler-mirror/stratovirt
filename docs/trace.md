@@ -9,7 +9,7 @@ Ftrace is a tracer provided by Linux kernel, which can help linux developers to
 debug or analyze issues. As ftrace can avoid performance penalty, it's especially
 suited for performance issues.
 
-StratoVirt use ftrace by writting trace data to ftrace marker, and developers can
+StratoVirt use ftrace by writing trace data to ftrace marker, and developers can
 read trace records from *trace* file under mounted ftrace director,
 e.g. /sys/kernel/debug/tracing/trace.
 

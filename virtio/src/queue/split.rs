@@ -189,15 +189,15 @@ impl SplitVringDesc {
         let desc_addr = desc_table_host
             .checked_add(u64::from(index) * DESCRIPTOR_LEN)
             .with_context(|| {
-                anyhow!(VirtioError::AddressOverflow(
+                VirtioError::AddressOverflow(
                     "creating a descriptor",
                     desc_table_host,
                     u64::from(index) * DESCRIPTOR_LEN,
-                ))
+                )
             })?;
         let desc = sys_mem
             .read_object_direct::<SplitVringDesc>(desc_addr)
-            .with_context(|| anyhow!(VirtioError::ReadObjectErr("a descriptor", desc_addr)))?;
+            .with_context(|| VirtioError::ReadObjectErr("a descriptor", desc_addr))?;
 
         if desc.is_valid(sys_mem, queue_size, cache) {
             Ok(desc)
@@ -340,13 +340,13 @@ impl SplitVringDesc {
                 }
                 desc_table_host = sys_mem
                     .get_host_address_from_cache(desc.addr, cache)
-                    .ok_or_else(|| anyhow!("Failed to get descriptor table entry host address"))?;
+                    .with_context(|| "Failed to get descriptor table entry host address")?;
                 queue_size = desc.get_desc_num();
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, 0, cache)?;
                 desc_size = elem
                     .desc_num
                     .checked_add(queue_size)
-                    .ok_or_else(|| anyhow!("The chained desc number overflows"))?;
+                    .with_context(|| "The chained desc number overflows")?;
                 continue;
             }
 
@@ -429,10 +429,7 @@ impl SplitVring {
         sys_mem
             .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
             .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr(
-                    "avail flags idx",
-                    self.avail_ring.raw_value()
-                ))
+                VirtioError::ReadObjectErr("avail flags idx", self.avail_ring.raw_value())
             })
     }
 
@@ -455,10 +452,7 @@ impl SplitVring {
         sys_mem
             .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
             .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr(
-                    "used flags idx",
-                    self.used_ring.raw_value()
-                ))
+                VirtioError::ReadObjectErr("used flags idx", self.used_ring.raw_value())
             })
     }
 
@@ -518,14 +512,12 @@ impl SplitVring {
             VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
         // Make sure the event idx read from sys_mem is new.
         fence(Ordering::SeqCst);
-        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let used_event_addr = self.addr_cache.avail_ring_host + used_event_offset;
         let used_event = sys_mem
             .read_object_direct::<u16>(used_event_addr)
-            .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr("used event id", used_event_addr))
-            })?;
+            .with_context(|| VirtioError::ReadObjectErr("used event id", used_event_addr))?;
 
         Ok(used_event)
     }
@@ -679,16 +671,13 @@ impl SplitVring {
     ) -> Result<()> {
         let index_offset = VRING_FLAGS_AND_IDX_LEN
             + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
-        // The GPA of avail_ring_host with avail table lenth has been checked in
+        // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
         let desc_index = sys_mem
             .read_object_direct::<u16>(desc_index_addr)
             .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr(
-                    "the index of descriptor",
-                    desc_index_addr
-                ))
+                VirtioError::ReadObjectErr("the index of descriptor", desc_index_addr)
             })?;
 
         let desc = SplitVringDesc::new(
@@ -749,7 +738,7 @@ impl VringOps for SplitVring {
 
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
         let mut element = Element::new(0);
-        if self.avail_ring_len(sys_mem)? == 0 {
+        if !self.is_enabled() || self.avail_ring_len(sys_mem)? == 0 {
             return Ok(element);
         }
 

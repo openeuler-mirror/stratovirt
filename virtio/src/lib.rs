@@ -30,7 +30,21 @@ pub mod error;
 mod queue;
 mod transport;
 pub mod vhost;
-pub use anyhow::Result;
+
+use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::eventfd::EventFd;
+
+use address_space::AddressSpace;
+use machine_manager::config::ConfigCheck;
+use util::aio::mem_to_buf;
+use util::num_ops::write_u32;
+use util::AsAny;
+
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState};
 pub use device::console::{Console, VirtioConsoleState};
@@ -38,29 +52,14 @@ pub use device::console::{Console, VirtioConsoleState};
 pub use device::gpu::*;
 pub use device::net::*;
 pub use device::rng::{Rng, RngState};
-pub use device::scsi::bus as ScsiBus;
-pub use device::scsi::controller as ScsiCntlr;
-pub use device::scsi::disk as ScsiDisk;
+pub use device::scsi_cntlr as ScsiCntlr;
 pub use error::VirtioError;
 pub use error::*;
-use log::{error, warn};
 pub use queue::*;
 pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use transport::virtio_pci::VirtioPciDevice;
 pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
-
-use std::cmp;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
-use address_space::AddressSpace;
-use anyhow::anyhow;
-use anyhow::bail;
-use machine_manager::config::ConfigCheck;
-use util::aio::mem_to_buf;
-use util::num_ops::write_u32;
-use vmm_sys_util::eventfd::EventFd;
 
 /// Check if the bit of features is configured.
 pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {
@@ -154,6 +153,8 @@ pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
 pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
+/// Unmap flags for write zeroes command.
+pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
 
@@ -179,7 +180,7 @@ pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
 
 /// The driver can send control commands for MAC address filtering.
 pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
-/// The driver sets the unicast/multicast addresse table.
+/// The driver sets the unicast/multicast address table.
 pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
 /// The driver sets the default MAC address which rx filtering accepts.
 pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
@@ -222,13 +223,17 @@ pub const VIRTIO_BLK_T_OUT: u32 = 1;
 pub const VIRTIO_BLK_T_FLUSH: u32 = 4;
 /// Device id
 pub const VIRTIO_BLK_T_GET_ID: u32 = 8;
+/// Discard command.
+pub const VIRTIO_BLK_T_DISCARD: u32 = 11;
+/// Write zeroes command.
+pub const VIRTIO_BLK_T_WRITE_ZEROES: u32 = 13;
 /// Device id length
 pub const VIRTIO_BLK_ID_BYTES: u32 = 20;
 /// Success
 pub const VIRTIO_BLK_S_OK: u8 = 0;
 /// IO Error.
 pub const VIRTIO_BLK_S_IOERR: u8 = 1;
-/// Unsupport.
+/// Unsupported.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 
 /// The Type of virtio gpu, refer to Virtio Spec.
@@ -306,7 +311,7 @@ pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
 
 /// The trait for virtio device operations.
-pub trait VirtioDevice: Send {
+pub trait VirtioDevice: Send + AsAny {
     /// Realize low level device.
     fn realize(&mut self) -> Result<()>;
 
@@ -333,7 +338,7 @@ pub trait VirtioDevice: Send {
         let unsupported_features = value & !self.get_device_features(page);
         if unsupported_features != 0 {
             warn!(
-                "Receive acknowlege request with unknown feature: {:x}",
+                "Receive acknowledge request with unknown feature: {:x}",
                 write_u32(value, page)
             );
             v &= !unsupported_features;
@@ -444,7 +449,7 @@ pub fn report_virtio_error(
     if virtio_has_feature(features, VIRTIO_F_VERSION_1) {
         interrupt_cb(&VirtioInterruptType::Config, None, true).unwrap_or_else(|e| {
             error!(
-                "Failed to trigger interrupt for virtio error, error is {}",
+                "Failed to trigger interrupt for virtio error, error is {:?}",
                 e
             )
         });
@@ -453,7 +458,7 @@ pub fn report_virtio_error(
     broken.store(true, Ordering::SeqCst);
 }
 
-/// Read iovec to buf and return the readed number of bytes.
+/// Read iovec to buf and return the read number of bytes.
 pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;
@@ -463,7 +468,7 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
         end = cmp::min(start + iov.len as usize, buf.len());
         hva = mem_space
             .get_host_address(iov.addr)
-            .ok_or_else(|| anyhow!("Map iov base failed"))?;
+            .with_context(|| "Map iov base failed")?;
         mem_to_buf(&mut buf[start..end], hva)?;
         if end >= buf.len() {
             break;

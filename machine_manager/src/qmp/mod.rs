@@ -197,16 +197,8 @@ impl QmpGreeting {
     /// * `minor` - Minor version number.
     /// * `major` - Major version number.
     pub fn create_greeting(micro: u8, minor: u8, major: u8) -> Self {
-        let version_number = VersionNumber {
-            micro,
-            minor,
-            major,
-        };
+        let version = Version::new(micro, minor, major);
         let cap: Vec<String> = Default::default();
-        let version = Version {
-            application: version_number,
-            package: "".to_string(),
-        };
         let greeting = Greeting {
             version,
             capabilities: cap,
@@ -399,7 +391,7 @@ pub fn handle_qmp(
         }
         (Err(e), _) => {
             let err_resp = schema::QmpErrorClass::GenericError(format!("{}", &e));
-            warn!("Qmp json parser made an error:{}", e);
+            warn!("Qmp json parser made an error: {:?}", e);
             qmp_service.send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
             ))?)?;
@@ -466,7 +458,8 @@ fn qmp_command_exec(
         (blockdev_add, blockdev_add),
         (netdev_add, netdev_add),
         (chardev_add, chardev_add),
-        (update_region, update_region)
+        (update_region, update_region),
+        (human_monitor_command, human_monitor_command)
     );
 
     // Handle the Qmp command which macro can't cover
@@ -589,6 +582,19 @@ impl QmpChannel {
     }
 }
 
+/// Send device deleted message to qmp client.
+pub fn send_device_deleted_msg(id: &str) {
+    if QmpChannel::is_connected() {
+        let deleted_event = schema::DeviceDeleted {
+            device: Some(id.to_string()),
+            path: format!("/machine/peripheral/{}", id),
+        };
+        event!(DeviceDeleted; deleted_event);
+    } else {
+        warn!("Qmp channel is not connected while sending device deleted message");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,7 +614,7 @@ mod tests {
                             "minor": 0,
                             "major": 5
                         },
-                        "package": ""
+                        "package": "StratoVirt-2.2.0"
                     },
                     "capabilities": []
                 }

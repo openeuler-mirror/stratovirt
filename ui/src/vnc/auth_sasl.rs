@@ -74,7 +74,7 @@ impl SaslAuth {
     }
 }
 
-/// Struct of sasl authentiation.
+/// Struct of sasl authentication.
 #[derive(Debug, Clone)]
 pub struct SaslConfig {
     /// State of sasl connection .
@@ -289,7 +289,7 @@ impl ClientIoHandler {
                 vnc_flush(&client);
                 return Err(err);
             }
-            // Accpet auth.
+            // Accept auth.
             buf.append(&mut (0_u32).as_bytes().to_vec());
         }
 

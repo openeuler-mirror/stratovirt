@@ -61,7 +61,7 @@ impl Default for VirtioFsConfig {
 impl ByteCode for VirtioFsConfig {}
 
 struct VhostUserFsHandler {
-    interrup_cb: Arc<VirtioInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
 }
 
@@ -73,7 +73,7 @@ impl EventNotifierHelper for VhostUserFsHandler {
             read_fd(fd);
             let locked_vhost_user = vhost_user.lock().unwrap();
             for host_notify in locked_vhost_user.host_notifies.iter() {
-                if let Err(e) = (locked_vhost_user.interrup_cb)(
+                if let Err(e) = (locked_vhost_user.interrupt_cb)(
                     &VirtioInterruptType::Vring,
                     Some(&host_notify.queue.lock().unwrap()),
                     false,
@@ -209,7 +209,7 @@ impl VirtioDevice for Fs {
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
-        interrup_cb: Arc<VirtioInterrupt>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
@@ -233,7 +233,7 @@ impl VirtioDevice for Fs {
             }
 
             let handler = VhostUserFsHandler {
-                interrup_cb,
+                interrupt_cb,
                 host_notifies,
             };
 
@@ -269,7 +269,7 @@ impl VirtioDevice for Fs {
         self.config = VirtioFsConfig::default();
 
         let client = match &self.client {
-            None => return Err(anyhow!("Failed to get client when reseting virtio fs")),
+            None => return Err(anyhow!("Failed to get client when resetting virtio fs")),
             Some(client_) => client_,
         };
         client

@@ -22,7 +22,7 @@ use std::io::{self, BufRead, BufReader};
 use std::process::Command;
 use std::rc::Rc;
 use std::{thread, time};
-use util::offset_of;
+use util::{byte_code::ByteCode, offset_of};
 
 const BALLOON_F_DEFLATE_ON_OOM_TEST: u32 = 2;
 const BALLOON_F_PRPORTING_TEST: u32 = 5;
@@ -30,6 +30,8 @@ const BALLOON_F_VERSION1_TEST: u64 = 32;
 const PAGE_SIZE_UNIT: u64 = 4096;
 const TIMEOUT_US: u64 = 15 * 1000 * 1000;
 const MBSIZE: u64 = 1024 * 1024;
+const MEM_BUFFER_PERCENT_DEFAULT: u32 = 50;
+const MONITOR_INTERVAL_SECOND_DEFAULT: u32 = 10;
 
 fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
     let file = File::open(filename).unwrap();
@@ -63,13 +65,28 @@ pub struct VirtioBalloonTest {
     pub inf_queue: Rc<RefCell<TestVirtQueue>>,
     pub def_queue: Rc<RefCell<TestVirtQueue>>,
     pub fpr_queue: Option<Rc<RefCell<TestVirtQueue>>>,
+    pub auto_queue: Option<Rc<RefCell<TestVirtQueue>>>,
+}
+
+pub struct BalloonTestCfg {
+    pub fpr: bool,
+    pub auto_balloon: bool,
+    pub percent: u32,
+    pub interval: u32,
 }
 
 impl VirtioBalloonTest {
-    pub fn new(memsize: u64, page_size: u64, shared: bool, fpr: bool, huge: bool) -> Self {
+    pub fn new(
+        memsize: u64,
+        page_size: u64,
+        shared: bool,
+        huge: bool,
+        cfg: BalloonTestCfg,
+    ) -> Self {
         let pci_slot: u8 = 0x4;
         let mut extra_args: Vec<&str> = Vec::new();
         let mut fpr_switch = String::from("false");
+        let mut auto_switch = String::from("false");
         let mem_path = format!("-mem-path /tmp/stratovirt/hugepages");
 
         let mut args: Vec<&str> = "-machine".split(' ').collect();
@@ -89,12 +106,15 @@ impl VirtioBalloonTest {
             extra_args.append(&mut args);
         }
 
-        if fpr {
+        if cfg.fpr {
             fpr_switch = String::from("true");
         }
+        if cfg.auto_balloon {
+            auto_switch = String::from("true");
+        }
         let dev_args = format!(
-            "-device {},id=drv0,bus=pcie.0,addr={}.0,free-page-reporting={}",
-            "virtio-balloon-pci", pci_slot, fpr_switch
+            "-device virtio-balloon-pci,id=drv0,bus=pcie.0,addr={}.0,free-page-reporting={},auto-balloon={},membuf-percent={},monitor-interval={}",
+            pci_slot, fpr_switch, auto_switch, cfg.percent, cfg.interval
         );
         args = dev_args[..].split(' ').collect();
         extra_args.append(&mut args);
@@ -110,19 +130,26 @@ impl VirtioBalloonTest {
         let inf_queue;
         let def_queue;
         let mut fpr_queue = None;
-        if fpr {
-            let ques =
-                dev.borrow_mut()
-                    .init_device(test_state.clone(), allocator.clone(), features, 3);
-            inf_queue = ques[0].clone();
-            def_queue = ques[1].clone();
-            fpr_queue = Some(ques[2].clone());
-        } else {
-            let ques =
-                dev.borrow_mut()
-                    .init_device(test_state.clone(), allocator.clone(), features, 2);
-            inf_queue = ques[0].clone();
-            def_queue = ques[1].clone();
+        let mut auto_queue = None;
+        let mut que_num = 2_usize;
+        let mut idx = 2_usize;
+        if cfg.fpr {
+            que_num += 1;
+        }
+        if cfg.auto_balloon {
+            que_num += 1;
+        }
+        let ques =
+            dev.borrow_mut()
+                .init_device(test_state.clone(), allocator.clone(), features, que_num);
+        inf_queue = ques[0].clone();
+        def_queue = ques[1].clone();
+        if cfg.fpr {
+            fpr_queue = Some(ques[idx].clone());
+            idx += 1;
+        }
+        if cfg.auto_balloon {
+            auto_queue = Some(ques[idx].clone());
         }
 
         VirtioBalloonTest {
@@ -132,6 +159,7 @@ impl VirtioBalloonTest {
             inf_queue,
             def_queue,
             fpr_queue,
+            auto_queue,
         }
     }
 }
@@ -139,7 +167,13 @@ impl VirtioBalloonTest {
 fn inflate_fun(shared: bool) {
     let page_num = 255_i32;
     let mut idx = 0_i32;
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, false, false);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, false, cfg);
 
     let free_page = balloon
         .allocator
@@ -212,7 +246,13 @@ fn inflate_fun(shared: bool) {
 fn balloon_fun(shared: bool, huge: bool) {
     let page_num = 255_u32;
     let mut idx = 0_u32;
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, false, huge);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, huge, cfg);
 
     let free_page = balloon
         .allocator
@@ -435,7 +475,7 @@ fn balloon_huge_fun_001() {
 ///     2.set guest feature 0xFFFFFFFFFFFFFFFF
 /// Expect:
 ///     1.Success
-///     2.guest feature equel device feature
+///     2.guest feature equal device feature
 #[test]
 fn balloon_feature_001() {
     let pci_slot: u8 = 0x4;
@@ -534,7 +574,13 @@ fn balloon_feature_002() {
 fn balloon_fpr_fun(shared: bool) {
     let page_num = 255_u32;
     let mut idx = 0_u32;
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, true, false);
+    let cfg = BalloonTestCfg {
+        fpr: true,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, shared, false, cfg);
 
     let free_page = balloon
         .allocator
@@ -629,17 +675,33 @@ fn balloon_fpr_001() {
 fn balloon_fpr_002() {
     balloon_fpr_fun(false);
 }
-
+#[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
     pub num_pages: u32,
     /// Number of pages we've actually got in balloon device.
     pub actual: u32,
+    pub _reserved: u32,
+    pub _reserved1: u32,
+    /// Buffer percent is a percentage of memory actually needed by
+    /// the applications and services running inside the virtual machine.
+    /// This parameter takes effect only when VIRTIO_BALLOON_F_MESSAGE_VQ is supported.
+    /// Recommended value range: [20, 80] and default is 50.
+    pub membuf_percent: u32,
+    /// Monitor interval host wants to adjust VM memory size.
+    /// Recommended value range: [5, 300] and default is 10.
+    pub monitor_interval: u32,
 }
 
 #[test]
 fn query() {
-    let balloon = VirtioBalloonTest::new(2048, PAGE_SIZE_UNIT, false, false, false);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(2048, PAGE_SIZE_UNIT, false, false, cfg);
     let ret = balloon
         .state
         .borrow_mut()
@@ -662,7 +724,13 @@ fn query() {
 ///     1/2/3.Success
 #[test]
 fn balloon_config_001() {
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, false);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, cfg);
 
     balloon
         .state
@@ -727,7 +795,13 @@ fn balloon_config_002() {
     if size_kb < 1024 * 1024 {
         return;
     }
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, true);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, true, cfg);
 
     balloon
         .state
@@ -787,7 +861,13 @@ fn balloon_config_002() {
 ///     1/2.Success
 #[test]
 fn balloon_deactive_001() {
-    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, false);
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: false,
+        percent: 0,
+        interval: 0,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, cfg);
 
     let bar = balloon.device.borrow().bar;
     let common_base = balloon.device.borrow().common_base as u64;
@@ -810,4 +890,90 @@ fn balloon_deactive_001() {
         json!({"actual": 1073741824 as u64})
     );
     balloon.state.borrow_mut().stop();
+}
+
+#[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
+#[repr(packed(1))]
+struct BalloonStat {
+    tag: u16,
+    val: u64,
+}
+impl ByteCode for BalloonStat {}
+/// balloon device deactive config test
+/// TestStep:
+///     1.Init device
+///     2.geust send msg to host by auto balloon
+/// Expect:
+///     1/2.Success
+#[test]
+fn auto_balloon_test_001() {
+    let cfg = BalloonTestCfg {
+        fpr: false,
+        auto_balloon: true,
+        percent: MEM_BUFFER_PERCENT_DEFAULT,
+        interval: MONITOR_INTERVAL_SECOND_DEFAULT,
+    };
+    let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, cfg);
+
+    let num_pages = balloon
+        .device
+        .borrow_mut()
+        .config_readl(offset_of!(VirtioBalloonConfig, num_pages) as u64);
+    assert_eq!(num_pages, 0);
+    let percent = balloon
+        .device
+        .borrow_mut()
+        .config_readl(offset_of!(VirtioBalloonConfig, membuf_percent) as u64);
+    assert_eq!(percent, MEM_BUFFER_PERCENT_DEFAULT);
+    let interval = balloon
+        .device
+        .borrow_mut()
+        .config_readl(offset_of!(VirtioBalloonConfig, monitor_interval) as u64);
+    assert_eq!(interval, MONITOR_INTERVAL_SECOND_DEFAULT);
+
+    let stat = BalloonStat {
+        tag: 0,
+        val: 131070,
+    };
+    let msg_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
+    balloon
+        .state
+        .borrow_mut()
+        .memwrite(msg_addr, &stat.as_bytes());
+
+    let auto_queue = balloon.auto_queue.unwrap();
+
+    let free_head = auto_queue.borrow_mut().add(
+        balloon.state.clone(),
+        msg_addr,
+        std::mem::size_of::<BalloonStat>() as u32,
+        false,
+    );
+    balloon
+        .device
+        .borrow_mut()
+        .kick_virtqueue(balloon.state.clone(), auto_queue.clone());
+    balloon.device.borrow_mut().poll_used_elem(
+        balloon.state.clone(),
+        auto_queue.clone(),
+        free_head,
+        TIMEOUT_US,
+        &mut None,
+        false,
+    );
+    let num_pages = balloon
+        .device
+        .borrow_mut()
+        .config_readl(offset_of!(VirtioBalloonConfig, num_pages) as u64);
+    assert_eq!(num_pages, 131070);
+    balloon
+        .device
+        .borrow_mut()
+        .config_writel(offset_of!(VirtioBalloonConfig, actual) as u64, 131070);
+    let actual = balloon
+        .device
+        .borrow_mut()
+        .config_readl(offset_of!(VirtioBalloonConfig, actual) as u64);
+    assert_eq!(actual, 131070);
 }

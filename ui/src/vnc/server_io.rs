@@ -71,7 +71,7 @@ pub struct VncServer {
     /// Display Change Listener.
     pub display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
     /// Saves all image regions that need to be updated.
-    /// It will be sent to vnc_worker thread, and be transfered into byte stream,
+    /// It will be sent to vnc_worker thread, and be transferred into byte stream,
     /// which will be sent to vnc client in main loop.
     pub rect_jobs: Arc<Mutex<Vec<RectInfo>>>,
     /// Connection limit.
@@ -479,7 +479,7 @@ fn set_dirty_for_each_clients(x: usize, y: usize) -> Result<()> {
     Ok(())
 }
 
-/// Accpet client's connection.
+/// Accept client's connection.
 ///
 /// # Arguments
 ///

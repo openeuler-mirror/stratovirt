@@ -34,6 +34,7 @@ const BIT_PER_BYTE: u32 = 8;
 pub const KEYCODE_1: u16 = 2;
 pub const KEYCODE_9: u16 = 10;
 const KEYCODE_CTRL: u16 = 29;
+pub const KEYCODE_RET: u16 = 38;
 const KEYCODE_SHIFT: u16 = 42;
 const KEYCODE_SHIFT_R: u16 = 54;
 const KEYCODE_ALT: u16 = 56;
@@ -173,46 +174,60 @@ impl KeyBoardState {
 }
 #[derive(Default)]
 struct Inputs {
-    active_kbd: Option<String>,
-    active_tablet: Option<String>,
+    kbd_ids: Vec<String>,
     kbd_lists: HashMap<String, Arc<Mutex<dyn KeyboardOpts>>>,
+    tablet_ids: Vec<String>,
     tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
 }
 
 impl Inputs {
     fn register_kbd(&mut self, device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
-        if self.active_kbd.is_none() {
-            self.active_kbd = Some(device.to_string());
-        }
-
+        self.kbd_ids.insert(0, device.to_string());
         self.kbd_lists.insert(device.to_string(), kbd);
     }
 
-    fn register_mouse(&mut self, device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
-        if self.active_tablet.is_none() {
-            self.active_tablet = Some(device.to_string());
+    fn unregister_kbd(&mut self, device: &str) {
+        self.kbd_lists.remove(&device.to_string());
+        let len = self.kbd_ids.len();
+        for i in 0..len {
+            if self.kbd_ids[i] == device {
+                self.kbd_ids.remove(i);
+                break;
+            }
         }
+    }
 
+    fn register_mouse(&mut self, device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
+        self.tablet_ids.insert(0, device.to_string());
         self.tablet_lists.insert(device.to_string(), tablet);
     }
 
-    fn get_active_kbd(&mut self) -> Option<Arc<Mutex<dyn KeyboardOpts>>> {
-        match &self.active_kbd {
-            Some(active_kbd) => {
-                let kbd = self.kbd_lists.get(active_kbd)?.clone();
-                Some(kbd)
+    fn unregister_mouse(&mut self, device: &str) {
+        self.tablet_lists.remove(&device.to_string());
+        let len = self.tablet_ids.len();
+        for i in 0..len {
+            if self.tablet_ids[i] == device {
+                self.tablet_ids.remove(i);
+                break;
             }
-            None => None,
+        }
+    }
+
+    fn get_active_kbd(&mut self) -> Option<Arc<Mutex<dyn KeyboardOpts>>> {
+        if !self.kbd_ids.is_empty() {
+            let kbd = self.kbd_lists.get(&self.kbd_ids[0])?.clone();
+            Some(kbd)
+        } else {
+            None
         }
     }
 
     fn get_active_mouse(&mut self) -> Option<Arc<Mutex<dyn PointerOpts>>> {
-        match &self.active_tablet {
-            Some(active_mouse) => {
-                let mouse = self.tablet_lists.get(active_mouse)?.clone();
-                Some(mouse)
-            }
-            None => None,
+        if !self.tablet_ids.is_empty() {
+            let mouse = self.tablet_lists.get(&self.tablet_ids[0])?.clone();
+            Some(mouse)
+        } else {
+            None
         }
     }
 }
@@ -221,14 +236,33 @@ pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
     INPUTS.lock().unwrap().register_kbd(device, kbd);
 }
 
+pub fn unregister_keyboard(device: &str) {
+    INPUTS.lock().unwrap().unregister_kbd(device);
+}
+
 pub fn register_pointer(device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
     INPUTS.lock().unwrap().register_mouse(device, tablet);
+}
+
+pub fn unregister_pointer(device: &str) {
+    INPUTS.lock().unwrap().unregister_mouse(device);
 }
 
 pub fn key_event(keycode: u16, down: bool) -> Result<()> {
     let kbd = INPUTS.lock().unwrap().get_active_kbd();
     if let Some(k) = kbd {
         k.lock().unwrap().do_key_event(keycode, down)?;
+    }
+    Ok(())
+}
+
+/// A complete mouse click event.
+pub fn press_mouse(button: u32, x: u32, y: u32) -> Result<()> {
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        let mut locked_mouse = m.lock().unwrap();
+        locked_mouse.do_point_event(button, x, y)?;
+        locked_mouse.do_point_event(0, x, y)?
     }
     Ok(())
 }

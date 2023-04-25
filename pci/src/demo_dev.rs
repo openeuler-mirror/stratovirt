@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-/// DemoDev is a demo PCIe device, that can have device properites configurable, eg.
+/// DemoDev is a demo PCIe device, that can have device properties configurable, eg.
 /// bar num, max msix vector num, etc.
 /// It can have 0-6 bars, if set, msix always lives in bar 0, data handling in bar 1.
 /// 1. its functionality is to read and write data for the guest, meanwhile, do a little

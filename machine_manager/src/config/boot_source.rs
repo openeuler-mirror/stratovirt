@@ -14,7 +14,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::error::ConfigError;
-use crate::config::{ConfigCheck, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
+use crate::config::{check_arg_too_long, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
@@ -82,12 +82,7 @@ impl InitrdConfig {
 
 impl ConfigCheck for InitrdConfig {
     fn check(&self) -> Result<()> {
-        if self.initrd_file.to_str().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "initrd_file".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
+        check_arg_too_long(self.initrd_file.to_str().unwrap(), "initrd_file")?;
 
         if !self.initrd_file.is_file() {
             return Err(anyhow!(ConfigError::UnRegularFile(
@@ -110,12 +105,7 @@ pub struct KernelParams {
 impl ConfigCheck for KernelParams {
     fn check(&self) -> Result<()> {
         for param in self.params.clone() {
-            if param.value.len() > MAX_STRING_LENGTH {
-                return Err(anyhow!(ConfigError::StringLengthTooLong(
-                    "kernel params".to_string(),
-                    MAX_STRING_LENGTH,
-                )));
-            }
+            check_arg_too_long(&param.value, "kernel params")?;
         }
 
         Ok(())

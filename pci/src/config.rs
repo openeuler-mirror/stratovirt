@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use address_space::Region;
 use log::{error, warn};
 
-use crate::msix::Msix;
+use crate::intx::Intx;
+use crate::msix::{is_msix_enabled, Msix};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
@@ -62,8 +63,8 @@ pub const MEMORY_BASE: u8 = 0x20;
 pub const PREF_MEMORY_BASE: u8 = 0x24;
 /// Prefetchable memory limit register.
 pub const PREF_MEMORY_LIMIT: u8 = 0x26;
-pub const ROM_ADDRESS: usize = 0x30;
-pub const ROM_ADDRESS1: usize = 0x38;
+pub const ROM_ADDRESS_ENDPOINT: usize = 0x30;
+pub const ROM_ADDRESS_BRIDGE: usize = 0x38;
 
 /// 64-bit prefetchable memory addresses.
 pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
@@ -85,6 +86,8 @@ pub const HEADER_TYPE_ENDPOINT: u8 = 0x0;
 pub const HEADER_TYPE_BRIDGE: u8 = 0x01;
 /// Multi-function device.
 pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
+/// The vendor ID for Red Hat / Qumranet.
+pub const PCI_VENDOR_ID_REDHAT_QUMRANET: u16 = 0x1af4;
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
@@ -102,6 +105,7 @@ pub const IO_LIMIT: u8 = 0x1d;
 pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
+pub const INTERRUPT_PIN: u8 = 0x3d;
 pub const BRIDGE_CONTROL: u8 = 0x3e;
 
 const BRIDGE_CTL_PARITY_ENABLE: u16 = 0x0001;
@@ -254,6 +258,7 @@ pub const PCI_EXP_SLOTSTA_EVENTS: u16 = PCI_EXP_SLTSTA_ABP
     | PCI_EXP_SLTSTA_MRLSC
     | PCI_EXP_SLTSTA_PDC
     | PCI_EXP_SLTSTA_CC;
+pub const PCI_EXP_HP_EV_SPT: u16 = PCI_EXP_SLTCTL_ABPE | PCI_EXP_SLTCTL_PDCE | PCI_EXP_SLTCTL_CCIE;
 
 // System error on correctable error enable.
 const PCI_EXP_RTCTL_SECEE: u16 = 0x01;
@@ -292,6 +297,9 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
+
+/* Device classes and subclasses */
+pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
 /// Type of bar region.
@@ -385,6 +393,8 @@ pub struct PciConfig {
     pub msix: Option<Arc<Mutex<Msix>>>,
     /// Offset of the PCI express capability.
     pub pci_express_cap_offset: u16,
+    /// INTx infomation.
+    pub intx: Option<Arc<Mutex<Intx>>>,
 }
 
 impl PciConfig {
@@ -417,6 +427,7 @@ impl PciConfig {
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
             pci_express_cap_offset: PCI_CONFIG_HEAD_END as u16,
+            intx: None,
         }
     }
 
@@ -501,12 +512,23 @@ impl PciConfig {
     ///
     /// * `offset` - Offset in the configuration space from which to read.
     /// * `data` - Buffer to put read data.
-    pub fn read(&self, offset: usize, buf: &mut [u8]) {
+    pub fn read(&mut self, offset: usize, buf: &mut [u8]) {
         if let Err(err) = self.validate_config_boundary(offset, buf) {
             warn!("invalid read: {:?}", err);
             return;
         }
+
         let size = buf.len();
+        if ranges_overlap(offset, size, STATUS as usize, 1) {
+            if let Some(intx) = &self.intx {
+                if intx.lock().unwrap().level == 1 {
+                    self.config[STATUS as usize] |= STATUS_INTERRUPT;
+                } else {
+                    self.config[STATUS as usize] &= !STATUS_INTERRUPT;
+                }
+            }
+        }
+
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
     }
 
@@ -551,7 +573,6 @@ impl PciConfig {
 
         let cloned_data = data.to_vec();
         let old_offset = offset;
-        let end = offset + data.len();
         for data in &cloned_data {
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
                 | (data & self.write_mask[offset]);
@@ -559,18 +580,16 @@ impl PciConfig {
             offset += 1;
         }
 
-        let mut bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
-        if self.config[HEADER_TYPE as usize] == HEADER_TYPE_BRIDGE {
-            bar_num = BAR_NUM_MAX_FOR_BRIDGE;
-        }
-        if ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize)
-            || ranges_overlap(
-                old_offset,
-                end,
-                BAR_0 as usize,
-                BAR_0 as usize + REG_SIZE * bar_num as usize,
-            )
-            || ranges_overlap(old_offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
+        let (bar_num, rom_addr) = match self.config[HEADER_TYPE as usize] & HEADER_TYPE_BRIDGE {
+            HEADER_TYPE_BRIDGE => (BAR_NUM_MAX_FOR_BRIDGE as usize, ROM_ADDRESS_BRIDGE),
+            _ => (BAR_NUM_MAX_FOR_ENDPOINT as usize, ROM_ADDRESS_ENDPOINT),
+        };
+
+        let size = data.len();
+        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1);
+        if cmd_overlap
+            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num)
+            || ranges_overlap(old_offset, size, rom_addr, 4)
         {
             if let Err(e) = self.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
@@ -581,7 +600,30 @@ impl PciConfig {
             }
         }
 
+        if cmd_overlap {
+            if let Some(intx) = &self.intx {
+                let cmd = le_read_u16(self.config.as_slice(), COMMAND as usize).unwrap();
+                let enabled = cmd & COMMAND_INTERRUPT_DISABLE == 0;
+
+                let mut locked_intx = intx.lock().unwrap();
+                if locked_intx.enabled != enabled {
+                    if !enabled {
+                        locked_intx.change_irq_level(-(locked_intx.level as i8));
+                    } else {
+                        locked_intx.change_irq_level(locked_intx.level as i8);
+                    }
+                    locked_intx.enabled = enabled;
+                }
+            }
+        }
+
         if let Some(msix) = &mut self.msix {
+            if is_msix_enabled(msix.lock().unwrap().msix_cap_offset as usize, &self.config) {
+                if let Some(intx) = &self.intx {
+                    intx.lock().unwrap().notify(0);
+                }
+            }
+
             msix.lock()
                 .unwrap()
                 .write_config(&self.config, dev_id, old_offset, data);
@@ -621,6 +663,10 @@ impl PciConfig {
 
     /// General reset process for pci devices
     pub fn reset(&mut self) -> Result<()> {
+        if let Some(intx) = &self.intx {
+            intx.lock().unwrap().reset();
+        }
+
         self.reset_common_regs()?;
 
         if let Err(e) = self.update_bar_mapping(
@@ -840,7 +886,7 @@ impl PciConfig {
                                 .lock()
                                 .unwrap()
                                 .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                                .with_context(|| anyhow!(PciError::UnregMemBar(id)))?
+                                .with_context(|| PciError::UnregMemBar(id))?
                         }
                     }
                 }
@@ -871,7 +917,7 @@ impl PciConfig {
                         mem_region
                             .unwrap()
                             .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
-                            .with_context(|| anyhow!(PciError::UnregMemBar(id)))?;
+                            .with_context(|| PciError::UnregMemBar(id))?;
                         self.bars[id].parent_mem_region =
                             Some(Arc::new(Mutex::new(mem_region.unwrap().clone())));
                     }
@@ -1109,9 +1155,7 @@ impl PciConfig {
 
     fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
         if !size.is_power_of_two()
-            || ((bar_type == RegionType::Mem32Bit || bar_type == RegionType::Mem64Bit)
-                && size < MINMUM_BAR_SIZE_FOR_MMIO.try_into().unwrap())
-            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO.try_into().unwrap())
+            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO as u64)
             || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
             || (bar_type == RegionType::Io && size > u16::MAX as u64)
         {
@@ -1121,6 +1165,10 @@ impl PciConfig {
             )));
         }
         Ok(())
+    }
+
+    pub fn set_interrupt_pin(&mut self) {
+        self.config[INTERRUPT_PIN as usize] = 0x01;
     }
 }
 
@@ -1181,11 +1229,7 @@ mod tests {
         assert!(pci_config
             .register_bar(7, region, RegionType::Mem64Bit, true, 8192)
             .is_err());
-        // test when bar size is incorrect(below 4KB, or not power of 2)
-        let region_size_too_small = Region::init_io_region(2048, region_ops.clone());
-        assert!(pci_config
-            .register_bar(3, region_size_too_small, RegionType::Mem64Bit, true, 2048)
-            .is_err());
+        // test when bar size is incorrect(not power of 2)
         let region_size_not_pow_2 = Region::init_io_region(4238, region_ops);
         assert!(pci_config
             .register_bar(4, region_size_not_pow_2, RegionType::Mem64Bit, true, 4238)

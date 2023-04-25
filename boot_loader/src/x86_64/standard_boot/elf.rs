@@ -14,12 +14,12 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+use anyhow::{bail, Context, Result};
+
 use address_space::{AddressSpace, GuestAddress};
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
-
-use anyhow::{anyhow, bail, Context, Result};
 
 const EI_MAG0: usize = 0;
 const EI_MAG3: usize = 3;
@@ -181,11 +181,11 @@ pub fn load_elf_kernel(
 
                 let p_align = ph.p_align;
                 let aligned_namesz =
-                    round_up(note_hdr.namesz as u64, p_align).ok_or_else(|| {
-                        anyhow!(format!(
+                    round_up(note_hdr.namesz as u64, p_align).with_context(|| {
+                        format!(
                             "Overflows when align up: num 0x{:x}, alignment 0x{:x}",
                             note_hdr.namesz as u64, p_align,
-                        ))
+                        )
                     })?;
                 if note_hdr.type_ == XEN_ELFNOTE_PHYS32_ENTRY {
                     kernel_image.seek(SeekFrom::Current(aligned_namesz as i64))?;
@@ -196,11 +196,11 @@ pub fn load_elf_kernel(
                     break;
                 } else {
                     let aligned_descsz =
-                        round_up(note_hdr.descsz as u64, p_align).ok_or_else(|| {
-                            anyhow!(format!(
+                        round_up(note_hdr.descsz as u64, p_align).with_context(|| {
+                            format!(
                                 "Overflows when align up, num 0x{:x}, alignment 0x{:x}",
                                 note_hdr.descsz as u64, p_align,
-                            ))
+                            )
                         })?;
                     let tail_size = aligned_namesz + aligned_descsz;
 
@@ -211,13 +211,12 @@ pub fn load_elf_kernel(
             }
         }
     }
-    if pvh_start_addr.is_none() {
-        bail!("No Note header contains PVH entry info in ELF kernel image.");
-    }
 
+    let pvh_start_addr = pvh_start_addr
+        .with_context(|| "No Note header contains PVH entry info in ELF kernel image.")?;
     fwcfg.add_data_entry(
         FwCfgEntryType::KernelEntry,
-        (pvh_start_addr.unwrap() as u32).as_bytes().to_vec(),
+        (pvh_start_addr as u32).as_bytes().to_vec(),
     )?;
     fwcfg.add_data_entry(
         FwCfgEntryType::KernelAddr,

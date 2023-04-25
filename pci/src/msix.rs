@@ -15,9 +15,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::{bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::eventfd::EventFd;
+
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::{error, warn};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -27,14 +30,12 @@ use util::{
     num_ops::round_up,
     test_helper::{add_msix_msg, is_test_enabled},
 };
-use vmm_sys_util::eventfd::EventFd;
 
 use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
 };
-use anyhow::{anyhow, bail, Context, Result};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -455,12 +456,7 @@ impl Msix {
         let len = data.len();
         let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
         // Only care about the bits Masked(14) & Enabled(15) in msix control register.
-        if !ranges_overlap(
-            offset,
-            offset + len,
-            msix_cap_control_off + 1,
-            msix_cap_control_off + 2,
-        ) {
+        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1) {
             return;
         }
 
@@ -503,7 +499,7 @@ impl StateTransfer for Msix {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let msix_state = *MsixState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MSIX_DEVICE")))?;
+            .with_context(|| MigrationError::FromBytesError("MSIX_DEVICE"))?;
 
         let table_length = self.table.len();
         let pba_length = self.pba.len();
@@ -518,11 +514,7 @@ impl StateTransfer for Msix {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&MsixState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&MsixState::descriptor().name).unwrap_or(!0)
     }
 }
 
@@ -655,16 +647,12 @@ pub fn init_msix(
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
     let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
     let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
-    let (table_offset, pba_offset) = if let Some((table, pba)) = offset_opt {
-        (table, pba)
-    } else {
-        (0, table_size)
-    };
+    let (table_offset, pba_offset) = offset_opt.unwrap_or((0, table_size));
     if ranges_overlap(
-        table_offset.try_into().unwrap(),
-        table_size.try_into().unwrap(),
-        pba_offset.try_into().unwrap(),
-        pba_size.try_into().unwrap(),
+        table_offset as usize,
+        table_size as usize,
+        pba_offset as usize,
+        pba_size as usize,
     ) {
         bail!("msix table and pba table overlapped.");
     }

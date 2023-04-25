@@ -10,12 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::Context;
 use kvm_bindings::{kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_IRQCHIP_IOAPIC};
-use migration_derive::{ByteCode, Desc};
 
-use anyhow::anyhow;
 use hypervisor::kvm::KVM_FDS;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
+use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
 /// Structure to wrapper kvm_device related function.
@@ -66,7 +68,7 @@ impl StateTransfer for KvmDevice {
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
 
         let kvm_state = KvmDeviceState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("KVM_DEVICE")))?;
+            .with_context(|| MigrationError::FromBytesError("KVM_DEVICE"))?;
 
         vm_fd.set_pit2(&kvm_state.pit_state)?;
         vm_fd.set_clock(&kvm_state.kvm_clock)?;
@@ -76,11 +78,7 @@ impl StateTransfer for KvmDevice {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&KvmDeviceState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&KvmDeviceState::descriptor().name).unwrap_or(!0)
     }
 }
 

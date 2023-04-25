@@ -10,25 +10,34 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+
+use anyhow::Context;
+use drm_fourcc::DrmFourcc;
+use log::error;
+
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::legacy::Result;
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::Context;
-use drm_fourcc::DrmFourcc;
-use log::error;
-use std::mem::size_of;
-use std::sync::{Arc, Mutex};
+use machine_manager::event_loop::EventLoop;
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use ui::console::{
-    console_init, display_graphic_update, display_replace_surface, DisplayConsole, DisplaySurface,
-    HardWareOperations,
+    console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
+    DisplaySurface, HardWareOperations,
 };
+use ui::input::{key_event, KEYCODE_RET};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
 const HEIGHT_MAX: u32 = 12_000;
+const INSTALL_CHECK_INTERVEL_MS: u64 = 500;
+const INSTALL_RELEASE_INTERVEL_MS: u64 = 200;
+const INSTALL_PRESS_INTERVEL_MS: u64 = 100;
 
 #[repr(packed)]
 struct RamfbCfg {
@@ -43,7 +52,9 @@ struct RamfbCfg {
 #[derive(Clone)]
 pub struct RamfbState {
     pub surface: Option<DisplaySurface>,
+    pub con: Option<Weak<Mutex<DisplayConsole>>>,
     sys_mem: Arc<AddressSpace>,
+    install: Arc<AtomicBool>,
 }
 
 // SAFETY: The type of image, the field of the struct DisplaySurface
@@ -55,10 +66,14 @@ unsafe impl Sync for RamfbState {}
 unsafe impl Send for RamfbState {}
 
 impl RamfbState {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+    pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
+        let ramfb_opts = Arc::new(RamfbInterface {});
+        let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
         Self {
             surface: None,
+            con,
             sys_mem,
+            install: Arc::new(AtomicBool::new(install)),
         }
     }
 
@@ -126,6 +141,8 @@ impl RamfbState {
         }
 
         self.surface = Some(ds);
+
+        set_press_event(self.install.clone(), fb_addr as *const u8);
     }
 
     fn reset_ramfb_state(&mut self) {
@@ -183,24 +200,19 @@ impl FwCfgWriteCallback for RamfbState {
         };
 
         self.create_display_surface(width, height, format, stride, addr);
-
-        let ramfb_opts = Arc::new(RamfbInterface {
-            width: width as i32,
-            height: height as i32,
-        });
-        let con = console_init(ramfb_opts);
-        display_replace_surface(&con, self.surface)
+        display_replace_surface(&self.con, self.surface)
             .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     }
 }
 
-pub struct RamfbInterface {
-    width: i32,
-    height: i32,
-}
+pub struct RamfbInterface {}
 impl HardWareOperations for RamfbInterface {
     fn hw_update(&self, con: Arc<Mutex<DisplayConsole>>) {
-        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, self.width, self.height)
+        let locked_con = con.lock().unwrap();
+        let width = locked_con.width;
+        let height = locked_con.height;
+        drop(locked_con);
+        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, width, height)
             .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
     }
 }
@@ -210,9 +222,9 @@ pub struct Ramfb {
 }
 
 impl Ramfb {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+    pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         Ramfb {
-            ramfb_state: RamfbState::new(sys_mem),
+            ramfb_state: RamfbState::new(sys_mem, install),
         }
     }
 
@@ -230,7 +242,7 @@ impl SysBusDevOps for Ramfb {
     }
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
-        error!("Ramfb can not be writed!");
+        error!("Ramfb can not be written!");
         false
     }
 
@@ -247,5 +259,39 @@ impl SysBusDevOps for Ramfb {
 impl AmlBuilder for Ramfb {
     fn aml_bytes(&self) -> Vec<u8> {
         Vec::new()
+    }
+}
+
+fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
+    // SAFETY: data is the raw pointer of framebuffer. EDKII has malloc the memory of
+    // the framebuffer. So dereference the data is safe.
+    let black_screen =
+        unsafe { !data.is_null() && *data == 0 && *data.offset(1) == 0 && *data.offset(2) == 0 };
+    if install.load(Ordering::Acquire) && black_screen {
+        let set_press_func = Box::new(move || {
+            set_press_event(install.clone(), data);
+        });
+        let press_func = Box::new(move || {
+            key_event(KEYCODE_RET, true)
+                .unwrap_or_else(|e| error!("Ramfb couldn't press return key: {:?}", e));
+        });
+        let release_func = Box::new(move || {
+            key_event(KEYCODE_RET, false)
+                .unwrap_or_else(|e| error!("Ramfb couldn't release return key: {:?}.", e));
+        });
+
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            ctx.delay_call(
+                set_press_func,
+                Duration::from_millis(INSTALL_CHECK_INTERVEL_MS),
+            );
+            ctx.delay_call(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
+            ctx.delay_call(
+                release_func,
+                Duration::from_millis(INSTALL_RELEASE_INTERVEL_MS),
+            );
+        }
+    } else {
+        install.store(false, Ordering::Release);
     }
 }

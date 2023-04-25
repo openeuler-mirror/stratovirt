@@ -13,25 +13,55 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check, ConfigCheck, MAX_STRING_LENGTH};
-use crate::config::{CmdParser, ExBool, VmConfig};
+use super::{pci_args_check, ConfigCheck};
+use crate::config::{check_arg_too_long, CmdParser, ConfigError, ExBool, VmConfig};
+
+const MEM_BUFFER_PERCENT_MIN: u32 = 20;
+const MEM_BUFFER_PERCENT_MAX: u32 = 80;
+const MEM_BUFFER_PERCENT_DEFAULT: u32 = 50;
+const MONITOR_INTERVAL_SECOND_MIN: u32 = 5;
+const MONITOR_INTERVAL_SECOND_MAX: u32 = 300;
+const MONITOR_INTERVAL_SECOND_DEFAULT: u32 = 10;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BalloonConfig {
     pub id: String,
     pub deflate_on_oom: bool,
     pub free_page_reporting: bool,
+    pub auto_balloon: bool,
+    pub membuf_percent: u32,
+    pub monitor_interval: u32,
 }
 
 impl ConfigCheck for BalloonConfig {
     fn check(&self) -> Result<()> {
-        if self.id.len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "balloon id".to_string(),
-                MAX_STRING_LENGTH,
+        check_arg_too_long(&self.id, "balloon id")?;
+
+        if !self.auto_balloon {
+            return Ok(());
+        }
+        if self.membuf_percent > MEM_BUFFER_PERCENT_MAX
+            || self.membuf_percent < MEM_BUFFER_PERCENT_MIN
+        {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "balloon membuf-percent".to_string(),
+                MEM_BUFFER_PERCENT_MIN as u64,
+                false,
+                MEM_BUFFER_PERCENT_MAX as u64,
+                false,
             )));
         }
-
+        if self.monitor_interval > MONITOR_INTERVAL_SECOND_MAX
+            || self.monitor_interval < MONITOR_INTERVAL_SECOND_MIN
+        {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "balloon monitor-interval".to_string(),
+                MONITOR_INTERVAL_SECOND_MIN as u64,
+                false,
+                MONITOR_INTERVAL_SECOND_MAX as u64,
+                false,
+            )));
+        }
         Ok(())
     }
 }
@@ -48,11 +78,19 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
         .push("multifunction")
         .push("id")
         .push("deflate-on-oom")
-        .push("free-page-reporting");
+        .push("free-page-reporting")
+        .push("auto-balloon")
+        .push("membuf-percent")
+        .push("monitor-interval");
     cmd_parser.parse(balloon_config)?;
 
     pci_args_check(&cmd_parser)?;
-    let mut balloon: BalloonConfig = Default::default();
+    let mut balloon = BalloonConfig {
+        membuf_percent: MEM_BUFFER_PERCENT_DEFAULT,
+        monitor_interval: MONITOR_INTERVAL_SECOND_DEFAULT,
+        ..Default::default()
+    };
+
     if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
         balloon.deflate_on_oom = default.into();
     }
@@ -61,6 +99,15 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
     }
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         balloon.id = id;
+    }
+    if let Some(default) = cmd_parser.get_value::<ExBool>("auto-balloon")? {
+        balloon.auto_balloon = default.into();
+    }
+    if let Some(membuf_percent) = cmd_parser.get_value::<u32>("membuf-percent")? {
+        balloon.membuf_percent = membuf_percent;
+    }
+    if let Some(monitor_interval) = cmd_parser.get_value::<u32>("monitor-interval")? {
+        balloon.monitor_interval = monitor_interval;
     }
     balloon.check()?;
     vm_config.dev_name.insert("balloon".to_string(), 1);

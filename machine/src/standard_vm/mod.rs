@@ -28,7 +28,7 @@ use ui::{
     input::{key_event, point_event},
     vnc::qmp_query_vnc,
 };
-use util::aio::AioEngine;
+use util::aio::{AioEngine, WriteZeroesState};
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -59,18 +59,19 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig,
+    VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::MigrationManager;
-use pci::hotplug::{handle_plug, handle_unplug_request};
+use pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
-    qmp_balloon, qmp_query_balloon, Block, BlockState, ScsiBus, ScsiCntlr, VhostKern, VhostUser,
-    VirtioDevice, VirtioNetState, VirtioPciDevice,
+    qmp_balloon, qmp_query_balloon, Block, BlockState,
+    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
+    VhostKern, VhostUser, VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -490,7 +491,7 @@ trait AcpiBuilder {
             fadt.set_field(148, 0x01_u8);
             fadt.set_field(149, 0x20_u8);
             fadt.set_field(152, PM_EVENT_OFFSET as u64);
-            // PM1a contol register bit, offset is 172.
+            // PM1a control register bit, offset is 172.
             fadt.set_field(172, 0x01_u8);
             fadt.set_field(173, 0x10_u8);
             fadt.set_field(176, PM_CTRL_OFFSET as u64);
@@ -742,11 +743,7 @@ impl StdMachine {
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
-        let drive = if let Some(drv) = &args.drive {
-            drv
-        } else {
-            bail!("Drive not set");
-        };
+        let drive = args.drive.as_ref().with_context(|| "Drive not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -768,6 +765,8 @@ impl StdMachine {
                 socket_path: None,
                 aio: conf.aio,
                 queue_size,
+                discard: conf.discard,
+                write_zeroes: conf.write_zeroes,
             };
             dev.check()?;
             dev
@@ -817,32 +816,15 @@ impl StdMachine {
         };
         dev_cfg.check()?;
 
-        let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(dev_cfg.clone())));
+        let device = Arc::new(Mutex::new(ScsiCntlr::new(dev_cfg.clone())));
 
         let bus_name = format!("{}.0", dev_cfg.id);
-        ScsiBus::create_scsi_bus(&bus_name, &device)?;
-        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
-            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
-            lock_cntlr_list.insert(bus_name.clone(), device.clone());
-        } else {
-            bail!("No scsi controller list found");
-        }
+        scsi_cntlr_create_scsi_bus(&bus_name, &device)?;
 
-        let result =
-            self.add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false);
-        let pci_dev = if let Err(ref e) = result {
-            // SAFETY: unwrap is safe because Standard machine always make sure it not return null.
-            self.get_scsi_cntlr_list()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .remove(&bus_name);
-            bail!("Failed to add virtio scsi controller, error is {:?}", e);
-        } else {
-            result.unwrap()
-        };
-
-        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
+        let virtio_pci_dev = self
+            .add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false)
+            .with_context(|| "Failed to add virtio scsi controller")?;
+        device.lock().unwrap().config.boot_prefix = virtio_pci_dev.lock().unwrap().get_dev_path();
 
         Ok(())
     }
@@ -855,11 +837,7 @@ impl StdMachine {
         let multifunction = args.multifunction.unwrap_or(false);
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
-        let chardev = if let Some(dev) = &args.chardev {
-            dev
-        } else {
-            bail!("Chardev not set");
-        };
+        let chardev = args.chardev.as_ref().with_context(|| "Chardev not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let socket_path = self
             .get_socket_path(&locked_vmconfig, chardev.to_string())
@@ -888,11 +866,10 @@ impl StdMachine {
     }
 
     fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
-        let char_dev = if let Some(char_dev) = vm_config.chardev.get(&chardev) {
-            char_dev
-        } else {
-            bail!("Chardev: {:?} not found for character device", &chardev);
-        };
+        let char_dev = vm_config
+            .chardev
+            .get(&chardev)
+            .with_context(|| format!("Chardev: {:?} not found for character device", &chardev))?;
 
         let socket_path = match &char_dev.backend {
             ChardevType::Socket {
@@ -922,11 +899,7 @@ impl StdMachine {
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
-        let netdev = if let Some(dev) = &args.netdev {
-            dev
-        } else {
-            bail!("Netdev not set");
-        };
+        let netdev = args.netdev.as_ref().with_context(|| "Netdev not set")?;
         let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -959,15 +932,13 @@ impl StdMachine {
         drop(locked_vmconfig);
 
         if dev.vhost_type.is_some() {
-            let mut need_irqfd = false;
             let net: Arc<Mutex<dyn VirtioDevice>> =
                 if dev.vhost_type == Some(String::from("vhost-kernel")) {
                     Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
                 } else {
-                    need_irqfd = true;
                     Arc::new(Mutex::new(VhostUser::Net::new(&dev, self.get_sys_mem())))
                 };
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, need_irqfd)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, true)
                 .with_context(|| "Failed to add vhost-kernel/vhost-user net device")?;
         } else {
             let net_id = dev.id.clone();
@@ -980,41 +951,54 @@ impl StdMachine {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
+    fn plug_usb_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
+        let driver = args.driver.as_str();
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let cfg_args = format!("id={}", args.id);
+        match driver {
+            "usb-kbd" => {
+                self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
+            }
+            "usb-tablet" => {
+                self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
+            }
+            _ => {
+                bail!("Invalid usb device driver '{}'", driver);
+            }
+        };
+
+        Ok(())
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)?;
+
+        Ok(())
+    }
+
     fn plug_vfio_pci_device(
         &mut self,
         bdf: &PciBdf,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
-        let host = if args.host.is_none() {
-            ""
-        } else {
-            args.host.as_ref().unwrap()
-        };
-
-        let sysfsdev = if args.sysfsdev.is_none() {
-            ""
-        } else {
-            args.sysfsdev.as_ref().unwrap()
-        };
-
         if args.host.is_none() && args.sysfsdev.is_none() {
             bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");
         }
-
         if args.host.is_some() && args.sysfsdev.is_some() {
             bail!("Both option \"host\" and \"sysfsdev\" was provided.");
         }
 
-        if let Err(e) = self.create_vfio_pci_device(
-            &args.id,
-            bdf,
-            host,
-            sysfsdev,
-            args.multifunction.map_or(false, |m| m),
-        ) {
-            error!("{:?}", e);
-            bail!("Failed to plug vfio-pci device.");
-        }
+        let host = args.host.as_ref().map_or("", String::as_str);
+        let sysfsdev = args.sysfsdev.as_ref().map_or("", String::as_str);
+        let multifunc = args.multifunction.unwrap_or(false);
+        self.create_vfio_pci_device(&args.id, bdf, host, sysfsdev, multifunc)
+            .with_context(|| "Failed to plug vfio-pci device.")?;
+
         Ok(())
     }
 }
@@ -1184,11 +1168,23 @@ impl DeviceInterface for StdMachine {
             }
             "vfio-pci" => {
                 if let Err(e) = self.plug_vfio_pci_device(&pci_bdf, args.as_ref()) {
+                    error!("{:?}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
                     );
                 }
+            }
+            #[cfg(not(target_env = "musl"))]
+            "usb-kbd" | "usb-tablet" => {
+                if let Err(e) = self.plug_usb_device(args.as_ref()) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+                return Response::create_empty_response();
             }
             _ => {
                 let err_str = format!("Failed to add device: Driver {} is not support", driver);
@@ -1239,7 +1235,7 @@ impl DeviceInterface for StdMachine {
 
         let locked_pci_host = pci_host.lock().unwrap();
         if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
-            match handle_unplug_request(&bus, &dev) {
+            return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();
                     let dev_id = locked_dev.name();
@@ -1255,34 +1251,72 @@ impl DeviceInterface for StdMachine {
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
                 ),
-            }
-        } else {
+            };
+        }
+        drop(locked_pci_host);
+
+        // The device is not a pci device, assume it is a usb device.
+        #[cfg(not(target_env = "musl"))]
+        return match self.handle_unplug_usb_request(device_id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        };
+
+        #[cfg(target_env = "musl")]
+        {
             let err_str = format!("Failed to remove device: id {} not found", &device_id);
             Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
         }
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        let read_only = args.read_only.unwrap_or(false);
-        let direct = if let Some(cache) = args.cache {
-            cache.direct.unwrap_or(true)
-        } else {
-            true
-        };
-        let config = DriveConfig {
+        let mut config = DriveConfig {
             id: args.node_name,
             path_on_host: args.file.filename.clone(),
-            read_only,
-            direct,
+            read_only: args.read_only.unwrap_or(false),
+            direct: true,
             iops: args.iops,
             // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: if direct {
-                AioEngine::Native
-            } else {
-                AioEngine::Off
-            },
+            aio: AioEngine::Native,
+            media: "disk".to_string(),
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
         };
-
+        if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
+            config.direct = false;
+            config.aio = AioEngine::Off;
+        }
+        if let Some(discard) = args.discard {
+            let ret = discard.as_str().parse::<ExBool>();
+            if ret.is_err() {
+                let err_msg = format!(
+                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
+                    discard
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_msg),
+                    None,
+                );
+            }
+            config.discard = ret.unwrap().into();
+        }
+        if let Some(detect_zeroes) = args.detect_zeroes {
+            let state = detect_zeroes.as_str().parse::<WriteZeroesState>();
+            if state.is_err() {
+                let err_msg = format!(
+                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
+                    detect_zeroes
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_msg),
+                    None,
+                );
+            }
+            config.write_zeroes = state.unwrap();
+        }
         if let Err(e) = config.check() {
             error!("{:?}", e);
             return Response::create_error_response(
@@ -1299,7 +1333,9 @@ impl DeviceInterface for StdMachine {
             );
         }
         // Register drive backend file for hotplug drive.
-        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+        if let Err(e) =
+            self.register_drive_file(&args.file.filename, config.read_only, config.direct)
+        {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1601,6 +1637,73 @@ impl DeviceInterface for StdMachine {
                 None,
             ),
         }
+    }
+
+    fn human_monitor_command(&self, args: qmp_schema::HumanMonitorCmdArgument) -> Response {
+        let cmd_args: Vec<&str> = args.command_line.split(' ').collect();
+        match cmd_args[0] {
+            "drive_add" => {
+                // The drive_add command has three arguments splited by space:
+                // "drive_add dummy file=/path/to/file,format=raw,if=none,id=drive-id..."
+                // The 'dummy' here is a placeholder for pci address which is not needed for drive.
+                if cmd_args.len() != 3 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                let drive_cfg = match self
+                    .get_vm_config()
+                    .lock()
+                    .unwrap()
+                    .add_block_drive(cmd_args[2])
+                {
+                    Ok(cfg) => cfg,
+                    Err(ref e) => {
+                        return Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                            None,
+                        );
+                    }
+                };
+                if let Err(e) = self.register_drive_file(
+                    &drive_cfg.path_on_host,
+                    drive_cfg.read_only,
+                    drive_cfg.direct,
+                ) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+            }
+            "drive_del" => {
+                // The drive_del command has two arguments splited by space:
+                // "drive_del drive-id"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                return self.blockdev_del(cmd_args[1].to_string());
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Unsupported command: {}",
+                        cmd_args[0]
+                    )),
+                    None,
+                );
+            }
+        }
+        Response::create_empty_response()
     }
 }
 

@@ -92,7 +92,7 @@ impl FileBackend {
 
             if unsafe { libc::unlink(fs_cstr) } != 0 {
                 error!(
-                    "Failed to unlink file \"{}\", error: {}",
+                    "Failed to unlink file \"{}\", error: {:?}",
                     fs_path,
                     std::io::Error::last_os_error()
                 );
@@ -117,7 +117,7 @@ impl FileBackend {
 
                 if unsafe { libc::unlink(fs_cstr) } != 0 {
                     error!(
-                        "Failed to unlink file \"{}\", error: {}",
+                        "Failed to unlink file \"{}\", error: {:?}",
                         file_path,
                         std::io::Error::last_os_error()
                     );
@@ -188,8 +188,8 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
         unsafe {
             let read_addr = addr as *mut u8;
             let data: u8 = *read_addr;
-            // This function is used to prevent complier optimization.
-            // If `*read = data` is used, the complier optimizes it as no-op,
+            // This function is used to prevent compiler optimization.
+            // If `*read = data` is used, the compiler optimizes it as no-op,
             // which means that the pages will not be touched.
             std::ptr::write_volatile(read_addr, data);
         }
@@ -227,7 +227,7 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     // join all threads to wait for pre-allocating.
     while let Some(thread) = threads_join.pop() {
         if let Err(ref e) = thread.join() {
-            error!("{}", format!("Failed to join thread: {:?}", e));
+            error!("Failed to join thread: {:?}", e);
         }
     }
 }

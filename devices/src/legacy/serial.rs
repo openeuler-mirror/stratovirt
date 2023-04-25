@@ -36,7 +36,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::chardev::{Chardev, InputReceiver};
 use super::error::LegacyError;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
 const UART_IER_RDI: u8 = 0x01;
@@ -149,7 +149,7 @@ impl Serial {
             .with_context(|| "Failed to realize chardev")?;
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| anyhow!(LegacyError::SetSysResErr))?;
+            .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
@@ -170,7 +170,7 @@ impl Serial {
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
         )
-        .with_context(|| anyhow!(LegacyError::RegNotifierErr))?;
+        .with_context(|| LegacyError::RegNotifierErr)?;
         Ok(())
     }
 
@@ -191,7 +191,7 @@ impl Serial {
         if iir != UART_IIR_NO_INT {
             if let Some(evt) = self.interrupt_evt() {
                 if let Err(e) = evt.write(1) {
-                    error!("serial: failed to write interrupt eventfd ({}).", e);
+                    error!("serial: failed to write interrupt eventfd ({:?}).", e);
                 }
                 return;
             }
@@ -438,7 +438,7 @@ impl StateTransfer for Serial {
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let serial_state = *SerialState::from_bytes(state)
-            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("SERIAL")))?;
+            .with_context(|| MigrationError::FromBytesError("SERIAL"))?;
         let mut rbr = VecDeque::<u8>::default();
         for i in 0..serial_state.rbr_len {
             rbr.push_back(serial_state.rbr_value[i]);
@@ -450,11 +450,7 @@ impl StateTransfer for Serial {
     }
 
     fn get_device_alias(&self) -> u64 {
-        if let Some(alias) = MigrationManager::get_desc_alias(&SerialState::descriptor().name) {
-            alias
-        } else {
-            !0
-        }
+        MigrationManager::get_desc_alias(&SerialState::descriptor().name).unwrap_or(!0)
     }
 }
 

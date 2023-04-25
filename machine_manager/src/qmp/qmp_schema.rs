@@ -399,6 +399,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "human-monitor-command")]
+    human_monitor_command {
+        arguments: human_monitor_command,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -595,6 +601,7 @@ pub struct device_add {
     pub sysfsdev: Option<String>,
     #[serde(rename = "queue-size")]
     pub queue_size: Option<u16>,
+    pub port: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;
@@ -709,8 +716,8 @@ pub struct blockdev_add {
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
-    #[serde(rename = "read-zeros")]
-    pub read_zeros: Option<bool>,
+    #[serde(rename = "detect-zeroes")]
+    pub detect_zeroes: Option<String>,
     pub driver: Option<String>,
     pub backing: Option<String>,
     pub discard: Option<String>,
@@ -1535,7 +1542,7 @@ impl Command for balloon {
 ///
 /// ```text
 /// -> { "execute": "query-version" }
-/// <- {"return":{"package":"StratoVirt-0.3.0","qemu":{"major":4,"micro":0,"minor":1}}}
+/// <- {"return":{"version":{"qemu":{"minor":1,"micro":0,"major":5},"package":"StratoVirt-2.2.0"},"capabilities":[]}}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_version {}
@@ -1825,10 +1832,10 @@ pub struct query_command_line_options {}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CmdParameter {
-    name: String,
-    help: String,
+    pub name: String,
+    pub help: String,
     #[serde(rename = "type")]
-    paramter_type: String,
+    pub paramter_type: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -2140,6 +2147,28 @@ impl Command for input_event {
         Default::default()
     }
 }
+
+/// human-monitor-command
+///
+/// # Arguments
+///
+/// * `command_line` - the command line will be executed.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "human-monitor-command",
+///      "arguments": { "command-line": "drive_add dummy
+///      file=/path/to/file,format=raw,if=none,id=drive-id" }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct human_monitor_command {
+    #[serde(rename = "command-line")]
+    pub command_line: String,
+}
+pub type HumanMonitorCmdArgument = human_monitor_command;
 
 #[cfg(test)]
 mod tests {
@@ -2684,6 +2713,41 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_human_monitor_command() {
+        // Normal test.
+        let json_msg = r#"
+        {
+            "execute": "human-monitor-command" ,
+            "arguments": {
+                "command-line": "drive_add dummy file=/path/to/file,format=raw,if=none,id=drive-id"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+
+        // Abnormal test with invalid arguments.
+        let json_msg = r#"
+        {
+            "execute": "human-monitor-command" ,
+            "arguments": {
+                "invalid_key": "invalid_value"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown field `invalid_key`, expected `command-line`"#;
         assert!(err_msg.contains(part_msg));
     }
 }

@@ -80,7 +80,7 @@ pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
 
 /// The driver can send control commands for MAC address filtering.
 pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
-/// The driver sets the unicast/multicast addresse table.
+/// The driver sets the unicast/multicast address table.
 pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
 /// The driver sets the default MAC address which rx filtering accepts.
 pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
@@ -335,8 +335,7 @@ struct VirtioNetHdr {
 }
 impl ByteCode for VirtioNetHdr {}
 
-/// Execute cmd used to create br/tap.
-fn execute_cmd(cmd: String) {
+fn execute_cmd(cmd: String, check: bool) {
     let args = cmd.split(' ').collect::<Vec<&str>>();
     if args.len() <= 0 {
         return;
@@ -351,24 +350,34 @@ fn execute_cmd(cmd: String) {
         .output()
         .expect(format!("Failed to execute {}", cmd).as_str());
     println!("{:?}", args);
-    assert!(output.status.success());
+    if check {
+        assert!(output.status.success());
+    }
+}
+
+fn execute_cmd_unchecked(cmd: String) {
+    execute_cmd(cmd, false);
+}
+
+fn execute_cmd_checked(cmd: String) {
+    execute_cmd(cmd, true);
 }
 
 fn create_tap(id: u8, mq: bool) {
-    let br_name = "qbr".to_string() + &id.to_string();
-    let tap_name = "qtap".to_string() + &id.to_string();
-    execute_cmd("brctl addbr ".to_string() + &br_name);
+    let br_name = "mst_net_qbr".to_string() + &id.to_string();
+    let tap_name = "mst_net_qtap".to_string() + &id.to_string();
+    execute_cmd_checked("brctl addbr ".to_string() + &br_name);
     if mq {
-        execute_cmd(
+        execute_cmd_checked(
             "ip tuntap add ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
         );
     } else {
-        execute_cmd("ip tuntap add ".to_string() + &tap_name + &" mode tap".to_string());
+        execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd("brctl addif ".to_string() + &br_name + &" ".to_string() + &tap_name);
-    execute_cmd("ip link set ".to_string() + &br_name + &" up".to_string());
-    execute_cmd("ip link set ".to_string() + &tap_name + &" up".to_string());
-    execute_cmd(
+    execute_cmd_checked("brctl addif ".to_string() + &br_name + &" ".to_string() + &tap_name);
+    execute_cmd_checked("ip link set ".to_string() + &br_name + &" up".to_string());
+    execute_cmd_checked("ip link set ".to_string() + &tap_name + &" up".to_string());
+    execute_cmd_checked(
         "ip address add ".to_string()
             + &id.to_string()
             + &".1.1.".to_string()
@@ -379,18 +388,18 @@ fn create_tap(id: u8, mq: bool) {
 }
 
 fn clear_tap(id: u8, mq: bool) {
-    let br_name = "qbr".to_string() + &id.to_string();
-    let tap_name = "qtap".to_string() + &id.to_string();
-    execute_cmd("ip link set ".to_string() + &tap_name + &" down".to_string());
-    execute_cmd("ip link set ".to_string() + &br_name + &" down".to_string());
+    let br_name = "mst_net_qbr".to_string() + &id.to_string();
+    let tap_name = "mst_net_qtap".to_string() + &id.to_string();
+    execute_cmd_unchecked("ip link set ".to_string() + &tap_name + &" down".to_string());
+    execute_cmd_unchecked("ip link set ".to_string() + &br_name + &" down".to_string());
     if mq {
-        execute_cmd(
+        execute_cmd_unchecked(
             "ip tuntap del ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
         );
     } else {
-        execute_cmd("ip tuntap del ".to_string() + &tap_name + &" mode tap".to_string());
+        execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd("brctl delbr ".to_string() + &br_name);
+    execute_cmd_unchecked("brctl delbr ".to_string() + &br_name);
 }
 
 #[allow(unused)]
@@ -438,7 +447,7 @@ pub fn create_net(
     extra_args.append(&mut args);
 
     let net_args =
-        String::from("-netdev tap,id=netdev0,ifname=qtap") + &id.to_string() + &mq_queues;
+        String::from("-netdev tap,id=netdev0,ifname=mst_net_qtap") + &id.to_string() + &mq_queues;
     args = net_args.split(' ').collect();
     extra_args.append(&mut args);
 
@@ -461,11 +470,12 @@ fn set_up(
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
 ) {
+    clear_tap(id, mq);
     create_tap(id, mq);
     create_net(id, mq, num_queues, with_mac, false)
 }
 
-// Set the iothread argument in comand line.
+// Set the iothread argument in command line.
 fn set_up_iothread(
     id: u8,
     mq: bool,
@@ -476,6 +486,7 @@ fn set_up_iothread(
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
 ) {
+    clear_tap(id, mq);
     create_tap(id, mq);
     create_net(id, mq, num_queues, with_mac, true)
 }
@@ -534,30 +545,17 @@ fn init_net_device(
     vqs
 }
 
-fn check_arp_mac(
-    net: Rc<RefCell<TestVirtioPciDev>>,
+fn poll_used_ring(
     test_state: Rc<RefCell<TestState>>,
     vq: Rc<RefCell<TestVirtQueue>>,
     arp_request: &[u8],
     need_reply: bool,
-) {
+) -> bool {
     let mut start = 0_u64;
-    let start_time = time::Instant::now();
-    let timeout_us = time::Duration::from_micros(TIMEOUT_US);
-    let timeout_us_no_reply = time::Duration::from_micros(TIMEOUT_US / 5);
-    loop {
-        if need_reply {
-            assert!(time::Instant::now() - start_time < timeout_us);
-            if !net.borrow().queue_was_notified(vq.clone()) {
-                continue;
-            }
-        } else if time::Instant::now() - start_time > timeout_us_no_reply {
-            return;
-        }
-
-        let idx = test_state
-            .borrow()
-            .readw(vq.borrow().used + offset_of!(VringUsed, idx) as u64);
+    let mut idx = test_state
+        .borrow()
+        .readw(vq.borrow().used + offset_of!(VringUsed, idx) as u64);
+    while start < idx as u64 {
         for i in start..idx as u64 {
             let len = test_state.borrow().readw(
                 vq.borrow().used
@@ -580,7 +578,7 @@ fn check_arp_mac(
                     == packets[dst_mac_pos..dst_mac_pos + MAC_ADDR_LEN]
                 {
                     if need_reply {
-                        return;
+                        return true;
                     } else {
                         assert!(false);
                     }
@@ -588,6 +586,37 @@ fn check_arp_mac(
             }
         }
         start = idx as u64;
+        vq.borrow().set_used_event(test_state.clone(), start as u16);
+        idx = test_state
+            .borrow()
+            .readw(vq.borrow().used + offset_of!(VringUsed, idx) as u64);
+    }
+    false
+}
+
+fn check_arp_mac(
+    net: Rc<RefCell<TestVirtioPciDev>>,
+    test_state: Rc<RefCell<TestState>>,
+    vq: Rc<RefCell<TestVirtQueue>>,
+    arp_request: &[u8],
+    need_reply: bool,
+) {
+    let start_time = time::Instant::now();
+    let timeout_us = time::Duration::from_micros(TIMEOUT_US);
+    let timeout_us_no_reply = time::Duration::from_micros(TIMEOUT_US / 5);
+    loop {
+        if need_reply {
+            assert!(time::Instant::now() - start_time < timeout_us);
+            if !net.borrow().queue_was_notified(vq.clone()) {
+                continue;
+            }
+        } else if time::Instant::now() - start_time > timeout_us_no_reply {
+            return;
+        }
+
+        if poll_used_ring(test_state.clone(), vq.clone(), arp_request, need_reply) {
+            return;
+        }
     }
 }
 
@@ -1728,7 +1757,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     test_state.borrow().writew(vqs[0].borrow().avail + 2, 0);
     net.borrow().set_driver_ok();
 
-    // Test send 256 packet to execeed the handle_tx limitation once.
+    // Test send 256 packet to exceed the handle_tx limitation once.
     let request = get_arp_request(id);
     let length = request.as_bytes().len() as u64;
     let size = net.borrow().get_queue_size();

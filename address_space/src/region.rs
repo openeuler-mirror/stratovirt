@@ -505,7 +505,7 @@ impl Region {
         match self.region_type {
             RegionType::Ram | RegionType::RamDevice => {
                 self.check_valid_offset(offset, count).with_context(|| {
-                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                    AddressSpaceError::InvalidOffset(offset, count, self.size())
                 })?;
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
@@ -516,7 +516,7 @@ impl Region {
             }
             RegionType::RomDevice => {
                 self.check_valid_offset(offset, count).with_context(|| {
-                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                    AddressSpaceError::InvalidOffset(offset, count, self.size())
                 })?;
                 if self.rom_dev_romd.as_ref().load(Ordering::SeqCst) {
                     let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
@@ -1092,11 +1092,11 @@ mod test {
             data_match: false,
             data: 0,
         };
-        // comapre unchanged
+        // compare unchanged
         let mut fd2 = fd1.clone();
         assert!(fd2 == fd1);
 
-        // comapre fd
+        // compare fd
         fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
         assert!(fd2 != fd1);
 
