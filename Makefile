@@ -21,3 +21,4 @@ yum-deps:
 	@yum install pulseaudio
 	@yum install clang
 	@yum install gtk3-devel
+	@yum install libusbx
