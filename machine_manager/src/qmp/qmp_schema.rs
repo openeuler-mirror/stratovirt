@@ -615,6 +615,11 @@ pub struct device_add {
     pub backend: Option<String>,
     pub path: Option<String>,
     pub cameradev: Option<String>,
+    pub hostbus: Option<String>,
+    pub hostaddr: Option<String>,
+    pub hostport: Option<String>,
+    pub vendorid: Option<String>,
+    pub productid: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;
