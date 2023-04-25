@@ -321,6 +321,12 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause
 Please see above.
 
+Software: libusb1_sys 0.6.4
+Copyright notice:
+Copyright (c) 2015 David Cuddeback
+License: MIT
+Please see above.
+
 ----------------------------------------------------------------
 
 Copyright (c) <year> <owner>. All rights reserved.

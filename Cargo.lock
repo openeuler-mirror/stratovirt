@@ -349,6 +349,7 @@ dependencies = [
  "libc",
  "libpulse-binding",
  "libpulse-simple-binding",
+ "libusb1-sys",
  "log",
  "machine_manager",
  "migration",
