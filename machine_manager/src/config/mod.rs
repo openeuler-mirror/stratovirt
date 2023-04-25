@@ -76,6 +76,7 @@ use log::error;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
+    num_ops::str_to_usize,
     test_helper::is_test_enabled,
     trace::enable_trace_events,
     AsAny,
@@ -580,6 +581,20 @@ pub fn add_trace_events(config: &str) -> Result<()> {
         return Ok(());
     }
     bail!("trace: events file must be set.");
+}
+
+/// This struct is a wrapper for `usize`.
+/// Hexadecimal string can be converted to integers by this structure method.
+pub struct UnsignedInteger(pub usize);
+
+impl FromStr for UnsignedInteger {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let value = str_to_usize(s.to_string())
+            .map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
+        Ok(UnsignedInteger(value))
+    }
 }
 
 pub struct IntegerList(pub Vec<u64>);
