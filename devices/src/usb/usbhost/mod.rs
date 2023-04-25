@@ -32,7 +32,10 @@ use crate::usb::{
     xhci::xhci_controller::XhciDevice,
     UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
-use machine_manager::config::UsbHostConfig;
+use machine_manager::{
+    config::UsbHostConfig,
+    temp_cleaner::{ExitNotifier, TempCleaner},
+};
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
@@ -56,6 +59,8 @@ pub struct UsbHost {
     ifs_num: u8,
     ifs: [InterfaceStatus; USB_MAX_INTERFACES as usize],
     usb_device: UsbDevice,
+    /// Callback for release dev to Host afer the vm exited.
+    exit: Option<Arc<ExitNotifier>>,
 }
 
 impl UsbHost {
@@ -72,6 +77,7 @@ impl UsbHost {
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
             usb_device: UsbDevice::new(),
+            exit: None,
         })
     }
 
@@ -272,6 +278,19 @@ impl UsbHost {
         Ok(())
     }
 
+    fn register_exit(&mut self) {
+        let exit = self as *const Self as u64;
+        let exit_notifier = Arc::new(move || {
+            // SAFETY: This callback is deleted after the device hot-unplug, so it is called only
+            // when the vm exits abnormally.
+            let usb_host =
+                &mut unsafe { std::slice::from_raw_parts_mut(exit as *mut UsbHost, 1) }[0];
+            usb_host.release_dev_to_host();
+        }) as Arc<ExitNotifier>;
+        self.exit = Some(exit_notifier.clone());
+        TempCleaner::add_exit_notifier(self.id.clone(), exit_notifier);
+    }
+
     fn release_interfaces(&mut self) {
         for i in 0..self.ifs_num {
             if !self.ifs[i as usize].claimed {
@@ -456,10 +475,14 @@ impl UsbDeviceOps for UsbHost {
         self.open_and_init()?;
 
         let usbhost = Arc::new(Mutex::new(self));
+        // UsbHost addr is changed after Arc::new, so so the registration must be here.
+        usbhost.lock().unwrap().register_exit();
+
         Ok(usbhost)
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        TempCleaner::remove_exit_notifier(&self.id);
         self.release_dev_to_host();
         Ok(())
     }
