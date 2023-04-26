@@ -30,6 +30,9 @@ use super::{
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
 use crate::libtest::{test_init, TestState};
 use devices::usb::{
+    camera::{
+        INTERFACE_ID_CONTROL, SC_VIDEOCONTROL, SC_VIDEOSTREAMING, SC_VIDEO_INTERFACE_COLLECTION,
+    },
     config::*,
     hid::{
         HID_GET_IDLE, HID_GET_PROTOCOL, HID_GET_REPORT, HID_SET_IDLE, HID_SET_PROTOCOL,
@@ -134,10 +137,12 @@ pub const PRIMARY_INTERRUPTER_ID: usize = 0;
 pub const XHCI_PCI_SLOT_NUM: u8 = 0x5;
 pub const XHCI_PCI_FUN_NUM: u8 = 0;
 
+#[derive(Eq, PartialEq)]
 enum UsbDeviceType {
     Tablet,
     Keyboard,
     Storage,
+    Camera,
     Other,
 }
 
@@ -604,6 +609,9 @@ impl TestXhciPciDevice {
             UsbDeviceType::Storage => {
                 assert_eq!(buf, [3, 0]);
             }
+            UsbDeviceType::Camera => {
+                assert_eq!(buf, [3, 0]);
+            }
             _ => {}
         }
 
@@ -979,6 +987,11 @@ impl TestXhciPciDevice {
                 endpoint_id.push(STORAGE_DEVICE_OUT_ENDPOINT_ID);
                 endpoint_type.push(2);
                 endpoint_offset.push(0xa0);
+            }
+            UsbDeviceType::Camera => {
+                endpoint_id.push(3);
+                endpoint_type.push(6);
+                endpoint_offset.push(0x80);
             }
             _ => {
                 endpoint_id.push(3);
@@ -1572,11 +1585,167 @@ impl TestXhciPciDevice {
             UsbDeviceType::Keyboard
         } else if *self.device_config.get("storage").unwrap_or(&false) {
             UsbDeviceType::Storage
+        } else if *self.device_config.get("camera").unwrap_or(&false) {
+            UsbDeviceType::Camera
         } else {
             UsbDeviceType::Other
         };
 
         usb_device_type
+    }
+
+    fn get_iad_desc(&mut self, offset: &mut u64, addr: u64) {
+        let usb_device_type = self.get_usb_device_type();
+        if usb_device_type != UsbDeviceType::Camera {
+            return;
+        }
+
+        // 1. IAD header descriptor
+        *offset += USB_DT_CONFIG_SIZE as u64;
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 8 as usize, *offset);
+
+        // descriptor type
+        assert_eq!(buf[1], USB_DT_INTERFACE_ASSOCIATION);
+        // class
+        assert_eq!(buf[4], USB_CLASS_VIDEO);
+        // subclass
+        assert_eq!(buf[5], SC_VIDEO_INTERFACE_COLLECTION);
+
+        //2. VC interface
+        *offset += 8;
+        let buf = self.get_transfer_data_indirect_with_offset(
+            addr,
+            USB_DT_INTERFACE_SIZE as usize,
+            *offset,
+        );
+
+        assert_eq!(buf[1], USB_DT_INTERFACE);
+        assert_eq!(buf[2], INTERFACE_ID_CONTROL);
+        assert_eq!(buf[5], USB_CLASS_VIDEO);
+        assert_eq!(buf[6], SC_VIDEOCONTROL);
+
+        // get total vc length from its header descriptor
+        *offset += USB_DT_INTERFACE_SIZE as u64;
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xd as usize, *offset);
+
+        let total = u16::from_le_bytes(buf[5..7].try_into().unwrap());
+        let remained = total - 0xd;
+
+        *offset += 0xd;
+        let _buf = self.get_transfer_data_indirect_with_offset(addr, remained as usize, *offset);
+
+        //3. VS interface
+        *offset += remained as u64;
+        let buf = self.get_transfer_data_indirect_with_offset(
+            addr,
+            USB_DT_INTERFACE_SIZE as usize,
+            *offset,
+        );
+
+        assert_eq!(buf[1], USB_DT_INTERFACE);
+        assert_eq!(buf[5], USB_CLASS_VIDEO);
+        assert_eq!(buf[6], SC_VIDEOSTREAMING);
+
+        // get total vs length from its header descriptor
+        *offset += USB_DT_INTERFACE_SIZE as u64;
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xf as usize, *offset);
+        let total = u16::from_le_bytes(buf[4..6].try_into().unwrap());
+        let remained = total - 0xf;
+
+        *offset += 0xf;
+        let _buf = self.get_transfer_data_indirect_with_offset(addr, remained as usize, *offset);
+    }
+
+    fn get_interfaces(&mut self, offset: &mut u64, addr: u64) {
+        let usb_device_type = self.get_usb_device_type();
+        if usb_device_type == UsbDeviceType::Camera {
+            return;
+        }
+
+        *offset += USB_DT_CONFIG_SIZE as u64;
+        let buf = self.get_transfer_data_indirect_with_offset(
+            addr,
+            USB_DT_INTERFACE_SIZE as usize,
+            *offset,
+        );
+        // descriptor type
+        assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_INTERFACE);
+        // USB class
+        match usb_device_type {
+            UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
+                assert_eq!(buf[5], USB_CLASS_HID);
+            }
+            UsbDeviceType::Storage => {
+                assert_eq!(buf[5], USB_CLASS_MASS_STORAGE);
+                assert_eq!(buf[6], 0x06);
+                assert_eq!(buf[7], 0x50);
+            }
+            _ => {}
+        }
+
+        match usb_device_type {
+            UsbDeviceType::Tablet => {
+                // hid descriptor
+                *offset += USB_DT_INTERFACE_SIZE as u64;
+                let buf = self.get_transfer_data_indirect_with_offset(addr, 9, *offset);
+                assert_eq!(buf, [0x9, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0]);
+            }
+            UsbDeviceType::Keyboard => {
+                // hid descriptor
+                *offset += USB_DT_INTERFACE_SIZE as u64;
+                let buf = self.get_transfer_data_indirect_with_offset(addr, 9, *offset);
+                assert_eq!(buf, [0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0]);
+            }
+            _ => {}
+        }
+
+        *offset += USB_DT_INTERFACE_SIZE as u64;
+        // endpoint descriptor
+        let buf = self.get_transfer_data_indirect_with_offset(
+            addr,
+            USB_DT_ENDPOINT_SIZE as usize,
+            *offset,
+        );
+
+        match usb_device_type {
+            UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
+                // descriptor type
+                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
+                // endpoint address
+                assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x1);
+            }
+            UsbDeviceType::Storage => {
+                // descriptor type
+                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
+                // endpoint address
+                assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x01);
+                *offset += USB_DT_ENDPOINT_SIZE as u64;
+                // endpoint descriptor
+                let buf = self.get_transfer_data_indirect_with_offset(
+                    addr,
+                    USB_DT_ENDPOINT_SIZE as usize,
+                    *offset,
+                );
+                // descriptor type
+                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
+                // endpoint address
+                assert_eq!(buf[2], USB_DIRECTION_HOST_TO_DEVICE | 0x02);
+            }
+            _ => {}
+        }
+    }
+
+    fn check_string_descriptor(&mut self, slot_id: u32, name_idx: u16, name: &str) {
+        self.get_string_descriptor(slot_id, name_idx);
+        self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
+        let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+        assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
+
+        let len = name.len() * 2 + 2;
+        let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
+        for i in 0..name.len() {
+            assert_eq!(buf[2 * i + 2], name.as_bytes()[i]);
+        }
     }
 
     pub fn get_usb_descriptor(&mut self, slot_id: u32) {
@@ -1598,6 +1767,9 @@ impl TestXhciPciDevice {
             UsbDeviceType::Storage => {
                 assert_eq!(buf[2..4], [0, 2]);
             }
+            UsbDeviceType::Camera => {
+                assert_eq!(buf[2..4], [0, 3]);
+            }
             _ => {}
         }
         // config descriptor
@@ -1613,77 +1785,9 @@ impl TestXhciPciDevice {
         assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_CONFIG);
         // configure value
         assert_eq!(buf[5], 1);
-        offset += USB_DT_CONFIG_SIZE as u64;
-        let buf = self.get_transfer_data_indirect_with_offset(
-            addr,
-            USB_DT_INTERFACE_SIZE as usize,
-            offset,
-        );
-        // descriptor type
-        assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_INTERFACE);
-        // USB class
-        match usb_device_type {
-            UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
-                assert_eq!(buf[5], USB_CLASS_HID);
-            }
-            UsbDeviceType::Storage => {
-                assert_eq!(buf[5], USB_CLASS_MASS_STORAGE);
-                assert_eq!(buf[6], 0x06);
-                assert_eq!(buf[7], 0x50);
-            }
-            _ => {}
-        }
 
-        match usb_device_type {
-            UsbDeviceType::Tablet => {
-                // hid descriptor
-                offset += USB_DT_INTERFACE_SIZE as u64;
-                let buf = self.get_transfer_data_indirect_with_offset(addr, 9, offset);
-                assert_eq!(buf, [0x9, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0]);
-            }
-            UsbDeviceType::Keyboard => {
-                // hid descriptor
-                offset += USB_DT_INTERFACE_SIZE as u64;
-                let buf = self.get_transfer_data_indirect_with_offset(addr, 9, offset);
-                assert_eq!(buf, [0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0]);
-            }
-            _ => {}
-        }
-
-        offset += USB_DT_INTERFACE_SIZE as u64;
-        // endpoint descriptor
-        let buf = self.get_transfer_data_indirect_with_offset(
-            addr,
-            USB_DT_ENDPOINT_SIZE as usize,
-            offset,
-        );
-
-        match usb_device_type {
-            UsbDeviceType::Tablet | UsbDeviceType::Keyboard => {
-                // descriptor type
-                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
-                // endpoint address
-                assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x1);
-            }
-            UsbDeviceType::Storage => {
-                // descriptor type
-                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
-                // endpoint address
-                assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x01);
-                offset += USB_DT_ENDPOINT_SIZE as u64;
-                // endpoint descriptor
-                let buf = self.get_transfer_data_indirect_with_offset(
-                    addr,
-                    USB_DT_ENDPOINT_SIZE as usize,
-                    offset,
-                );
-                // descriptor type
-                assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
-                // endpoint address
-                assert_eq!(buf[2], USB_DIRECTION_HOST_TO_DEVICE | 0x02);
-            }
-            _ => {}
-        }
+        self.get_iad_desc(&mut offset, addr);
+        self.get_interfaces(&mut offset, addr);
 
         // string descriptor
         self.get_string_descriptor(slot_id, 0);
@@ -1693,39 +1797,19 @@ impl TestXhciPciDevice {
         let buf = self.get_transfer_data_indirect(evt.ptr - 16, 4);
         // Language ID
         assert_eq!(buf, [4, 3, 9, 4]);
-        self.get_string_descriptor(slot_id, 3);
-        self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
-        let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-        assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
 
         match usb_device_type {
             UsbDeviceType::Tablet => {
-                let hid_str = "HID Tablet";
-                let len = hid_str.len() * 2 + 2;
-                let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
-                for i in 0..hid_str.len() {
-                    assert_eq!(buf[2 * i + 2], hid_str.as_bytes()[i]);
-                }
+                self.check_string_descriptor(slot_id, 3, "HID Tablet");
             }
             UsbDeviceType::Keyboard => {
-                let hid_str = "HID Keyboard";
-                let len = hid_str.len() * 2 + 2;
-                let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
-                for i in 0..hid_str.len() {
-                    assert_eq!(buf[2 * i + 2], hid_str.as_bytes()[i]);
-                }
+                self.check_string_descriptor(slot_id, 3, "HID Keyboard");
             }
             UsbDeviceType::Storage => {
-                self.get_string_descriptor(slot_id, 2);
-                self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
-                let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-                assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
-                let hid_str = "StratoVirt USB Storage";
-                let len = hid_str.len() * 2 + 2;
-                let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
-                for i in 0..hid_str.len() {
-                    assert_eq!(buf[2 * i + 2], hid_str.as_bytes()[i]);
-                }
+                self.check_string_descriptor(slot_id, 2, "StratoVirt USB Storage");
+            }
+            UsbDeviceType::Camera => {
+                self.check_string_descriptor(slot_id, 2, "USB Camera");
             }
             _ => {}
         }
@@ -2123,6 +2207,19 @@ impl TestUsbBuilder {
         self.args.append(&mut args);
 
         self.config.insert(String::from("storage"), true);
+        self
+    }
+
+    pub fn with_usb_camera(mut self, id: &str, path: &str) -> Self {
+        let args = format!("-cameradev demo,id=camdev0,path={}", path);
+        let args: Vec<&str> = args[..].split(' ').collect();
+        let mut args = args.into_iter().map(|s| s.to_string()).collect();
+        self.args.append(&mut args);
+        let args = format!("-device usb-camera,id={},cameradev=camdev0", id);
+        let args: Vec<&str> = args[..].split(' ').collect();
+        let mut args = args.into_iter().map(|s| s.to_string()).collect();
+        self.args.append(&mut args);
+        self.config.insert(String::from("camera"), true);
         self
     }
 
