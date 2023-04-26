@@ -18,10 +18,10 @@ use strum::VariantNames;
 
 use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter,
-    DeviceAddArgument, DeviceProps, Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo,
-    MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass,
-    QmpEvent, Target, TypeLists, UpdateRegionArgument,
+    BlockDevAddArgument, CameraDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine,
+    CmdParameter, DeviceAddArgument, DeviceProps, Events, GicCap, HumanMonitorCmdArgument,
+    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
+    QmpCommand, QmpErrorClass, QmpEvent, Target, TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -180,6 +180,12 @@ pub trait DeviceInterface {
 
     /// Remove a chardev device.
     fn chardev_remove(&mut self, _id: String) -> Response;
+
+    /// Creates a new camera device.
+    fn cameradev_add(&mut self, args: CameraDevAddArgument) -> Response;
+
+    /// Delete a camera device.
+    fn cameradev_del(&mut self, id: String) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;

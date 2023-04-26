@@ -454,6 +454,7 @@ impl VmConfig {
         }
         Ok(())
     }
+
     /// Add 'net devices' to `VmConfig devices`.
     pub fn add_net_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
         let mut device_info = args.driver.clone();

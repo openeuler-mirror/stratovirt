@@ -25,7 +25,7 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
+use machine_manager::config::UsbCameraConfig;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
@@ -36,10 +36,9 @@ use util::loop_context::{
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    v4l2::V4l2CameraBackend, CamBasicFmt, CameraBrokenCallback, CameraHostdevOps,
-    CameraNotifyCallback,
+    camera_ops, CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
+    CameraNotifyCallback, FmtType,
 };
-use crate::camera_backend::{CameraFormatList, CameraFrame, FmtType};
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
 use crate::usb::{
@@ -603,17 +602,7 @@ impl VideoStreamingControl {
 
 impl UsbCamera {
     pub fn new(config: UsbCameraConfig) -> Result<Self> {
-        let cam = match config.backend {
-            CamBackendType::V4l2 => V4l2CameraBackend::new(
-                config.id.clone().unwrap(),
-                config.path.clone().with_context(|| {
-                    ConfigError::FieldIsMissing("path".to_string(), "V4L2".to_string())
-                })?,
-                config.iothread.clone(),
-            )?,
-            CamBackendType::Demo => bail!("Not supported type"),
-        };
-        let camera = Arc::new(Mutex::new(cam));
+        let camera = camera_ops(config.clone())?;
         Ok(Self {
             id: config.id.unwrap(),
             usb_device: UsbDevice::new(),

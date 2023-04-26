@@ -12,6 +12,7 @@
 
 pub use balloon::*;
 pub use boot_source::*;
+pub use camera::*;
 pub use chardev::*;
 pub use demo_dev::*;
 pub use devices::*;
@@ -37,6 +38,7 @@ pub use vnc::*;
 
 mod balloon;
 mod boot_source;
+pub mod camera;
 mod chardev;
 mod demo_dev;
 mod devices;
@@ -121,6 +123,7 @@ pub struct VmConfig {
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
     pub display: Option<DisplayConfig>,
+    pub camera_backend: HashMap<String, CameraDevConfig>,
 }
 
 impl VmConfig {
