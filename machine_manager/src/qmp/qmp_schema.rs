@@ -124,6 +124,16 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    cameradev_add {
+        arguments: cameradev_add,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    cameradev_del {
+        arguments: cameradev_del,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-hotpluggable-cpus")]
     #[strum(serialize = "query-hotpluggable-cpus")]
     query_hotpluggable_cpus {
@@ -604,6 +614,7 @@ pub struct device_add {
     pub port: Option<String>,
     pub backend: Option<String>,
     pub path: Option<String>,
+    pub cameradev: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;
@@ -779,6 +790,40 @@ pub struct netdev_add {
 pub type NetDevAddArgument = netdev_add;
 
 impl Command for netdev_add {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// cameradev_add
+///
+/// # Arguments
+///
+/// * `id` - the device's ID, must be unique.
+/// * `path` - the backend camera file, eg. /dev/video0.
+/// * `driver` - the backend type, eg. v4l2.
+///
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "cameradev_add",
+///      "arguments":  {"id": "cam0", "driver": "v4l2", "path": "/dev/video0" }}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct cameradev_add {
+    pub id: String,
+    pub path: Option<String>,
+    pub driver: String,
+}
+
+pub type CameraDevAddArgument = cameradev_add;
+
+impl Command for cameradev_add {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -966,6 +1011,38 @@ pub struct netdev_del {
 }
 
 impl Command for netdev_del {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// cameradev_del
+///
+/// Remove a camera backend.
+///
+/// # Arguments
+///
+/// * `id` - The name of the camera backend to remove.
+///
+/// # Errors
+///
+/// If `id` is not a valid camera backend, DeviceNotFound
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "cameradev_del", "arguments": { "id": "cam0" } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct cameradev_del {
+    pub id: String,
+}
+
+impl Command for cameradev_del {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -1565,13 +1642,20 @@ impl Command for query_version {
 ///
 /// ```text
 /// -> { "execute": "query-commands" }
-/// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},
-/// {"name":"cont"},{"name":"system_powerdown"},{"name":"system_reset"},{"name":"device_add"},
-/// {"name":"device_del"},{"name":"netdev_add"},{"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},
+/// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},{"name":"cont"},
+/// {"name":"system_powerdown"},{"name":"system_reset"},{"name":"device_add"},{"name":"device_del"},
+/// {"name":"chardev_add"},{"name":"chardev_remove"},{"name":"netdev_add"},{"name":"netdev_del"},
+/// {"name":"cameradev_add"},{"name":"cameradev_del"},{"name":"query-hotpluggable-cpus"},
 /// {"name":"query-cpus"},{"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
-/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query_vnc"},
-/// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
-/// {"name":"query_target"},{"name":"query_commands"}]}
+/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query-vnc"},
+/// {"name":"migrate"},{"name":"query_migrate"},{"name":"cancel_migrate"},{"name":"query_version"},
+/// {"name":"query_commands"},{"name":"query_target"},{"name":"query_kvm"},{"name":"query_machines"},
+/// {"name":"query-events"},{"name":"list_type"},{"name":"device_list_properties"},{"name":"block-commit"},
+/// {"name":"query_tpm_models"},{"name":"query_tpm_types"},{"name":"query_command_line_options"},
+/// {"name":"query_migrate_capabilities"},{"name":"query_qmp_schema"},{"name":"query_sev_capabilities"},
+/// {"name":"query-chardev"},{"name":"qom-list"},{"name":"qom_get"},{"name":"query-block"},{"name":"query-named-block-nodes"},
+/// {"name":"query-blockstats"},{"name":"query-block-jobs"},{"name":"query-gic-capabilities"},{"name":"query-iothreads"},
+/// {"name":"update_region"},{"name":"input_event"},{"name":"human_monitor_command"}]}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_commands {}
