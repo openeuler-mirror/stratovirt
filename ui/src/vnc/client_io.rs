@@ -14,8 +14,9 @@ use crate::{
     console::{console_select, DisplayMouse},
     error::VncError,
     input::{
-        key_event, point_event, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT,
-        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+        key_event, keyboard_modifier_get, keyboard_state_reset, point_event, update_key_state,
+        KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
+        INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
     },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
@@ -910,14 +911,14 @@ impl ClientIoHandler {
         }
         let buf = self.read_incoming_msg();
         let down: bool = buf[1] != 0;
-        let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let org_keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let mut keysym = org_keysym;
         let server = self.server.clone();
 
         // Uppercase -> Lowercase.
         if (ASCII_A..=ASCII_Z).contains(&keysym) {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
-        let mut kbd_state = server.keyboard_state.borrow_mut();
 
         let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
             Some(k) => *k,
@@ -929,14 +930,14 @@ impl ClientIoHandler {
         if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
             && down
             && self.server.display_listener.is_some()
-            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
-            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+            && keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && keyboard_modifier_get(KeyboardModifier::KeyModAlt)
         {
-            kbd_state.keyboard_state_reset();
+            keyboard_state_reset();
             console_select(Some((keycode - KEYCODE_1) as usize))?;
         }
 
-        kbd_state.keyboard_state_update(keycode, down)?;
+        update_key_state(down, org_keysym, keycode)?;
         key_event(keycode, down)?;
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
