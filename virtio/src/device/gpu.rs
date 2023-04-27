@@ -654,13 +654,22 @@ impl GpuIoHandler {
                         let mse = scanout.mouse.as_mut().unwrap();
 
                         if res_width as u32 == mse.width && res_height as u32 == mse.height {
-                            let pixels = mse.width * mse.height;
-                            let mouse_data_size = pixels * (size_of::<u32>() as u32);
-                            let mut con = vec![0u8; 64 * 64 * 4];
                             let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
-                            ptr::copy(res_data_ptr, con.as_mut_ptr(), mouse_data_size as usize);
-                            mse.data.clear();
-                            mse.data.append(&mut con);
+                            let mse_data_size = mse.data.len();
+                            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+                            // Front-end drvier does not deliver data in format sequence.
+                            // So we fix it in back-end.
+                            //
+                            // TODO: Fix front-end driver is a better solution.
+                            if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+                                || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+                            {
+                                let mut i = 0;
+                                while i < mse_data_size {
+                                    mse.data.swap(i, i + 2);
+                                    i += 4;
+                                }
+                            }
                             scanout.cursor_visible = true;
                         }
                     }
