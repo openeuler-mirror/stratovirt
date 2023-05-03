@@ -26,6 +26,7 @@ use machine_manager::{
     config::{ChardevConfig, ChardevType},
     temp_cleaner::TempCleaner,
 };
+use util::file::clear_file;
 use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -124,6 +125,7 @@ impl Chardev {
                         path
                     );
                 }
+                clear_file(path.clone())?;
                 let sock = UnixListener::bind(path.clone())
                     .with_context(|| format!("Failed to bind socket for chardev, path:{}", path))?;
                 self.listener = Some(sock);
