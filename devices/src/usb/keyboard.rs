@@ -91,7 +91,7 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 8,
                 bInterval: 0xa,
             },
-            extra: None,
+            extra: Vec::new(),
         })],
     })
 });

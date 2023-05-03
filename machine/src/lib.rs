@@ -1263,7 +1263,7 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_camera(cfg_args)?;
-        let camera = UsbCamera::new(device_cfg);
+        let camera = UsbCamera::new(device_cfg)?;
         let camera = camera.realize()?;
 
         self.attach_usb_to_xhci_controller(vm_config, camera)?;

@@ -37,6 +37,7 @@ pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;
+pub mod v4l2;
 pub use anyhow::Result;
 pub use error::UtilError;
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
