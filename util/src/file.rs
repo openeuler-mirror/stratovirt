@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{remove_file, File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
+use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context, Ok, Result};
 
 const MIN_FILE_ALIGN: u32 = 512;
 const MAX_FILE_ALIGN: u32 = 4096;
@@ -123,6 +124,15 @@ pub fn unlock_file(file: &File, path: &str) -> Result<()> {
             path,
             std::io::Error::last_os_error(),
         );
+    }
+
+    Ok(())
+}
+
+pub fn clear_file(path: String) -> Result<()> {
+    if Path::new(&path).exists() {
+        remove_file(&path)
+            .with_context(|| format!("File {} exists, but failed to remove it.", &path))?;
     }
 
     Ok(())

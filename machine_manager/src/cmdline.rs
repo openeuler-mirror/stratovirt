@@ -14,6 +14,7 @@ use std::os::unix::net::UnixListener;
 
 use anyhow::{bail, Context, Result};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
+use util::file::clear_file;
 use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
@@ -630,6 +631,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 }
 
 fn bind_socket(path: String) -> Result<UnixListener> {
+    clear_file(path.clone())?;
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("Failed to bind socket file {}", &path))?;
     // Add file to temporary pool, so it could be cleaned when vm exits.
