@@ -886,7 +886,6 @@ impl Region {
                     })?;
                 }
             }
-
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, flat_view)
                     .with_context(||
