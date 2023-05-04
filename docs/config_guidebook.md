@@ -516,10 +516,12 @@ Two properties can be set for virtconsole.
 * id: unique device-id.
 * chardev: char device of virtio console device.
 
-For virtio-serial-pci, two more properties are required.
+For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
+* multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* max_ports: max number of ports we can have for a virtio-serial device. Configuration range is [1, 31]. (optional) If not set, default is 31.
 
 ```shell
 # virtio mmio device
@@ -528,12 +530,12 @@ of device and the second one represents function number of it.
 -device virtconsole,id=<console_id>,chardev=<virtioconsole1>
 
 # virtio pci device
--device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}]
+-device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off},max_ports=<number>]
 -chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
 -device virtconsole,id=<console_id>,chardev=<virtioconsole1>
 ```
 NB:
-Currently, only one virtio console device is supported in standard machine.
+Currently, only one virtio console device is supported. Only one port is supported in microvm.
 
 ### 2.5 Virtio-vsock
 

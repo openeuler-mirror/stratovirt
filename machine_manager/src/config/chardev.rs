@@ -23,6 +23,9 @@ use crate::qmp::qmp_schema;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
+/// Default value of max ports for virtio-serial.
+const DEFAULT_SERIAL_PORTS_NUMBER: u32 = 31;
+
 /// Character device options.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChardevType {
@@ -424,16 +427,29 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     Ok(vsock)
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VirtioSerialInfo {
     pub id: String,
     pub pci_bdf: Option<PciBdf>,
     pub multifunction: bool,
+    pub max_ports: u32,
 }
 
 impl ConfigCheck for VirtioSerialInfo {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "virtio-serial id")
+        check_arg_too_long(&self.id, "virtio-serial id")?;
+
+        if self.max_ports < 1 || self.max_ports > DEFAULT_SERIAL_PORTS_NUMBER {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "Virtio-serial max_ports".to_string(),
+                1,
+                true,
+                DEFAULT_SERIAL_PORTS_NUMBER as u64,
+                true
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -444,7 +460,8 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
         .push("id")
         .push("bus")
         .push("addr")
-        .push("multifunction");
+        .push("multifunction")
+        .push("max_ports");
     cmd_parser.parse(serial_config)?;
     pci_args_check(&cmd_parser)?;
 
@@ -453,18 +470,24 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
         let multifunction = cmd_parser
             .get_value::<ExBool>("multifunction")?
             .map_or(false, |switch| switch.into());
+        let max_ports = cmd_parser
+            .get_value::<u32>("max_ports")?
+            .unwrap_or(DEFAULT_SERIAL_PORTS_NUMBER);
         let virtio_serial = if serial_config.contains("-pci") {
             let pci_bdf = get_pci_bdf(serial_config)?;
             VirtioSerialInfo {
                 id,
                 pci_bdf: Some(pci_bdf),
                 multifunction,
+                max_ports,
             }
         } else {
             VirtioSerialInfo {
                 id,
                 pci_bdf: None,
                 multifunction,
+                // Micro_vm does not support multi-ports in virtio-serial-device.
+                max_ports: 1,
             }
         };
         virtio_serial.check()?;
