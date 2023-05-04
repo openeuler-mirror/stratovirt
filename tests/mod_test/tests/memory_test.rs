@@ -378,7 +378,9 @@ fn ram_device_region_readwrite() {
         .state
         .borrow_mut()
         .memread(addr + PAGE_SIZE - 1, std::mem::size_of::<u64>() as u64);
-    assert_eq!(ret, [0x00u8; 8]);
+    let mut data_err = [0x00u8; 8];
+    data_err[0] = 0x01u8;
+    assert_eq!(ret, data_err);
 
     memory_test
         .state
@@ -645,5 +647,79 @@ fn ram_readwrite_numa() {
         .memread(start_base, str.len() as u64);
     assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
 
+    test_state.borrow_mut().stop();
+}
+
+/// Ram read and write Test.
+/// TestStep:
+///   1. Start device.
+///   2. Write some data("test memory read write") to the address.
+///      And the read/write will across numa.
+///   3. Read data from the address and check it.
+///   4. Destroy device.
+/// Expect:
+///   1/2/3/4: success.
+#[test]
+fn ram_readwrite_numa1() {
+    let mut args: Vec<&str> = Vec::new();
+    let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    args.append(&mut extra_args);
+
+    let cpu = 8;
+    let cpu_args = format!(
+        "-smp {},sockets=1,cores=4,threads=2 -cpu host,pmu=on -m 2G",
+        cpu
+    );
+    let mut extra_args = cpu_args.split(' ').collect();
+    args.append(&mut extra_args);
+    extra_args = "-object memory-backend-file,size=1G,id=mem0,host-nodes=0-1,policy=bind,share=on,mem-path=test.fd"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+    extra_args =
+        "-object memory-backend-memfd,size=1G,id=mem1,host-nodes=0-1,policy=bind,mem-prealloc=true"
+            .split(' ')
+            .collect();
+    args.append(&mut extra_args);
+    extra_args = "-numa node,nodeid=0,cpus=0-3,memdev=mem0"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+    extra_args = "-numa node,nodeid=1,cpus=4-7,memdev=mem1"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+    extra_args = "-numa dist,src=0,dst=1,val=30".split(' ').collect();
+    args.append(&mut extra_args);
+    extra_args = "-numa dist,src=1,dst=0,val=30".split(' ').collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+
+    let str = "test memory read write";
+    let start_base = ADDRESS_BASE + MEM_SIZE * 1024 * 1024 / 2 - 4;
+    test_state.borrow_mut().memwrite(start_base, str.as_bytes());
+    let ret = test_state
+        .borrow_mut()
+        .memread(start_base, str.len() as u64);
+    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
+
+    let file = File::create(&RAM_DEV_PATH).unwrap();
+    file.set_len(PAGE_SIZE).unwrap();
+    let qmp_str = format!(
+        "{{ \"execute\": \"update_region\",
+                        \"arguments\": {{ \"update_type\": \"add\",
+                                        \"region_type\": \"ram_device_region\",
+                                        \"offset\": 1099511627776,
+                                        \"size\": 4096,
+                                        \"priority\": 99,
+                                        \"device_fd_path\": {:?} }} }}",
+        RAM_DEV_PATH
+    );
+    test_state.borrow_mut().qmp(&qmp_str);
+
+    test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
+    remove_file(RAM_DEV_PATH.to_string());
     test_state.borrow_mut().stop();
 }
