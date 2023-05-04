@@ -42,6 +42,7 @@ use crate::{
     virtio_has_feature, NotifyEventFds, Queue, QueueConfig, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType,
 };
+
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, INVALID_VECTOR_NUM,
@@ -728,22 +729,20 @@ impl VirtioPciDevice {
         let queue_type = common_cfg_lock.queue_type;
         let queues_config = &mut common_cfg_lock.queues_config;
         let mut locked_queues = self.queues.lock().unwrap();
+        let dev_lock = self.device.lock().unwrap();
+        let features =
+            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+        let broken = dev_lock.get_device_broken();
         for q_config in queues_config.iter_mut() {
             if !q_config.ready {
                 debug!("queue is not ready, please check your init process");
             } else {
-                q_config.addr_cache.desc_table_host = self
-                    .sys_mem
-                    .get_host_address(q_config.desc_table)
-                    .unwrap_or(0);
-                q_config.addr_cache.avail_ring_host = self
-                    .sys_mem
-                    .get_host_address(q_config.avail_ring)
-                    .unwrap_or(0);
-                q_config.addr_cache.used_ring_host = self
-                    .sys_mem
-                    .get_host_address(q_config.used_ring)
-                    .unwrap_or(0);
+                q_config.set_addr_cache(
+                    self.sys_mem.clone(),
+                    self.interrupt_cb.clone().unwrap(),
+                    features,
+                    broken,
+                );
             }
             let queue = Queue::new(*q_config, queue_type).unwrap();
             if q_config.ready && !queue.is_valid(&self.sys_mem) {
@@ -753,6 +752,7 @@ impl VirtioPciDevice {
             let arc_queue = Arc::new(Mutex::new(queue));
             locked_queues.push(arc_queue.clone());
         }
+        drop(dev_lock);
         drop(locked_queues);
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
@@ -1396,17 +1396,17 @@ impl StateTransfer for VirtioPciDevice {
         {
             let queue_type = self.common_config.lock().unwrap().queue_type;
             let mut locked_queues = self.queues.lock().unwrap();
-            let cloned_mem_space = self.sys_mem.clone();
+            let dev_lock = self.device.lock().unwrap();
+            let features = (dev_lock.get_driver_features(1) as u64) << 32
+                | dev_lock.get_driver_features(0) as u64;
+            let broken = dev_lock.get_device_broken();
             for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter_mut() {
-                queue_state.addr_cache.desc_table_host = cloned_mem_space
-                    .get_host_address(queue_state.desc_table)
-                    .unwrap_or(0);
-                queue_state.addr_cache.avail_ring_host = cloned_mem_space
-                    .get_host_address(queue_state.avail_ring)
-                    .unwrap_or(0);
-                queue_state.addr_cache.used_ring_host = cloned_mem_space
-                    .get_host_address(queue_state.used_ring)
-                    .unwrap_or(0);
+                queue_state.set_addr_cache(
+                    self.sys_mem.clone(),
+                    self.interrupt_cb.clone().unwrap(),
+                    features,
+                    broken,
+                );
                 locked_queues.push(Arc::new(Mutex::new(
                     Queue::new(*queue_state, queue_type).unwrap(),
                 )))
@@ -1477,6 +1477,7 @@ mod tests {
         pub device_features: u64,
         pub driver_features: u64,
         pub is_activated: bool,
+        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
@@ -1485,6 +1486,7 @@ mod tests {
                 device_features: 0xFFFF_FFF0,
                 driver_features: 0,
                 is_activated: false,
+                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -1535,6 +1537,10 @@ mod tests {
         ) -> VirtioResult<()> {
             self.is_activated = true;
             Ok(())
+        }
+
+        fn get_device_broken(&self) -> &Arc<AtomicBool> {
+            &self.broken
         }
     }
 

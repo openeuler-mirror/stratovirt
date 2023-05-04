@@ -435,6 +435,10 @@ impl VirtioDevice for Net {
 
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 #[cfg(test)]

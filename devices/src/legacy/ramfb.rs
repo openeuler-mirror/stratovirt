@@ -111,8 +111,14 @@ impl RamfbState {
             stride = linesize;
         }
 
-        let fb_addr = match self.sys_mem.get_host_address(GuestAddress(addr)) {
-            Some(addr) => addr,
+        let fb_addr = match self.sys_mem.addr_cache_init(GuestAddress(addr)) {
+            Some((hva, len)) => {
+                if len < stride as u64 {
+                    error!("Insufficient contiguous memory length");
+                    return;
+                }
+                hva
+            }
             None => {
                 error!("Failed to get the host address of the framebuffer");
                 return;

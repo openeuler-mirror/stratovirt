@@ -14,6 +14,7 @@ use crate::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp;
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -44,6 +45,8 @@ pub struct Block {
     state: BlockState,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Block {
@@ -53,6 +56,7 @@ impl Block {
             state: BlockState::default(),
             mem_space: mem_space.clone(),
             client: None,
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -296,5 +300,9 @@ impl VirtioDevice for Block {
         };
 
         Ok(())
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }

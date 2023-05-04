@@ -1320,6 +1320,10 @@ impl VirtioDevice for Block {
 
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 // SAFETY: Send and Sync is not auto-implemented for `Sender` type.

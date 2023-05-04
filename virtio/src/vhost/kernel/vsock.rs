@@ -368,6 +368,10 @@ impl VirtioDevice for Vsock {
     fn reset(&mut self) -> Result<()> {
         self.backend.as_ref().unwrap().set_running(false)
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 impl StateTransfer for Vsock {

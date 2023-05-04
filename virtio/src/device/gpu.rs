@@ -15,6 +15,7 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
@@ -1449,6 +1450,8 @@ pub struct Gpu {
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1465,6 +1468,7 @@ impl Gpu {
             )),
             consoles: Vec::new(),
             deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1660,5 +1664,9 @@ impl VirtioDevice for Gpu {
             set_run_stage(VmRunningStage::Bios);
         }
         unregister_event_helper(None, &mut self.deactivate_evts)
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }

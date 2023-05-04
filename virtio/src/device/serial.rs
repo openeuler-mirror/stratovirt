@@ -330,6 +330,10 @@ impl VirtioDevice for Serial {
 
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.device_broken
+    }
 }
 
 impl StateTransfer for Serial {

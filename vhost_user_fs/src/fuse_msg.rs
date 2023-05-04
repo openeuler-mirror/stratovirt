@@ -409,14 +409,14 @@ impl FuseBuffer {
                 buf.len
             };
 
-            let hva = sys_mem
-                .get_host_address(buf.addr)
-                .with_context(|| "read file error: get hva failed.")?;
-
-            let iov = vec![libc::iovec {
-                iov_base: hva as *mut libc::c_void,
-                iov_len: len as usize,
-            }];
+            let mut iov = Vec::new();
+            let hvas = sys_mem.get_address_map(buf.addr, len as u64)?;
+            for addr in hvas.into_iter() {
+                iov.push(libc::iovec {
+                    iov_base: addr.iov_base as *mut libc::c_void,
+                    iov_len: addr.iov_len as usize,
+                })
+            }
 
             let ret = unsafe {
                 if is_read {

@@ -14,7 +14,7 @@ use std::cmp::min;
 use std::mem::size_of;
 use std::num::Wrapping;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{fence, Ordering};
+use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
@@ -26,7 +26,9 @@ use super::{
     checked_offset_mem, ElemIovec, Element, VringOps, INVALID_VECTOR_NUM, VIRTQ_DESC_F_INDIRECT,
     VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE,
 };
-use crate::{virtio_has_feature, VirtioError, VIRTIO_F_RING_EVENT_IDX};
+use crate::{
+    report_virtio_error, virtio_has_feature, VirtioError, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
+};
 
 /// When host consumes a buffer, don't interrupt the guest.
 const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
@@ -114,8 +116,77 @@ impl QueueConfig {
         }
     }
 
+    pub fn get_desc_size(&self) -> u64 {
+        min(self.size, self.max_size) as u64 * DESCRIPTOR_LEN
+    }
+
+    pub fn get_used_size(&self, features: u64) -> u64 {
+        let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            2_u64
+        } else {
+            0_u64
+        };
+
+        size + VRING_FLAGS_AND_IDX_LEN + (min(self.size, self.max_size) as u64) * USEDELEM_LEN
+    }
+
+    pub fn get_avail_size(&self, features: u64) -> u64 {
+        let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            2_u64
+        } else {
+            0_u64
+        };
+
+        size + VRING_FLAGS_AND_IDX_LEN
+            + (min(self.size, self.max_size) as u64) * (size_of::<u16>() as u64)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new(self.max_size);
+    }
+
+    pub fn set_addr_cache(
+        &mut self,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        features: u64,
+        broken: &Arc<AtomicBool>,
+    ) {
+        self.addr_cache.desc_table_host =
+            if let Some((addr, size)) = mem_space.addr_cache_init(self.desc_table) {
+                if size < self.get_desc_size() {
+                    report_virtio_error(interrupt_cb.clone(), features, broken);
+                    0_u64
+                } else {
+                    addr
+                }
+            } else {
+                0_u64
+            };
+
+        self.addr_cache.avail_ring_host =
+            if let Some((addr, size)) = mem_space.addr_cache_init(self.avail_ring) {
+                if size < self.get_avail_size(features) {
+                    report_virtio_error(interrupt_cb.clone(), features, broken);
+                    0_u64
+                } else {
+                    addr
+                }
+            } else {
+                0_u64
+            };
+
+        self.addr_cache.used_ring_host =
+            if let Some((addr, size)) = mem_space.addr_cache_init(self.used_ring) {
+                if size < self.get_used_size(features) {
+                    report_virtio_error(interrupt_cb.clone(), features, broken);
+                    0_u64
+                } else {
+                    addr
+                }
+            } else {
+                0_u64
+            };
     }
 }
 
@@ -338,7 +409,7 @@ impl SplitVringDesc {
                 } else {
                     bail!("Found two indirect descriptor elem in one request");
                 }
-                desc_table_host = sys_mem
+                (desc_table_host, _) = sys_mem
                     .get_host_address_from_cache(desc.addr, cache)
                     .with_context(|| "Failed to get descriptor table entry host address")?;
                 queue_size = desc.get_desc_num();

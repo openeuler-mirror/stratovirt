@@ -18,6 +18,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use migration::{migration::Migratable, MigrationManager};
+use util::aio::Iovec;
 use util::byte_code::ByteCode;
 use util::test_helper::is_test_enabled;
 
@@ -448,6 +449,65 @@ impl AddressSpace {
         })
     }
 
+    /// Return the available size and hva to the given `GuestAddress` from flat_view.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// Return Error if the `addr` is not mapped.
+    /// or return the HVA address and available mem length
+    pub fn addr_cache_init(&self, addr: GuestAddress) -> Option<(u64, u64)> {
+        let view = self.flat_view.load();
+
+        if let Some(flat_range) = view.find_flatrange(addr) {
+            let fr_offset = addr.offset_from(flat_range.addr_range.base);
+            let region_offset = flat_range.offset_in_region + fr_offset;
+
+            let region_remain = flat_range.owner.size() - region_offset;
+            let fr_remain = flat_range.addr_range.size - fr_offset;
+
+            return flat_range.owner.get_host_address().map(|host| {
+                (
+                    host + region_offset,
+                    std::cmp::min(fr_remain, region_remain),
+                )
+            });
+        }
+
+        None
+    }
+
+    /// Convert GPA buffer iovec to HVA buffer iovec.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// * `count` - Memory needed length
+    pub fn get_address_map(&self, addr: GuestAddress, count: u64) -> Result<Vec<Iovec>> {
+        let mut len = count;
+        let mut start = addr;
+        let mut hva_iovec = Vec::new();
+
+        loop {
+            let io_vec = self
+                .addr_cache_init(start)
+                .map(|(hva, fr_len)| Iovec {
+                    iov_base: hva,
+                    iov_len: std::cmp::min(len, fr_len),
+                })
+                .with_context(|| format!("Map iov base {:x?}, iov len {:?} failed", addr, count))?;
+            start = start.unchecked_add(io_vec.iov_len);
+            len -= io_vec.iov_len;
+            hva_iovec.push(io_vec);
+
+            if len == 0 {
+                break;
+            }
+        }
+
+        Ok(hva_iovec)
+    }
+
     /// Return the host address according to the given `GuestAddress` from cache.
     ///
     /// # Arguments
@@ -458,15 +518,18 @@ impl AddressSpace {
         &self,
         addr: GuestAddress,
         cache: &Option<RegionCache>,
-    ) -> Option<u64> {
+    ) -> Option<(u64, u64)> {
         if cache.is_none() {
-            return self.get_host_address(addr);
+            return self.addr_cache_init(addr);
         }
         let region_cache = cache.unwrap();
         if addr.0 >= region_cache.start && addr.0 < region_cache.end {
-            Some(region_cache.host_base + addr.0 - region_cache.start)
+            Some((
+                region_cache.host_base + addr.0 - region_cache.start,
+                region_cache.end - addr.0,
+            ))
         } else {
-            self.get_host_address(addr)
+            self.addr_cache_init(addr)
         }
     }
 

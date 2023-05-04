@@ -22,6 +22,7 @@ use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -111,6 +112,8 @@ pub struct Fs {
     call_events: Vec<Arc<EventFd>>,
     deactivate_evts: Vec<RawFd>,
     enable_irqfd: bool,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Fs {
@@ -132,6 +135,7 @@ impl Fs {
             call_events: Vec::<Arc<EventFd>>::new(),
             deactivate_evts: Vec::new(),
             enable_irqfd,
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -280,5 +284,9 @@ impl VirtioDevice for Fs {
         self.client = None;
 
         self.realize()
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }

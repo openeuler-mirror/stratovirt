@@ -16,6 +16,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -226,6 +227,8 @@ pub struct Rng {
     state: RngState,
     /// Eventfd for device deactivate
     deactivate_evts: Vec<RawFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Rng {
@@ -238,6 +241,7 @@ impl Rng {
                 driver_features: 0,
             },
             deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -355,6 +359,10 @@ impl VirtioDevice for Rng {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.deactivate_evts)
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }
 
