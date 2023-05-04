@@ -310,7 +310,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .multiple(true)
             .long("object")
             .value_name("<parameters>")
-            .help("\n\t\tadd memory backend ram object: -object memory-backend-ram,id=<memid>,size=<2G>,host-nodes=<0-1>,policy=<bind>; \
+            .help("\n\t\tadd memory backend ram object: -object memory-backend-ram,size=<size>,id=<memid>[,policy=<bind>]
+                   [,host-nodes=<0>][,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]; \
+                   \n\t\tadd memory backend file object: -object memory-backend-file,size=<size>,id=<memid>[,host-nodes=<0-1>] \
+                   [,policy=bind][,mem-path=<path/to/file>][,dump-guest-core=<true|false>][,mem-prealloc=<true|false>][,share=<on|off>] \
+                   \n\t\tadd memory backend memfd object: -object memory-backend-memfd,size=<size>,id=<memid>[,host-nodes=0-1][,policy=bind] \
+                   [,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]; \
                    \n\t\tadd iothread object: -object iothread,id=<iothread_id>; \
                    \n\t\tadd rng object: -object rng-random,id=<rng_id>,filename=<file_path>; \
                    \n\t\tadd vnc tls object: -object tls-creds-x509,id=<vnc_id>,dir=</etc/pki/vnc>; \

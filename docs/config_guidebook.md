@@ -129,9 +129,12 @@ $ cat /proc/meminfo
 ### 1.5 NUMA node
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
 The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
+The configuration items(mem-path, mem-prealloc) here will cause the global configuration to be invalidated
 
 Each NUMA node is given a list of command lines option, there will be described in detail below.
-1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
+1. -object memory-backend-ram,size=<size>,id=<memid>[,policy=<bind>][,host-nodes=<0>][,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]
+   -object memory-backend-file,size=<size>,id=<memid>[,host-nodes=<0-1>][,policy=bind][,mem-path=<path/to/file>][,dump-guest-core=<true|false>][,mem-prealloc=<true|false>][,share=<on|off>]
+   -object memory-backend-memfd,size=<size>,id=<memid>[,host-nodes=0-1][,policy=bind][,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
    The optional policies are default, preferred, bind and interleave. If it is not configured, `default` is used.
@@ -154,6 +157,10 @@ The following command shows how to set NUMA node:
 
 -object memory-backend-ram,size=2G,id=mem0,host-nodes=0-1,policy=bind
 -object memory-backend-ram,size=2G,id=mem1,host-nodes=0-1,policy=bind
+or
+-object memory-backend-file,size=2G,id=mem0,host-nodes=0-1,policy=bind,mem-path=/path/to/file
+-object memory-backend-memfd,size=2G,id=mem1,host-nodes=0-1,policy=bind,mem-prealloc=true
+
 -numa node,nodeid=0,cpus=0-1:4-5,memdev=mem0
 -numa node,nodeid=1,cpus=2-3:6-7,memdev=mem1
 [-numa dist,src=0,dst=0,val=10]
@@ -165,6 +172,8 @@ The following command shows how to set NUMA node:
 Detailed configuration instructions:
 ```
 -object memory-backend-ram,size=<num[M|m|G|g]>,id=<memid>,policy={bind|default|preferred|interleave},host-nodes=<id>
+-object memory-backend-file,size=<num[M|m|G|g]>,id=<memid>,policy={bind|default|preferred|interleave},host-nodes=<id>,mem-path=</path/to/file>[,dump-guest-core=<true|false>]
+-object memory-backend-memfd,size=<num[M|m|G|g]>,id=<memid>[,host-nodes=0-1][,policy=bind][,mem-prealloc=true][,dump-guest-core=false]
 -numa node[,nodeid=<node>][,cpus=<firstcpu>[-<lastcpus>][:<secondcpus>[-<lastcpus>]]][,memdev=<memid>]
 -numa dist,src=<source>,dst=<destination>,val=<distance>
 ```

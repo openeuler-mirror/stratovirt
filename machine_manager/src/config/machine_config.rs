@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
 use crate::config::{
-    check_arg_too_long, CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES,
+    check_arg_too_long, check_path_too_long, CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig,
+    MAX_NODES,
 };
 
 const DEFAULT_CPUS: u8 = 1;
@@ -86,7 +87,11 @@ pub struct MemZoneConfig {
     pub size: u64,
     pub host_numa_nodes: Option<Vec<u32>>,
     pub policy: String,
+    pub mem_path: Option<String>,
+    pub dump_guest_core: bool,
     pub share: bool,
+    pub prealloc: bool,
+    pub memfd: bool,
 }
 
 impl Default for MemZoneConfig {
@@ -96,7 +101,11 @@ impl Default for MemZoneConfig {
             size: 0,
             host_numa_nodes: None,
             policy: String::from("bind"),
+            mem_path: None,
+            dump_guest_core: true,
             share: false,
+            prealloc: false,
+            memfd: false,
         }
     }
 }
@@ -435,6 +444,14 @@ impl VmConfig {
         }
     }
 
+    fn get_mem_path(&self, cmd_parser: &CmdParser) -> Result<Option<String>> {
+        if let Some(path) = cmd_parser.get_value::<String>("mem-path")? {
+            check_path_too_long(&path, "mem-path")?;
+            return Ok(Some(path));
+        }
+        Ok(None)
+    }
+
     fn get_mem_zone_size(&self, cmd_parser: &CmdParser) -> Result<u64> {
         if let Some(mem) = cmd_parser.get_value::<String>("size")? {
             let size = memory_unit_conversion(&mem)?;
@@ -499,12 +516,27 @@ impl VmConfig {
         }
     }
 
+    fn get_mem_dump(&self, cmd_parser: &CmdParser) -> Result<bool> {
+        if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
+            return Ok(dump_guest.into());
+        }
+        Ok(true)
+    }
+
+    fn get_mem_prealloc(&self, cmd_parser: &CmdParser) -> Result<bool> {
+        if let Some(mem_prealloc) = cmd_parser.get_value::<ExBool>("mem-prealloc")? {
+            return Ok(mem_prealloc.into());
+        }
+        Ok(false)
+    }
+
     /// Convert memory zone cmdline to VM config
     ///
     /// # Arguments
     ///
     /// * `mem_zone` - The memory zone cmdline string.
-    pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
+    /// * `mem_type` - The memory zone type
+    pub fn add_mem_zone(&mut self, mem_zone: &str, mem_type: String) -> Result<MemZoneConfig> {
         let mut cmd_parser = CmdParser::new("mem_zone");
         cmd_parser
             .push("")
@@ -512,7 +544,10 @@ impl VmConfig {
             .push("size")
             .push("host-nodes")
             .push("policy")
-            .push("share");
+            .push("share")
+            .push("mem-path")
+            .push("dump-guest-core")
+            .push("mem-prealloc");
         cmd_parser.parse(mem_zone)?;
 
         let zone_config = MemZoneConfig {
@@ -520,8 +555,26 @@ impl VmConfig {
             size: self.get_mem_zone_size(&cmd_parser)?,
             host_numa_nodes: self.get_mem_zone_host_nodes(&cmd_parser)?,
             policy: self.get_mem_zone_policy(&cmd_parser)?,
+            dump_guest_core: self.get_mem_dump(&cmd_parser)?,
             share: self.get_mem_share(&cmd_parser)?,
+            mem_path: self.get_mem_path(&cmd_parser)?,
+            prealloc: self.get_mem_prealloc(&cmd_parser)?,
+            memfd: mem_type.eq("memory-backend-memfd"),
         };
+
+        if (zone_config.mem_path.is_none() && mem_type.eq("memory-backend-file"))
+            || (zone_config.mem_path.is_some() && mem_type.ne("memory-backend-file"))
+        {
+            bail!("Object type: {} config path err", mem_type);
+        }
+
+        if self.object.mem_object.get(&zone_config.id).is_none() {
+            self.object
+                .mem_object
+                .insert(zone_config.id.clone(), zone_config.clone());
+        } else {
+            bail!("Object: {} has been added", zone_config.id);
+        }
 
         if zone_config.host_numa_nodes.is_none() {
             return Ok(zone_config);
@@ -993,7 +1046,10 @@ mod tests {
     fn test_add_mem_zone() {
         let mut vm_config = VmConfig::default();
         let zone_config_1 = vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
+            .add_mem_zone(
+                "-object memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind",
+                String::from("memory-backend-ram"),
+            )
             .unwrap();
         assert_eq!(zone_config_1.id, "mem1");
         assert_eq!(zone_config_1.size, 2147483648);
@@ -1002,21 +1058,37 @@ mod tests {
 
         let zone_config_2 = vm_config
             .add_mem_zone(
-                "-object memory-backend-ram,size=2G,id=mem1,host-nodes=1-2,policy=default",
+                "-object memory-backend-ram,size=2G,id=mem2,host-nodes=1-2,policy=default",
+                String::from("memory-backend-ram"),
             )
             .unwrap();
         assert_eq!(zone_config_2.host_numa_nodes, Some(vec![1, 2]));
 
         let zone_config_3 = vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2M,id=mem1,share=on")
+            .add_mem_zone(
+                "-object memory-backend-ram,size=2M,id=mem3,share=on",
+                String::from("memory-backend-ram"),
+            )
             .unwrap();
         assert_eq!(zone_config_3.size, 2 * 1024 * 1024);
         assert_eq!(zone_config_3.share, true);
 
         let zone_config_4 = vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2M,id=mem1")
+            .add_mem_zone(
+                "-object memory-backend-ram,size=2M,id=mem4",
+                String::from("memory-backend-ram"),
+            )
             .unwrap();
         assert_eq!(zone_config_4.share, false);
+        assert_eq!(zone_config_4.memfd, false);
+
+        let zone_config_5 = vm_config
+            .add_mem_zone(
+                "-object memory-backend-memfd,size=2M,id=mem5",
+                String::from("memory-backend-memfd"),
+            )
+            .unwrap();
+        assert_eq!(zone_config_5.memfd, true);
     }
 
     #[test]
