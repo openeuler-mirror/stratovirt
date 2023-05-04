@@ -210,14 +210,8 @@ impl VmConfig {
                     bail!("Object: {} has been added", id);
                 }
             }
-            "memory-backend-ram" => {
-                let config = self.add_mem_zone(object_args)?;
-                let id = config.id.clone();
-                if self.object.mem_object.get(&id).is_none() {
-                    self.object.mem_object.insert(id, config);
-                } else {
-                    bail!("Object: {} has been added", id);
-                }
+            "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
+                self.add_mem_zone(object_args, device_type)?;
             }
             "tls-creds-x509" => {
                 self.add_tlscred(object_args)?;
@@ -666,6 +660,16 @@ pub fn check_arg_too_long(arg: &str, name: &str) -> Result<()> {
         bail!(ConfigError::StringLengthTooLong(
             name.to_string(),
             MAX_STRING_LENGTH
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_path_too_long(arg: &str, name: &str) -> Result<()> {
+    if arg.len() > MAX_PATH_LENGTH {
+        bail!(ConfigError::StringLengthTooLong(
+            name.to_string(),
+            MAX_PATH_LENGTH
         ));
     }
     Ok(())
