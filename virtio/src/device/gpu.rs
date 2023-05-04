@@ -11,17 +11,17 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR,
-    VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
-    VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
-    VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
-    VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE, VIRTIO_GPU_F_EDID,
-    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
-    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
-    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
-    VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError,
+    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
+    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
+    VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
+    VIRTIO_GPU_F_EDID, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
+    VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
+    VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Result};
@@ -295,37 +295,17 @@ impl VirtioGpuRequest {
         };
 
         let mut out_iovec = elem.out_iovec.clone();
-        // Size of out_iovec no less than sizeo of VirtioGpuCtrlHdr, so
+        // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
         // it is possible to get none back.
-        if let Some(data_iovec) =
-            iov_discard_front(&mut out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
-        {
-            for elem_iov in data_iovec {
-                if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
-                    let iov = Iovec {
-                        iov_base: hva,
-                        iov_len: u64::from(elem_iov.len),
-                    };
-                    request.out_iovec.push(iov);
-                    request.out_len += elem_iov.len;
-                } else {
-                    bail!("Map desc base {:?} failed.", elem_iov.addr);
-                }
-            }
-        }
+        let data_iovec = iov_discard_front(&mut out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
+            .unwrap_or_default();
+        let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
+        request.out_len = data_len as u32;
+        request.out_iovec = iovec;
 
-        for elem_iov in elem.in_iovec.iter() {
-            if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
-                let iov = Iovec {
-                    iov_base: hva,
-                    iov_len: u64::from(elem_iov.len),
-                };
-                request.in_iovec.push(iov);
-                request.in_len += elem_iov.len;
-            } else {
-                bail!("Map desc base {:?} failed.", elem_iov.addr);
-            }
-        }
+        let (data_len, iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
+        request.in_len = data_len as u32;
+        request.in_iovec = iovec;
 
         Ok(request)
     }

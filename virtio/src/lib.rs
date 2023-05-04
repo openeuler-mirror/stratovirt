@@ -41,7 +41,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use address_space::AddressSpace;
 use machine_manager::config::ConfigCheck;
-use util::aio::mem_to_buf;
+use util::aio::{mem_to_buf, Iovec};
 use util::num_ops::write_u32;
 use util::AsAny;
 
@@ -502,4 +502,30 @@ pub fn iov_discard_back(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [
         size -= iov.len as u64;
     }
     None
+}
+
+/// Convert GPA buffer iovec to HVA buffer iovec.
+/// If don't need the entire iovec, use iov_discard_front/iov_discard_back firstly.
+fn gpa_hva_iovec_map(
+    gpa_elemiovec: &[ElemIovec],
+    mem_space: &AddressSpace,
+) -> Result<(u64, Vec<Iovec>)> {
+    let mut iov_size = 0;
+    let mut hva_iovec = Vec::new();
+
+    for elem in gpa_elemiovec.iter() {
+        let hva = mem_space.get_host_address(elem.addr).with_context(|| {
+            format!(
+                "Map iov base {:x?}, iov len {:?} failed",
+                elem.addr, elem.len
+            )
+        })?;
+        hva_iovec.push(Iovec {
+            iov_base: hva as u64,
+            iov_len: u64::from(elem.len),
+        });
+        iov_size += elem.len as u64;
+    }
+
+    Ok((iov_size, hva_iovec))
 }
