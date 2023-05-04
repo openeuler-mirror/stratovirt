@@ -38,6 +38,73 @@ impl FlatView {
             _ => None,
         }
     }
+
+    fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
+        let mut len = count;
+        let mut l = count;
+        let mut start = addr;
+
+        loop {
+            if let Some(fr) = self.find_flatrange(start) {
+                let fr_offset = start.offset_from(fr.addr_range.base);
+                let region_offset = fr.offset_in_region + fr_offset;
+                let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+                let fr_remain = fr.addr_range.size - fr_offset;
+
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
+                    l = std::cmp::min(l, fr_remain);
+                }
+                fr.owner.read(dst, region_base, region_offset, l)?;
+            } else {
+                return Err(anyhow!(AddressSpaceError::RegionNotFound(
+                    start.raw_value()
+                )));
+            }
+
+            len -= l;
+            if len == 0 {
+                return Ok(());
+            }
+            start = start.unchecked_add(l);
+            l = len;
+        }
+    }
+
+    fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
+        let mut l = count;
+        let mut len = count;
+        let mut start = addr;
+
+        loop {
+            if let Some(fr) = self.find_flatrange(start) {
+                let fr_offset = start.offset_from(fr.addr_range.base);
+                let region_offset = fr.offset_in_region + fr_offset;
+                let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+                let fr_remain = fr.addr_range.size - fr_offset;
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
+                    l = std::cmp::min(l, fr_remain);
+                }
+                fr.owner.write(src, region_base, region_offset, l)?;
+            } else {
+                return Err(anyhow!(AddressSpaceError::RegionNotFound(
+                    start.raw_value()
+                )));
+            }
+
+            len -= l;
+            if len == 0 {
+                break;
+            }
+            start = start.unchecked_add(l);
+            l = len;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -437,25 +504,10 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is not mapped.
     pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
-        let view = &self.flat_view.load();
+        let view = self.flat_view.load();
 
-        let (fr, offset) = view
-            .find_flatrange(addr)
-            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
-
-        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
-        let offset_in_region = fr.offset_in_region + offset;
-        fr.owner
-            .read(dst, region_base, offset_in_region, count)
-            .with_context(|| {
-                format!(
-                "Failed to read region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                region_base.raw_value(),
-                offset_in_region,
-                count
-            )
-            })
+        view.read(dst, addr, count)?;
+        Ok(())
     }
 
     /// Write data to specified guest address.
@@ -471,13 +523,6 @@ impl AddressSpace {
     /// Return Error if the `addr` is not mapped.
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
         let view = self.flat_view.load();
-        let (fr, offset) = view
-            .find_flatrange(addr)
-            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
-
-        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
-        let offset_in_region = fr.offset_in_region + offset;
 
         if is_test_enabled() {
             for evtfd in self.ioeventfds.lock().unwrap().iter() {
@@ -499,28 +544,12 @@ impl AddressSpace {
                         return Ok(());
                     }
                 }
-
-                return fr.owner
-                    .write(&mut buf.as_slice(), region_base, offset_in_region, count)
-                    .with_context(||
-                        format!(
-                            "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                            region_base.raw_value(),
-                            offset_in_region,
-                            count
-                        ));
+                view.write(&mut buf.as_slice(), addr, count)?;
             }
         }
 
-        fr.owner
-            .write(src, region_base, offset_in_region, count)
-            .with_context(||
-                format!(
-                    "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                    region_base.raw_value(),
-                    offset_in_region,
-                    count
-                ))
+        view.write(src, addr, count)?;
+        Ok(())
     }
 
     /// Write an object to memory.
