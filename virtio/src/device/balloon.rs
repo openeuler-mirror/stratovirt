@@ -1154,6 +1154,10 @@ impl VirtioDevice for Balloon {
         }
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 pub fn qmp_balloon(target: u64) -> bool {
