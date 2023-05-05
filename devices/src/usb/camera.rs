@@ -36,8 +36,8 @@ use util::loop_context::{
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    camera_ops, CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
-    CameraNotifyCallback, FmtType,
+    camera_ops, get_video_frame_size, CamBasicFmt, CameraBrokenCallback, CameraFormatList,
+    CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
@@ -92,7 +92,6 @@ const VS_PROBE_CONTROL: u8 = 1;
 const VS_COMMIT_CONTROL: u8 = 2;
 
 const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
-const FPS_30_INTERVAL: u32 = 333333;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 
 pub struct UsbCamera {
@@ -591,11 +590,18 @@ pub struct VideoStreamingControl {
 impl ByteCode for VideoStreamingControl {}
 
 impl VideoStreamingControl {
-    fn reset(&mut self) {
+    fn reset(&mut self, fmt: &CamBasicFmt) {
         self.bFormatIndex = 1;
-        self.bFormatIndex = 2;
-        self.dwFrameInterval = FPS_30_INTERVAL;
-        self.dwMaxVideoFrameSize = FRAME_SIZE_1280_720;
+        self.bFrameIndex = 1;
+        self.dwFrameInterval = fmt.get_frame_intervals().unwrap_or_else(|e| {
+            error!("Invalid interval {:?}", e);
+            0
+        });
+        self.dwMaxVideoFrameSize =
+            get_video_frame_size(fmt.width, fmt.height).unwrap_or_else(|e| {
+                error!("Invalid frame size {:?}", e);
+                0
+            });
         self.dwMaxPayloadTransferSize = MAX_PAYLOAD;
     }
 }
@@ -814,6 +820,16 @@ impl UsbCamera {
         }
         Ok(())
     }
+
+    fn reset_vs_control(&mut self) {
+        let default_fmt = self
+            .camera_dev
+            .lock()
+            .unwrap()
+            .get_format_by_index(1, 1)
+            .unwrap_or_default();
+        self.vs_control.reset(&default_fmt);
+    }
 }
 
 impl UsbDeviceOps for UsbCamera {
@@ -844,7 +860,7 @@ impl UsbDeviceOps for UsbCamera {
         if let Err(e) = self.unregister_camera_fd() {
             error!("Failed to unregister fd when reset {:?}", e);
         }
-        self.vs_control.reset();
+        self.reset_vs_control();
         self.payload.lock().unwrap().reset();
         self.camera_dev.lock().unwrap().reset();
         self.packet_list.lock().unwrap().clear();
@@ -1205,7 +1221,7 @@ fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
         wHeight: frm.height as u16,
         dwMinBitRate: 442368000,
         dwMaxBitRate: 442368000,
-        dwMaxVideoFrameBufSize: frm.width as u32 * frm.height as u32 * 2 + 589,
+        dwMaxVideoFrameBufSize: get_video_frame_size(frm.width, frm.height)?,
         dwDefaultFrameInterval: frm.interval,
         bFrameIntervalType: 1,
         dwIntervalVals: frm.interval,
