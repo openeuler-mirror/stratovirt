@@ -20,3 +20,4 @@ yum-deps:
 	@yum install cyrus-sasl-devel
 	@yum install pulseaudio
 	@yum install clang
+	@yum install gtk3-devel
