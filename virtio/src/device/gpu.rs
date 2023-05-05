@@ -366,6 +366,8 @@ struct GpuScanout {
     resource_id: u32,
     // Unused with vnc backend, work in others.
     cursor: VirtioGpuUpdateCursor,
+    // Cursor visable
+    cursor_visible: bool,
 }
 
 impl GpuScanout {
@@ -374,6 +376,7 @@ impl GpuScanout {
         self.surface = None;
         self.width = 0;
         self.height = 0;
+        self.cursor_visible = false;
     }
 }
 
@@ -602,6 +605,27 @@ impl GpuIoHandler {
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
             scanout.cursor.pos.x_coord = info_cursor.hot_x;
             scanout.cursor.pos.y_coord = info_cursor.hot_y;
+            if info_cursor.resource_id == 0 && scanout.cursor_visible && scanout.mouse.is_some() {
+                let data = &mut scanout.mouse.as_mut().unwrap().data;
+                // In order to improve performance, displaying cursor by virtio-gpu.
+                // But we have to displaying it in guest img if virtio-gpu can't do display job.
+                // In this case, to avoid overlapping displaying two cursor imgs, change
+                // cursor (render by virtio-gpu) color to transparent.
+                //
+                // Only A or X byte in RGBA\X needs to be set.
+                // We sure that the data is assembled in format like RGBA and the minimum unit
+                // is byte, so there is no size end problem.
+                //
+                // TODO: How much impact does it have on performance?
+                for (i, item) in data.iter_mut().enumerate() {
+                    if i % 4 == 3 {
+                        *item = 0_u8;
+                    }
+                }
+
+                display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
+                scanout.cursor_visible = false;
+            }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
             if scanout.mouse.is_none() {
                 let tmp_mouse = DisplayMouse {
@@ -630,17 +654,28 @@ impl GpuIoHandler {
                         let mse = scanout.mouse.as_mut().unwrap();
 
                         if res_width as u32 == mse.width && res_height as u32 == mse.height {
-                            let pixels = mse.width * mse.height;
-                            let mouse_data_size = pixels * (size_of::<u32>() as u32);
-                            let mut con = vec![0u8; 64 * 64 * 4];
                             let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
-                            ptr::copy(res_data_ptr, con.as_mut_ptr(), mouse_data_size as usize);
-                            mse.data.clear();
-                            mse.data.append(&mut con);
+                            let mse_data_size = mse.data.len();
+                            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+                            // Front-end drvier does not deliver data in format sequence.
+                            // So we fix it in back-end.
+                            //
+                            // TODO: Fix front-end driver is a better solution.
+                            if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+                                || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+                            {
+                                let mut i = 0;
+                                while i < mse_data_size {
+                                    mse.data.swap(i, i + 2);
+                                    i += 4;
+                                }
+                            }
+                            scanout.cursor_visible = true;
                         }
                     }
                 }
             }
+
             if let Some(mouse) = &mut scanout.mouse {
                 display_cursor_define(&scanout.con, mouse)?;
             }
