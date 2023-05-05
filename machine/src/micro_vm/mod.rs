@@ -1303,6 +1303,24 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    fn cameradev_add(&mut self, _args: qmp_schema::CameraDevAddArgument) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "cameradev_add not supported for MicroVM".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn cameradev_del(&mut self, _id: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "cameradev_del not supported for MicroVM".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
         if let Some(fd) = if_fd {
             QmpChannel::set_fd(fd_name, fd);

@@ -34,7 +34,9 @@ use crate::camera_backend::{
     CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
-use util::v4l2::{new_init, V4l2Backend, V4L2_FORMAT_MJPG, V4L2_FORMAT_YUYV};
+use util::v4l2::{new_init, V4l2Backend};
+
+use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 
 const BUFFER_CNT: usize = 4;
 
@@ -56,6 +58,7 @@ impl Sample {
     }
 }
 
+#[derive(Clone)]
 pub struct V4l2CameraBackend {
     id: String,
     dev_path: String,
@@ -73,6 +76,7 @@ pub struct V4l2CameraBackend {
     listening: bool,
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
+    fmt_list: Vec<CameraFormatList>,
 }
 
 impl V4l2CameraBackend {
@@ -89,6 +93,7 @@ impl V4l2CameraBackend {
             broken_cb: None,
             iothread,
             delete_evts: Vec::new(),
+            fmt_list: vec![],
         };
         cam.check_cap()?;
         Ok(cam)
@@ -159,6 +164,7 @@ impl V4l2CameraBackend {
         let backend = self.backend.as_ref().with_context(|| "Backend is none")?;
         let mut list = Vec::new();
         let mut frmsize = new_init::<v4l2_frmsizeenum>();
+        let mut frm_idx = 1;
         frmsize.pixel_format = pixfmt;
         const FRAME_SIZE_LIMIT: u32 = 1000;
         for i in 0..FRAME_SIZE_LIMIT {
@@ -179,8 +185,10 @@ impl V4l2CameraBackend {
                     width,
                     height,
                     interval,
+                    index: frm_idx,
                 });
             }
+            frm_idx += 1;
         }
         Ok(list)
     }
@@ -214,6 +222,10 @@ impl V4l2CameraBackend {
         }
         Ok(list)
     }
+
+    fn is_pixfmt_supported(&self, pixelformat: u32) -> bool {
+        pixelformat == PIXFMT_MJPG || pixelformat == PIXFMT_RGB565 || pixelformat == PIXFMT_YUYV
+    }
 }
 
 impl CameraHostdevOps for V4l2CameraBackend {
@@ -223,9 +235,11 @@ impl CameraHostdevOps for V4l2CameraBackend {
     fn is_camera(&self) -> Result<bool> {
         Ok(true)
     }
-    fn get_fmt(&self) -> Result<()> {
-        Ok(())
+
+    fn get_fmt(&self) -> Result<Vec<CameraFormatList>> {
+        Ok(self.fmt_list.clone())
     }
+
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
         info!("Camera {} set format {:?}", self.id, cam_fmt);
         if self.listening {
@@ -262,6 +276,7 @@ impl CameraHostdevOps for V4l2CameraBackend {
         backend.set_stream_parameter(&parm)?;
         Ok(())
     }
+
     fn set_ctl(&self) -> Result<()> {
         Ok(())
     }
@@ -301,17 +316,26 @@ impl CameraHostdevOps for V4l2CameraBackend {
         let mut desc = new_init::<v4l2_fmtdesc>();
         desc.type_ = V4L2_CAP_VIDEO_CAPTURE;
         const FORMAT_LIMIT: u32 = 1000;
+        let mut fmt_index = 1;
         for i in 0..FORMAT_LIMIT {
             desc.index = i;
             let format_end = backend.enum_format(&mut desc)?;
             if format_end {
                 break;
             }
+            if !self.is_pixfmt_supported(desc.pixelformat) {
+                continue;
+            }
             list.push(CameraFormatList {
                 format: cam_fmt_from_v4l2(desc.pixelformat)?,
                 frame: self.list_frame_size(desc.pixelformat)?,
+                fmt_index,
             });
+            fmt_index += 1;
         }
+
+        self.fmt_list = list.clone();
+
         Ok(list)
     }
 
@@ -334,6 +358,40 @@ impl CameraHostdevOps for V4l2CameraBackend {
         self.listening = false;
         self.running = false;
         self.sample.lock().unwrap().reset();
+    }
+
+    fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
+        let mut out = CamBasicFmt::default();
+        for fmt in &self.fmt_list {
+            if fmt.fmt_index != format_index {
+                continue;
+            }
+            out.fmttype = fmt.format;
+            for frm in &fmt.frame {
+                if frm.index != frame_index {
+                    continue;
+                }
+                out.width = frm.width;
+                out.height = frm.height;
+                out.fps = 10000000_u32.checked_div(frm.interval).with_context(|| {
+                    format!(
+                        "Invalied interval {} for format/frame {}:{}",
+                        frm.interval, format_index, frame_index
+                    )
+                })?;
+                debug!(
+                    "v4l2 get_format_by_index fmt {}, frm {}, info {:?}",
+                    format_index, frame_index, out
+                );
+                return Ok(out);
+            }
+        }
+
+        bail!(
+            "format/frame with idx {}/{} is not found",
+            format_index,
+            frame_index
+        );
     }
 
     fn get_frame_size(&self) -> usize {
@@ -384,15 +442,17 @@ impl CameraHostdevOps for V4l2CameraBackend {
 
 fn cam_fmt_to_v4l2(t: &FmtType) -> u32 {
     match t {
-        FmtType::Uncompressed => V4L2_FORMAT_YUYV,
-        FmtType::Mjpg => V4L2_FORMAT_MJPG,
+        FmtType::Yuy2 => PIXFMT_YUYV,
+        FmtType::Rgb565 => PIXFMT_RGB565,
+        FmtType::Mjpg => PIXFMT_MJPG,
     }
 }
 
 fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
     let fmt = match t {
-        V4L2_FORMAT_YUYV => FmtType::Uncompressed,
-        V4L2_FORMAT_MJPG => FmtType::Mjpg,
+        PIXFMT_YUYV => FmtType::Yuy2,
+        PIXFMT_RGB565 => FmtType::Rgb565,
+        PIXFMT_MJPG => FmtType::Mjpg,
         _ => bail!("Invalid v4l2 type {}", t),
     };
     Ok(fmt)

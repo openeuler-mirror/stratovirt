@@ -21,6 +21,7 @@ pub use error::StandardVmError;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
 use log::error;
+use machine_manager::config::get_cameradev_config;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 #[cfg(not(target_env = "musl"))]
@@ -956,7 +957,7 @@ impl StdMachine {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
-        let cfg_args = format!("id={}", args.id);
+        let mut cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
                 self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
@@ -965,19 +966,12 @@ impl StdMachine {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
             }
             "usb-camera" => {
-                let mut cfg_args = format!(
-                    "id={},backend={},path={}",
-                    args.id,
-                    args.backend
-                        .as_ref()
-                        .with_context(|| "No backend for usb camera.")?,
-                    args.path
-                        .as_ref()
-                        .with_context(|| "No path for usb camera.")?,
-                );
+                if let Some(cameradev) = &args.cameradev {
+                    cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
+                }
                 if let Some(iothread) = args.iothread.as_ref() {
                     cfg_args = format!("{},iothread={}", cfg_args, iothread);
-                };
+                }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
             _ => {
@@ -1465,6 +1459,46 @@ impl DeviceInterface for StdMachine {
 
     fn netdev_del(&mut self, id: String) -> Response {
         match self.get_vm_config().lock().unwrap().del_netdev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn cameradev_add(&mut self, args: qmp_schema::CameraDevAddArgument) -> Response {
+        let config = match get_cameradev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_cameradev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn cameradev_del(&mut self, id: String) -> Response {
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .del_cameradev_by_id(&id)
+        {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),

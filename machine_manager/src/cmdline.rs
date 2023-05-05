@@ -158,6 +158,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_values(true),
         )
         .arg(
+            Arg::with_name("cameradev")
+            .multiple(true)
+            .long("cameradev")
+            .value_name("<parameters>")
+            .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
+            .takes_values(true),
+        )
+        .arg(
             Arg::with_name("kernel")
             .long("kernel")
             .value_name("<kernel_path>")
@@ -510,6 +518,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
     add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
+    add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;

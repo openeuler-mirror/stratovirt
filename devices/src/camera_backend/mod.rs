@@ -16,17 +16,19 @@
 pub mod demo;
 pub mod v4l2;
 
-use std::sync::Arc;
+use anyhow::{bail, Context, Result};
+use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Result};
-
+use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
 use util::aio::Iovec;
+
+use self::v4l2::V4l2CameraBackend;
 
 /// Frame interval in 100ns units.
 pub const INTERVALS_PER_SEC: u32 = 10_000_000;
 
 #[allow(dead_code)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CamFmt {
     // Basic 3 configurations: frame size, format, frame frequency.
     basic_fmt: CamBasicFmt,
@@ -44,7 +46,7 @@ impl CamFmt {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct CamBasicFmt {
     width: u32,
     height: u32,
@@ -62,7 +64,7 @@ impl CamBasicFmt {
 }
 
 #[allow(dead_code)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CamPUFmt {
     bright: u64,
     contrast: u64,
@@ -72,36 +74,51 @@ pub struct CamPUFmt {
 }
 
 #[allow(dead_code)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CamLensFmt {
     focus: u64,
     zoom: u64,
     // TODO: to be extended.
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub enum FmtType {
-    Uncompressed = 0,
+    Yuy2 = 0,
+    Rgb565,
     Mjpg,
 }
 
 impl Default for FmtType {
     fn default() -> Self {
-        FmtType::Uncompressed
+        FmtType::Yuy2
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CameraFrame {
     pub width: u32,
     pub height: u32,
+    pub index: u8,
     pub interval: u32,
 }
 
+#[derive(Clone)]
 pub struct CameraFormatList {
     pub format: FmtType,
+    pub fmt_index: u8,
     pub frame: Vec<CameraFrame>,
 }
+
+#[macro_export]
+macro_rules! video_fourcc {
+    ($a:expr, $b:expr, $c:expr, $d:expr) => {
+        $a as u32 | (($b as u32) << 8) | (($c as u32) << 16) | (($d as u32) << 24)
+    };
+}
+
+pub const PIXFMT_RGB565: u32 = video_fourcc!('R', 'G', 'B', 'P');
+pub const PIXFMT_YUYV: u32 = video_fourcc!('Y', 'U', 'Y', 'V');
+pub const PIXFMT_MJPG: u32 = video_fourcc!('M', 'J', 'P', 'G');
 
 /// Callback function which is called when frame data is coming.
 pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
@@ -112,9 +129,14 @@ pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
 pub trait CameraHostdevOps: Send + Sync {
     fn init(&self) -> Result<()>;
     fn is_camera(&self) -> Result<bool>;
-    fn get_fmt(&self) -> Result<()>;
+
+    /// Get format list.
+    fn get_fmt(&self) -> Result<Vec<CameraFormatList>>;
+
     /// Set a specific format.
     fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
+
+    /// Set control capabilities and properties.
     fn set_ctl(&self) -> Result<()>;
 
     // Turn stream on to start to receive frame buffer.
@@ -135,6 +157,9 @@ pub trait CameraHostdevOps: Send + Sync {
     /// Copy frame data to iovecs.
     fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
 
+    /// Get format/frame info including width/height/interval/fmt according to format/frame index.
+    fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt>;
+
     /// Get next frame when current frame is read complete.
     fn next_frame(&mut self) -> Result<()>;
 
@@ -145,30 +170,17 @@ pub trait CameraHostdevOps: Send + Sync {
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
 
-pub fn get_format_by_index(format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
-    let fmttype = if format_index == 1 {
-        FmtType::Mjpg
-    } else if format_index == 2 {
-        FmtType::Uncompressed
-    } else {
-        bail!("Invalid format index {}", format_index);
+pub fn camera_ops(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraHostdevOps>>> {
+    let cam = match config.backend {
+        CamBackendType::V4l2 => V4l2CameraBackend::new(
+            config.drive.id.clone().unwrap(),
+            config.drive.path.clone().with_context(|| {
+                ConfigError::FieldIsMissing("path".to_string(), "V4L2".to_string())
+            })?,
+            config.iothread,
+        )?,
+        CamBackendType::Demo => bail!("Not supported type"),
     };
 
-    let width_height_list = [(960, 540), (1280, 720), (640, 480)];
-    let fps_list = [5, 10, 30];
-    if width_height_list.get((frame_index - 1) as usize).is_none() {
-        bail!("Invalid frame index {}", frame_index);
-    }
-    let fps = if format_index == 1 {
-        30
-    } else {
-        fps_list[(frame_index - 1) as usize]
-    };
-
-    Ok(CamBasicFmt {
-        width: width_height_list[(frame_index - 1) as usize].0,
-        height: width_height_list[(frame_index - 1) as usize].1,
-        fmttype,
-        fps,
-    })
+    Ok(Arc::new(Mutex::new(cam)))
 }
