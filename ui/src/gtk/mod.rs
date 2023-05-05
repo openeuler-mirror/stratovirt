@@ -388,6 +388,10 @@ impl GtkDisplayScreen {
             None => bail!("No display window."),
         };
 
+        if x.lt(&0.0) || x.gt(&window_width) || y.lt(&0.0) || y.gt(&window_height) {
+            bail!("The coordinate of pointer exceeds limit")
+        }
+
         // There may be unfilled areas between the window and the image.
         let (mut mx, mut my) = (0.0, 0.0);
         if window_width > scale_width {
