@@ -48,8 +48,8 @@ impl CamFmt {
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CamBasicFmt {
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
     fps: u32,
     fmttype: FmtType,
 }
@@ -107,6 +107,14 @@ pub struct CameraFormatList {
     pub format: FmtType,
     pub fmt_index: u8,
     pub frame: Vec<CameraFrame>,
+}
+
+pub fn get_video_frame_size(width: u32, height: u32) -> Result<u32> {
+    width
+        .checked_mul(height)
+        .with_context(|| format!("Invalid width {} or height {}", width, height))?
+        .checked_mul(2)
+        .with_context(|| format!("Invalid width {} or height {}", width, height))
 }
 
 #[macro_export]
