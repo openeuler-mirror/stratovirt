@@ -91,10 +91,15 @@ pub fn set_termi_canon_mode() -> std::io::Result<()> {
 /// This trait is to cast trait object to struct.
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: Any> AsAny for T {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
