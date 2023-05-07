@@ -24,9 +24,9 @@ use std::time::Instant;
 
 use crate::VirtioError;
 use crate::{
-    iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
+    gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error,
+    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
     VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
     VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
     VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
@@ -262,23 +262,12 @@ impl Request {
                     }
                     // Otherwise discard the last "status" byte.
                     _ => iov_discard_back(&mut elem.in_iovec, 1),
-                };
-                if data_iovec.is_none() {
-                    bail!("Empty data for block request");
                 }
-                for elem_iov in data_iovec.unwrap() {
-                    if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
-                        let iov = Iovec {
-                            iov_base: hva,
-                            iov_len: u64::from(elem_iov.len),
-                        };
-                        request.iovec.push(iov);
-                        // Note: elem_iov total len is no more than 1<<32.
-                        request.data_len += u64::from(elem_iov.len);
-                    } else {
-                        bail!("Map desc base {:?} failed", elem_iov.addr);
-                    }
-                }
+                .with_context(|| "Empty data for block request")?;
+
+                let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, &handler.mem_space)?;
+                request.data_len = data_len;
+                request.iovec = iovec;
             }
             VIRTIO_BLK_T_FLUSH => (),
             others => {
