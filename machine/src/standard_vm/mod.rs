@@ -41,6 +41,7 @@ use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
+use std::string::String;
 use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
@@ -974,6 +975,20 @@ impl StdMachine {
                 }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
+            "usb-host" => {
+                let default_value = "0".to_string();
+                let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
+                let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
+                let hostport = args.hostport.as_ref().unwrap_or(&default_value);
+                let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
+                let productid = args.productid.as_ref().unwrap_or(&default_value);
+                cfg_args = format!(
+                    "{},hostbus={},hostaddr={},hostport={},vendorid={},productid={}",
+                    cfg_args, hostbus, hostaddr, hostport, vendorid, productid
+                );
+
+                self.add_usb_host(&mut locked_vmconfig, &cfg_args)?;
+            }
             _ => {
                 bail!("Invalid usb device driver '{}'", driver);
             }
@@ -1186,7 +1201,7 @@ impl DeviceInterface for StdMachine {
                 }
             }
             #[cfg(not(target_env = "musl"))]
-            "usb-kbd" | "usb-tablet" | "usb-camera" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
                     error!("{:?}", e);
                     return Response::create_error_response(

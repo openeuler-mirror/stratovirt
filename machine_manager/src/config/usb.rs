@@ -12,12 +12,14 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::{error::ConfigError, get_cameradev_by_id};
+use super::{error::ConfigError, get_cameradev_by_id, UnsignedInteger};
 use crate::config::{
     check_arg_nonexist, check_arg_too_long, CamBackendType, CameraDevConfig, CmdParser,
     ConfigCheck, ScsiDevConfig, VmConfig,
 };
 use util::aio::AioEngine;
+
+const USBHOST_ADDR_MAX: u8 = 127;
 
 /// XHCI controller configuration.
 #[derive(Debug)]
@@ -288,6 +290,70 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.scsi_cfg.aio_type = drive_arg.aio;
     dev.scsi_cfg.direct = drive_arg.direct;
     dev.media = drive_arg.media.clone();
+
+    dev.check()?;
+    Ok(dev)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UsbHostConfig {
+    /// USB Host device id.
+    pub id: Option<String>,
+    /// The bus number of the USB Host device.
+    pub hostbus: u8,
+    /// The addr number of the USB Host device.
+    pub hostaddr: u8,
+    /// The physical port number of the USB host device.
+    pub hostport: Option<String>,
+    /// The vendor id of the USB Host device.
+    pub vendorid: u16,
+    /// The product id of the USB Host device.
+    pub productid: u16,
+}
+
+impl UsbHostConfig {
+    fn check_range(&self) -> Result<()> {
+        if self.hostaddr > USBHOST_ADDR_MAX {
+            bail!("USB Host hostaddr out of range");
+        }
+        Ok(())
+    }
+}
+
+impl ConfigCheck for UsbHostConfig {
+    fn check(&self) -> Result<()> {
+        check_id(self.id.clone(), "usb-host")?;
+        self.check_range()
+    }
+}
+
+pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
+    let mut cmd_parser = CmdParser::new("usb-host");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("hostbus")
+        .push("hostaddr")
+        .push("hostport")
+        .push("vendorid")
+        .push("productid");
+
+    cmd_parser.parse(cfg_args)?;
+
+    let dev = UsbHostConfig {
+        id: cmd_parser.get_value::<String>("id")?,
+        hostbus: cmd_parser.get_value::<u8>("hostbus")?.unwrap_or(0),
+        hostaddr: cmd_parser.get_value::<u8>("hostaddr")?.unwrap_or(0),
+        hostport: cmd_parser.get_value::<String>("hostport")?,
+        vendorid: cmd_parser
+            .get_value::<UnsignedInteger>("vendorid")?
+            .unwrap_or(UnsignedInteger(0))
+            .0 as u16,
+        productid: cmd_parser
+            .get_value::<UnsignedInteger>("productid")?
+            .unwrap_or(UnsignedInteger(0))
+            .0 as u16,
+    };
 
     dev.check()?;
     Ok(dev)

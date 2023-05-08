@@ -19,7 +19,7 @@ use util::byte_code::ByteCode;
 use super::config::*;
 use super::UsbDevice;
 
-const USB_MAX_INTERFACES: u32 = 16;
+pub const USB_MAX_INTERFACES: u32 = 16;
 const USB_DESCRIPTOR_TYPE_SHIFT: u32 = 8;
 const USB_DESCRIPTOR_INDEX_MASK: u32 = 0xff;
 
