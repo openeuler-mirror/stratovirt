@@ -30,7 +30,9 @@ use gtk::{
     gdk_pixbuf::Colorspace,
     glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
-    traits::{GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt},
+    traits::{
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt,
+    },
     Application, ApplicationWindow, DrawingArea, RadioMenuItem,
 };
 use log::error;
@@ -271,8 +273,8 @@ impl GtkDisplay {
         // Only one screen can be displayed at a time.
         let gs_show_menu = RadioMenuItem::with_label(&label_name);
         let note_book = self.gtk_menu.note_book.clone();
-        gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |_| {
-            gs_show_menu_callback(&gs, note_book).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
+        gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |show_menu| {
+            gs_show_menu_callback(&gs, note_book, show_menu).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
         }));
         self.gtk_menu.view_menu.append(&gs_show_menu);
 
@@ -551,16 +553,17 @@ fn gd_handle_event(gd: &Rc<RefCell<GtkDisplay>>, event: DisplayChangeEvent) -> R
 fn gs_show_menu_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     note_book: gtk::Notebook,
+    show_menu: &RadioMenuItem,
 ) -> Result<()> {
     let borrowed_gs = gs.borrow();
     let page_num = note_book.page_num(&borrowed_gs.draw_area);
     note_book.set_current_page(page_num);
 
-    if let Some(dcl) = borrowed_gs.dcl.upgrade() {
-        if borrowed_gs.dev_name == "ramfb" {
-            dcl.lock().unwrap().update_interval = 30;
-        } else {
-            dcl.lock().unwrap().update_interval = 0;
+    if borrowed_gs.dev_name == "ramfb" {
+        match borrowed_gs.dcl.upgrade() {
+            Some(dcl) if show_menu.is_active() => dcl.lock().unwrap().update_interval = 30,
+            Some(dcl) if !show_menu.is_active() => dcl.lock().unwrap().update_interval = 0,
+            _ => {}
         }
     }
 
