@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::io::Write;
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,17 +19,18 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{cmp, usize};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, error};
+use byteorder::{ByteOrder, LittleEndian};
+use log::{debug, error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue, VirtioDevice, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_MULTIPORT,
-    VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
+    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
-use devices::legacy::{Chardev, InputReceiver};
+use devices::legacy::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
     config::{VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
@@ -36,6 +38,7 @@ use machine_manager::{
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
+use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -44,6 +47,44 @@ use util::num_ops::read_u32;
 
 // Buffer size for chardev backend.
 const BUF_SIZE: usize = 4096;
+
+// The values for event.
+// Sent by the driver at initialization to indicate that it is ready to receive control message.
+const VIRTIO_CONSOLE_DEVICE_READY: u16 = 0;
+// Sent by the device, to create a new port.
+const VIRTIO_CONSOLE_PORT_ADD: u16 = 1;
+// Sent by the device, to remove an existing port.
+#[allow(unused)]
+const VIRTIO_CONSOLE_PORT_REMOVE: u16 = 2;
+// Sent by the driver in response to the device's VIRTIO_CONSOLE_PORT_ADD message.
+// To indicate that the port is ready to be used.
+const VIRTIO_CONSOLE_PORT_READY: u16 = 3;
+// Sent by the device to nominate a port as a console port.
+// There may be more than one console port.
+const VIRTIO_CONSOLE_CONSOLE_PORT: u16 = 4;
+// Sent by the device to indicate a console size change.
+#[allow(unused)]
+const VIRTIO_CONSOLE_RESIZE: u16 = 5;
+// This message is sent by both the device and the driver. This allows for ports to be used
+// directly by guest and host processes to communicate in an application-defined manner.
+const VIRTIO_CONSOLE_PORT_OPEN: u16 = 6;
+// Sent by the device to give a tag to the port.
+const VIRTIO_CONSOLE_PORT_NAME: u16 = 7;
+
+/// If the driver negotiated the VIRTIO_CONSOLE_F_MULTIPORT, the two control queues are used.
+/// The layout of the control message is VirtioConsoleControl.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+struct VirtioConsoleControl {
+    // Port number.
+    id: u32,
+    // The kind of control event.
+    event: u16,
+    // Extra information for event.
+    value: u16,
+}
+
+impl ByteCode for VirtioConsoleControl {}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -87,7 +128,6 @@ pub struct VirtioSerialState {
 }
 
 /// Virtio serial device structure.
-#[allow(dead_code)]
 pub struct Serial {
     /// Status of virtio serial device.
     state: VirtioSerialState,
@@ -312,7 +352,6 @@ impl StateTransfer for Serial {
 impl MigrationHook for Serial {}
 
 /// Virtio serial port structure.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct SerialPort {
     name: Option<String>,
@@ -321,7 +360,7 @@ pub struct SerialPort {
     /// Number id.
     nr: u32,
     /// Whether the port is a console port.
-    is_console: bool,
+    pub is_console: bool,
     /// Whether the guest open the serial port.
     guest_connected: bool,
     /// Whether the host open the serial socket.
@@ -338,7 +377,8 @@ impl SerialPort {
             nr: port_cfg.nr,
             is_console: port_cfg.is_console,
             guest_connected: false,
-            host_connected: false,
+            // Console is default host connected.
+            host_connected: port_cfg.is_console,
             ctrl_handler: None,
         }
     }
@@ -369,7 +409,6 @@ impl SerialPort {
 }
 
 /// Handler for queues which are used for port.
-#[allow(dead_code)]
 struct SerialPortHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
@@ -383,7 +422,6 @@ struct SerialPortHandler {
 }
 
 /// Handler for queues which are used for control.
-#[allow(dead_code)]
 struct SerialControlHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
@@ -605,7 +643,227 @@ impl InputReceiver for SerialPortHandler {
 }
 
 impl SerialControlHandler {
-    fn output_control(&mut self) {}
+    fn output_control(&mut self) {
+        self.output_control_internal().unwrap_or_else(|e| {
+            error!("handle output control error: {:?}", e);
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                &self.device_broken,
+            );
+        });
+    }
+
+    fn output_control_internal(&mut self) -> Result<()> {
+        let output_queue = self.output_queue.clone();
+        let mut queue_lock = output_queue.lock().unwrap();
+
+        loop {
+            let elem = queue_lock
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
+            if elem.desc_num == 0 {
+                break;
+            }
+
+            let mut req = VirtioConsoleControl::default();
+            iov_to_buf(&self.mem_space, &elem.out_iovec, req.as_mut_bytes()).and_then(|size| {
+                if size < size_of::<VirtioConsoleControl>() {
+                    bail!(
+                        "Invalid length for request: get {}, expected {}",
+                        size,
+                        size_of::<VirtioConsoleControl>(),
+                    );
+                }
+                Ok(())
+            })?;
+            req.id = LittleEndian::read_u32(req.id.as_bytes());
+            req.event = LittleEndian::read_u16(req.event.as_bytes());
+            req.value = LittleEndian::read_u16(req.value.as_bytes());
+
+            info!(
+                "Serial port {} handle control message: event({}), value({})",
+                req.id, req.event, req.value
+            );
+            self.handle_control_message(&mut req);
+
+            queue_lock
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .with_context(|| {
+                    format!(
+                        "Failed to add used ring for control port, index: {} len: {}.",
+                        elem.index, 0
+                    )
+                })?;
+        }
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
+                    VirtioError::InterruptTrigger(
+                        "serial input control queue",
+                        VirtioInterruptType::Vring,
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_control_message(&mut self, ctrl: &mut VirtioConsoleControl) {
+        if ctrl.event == VIRTIO_CONSOLE_DEVICE_READY {
+            if ctrl.value == 0 {
+                error!("Guest is not ready to receive contorl message.");
+                return;
+            }
+
+            let cloned_ports = self.ports.clone();
+            let mut locked_ports = cloned_ports.lock().unwrap();
+            for port in locked_ports.iter_mut() {
+                self.send_control_event(port.lock().unwrap().nr, VIRTIO_CONSOLE_PORT_ADD, 1);
+            }
+            return;
+        }
+
+        let port = if let Some(port) = find_port_by_nr(&self.ports, ctrl.id) {
+            port
+        } else {
+            error!("Invalid port id {}", ctrl.id);
+            return;
+        };
+
+        match ctrl.event {
+            VIRTIO_CONSOLE_PORT_READY => {
+                if ctrl.value == 0 {
+                    error!("Driver failed to add port {}", ctrl.id);
+                    return;
+                }
+
+                let locked_port = port.lock().unwrap();
+                if locked_port.is_console {
+                    self.send_control_event(locked_port.nr, VIRTIO_CONSOLE_CONSOLE_PORT, 1);
+                }
+
+                if let Some(name) = &locked_port.name {
+                    let mut extra_data: Vec<u8> = Vec::new();
+                    extra_data.extend(name.as_bytes());
+                    extra_data.push(0);
+                    self.send_input_control_msg(
+                        locked_port.nr,
+                        VIRTIO_CONSOLE_PORT_NAME,
+                        1,
+                        &extra_data,
+                    )
+                    .unwrap_or_else(|e| {
+                        error!("Send input control message error: {:?}", e);
+                        report_virtio_error(
+                            self.interrupt_cb.clone(),
+                            self.driver_features,
+                            &self.device_broken,
+                        );
+                    });
+                }
+
+                if locked_port.host_connected {
+                    self.send_control_event(locked_port.nr, VIRTIO_CONSOLE_PORT_OPEN, 1);
+                }
+            }
+            VIRTIO_CONSOLE_PORT_OPEN => {
+                port.lock().unwrap().guest_connected = ctrl.value != 0;
+            }
+            _ => (),
+        }
+    }
+
+    fn send_control_event(&mut self, id: u32, event: u16, value: u16) {
+        info!(
+            "Serial port {} send control message: event({}), value({})",
+            id, event, value
+        );
+        self.send_input_control_msg(id, event, value, &[])
+            .unwrap_or_else(|e| {
+                error!("send input control message error: {:?}", e);
+                report_virtio_error(
+                    self.interrupt_cb.clone(),
+                    self.driver_features,
+                    &self.device_broken,
+                );
+            });
+    }
+
+    fn send_input_control_msg(
+        &mut self,
+        id: u32,
+        event: u16,
+        value: u16,
+        extra: &[u8],
+    ) -> Result<()> {
+        let mut queue_lock = self.input_queue.lock().unwrap();
+        let elem = queue_lock
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)?;
+        if elem.desc_num == 0 {
+            warn!("empty input queue buffer!");
+            return Ok(());
+        }
+
+        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space)?;
+        let len = size_of::<VirtioConsoleControl>() + extra.len();
+        if in_size < len as u64 {
+            bail!(
+                "Invalid length for input control msg: get {}, expected {}",
+                in_size,
+                len,
+            );
+        }
+
+        let ctrl_msg = VirtioConsoleControl { id, event, value };
+        let mut msg_data: Vec<u8> = Vec::new();
+        msg_data.extend(ctrl_msg.as_bytes());
+        if !extra.is_empty() {
+            msg_data.extend(extra);
+        }
+
+        iov_from_buf_direct(&ctrl_vec, &msg_data).and_then(|size| {
+            if size != len {
+                bail!(
+                    "Expected send msg length is {}, actual send length {}.",
+                    len,
+                    size
+                );
+            }
+            Ok(())
+        })?;
+
+        queue_lock
+            .vring
+            .add_used(&self.mem_space, elem.index, len as u32)
+            .with_context(|| {
+                format!(
+                    "Failed to add used ring(serial input control queue), index {}, len {}",
+                    elem.index, len,
+                )
+            })?;
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
+                    VirtioError::InterruptTrigger(
+                        "serial input control queue",
+                        VirtioInterruptType::Vring,
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
 }
 
 impl EventNotifierHelper for SerialControlHandler {
@@ -631,5 +889,26 @@ impl EventNotifierHelper for SerialControlHandler {
         ));
 
         notifiers
+    }
+}
+
+impl ChardevNotifyDevice for SerialPort {
+    fn chardev_notify(&mut self, status: ChardevStatus) {
+        match (&status, self.host_connected) {
+            (ChardevStatus::Close, _) => self.host_connected = false,
+            (ChardevStatus::Open, false) => self.host_connected = true,
+            (ChardevStatus::Open, true) => return,
+        }
+
+        if let Some(handler) = &self.ctrl_handler {
+            let handler = handler.upgrade().unwrap();
+            handler.lock().unwrap().send_control_event(
+                self.nr,
+                VIRTIO_CONSOLE_PORT_OPEN,
+                status as u16,
+            );
+        } else {
+            error!("Control handler for port {} is None", self.nr);
+        }
     }
 }

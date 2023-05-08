@@ -479,6 +479,9 @@ pub trait MachineOps {
         let mut serial_port = SerialPort::new(serialport_cfg);
         let port = Arc::new(Mutex::new(serial_port.clone()));
         serial_port.realize()?;
+        if !is_console {
+            serial_port.chardev.lock().unwrap().set_device(port.clone());
+        }
         serial.ports.lock().unwrap().push(port);
 
         Ok(())
