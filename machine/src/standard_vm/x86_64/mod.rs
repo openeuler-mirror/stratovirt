@@ -239,19 +239,6 @@ impl StdMachine {
         Ok(())
     }
 
-    pub fn handle_shutdown_request(vm: &Arc<Mutex<Self>>) -> bool {
-        let locked_vm = vm.lock().unwrap();
-        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            if let Err(e) = cpu.destroy() {
-                error!("Failed to destroy vcpu{}, error is {:?}", cpu_index, e);
-            }
-        }
-
-        let mut vmstate = locked_vm.vm_state.0.lock().unwrap();
-        *vmstate = KvmVmState::Shutdown;
-        true
-    }
-
     fn arch_init() -> Result<()> {
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
@@ -287,7 +274,7 @@ impl StdMachine {
         )?;
         self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
-        self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
+        self.register_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
         ich.realize()?;
         Ok(())
@@ -884,8 +871,13 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
-            .is_ok()
+        if let Err(e) =
+            self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
+        {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
     }
 }
 

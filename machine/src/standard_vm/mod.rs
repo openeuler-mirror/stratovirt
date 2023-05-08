@@ -21,9 +21,9 @@ pub use error::StandardVmError;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
 use log::error;
-use machine_manager::config::get_cameradev_config;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 #[cfg(not(target_env = "musl"))]
 use ui::{
     input::{key_event, point_event},
@@ -224,8 +224,7 @@ trait StdMachineOps: AcpiBuilder {
         Ok(())
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn register_acpi_shutdown_event(
+    fn register_shutdown_event(
         &self,
         shutdown_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
@@ -235,8 +234,11 @@ trait StdMachineOps: AcpiBuilder {
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = shutdown_req.read().unwrap();
-            StdMachine::handle_shutdown_request(&clone_vm);
-            Some(gen_delete_notifiers(&[shutdown_req_fd]))
+            if clone_vm.lock().unwrap().destroy() {
+                Some(gen_delete_notifiers(&[shutdown_req_fd]))
+            } else {
+                None
+            }
         });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
