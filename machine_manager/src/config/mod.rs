@@ -125,6 +125,7 @@ pub struct VmConfig {
     pub vnc: Option<VncConfig>,
     pub display: Option<DisplayConfig>,
     pub camera_backend: HashMap<String, CameraDevConfig>,
+    pub windows_emu_pid: Option<String>,
 }
 
 impl VmConfig {
@@ -254,6 +255,19 @@ impl VmConfig {
                 bail!("Global config {} has been added", fast_unplug_key);
             }
         }
+        Ok(())
+    }
+
+    /// Add argument `windows_emu_pid` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `windows_emu_pid` - The args of windows_emu_pid.
+    pub fn add_windows_emu_pid(&mut self, windows_emu_pid: &str) -> Result<()> {
+        if windows_emu_pid.is_empty() {
+            bail!("The arg of windows_emu_pid is empty!");
+        }
+        self.windows_emu_pid = Some(windows_emu_pid.to_string());
         Ok(())
     }
 

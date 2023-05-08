@@ -24,13 +24,21 @@ use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
+#[cfg(not(target_env = "musl"))]
+use std::time::Duration;
 
 #[cfg(not(target_env = "musl"))]
 use devices::misc::scream::Scream;
 use log::warn;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::scream::parse_scream;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::event_loop::EventLoop;
+#[cfg(not(target_env = "musl"))]
+use ui::console::{get_run_stage, VmRunningStage};
 use util::file::{lock_file, unlock_file};
+#[cfg(not(target_env = "musl"))]
+use vmm_sys_util::eventfd::EventFd;
 
 pub use micro_vm::LightMachine;
 
@@ -1805,4 +1813,33 @@ fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_fcntl),
         BpfRule::new(libc::SYS_ftruncate),
     ])
+}
+
+#[cfg(not(target_env = "musl"))]
+fn check_windows_emu_pid(
+    pid_path: String,
+    powerdown_req: Arc<EventFd>,
+    shutdown_req: Arc<EventFd>,
+) {
+    if !Path::new(&pid_path).exists() {
+        log::info!("Detect windows emu exited, let VM exits now");
+        if get_run_stage() == VmRunningStage::Os {
+            if let Err(e) = powerdown_req.write(1) {
+                log::error!("Failed to send powerdown request after emu exits: {:?}", e);
+            }
+        } else if let Err(e) = shutdown_req.write(1) {
+            log::error!("Failed to send shutdown request after emu exits: {:?}", e);
+        }
+    } else {
+        let check_emu_alive = Box::new(move || {
+            check_windows_emu_pid(
+                pid_path.clone(),
+                powerdown_req.clone(),
+                shutdown_req.clone(),
+            );
+        });
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            ctx.delay_call(check_emu_alive, Duration::from_millis(4000));
+        }
+    }
 }
