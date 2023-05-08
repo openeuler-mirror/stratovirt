@@ -19,6 +19,7 @@ use std::{
 };
 
 use byteorder::{ByteOrder, LittleEndian};
+use serde_json::Value;
 
 use super::{
     machine::TestStdMachine,
@@ -733,7 +734,7 @@ impl TestXhciPciDevice {
         let hcsparams1 = self
             .pci_dev
             .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x4) as u64);
-        assert_eq!(hcsparams1, 0x08000140);
+        assert_eq!(hcsparams1 & 0xffffff, 0x000140);
         // HCSPARAMS2
         let hcsparams2 = self
             .pci_dev
@@ -777,7 +778,7 @@ impl TestXhciPciDevice {
         let usb2_port = self
             .pci_dev
             .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x28) as u64);
-        assert!(usb2_port & 0x400 == 0x400);
+        let usb2_port_num = (usb2_port >> 8) & 0xff;
         // extend capability end
         let end = self
             .pci_dev
@@ -795,12 +796,17 @@ impl TestXhciPciDevice {
         let usb3_port = self
             .pci_dev
             .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x38) as u64);
-        assert!(usb3_port & 0x400 == 0x400);
+        let usb3_port_num = (usb3_port >> 8) & 0xff;
         // extend capability end
         let end = self
             .pci_dev
             .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x3c) as u64);
         assert_eq!(end, 0);
+        // Max ports
+        let hcsparams1 = self
+            .pci_dev
+            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x4) as u64);
+        assert_eq!(hcsparams1 >> 24, usb2_port_num + usb3_port_num);
     }
 
     pub fn init_max_device_slot_enabled(&mut self) {
@@ -2186,6 +2192,44 @@ pub fn qmp_send_pointer_event(test_state: RefMut<TestState>, x: i32, y: i32, btn
     str += &value_str;
     str += "\" }}";
     test_state.qmp(&str);
+}
+
+pub fn qmp_plug_keyboard_event(test_state: RefMut<TestState>, num: u32) -> Value {
+    let num_str = format!("{}", num);
+    let mut str =
+        "{\"execute\":\"device_add\",\"arguments\":{\"driver\":\"usb-kbd\",\"id\":\"input"
+            .to_string();
+    str += &num_str;
+    str += "\",\"bus\":\"usb.0\",\"port\":\"1\"}}";
+
+    let value = test_state.qmp(&str);
+    value
+}
+
+pub fn qmp_plug_tablet_event(test_state: RefMut<TestState>, num: u32) -> Value {
+    let num_str = format!("{}", num);
+    let mut str =
+        "{\"execute\":\"device_add\",\"arguments\":{\"driver\":\"usb-tablet\",\"id\":\"input"
+            .to_string();
+    str += &num_str;
+    str += "\",\"bus\":\"usb.0\",\"port\":\"2\"}}";
+
+    let value = test_state.qmp(&str);
+    value
+}
+
+pub fn qmp_unplug_usb_event(test_state: RefMut<TestState>, num: u32) -> Value {
+    let num_str = format!("{}", num);
+    let mut str = "{\"execute\":\"device_del\",\"arguments\":{\"id\":\"input".to_string();
+    str += &num_str;
+    str += "\"}}";
+
+    let value = test_state.qmp(&str);
+    value
+}
+
+pub fn qmp_event_read(test_state: RefMut<TestState>) {
+    test_state.qmp_read();
 }
 
 pub fn clear_iovec(test_state: RefMut<TestState>, iovecs: &Vec<TestIovec>) {
