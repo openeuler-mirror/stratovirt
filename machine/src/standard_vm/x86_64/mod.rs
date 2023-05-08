@@ -496,6 +496,13 @@ impl MachineOps for StdMachine {
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
+        #[cfg(not(target_env = "musl"))]
+        locked_vm.watch_windows_emu_pid(
+            vm_config,
+            locked_vm.shutdown_req.clone(),
+            locked_vm.shutdown_req.clone(),
+        );
+
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
         MigrationManager::register_kvm_instance(

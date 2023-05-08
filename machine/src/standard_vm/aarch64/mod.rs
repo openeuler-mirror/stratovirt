@@ -55,9 +55,11 @@ use devices::legacy::{
 
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::parse_ramfb;
 use machine_manager::config::{
-    parse_incoming_uri, parse_ramfb, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode,
-    NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -618,6 +620,13 @@ impl MachineOps for StdMachine {
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
+
+        #[cfg(not(target_env = "musl"))]
+        locked_vm.watch_windows_emu_pid(
+            vm_config,
+            locked_vm.power_button.clone(),
+            locked_vm.shutdown_req.clone(),
+        );
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
