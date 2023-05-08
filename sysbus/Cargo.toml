@@ -14,3 +14,4 @@ vmm-sys-util = "0.11.0"
 acpi = { path = "../acpi" }
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
+util = {path = "../util"}
