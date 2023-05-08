@@ -176,10 +176,9 @@ impl Timer {
     /// # Arguments
     ///
     /// * `func` - the function will be called later.
-    /// * `nsec` - delay time in nanosecond.
+    /// * `delay` - delay time to call the function.
     pub fn new(func: Box<dyn Fn()>, delay: Duration) -> Self {
         let expire_time = get_current_time() + delay;
-
         Timer { func, expire_time }
     }
 }
@@ -205,7 +204,7 @@ pub struct EventLoopContext {
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
     /// Timer list
-    timers: Arc<Mutex<Vec<Timer>>>,
+    timers: Arc<Mutex<Vec<Box<Timer>>>>,
 }
 
 // SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
@@ -499,14 +498,15 @@ impl EventLoopContext {
         self.epoll_wait_manager(timeout)
     }
 
-    /// Call the function given by `func` after `nsec` nanoseconds.
+    /// Call the function given by `func` after `delay` time.
     ///
     /// # Arguments
     ///
     /// * `func` - the function will be called later.
-    /// * `nsec` - delay time in nanoseconds.
-    pub fn delay_call(&mut self, func: Box<dyn Fn()>, delay: Duration) {
-        let timer = Timer::new(func, delay);
+    /// * `delay` - delay time.
+    pub fn timer_add(&mut self, func: Box<dyn Fn()>, delay: Duration) -> u64 {
+        let timer = Box::new(Timer::new(func, delay));
+        let timer_id = timer.as_ref() as *const _ as u64;
 
         // insert in order of expire_time
         let mut timers = self.timers.lock().unwrap();
@@ -520,6 +520,18 @@ impl EventLoopContext {
         timers.insert(index, timer);
         drop(timers);
         self.kick();
+        timer_id
+    }
+
+    /// Remove timer with specific timer id.
+    pub fn timer_del(&mut self, timer_id: u64) {
+        let mut timers = self.timers.lock().unwrap();
+        for (i, t) in timers.iter().enumerate() {
+            if timer_id == t.as_ref() as *const _ as u64 {
+                timers.remove(i);
+                break;
+            }
+        }
     }
 
     /// Get the expire_time of the soonest Timer, and then translate it to duration.
@@ -576,11 +588,10 @@ impl EventLoopContext {
             if timer.expire_time > now {
                 break;
             }
-
             expired_nr += 1;
         }
 
-        let expired_timers: Vec<Timer> = timers.drain(0..expired_nr).collect();
+        let expired_timers: Vec<Box<Timer>> = timers.drain(0..expired_nr).collect();
         drop(timers);
         for timer in expired_timers {
             (timer.func)();

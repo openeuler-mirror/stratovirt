@@ -282,12 +282,12 @@ fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
         });
 
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(
+            ctx.timer_add(
                 set_press_func,
                 Duration::from_millis(INSTALL_CHECK_INTERVEL_MS),
             );
-            ctx.delay_call(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
-            ctx.delay_call(
+            ctx.timer_add(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
+            ctx.timer_add(
                 release_func,
                 Duration::from_millis(INSTALL_RELEASE_INTERVEL_MS),
             );

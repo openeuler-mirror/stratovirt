@@ -355,7 +355,7 @@ pub fn setup_refresh(update_interval: u64) {
 
     if update_interval != 0 {
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(func, Duration::from_millis(update_interval));
+            ctx.timer_add(func, Duration::from_millis(update_interval));
         }
     }
 }
