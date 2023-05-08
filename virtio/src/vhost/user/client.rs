@@ -114,7 +114,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     {
         if let Some(ctx) = EventLoop::get_ctx(None) {
             // Default reconnecting time: 3s.
-            ctx.delay_call(func, Duration::from_secs(3));
+            ctx.timer_add(func, Duration::from_secs(3));
         } else {
             error!("Failed to get ctx to delay vhost-user reconnecting");
         }

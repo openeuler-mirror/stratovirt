@@ -1908,7 +1908,7 @@ fn check_windows_emu_pid(
             );
         });
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(check_emu_alive, Duration::from_millis(4000));
+            ctx.timer_add(check_emu_alive, Duration::from_millis(4000));
         }
     }
 }

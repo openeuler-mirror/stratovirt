@@ -91,7 +91,7 @@ impl LeakBucket {
                     .unwrap_or_else(|e| error!("LeakBucket send event to device failed {:?}", e));
             });
 
-            loop_context.delay_call(
+            loop_context.timer_add(
                 func,
                 Duration::from_nanos(
                     (self.level - self.capacity) * NANOSECONDS_PER_SECOND / self.capacity,
