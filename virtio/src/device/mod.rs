@@ -12,9 +12,9 @@
 
 pub mod balloon;
 pub mod block;
-pub mod console;
 #[cfg(not(target_env = "musl"))]
 pub mod gpu;
 pub mod net;
 pub mod rng;
 pub mod scsi_cntlr;
+pub mod serial;

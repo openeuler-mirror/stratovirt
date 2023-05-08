@@ -1643,6 +1643,7 @@ dependencies = [
  "hypervisor",
  "kvm-ioctls",
  "thiserror",
+ "util",
  "vmm-sys-util",
 ]
 

@@ -47,12 +47,12 @@ use util::AsAny;
 
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState};
-pub use device::console::{Console, VirtioConsoleState};
 #[cfg(not(target_env = "musl"))]
 pub use device::gpu::*;
 pub use device::net::*;
 pub use device::rng::{Rng, RngState};
 pub use device::scsi_cntlr as ScsiCntlr;
+pub use device::serial::{find_port_by_nr, Serial, SerialPort, VirtioSerialState};
 pub use error::VirtioError;
 pub use error::*;
 pub use queue::*;
@@ -135,6 +135,12 @@ pub const VIRTIO_NET_F_MQ: u32 = 22;
 pub const VIRTIO_NET_F_CTRL_MAC_ADDR: u32 = 23;
 /// Configuration cols and rows are valid.
 pub const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
+/// Device has support for multiple ports.
+/// max_nr_ports is valid and control virtqueues will be used.
+pub const VIRTIO_CONSOLE_F_MULTIPORT: u64 = 1;
+/// Device has support for emergency write.
+/// Configuration field emerg_wr is valid.
+pub const VIRTIO_CONSOLE_F_EMERG_WRITE: u64 = 2;
 /// Maximum size of any single segment is in size_max.
 pub const VIRTIO_BLK_F_SIZE_MAX: u32 = 1;
 /// Maximum number of segments in a request is in seg_max.
