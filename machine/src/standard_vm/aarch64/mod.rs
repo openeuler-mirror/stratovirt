@@ -153,6 +153,8 @@ pub struct StdMachine {
     pub power_button: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
+    /// Shutdown request, handle VM `shutdown` event.
+    shutdown_req: Arc<EventFd>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
     /// Device Tree Blob.
@@ -214,6 +216,10 @@ impl StdMachine {
                     .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
             ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
+            shutdown_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
+            ),
             reset_req: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
@@ -531,11 +537,13 @@ impl MachineOps for StdMachine {
         use super::error::StandardVmError as StdErrorKind;
 
         let nr_cpus = vm_config.machine_config.nr_cpus;
-        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm
-            .register_reset_event(locked_vm.reset_req.clone(), clone_vm)
+            .register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Fail to register shutdown event")?;
+        locked_vm
+            .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
         locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
@@ -1073,14 +1081,17 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        self.vm_state_transfer(
+        if let Err(e) = self.vm_state_transfer(
             &self.cpus,
             &self.irq_chip,
             &mut self.vm_state.0.lock().unwrap(),
             old,
             new,
-        )
-        .is_ok()
+        ) {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
     }
 }
 
