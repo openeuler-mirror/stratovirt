@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -18,11 +18,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{cmp, usize};
 
 use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, error};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    Queue, VirtioDevice, VirtioError, VirtioInterrupt, VIRTIO_CONSOLE_F_MULTIPORT,
+    iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue, VirtioDevice, VirtioError,
+    VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_MULTIPORT,
     VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
@@ -40,7 +42,7 @@ use util::loop_context::{
 };
 use util::num_ops::read_u32;
 
-/// Buffer size for chardev backend.
+// Buffer size for chardev backend.
 const BUF_SIZE: usize = 4096;
 
 #[repr(C)]
@@ -395,8 +397,169 @@ struct SerialControlHandler {
 }
 
 impl SerialPortHandler {
-    fn output_handle(&mut self) {}
+    fn output_handle(&mut self) {
+        self.trace_request("Serial".to_string(), "to IO".to_string());
+
+        self.output_handle_internal().unwrap_or_else(|e| {
+            error!("Port handle output error: {:?}", e);
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                &self.device_broken,
+            );
+        });
+    }
+
+    fn output_handle_internal(&mut self) -> Result<()> {
+        let mut queue_lock = self.output_queue.lock().unwrap();
+
+        loop {
+            let elem = queue_lock
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
+            if elem.desc_num == 0 {
+                break;
+            }
+            debug!("elem desc_unm: {}", elem.desc_num);
+
+            // Discard requests when there is no port using this queue or this port's socket is not connected.
+            // Popping elements without processing means discarding the request.
+            if self.port.is_some() && self.port.as_ref().unwrap().lock().unwrap().host_connected {
+                let mut iovec = elem.out_iovec;
+                let mut iovec_size = Element::iovec_size(&iovec);
+                while iovec_size > 0 {
+                    let mut buffer = [0_u8; BUF_SIZE];
+                    let size = iov_to_buf(&self.mem_space, &iovec, &mut buffer)?;
+
+                    self.write_chardev_msg(&buffer, size);
+
+                    iovec = iov_discard_front(&mut iovec, size as u64)
+                        .unwrap_or_default()
+                        .to_vec();
+                    // Safety: iovec follows the iov_discard_front operation and
+                    // iovec_size always equals Element::iovec_size(&iovec).
+                    iovec_size -= size as u64;
+                    debug!("iovec size {}, write size {}", iovec_size, size);
+                }
+            }
+
+            queue_lock
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .with_context(|| {
+                    format!(
+                        "Failed to add used ring for virtio serial port output, index: {} len: {}",
+                        elem.index, 0,
+                    )
+                })?;
+        }
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
+                    VirtioError::InterruptTrigger(
+                        "serial port output queue",
+                        VirtioInterruptType::Vring,
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
+
+    fn write_chardev_msg(&self, buffer: &[u8], write_len: usize) {
+        let chardev = self.port.as_ref().unwrap().lock().unwrap();
+        if let Some(output) = &mut chardev.chardev.lock().unwrap().output {
+            let mut locked_output = output.lock().unwrap();
+            // To do:
+            // If the buffer is not fully written to chardev, the incomplete part will be discarded.
+            // This may occur when chardev is abnormal. Consider optimizing this logic in the future.
+            if let Err(e) = locked_output.write_all(&buffer[..write_len]) {
+                error!("Failed to write msg to chardev: {:?}", e);
+            }
+            if let Err(e) = locked_output.flush() {
+                error!("Failed to flush msg to chardev: {:?}", e);
+            }
+        } else {
+            error!("Failed to get output fd");
+        };
+    }
+
+    fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
+        let mut queue_lock = self.input_queue.lock().unwrap();
+
+        let count = buffer.len();
+        if count == 0
+            || self.port.is_some() && !self.port.as_ref().unwrap().lock().unwrap().guest_connected
+        {
+            return Ok(());
+        }
+
+        loop {
+            let elem = queue_lock
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
+            if elem.desc_num == 0 {
+                break;
+            }
+
+            let mut written_count = 0_usize;
+            for elem_iov in elem.in_iovec.iter() {
+                let allow_write_count = cmp::min(written_count + elem_iov.len as usize, count);
+                let mut source_slice = &buffer[written_count..allow_write_count];
+                let len = source_slice.len();
+
+                self.mem_space
+                    .write(&mut source_slice, elem_iov.addr, len as u64)
+                    .with_context(|| {
+                        format!(
+                            "Failed to write slice for virtio serial port input: addr {:X} len {}",
+                            elem_iov.addr.0, len
+                        )
+                    })?;
+
+                written_count = allow_write_count;
+                if written_count >= count {
+                    break;
+                }
+            }
+
+            queue_lock
+                .vring
+                .add_used(&self.mem_space, elem.index, written_count as u32)
+                .with_context(|| {
+                    format!(
+                        "Failed to add used ring for virtio serial port input: index {} len {}",
+                        elem.index, written_count
+                    )
+                })?;
+
+            if queue_lock
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                    .with_context(|| {
+                        VirtioError::InterruptTrigger(
+                            "serial port input queue",
+                            VirtioInterruptType::Vring,
+                        )
+                    })?;
+            }
+
+            if written_count >= count {
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
+
+impl VirtioTrace for SerialPortHandler {}
 
 impl EventNotifierHelper for SerialPortHandler {
     fn internal_notifiers(serial_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
@@ -425,7 +588,16 @@ impl EventNotifierHelper for SerialPortHandler {
 }
 
 impl InputReceiver for SerialPortHandler {
-    fn input_handle(&mut self, _buffer: &[u8]) {}
+    fn input_handle(&mut self, buffer: &[u8]) {
+        self.input_handle_internal(buffer).unwrap_or_else(|e| {
+            error!("Port handle input error: {:?}", e);
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                &self.device_broken,
+            );
+        });
+    }
 
     fn get_remain_space_size(&mut self) -> usize {
         BUF_SIZE
