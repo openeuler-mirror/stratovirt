@@ -58,8 +58,10 @@ use util::pixman::{
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
-// number of virtqueues
+/// Number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
+/// Display changed event
+const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
 
 #[derive(Debug)]
 struct GpuResource {
@@ -91,6 +93,7 @@ impl Default for GpuResource {
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuOutputState {
+    con_id: usize,
     width: u32,
     height: u32,
     x_coor: i32,
@@ -249,9 +252,45 @@ struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
-#[derive(Default)]
-pub struct GpuOpts {}
-impl HardWareOperations for GpuOpts {}
+pub struct GpuOpts {
+    /// Status of the emulated physical outputs.
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
+    /// Config space of the GPU device.
+    config_space: Arc<Mutex<VirtioGpuConfig>>,
+    /// Callback to trigger interrupt.
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+}
+
+impl HardWareOperations for GpuOpts {
+    fn hw_ui_info(&self, con: Arc<Mutex<DisplayConsole>>, width: u32, height: u32) {
+        let con_id = con.lock().unwrap().con_id;
+
+        // Update output size.
+        for output_state in self.output_states.lock().unwrap().iter_mut() {
+            if output_state.con_id == con_id {
+                output_state.width = width;
+                output_state.height = height;
+                break;
+            }
+        }
+
+        // Update events_read in config sapce.
+        let mut config_space = self.config_space.lock().unwrap();
+        config_space.events_read |= VIRTIO_GPU_EVENT_DISPLAY;
+
+        if self.interrupt_cb.is_none() {
+            return;
+        }
+        let interrup_cb = self.interrupt_cb.as_ref().unwrap();
+        if let Err(e) = (interrup_cb)(&VirtioInterruptType::Config, None, false) {
+            error!(
+                "{:?}. {:?}",
+                VirtioError::InterruptTrigger("gpu", VirtioInterruptType::Config),
+                e
+            );
+        }
+    }
+}
 
 #[allow(unused)]
 #[derive(Default, Clone)]
@@ -385,7 +424,7 @@ struct GpuIoHandler {
     /// The number of scanouts
     num_scanouts: u32,
     /// States of all output_states.
-    output_states: [VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS],
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Scanouts of gpu, mouse doesn't realize copy trait, so it is a vector.
     scanouts: Vec<GpuScanout>,
     /// Max host mem for resource.
@@ -672,15 +711,18 @@ impl GpuIoHandler {
     fn cmd_get_display_info(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut display_info = VirtioGpuDisplayInfo::default();
         display_info.header.hdr_type = VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
+
+        let output_states_lock = self.output_states.lock().unwrap();
         for i in 0..self.num_scanouts {
             if (self.enable_output_bitmask & (1 << i)) != 0 {
                 let i = i as usize;
                 display_info.pmodes[i].enabled = 1;
-                display_info.pmodes[i].rect.width = self.output_states[i].width;
-                display_info.pmodes[i].rect.height = self.output_states[i].height;
+                display_info.pmodes[i].rect.width = output_states_lock[i].width;
+                display_info.pmodes[i].rect.height = output_states_lock[i].height;
                 display_info.pmodes[i].flags = 0;
             }
         }
+        drop(output_states_lock);
 
         if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
             display_info.header.flags |= VIRTIO_GPU_FLAG_FENCE;
@@ -710,13 +752,15 @@ impl GpuIoHandler {
             edid_resp.header.ctx_id = req.header.ctx_id;
         }
 
+        let output_states_lock = self.output_states.lock().unwrap();
         let mut edid_info = EdidInfo::new(
             "HWV",
             "STRA Monitor",
             100,
-            self.output_states[edid_req.scanouts as usize].width,
-            self.output_states[edid_req.scanouts as usize].height,
+            output_states_lock[edid_req.scanouts as usize].width,
+            output_states_lock[edid_req.scanouts as usize].height,
         );
+        drop(output_states_lock);
         edid_info.edid_array_fulfill(&mut edid_resp.edid);
         edid_resp.size = edid_resp.edid.len() as u32;
 
@@ -1538,6 +1582,8 @@ pub struct Gpu {
     cfg: GpuDevConfig,
     /// Status of the GPU device.
     state: GpuState,
+    /// Status of the emulated physical outputs.
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
     /// Callback to trigger interrupt.
@@ -1555,6 +1601,9 @@ impl Gpu {
         Self {
             cfg,
             state: GpuState::default(),
+            output_states: Arc::new(Mutex::new(
+                [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS],
+            )),
             consoles: Vec::new(),
             interrupt_cb: None,
             deactivate_evts: Vec::new(),
@@ -1586,12 +1635,20 @@ impl VirtioDevice for Gpu {
             self.state.device_features |= 1 << VIRTIO_GPU_F_EDID;
         }
 
+        let mut output_states = self.output_states.lock().unwrap();
         for i in 0..self.cfg.max_outputs {
-            let gpu_opts = Arc::new(GpuOpts::default());
+            let gpu_opts = Arc::new(GpuOpts {
+                output_states: self.output_states.clone(),
+                config_space: self.state.config_space.clone(),
+                interrupt_cb: self.interrupt_cb.clone(),
+            });
             let dev_name = format!("virtio-gpu{}", i);
             let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
+            let con_ref = con.as_ref().unwrap().upgrade().unwrap();
+            output_states[i as usize].con_id = con_ref.lock().unwrap().con_id;
             self.consoles.push(con);
         }
+        drop(output_states);
 
         self.build_device_config_space();
 
@@ -1698,10 +1755,23 @@ impl VirtioDevice for Gpu {
         }
 
         self.interrupt_cb = Some(interrupt_cb.clone());
-        let output_states = [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS];
+
+        let mut output_states = self.output_states.lock().unwrap();
+        output_states[0].width = self.cfg.xres;
+        output_states[0].height = self.cfg.yres;
+        drop(output_states);
 
         let mut scanouts = vec![];
         for con in &self.consoles {
+            let gpu_opts = Arc::new(GpuOpts {
+                output_states: self.output_states.clone(),
+                config_space: self.state.config_space.clone(),
+                interrupt_cb: self.interrupt_cb.clone(),
+            });
+
+            let con_ref = con.as_ref().unwrap().upgrade().unwrap();
+            con_ref.lock().unwrap().dev_opts = gpu_opts;
+
             let scanout = GpuScanout {
                 con: con.clone(),
                 ..Default::default()
@@ -1709,7 +1779,7 @@ impl VirtioDevice for Gpu {
             scanouts.push(scanout);
         }
 
-        let mut handler = GpuIoHandler {
+        let handler = GpuIoHandler {
             ctrl_queue: queues[0].clone(),
             cursor_queue: queues[1].clone(),
             mem_space,
@@ -1720,13 +1790,11 @@ impl VirtioDevice for Gpu {
             resources_list: Vec::new(),
             enable_output_bitmask: 1,
             num_scanouts: self.cfg.max_outputs,
-            output_states,
+            output_states: self.output_states.clone(),
             scanouts,
             max_hostmem: self.cfg.max_hostmem,
             used_hostmem: 0,
         };
-        handler.output_states[0].width = self.cfg.xres;
-        handler.output_states[0].height = self.cfg.yres;
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
         register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
