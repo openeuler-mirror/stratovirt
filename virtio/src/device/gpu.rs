@@ -28,8 +28,7 @@ use anyhow::{anyhow, bail, Result};
 use log::{error, warn};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
-use migration_derive::{ByteCode, Desc};
+use migration_derive::ByteCode;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -1509,15 +1508,24 @@ pub struct VirtioGpuConfig {
 
 /// State of gpu device.
 #[repr(C)]
-#[derive(Clone, Copy, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone)]
 pub struct GpuState {
     /// Bitmask of features supported by the backend.
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// Config space of the GPU device.
-    config_space: VirtioGpuConfig,
+    config_space: Arc<Mutex<VirtioGpuConfig>>,
+}
+
+impl Default for GpuState {
+    fn default() -> Self {
+        GpuState {
+            device_features: 0,
+            driver_features: 0,
+            config_space: Arc::new(Mutex::new(VirtioGpuConfig::default())),
+        }
+    }
 }
 
 /// GPU device structure.
@@ -1551,8 +1559,9 @@ impl Gpu {
     }
 
     fn build_device_config_space(&mut self) {
-        self.state.config_space.num_scanouts = self.cfg.max_outputs;
-        self.state.config_space.reserved = 0;
+        let mut config_space = self.state.config_space.lock().unwrap();
+        config_space.num_scanouts = self.cfg.max_outputs;
+        config_space.reserved = 0;
     }
 }
 
@@ -1592,7 +1601,7 @@ impl VirtioDevice for Gpu {
             console_close(con)?;
         }
 
-        MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.cfg.id);
+        // TODO: support migration
         Ok(())
     }
 
@@ -1628,7 +1637,8 @@ impl VirtioDevice for Gpu {
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
+        let config_space = *self.state.config_space.lock().unwrap();
+        let config_slice = config_space.as_bytes();
         let config_len = config_slice.len() as u64;
 
         if offset
@@ -1647,7 +1657,8 @@ impl VirtioDevice for Gpu {
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let mut config_cpy = self.state.config_space;
+        let mut config_space = self.state.config_space.lock().unwrap();
+        let mut config_cpy = *config_space;
         let config_cpy_slice = config_cpy.as_mut_bytes();
         let config_len = config_cpy_slice.len() as u64;
 
@@ -1660,8 +1671,8 @@ impl VirtioDevice for Gpu {
         }
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
-        if self.state.config_space.events_clear != 0 {
-            self.state.config_space.events_read &= !config_cpy.events_clear;
+        if config_space.events_clear != 0 {
+            config_space.events_read &= !config_cpy.events_clear;
         }
 
         Ok(())
