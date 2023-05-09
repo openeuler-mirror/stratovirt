@@ -195,7 +195,8 @@ pub(crate) struct GtkDisplay {
     gtk_menu: GtkMenu,
     scale_mode: Rc<RefCell<ScaleMode>>,
     pagenum2ds: HashMap<u32, Rc<RefCell<GtkDisplayScreen>>>,
-    power_button: Arc<EventFd>,
+    powerdown_button: Option<Arc<EventFd>>,
+    shutdown_button: Option<Arc<EventFd>>,
     keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
 }
 
@@ -217,7 +218,8 @@ impl GtkDisplay {
             gtk_menu,
             scale_mode,
             pagenum2ds: HashMap::new(),
-            power_button: gtk_cfg.power_button.clone(),
+            powerdown_button: gtk_cfg.powerdown_button.clone(),
+            shutdown_button: gtk_cfg.shutdown_button.clone(),
             keysym2keycode,
         }
     }
@@ -290,6 +292,24 @@ impl GtkDisplay {
         gs.borrow_mut().draw_area = draw_area;
 
         Ok(())
+    }
+
+    /// Gracefully Shutdown.
+    pub(crate) fn vm_powerdown(&self) {
+        if let Some(button) = &self.powerdown_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm power down failed: {:?}", e));
+        }
+    }
+
+    /// Forced Shutdown.
+    pub(crate) fn vm_shutdown(&self) {
+        if let Some(button) = &self.shutdown_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm shut down failed: {:?}", e));
+        }
     }
 }
 
@@ -432,7 +452,10 @@ struct GtkConfig {
     full_screen: bool,
     zoom_fit: bool,
     vm_name: String,
-    power_button: Arc<EventFd>,
+    /// Gracefully Shutdown.
+    powerdown_button: Option<Arc<EventFd>>,
+    /// Forced Shutdown.
+    shutdown_button: Option<Arc<EventFd>>,
     gtk_args: Vec<String>,
 }
 
@@ -442,7 +465,8 @@ pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result
         full_screen: ds_cfg.full_screen,
         zoom_fit: ds_cfg.fix_size,
         vm_name: ui_context.vm_name,
-        power_button: ui_context.power_button,
+        powerdown_button: ui_context.power_button,
+        shutdown_button: ui_context.shutdown_req,
         gtk_args: vec![],
     };
     let _handle = thread::Builder::new()
