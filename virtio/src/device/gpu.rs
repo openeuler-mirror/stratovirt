@@ -26,7 +26,7 @@ use crate::{
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Result};
 use log::{error, warn};
-use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
+use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
 use migration_derive::{ByteCode, Desc};
@@ -91,7 +91,7 @@ impl Default for GpuResource {
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
-struct VirtioGpuReqState {
+struct VirtioGpuOutputState {
     width: u32,
     height: u32,
     x_coor: i32,
@@ -133,7 +133,7 @@ impl ByteCode for VirtioGpuDisplayOne {}
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
-    pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_SCANOUTS],
+    pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_OUTPUTS],
 }
 impl ByteCode for VirtioGpuDisplayInfo {}
 
@@ -382,8 +382,8 @@ struct GpuIoHandler {
     enable_output_bitmask: u32,
     /// The number of scanouts
     num_scanouts: u32,
-    /// States of all request in scanout.
-    req_states: [VirtioGpuReqState; VIRTIO_GPU_MAX_SCANOUTS],
+    /// States of all output_states.
+    output_states: [VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS],
     /// Scanouts of gpu, mouse doesn't realize copy trait, so it is a vector.
     scanouts: Vec<GpuScanout>,
     /// Max host mem for resource.
@@ -674,8 +674,8 @@ impl GpuIoHandler {
             if (self.enable_output_bitmask & (1 << i)) != 0 {
                 let i = i as usize;
                 display_info.pmodes[i].enabled = 1;
-                display_info.pmodes[i].rect.width = self.req_states[i].width;
-                display_info.pmodes[i].rect.height = self.req_states[i].height;
+                display_info.pmodes[i].rect.width = self.output_states[i].width;
+                display_info.pmodes[i].rect.height = self.output_states[i].height;
                 display_info.pmodes[i].flags = 0;
             }
         }
@@ -712,8 +712,8 @@ impl GpuIoHandler {
             "HWV",
             "STRA Monitor",
             100,
-            self.req_states[edid_req.scanouts as usize].width,
-            self.req_states[edid_req.scanouts as usize].height,
+            self.output_states[edid_req.scanouts as usize].width,
+            self.output_states[edid_req.scanouts as usize].height,
         );
         edid_info.edid_array_fulfill(&mut edid_resp.edid.to_vec());
         edid_resp.size = edid_resp.edid.len() as u32;
@@ -1559,11 +1559,11 @@ impl Gpu {
 impl VirtioDevice for Gpu {
     /// Realize virtio gpu device.
     fn realize(&mut self) -> Result<()> {
-        if self.cfg.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
+        if self.cfg.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 {
             bail!(
                 "Invalid max_outputs {} which is bigger than {}",
                 self.cfg.max_outputs,
-                VIRTIO_GPU_MAX_SCANOUTS
+                VIRTIO_GPU_MAX_OUTPUTS
             );
         }
 
@@ -1684,7 +1684,7 @@ impl VirtioDevice for Gpu {
         }
 
         self.interrupt_cb = Some(interrupt_cb.clone());
-        let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
+        let output_states = [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS];
 
         let mut scanouts = vec![];
         for con in &self.consoles {
@@ -1706,13 +1706,13 @@ impl VirtioDevice for Gpu {
             resources_list: Vec::new(),
             enable_output_bitmask: 1,
             num_scanouts: self.cfg.max_outputs,
-            req_states,
+            output_states,
             scanouts,
             max_hostmem: self.cfg.max_hostmem,
             used_hostmem: 0,
         };
-        handler.req_states[0].width = self.cfg.xres;
-        handler.req_states[0].height = self.cfg.yres;
+        handler.output_states[0].width = self.cfg.xres;
+        handler.output_states[0].height = self.cfg.yres;
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
         register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
