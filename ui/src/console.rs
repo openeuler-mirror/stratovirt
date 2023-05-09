@@ -137,6 +137,8 @@ pub trait DisplayChangeListenerOperations {
 pub trait HardWareOperations {
     /// Update image.
     fn hw_update(&self, _con: Arc<Mutex<DisplayConsole>>) {}
+    /// Ui configuration changed.
+    fn hw_ui_info(&self, _con: Arc<Mutex<DisplayConsole>>, _width: u32, _height: u32) {}
 }
 
 /// Listen to the change of image and call the related
@@ -171,7 +173,8 @@ pub struct DisplayConsole {
     pub height: i32,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
-    dev_opts: Arc<dyn HardWareOperations>,
+    pub dev_opts: Arc<dyn HardWareOperations>,
+    pub timer_id: Option<u64>,
     active: bool,
 }
 
@@ -192,6 +195,7 @@ impl DisplayConsole {
             console_list,
             surface: None,
             dev_opts,
+            timer_id: None,
             active: true,
         }
     }
@@ -490,6 +494,27 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
     if let Some(con) = console {
         let con_opts = con.lock().unwrap().dev_opts.clone();
         (*con_opts).hw_update(con);
+    }
+}
+
+pub fn graphic_hardware_ui_info(con_id: Option<usize>, width: u32, height: u32) {
+    let console = CONSOLES.lock().unwrap().get_console_by_id(con_id);
+
+    if let Some(con) = console {
+        let con_opts = con.lock().unwrap().dev_opts.clone();
+        let con_clone = con.clone();
+        let func = Box::new(move || {
+            (*con_opts).hw_ui_info(con_clone.clone(), width, height);
+        });
+
+        if let Some(ctx) = EventLoop::get_ctx(None) {
+            let mut con_locked = con.lock().unwrap();
+            if let Some(timer_id) = con_locked.timer_id {
+                ctx.timer_del(timer_id);
+            }
+
+            con_locked.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+        }
     }
 }
 

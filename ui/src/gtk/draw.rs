@@ -24,6 +24,7 @@ use gtk::{
 use log::error;
 
 use crate::{
+    console::graphic_hardware_ui_info,
     gtk::GtkDisplayScreen,
     input::{
         self, point_event, press_mouse, update_key_state, ABS_MAX, INPUT_POINT_LEFT,
@@ -76,6 +77,12 @@ pub(crate) fn set_callback_for_draw_area(
             Inhibit(false)}
         ),
     );
+    draw_area.connect_configure_event(
+        glib::clone!(@weak gs => @default-return false, move |_, event_configure| {
+            da_configure_callback(&gs, event_configure).unwrap_or_else(|e|error!("Configure event: {}", e));
+            false}
+        ),
+    );
 
     let event_mask = EventMask::BUTTON_PRESS_MASK
         | EventMask::BUTTON_RELEASE_MASK
@@ -87,6 +94,24 @@ pub(crate) fn set_callback_for_draw_area(
         | EventMask::POINTER_MOTION_MASK;
     draw_area.add_events(event_mask);
 
+    Ok(())
+}
+
+/// When the window size changes,
+/// the image resolution adapts to the window.
+fn da_configure_callback(
+    gs: &Rc<RefCell<GtkDisplayScreen>>,
+    event_configure: &gdk::EventConfigure,
+) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    let con = match borrowed_gs.con.upgrade() {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let con_id = con.lock().unwrap().con_id;
+    let (width, height) = event_configure.size();
+
+    graphic_hardware_ui_info(Some(con_id), width, height);
     Ok(())
 }
 
