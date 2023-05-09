@@ -85,6 +85,7 @@ pub struct UsbEndpoint {
     pub ep_type: u8,
     pub ifnum: u8,
     pub halted: bool,
+    pub max_packet_size: u32,
 }
 
 impl UsbEndpoint {
@@ -95,6 +96,17 @@ impl UsbEndpoint {
             ep_type,
             ..Default::default()
         }
+    }
+
+    fn set_max_packet_size(&mut self, raw: u16) {
+        let size = raw & 0x7ff;
+        let micro_frames: u32 = match (raw >> 11) & 3 {
+            1 => 2,
+            2 => 3,
+            _ => 1,
+        };
+
+        self.max_packet_size = size as u32 * micro_frames;
     }
 }
 
