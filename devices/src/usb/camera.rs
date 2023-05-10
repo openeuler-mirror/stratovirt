@@ -791,22 +791,20 @@ impl UsbCamera {
         match device_req.request {
             SET_CUR => match cs {
                 VS_PROBE_CONTROL => {
-                    self.vs_control.bFormatIndex = vs_control.bFormatIndex;
-                    self.vs_control.bFrameIndex = vs_control.bFrameIndex;
-                    self.vs_control.dwMaxVideoFrameSize = vs_control.dwMaxVideoFrameSize;
-                    self.vs_control.dwFrameInterval = vs_control.dwFrameInterval;
-                }
-                VS_COMMIT_CONTROL => {
-                    self.vs_control.bFormatIndex = vs_control.bFormatIndex;
-                    self.vs_control.bFrameIndex = vs_control.bFrameIndex;
-                    self.vs_control.dwMaxVideoFrameSize = vs_control.dwMaxVideoFrameSize;
-                    self.vs_control.dwFrameInterval = vs_control.dwFrameInterval;
                     let fmt = self
                         .camera_dev
                         .lock()
                         .unwrap()
                         .get_format_by_index(vs_control.bFormatIndex, vs_control.bFrameIndex)?;
-
+                    self.update_vs_control(&fmt, &vs_control)?;
+                }
+                VS_COMMIT_CONTROL => {
+                    let fmt = self
+                        .camera_dev
+                        .lock()
+                        .unwrap()
+                        .get_format_by_index(vs_control.bFormatIndex, vs_control.bFrameIndex)?;
+                    self.update_vs_control(&fmt, &vs_control)?;
                     self.activate(&fmt)
                         .with_context(|| "Failed to activate device")?;
                 }
@@ -818,6 +816,18 @@ impl UsbCamera {
                 bail!("Unsupported VS interface out request {:?}", device_req);
             }
         }
+        Ok(())
+    }
+
+    fn update_vs_control(
+        &mut self,
+        fmt: &CamBasicFmt,
+        vs_control: &VideoStreamingControl,
+    ) -> Result<()> {
+        self.vs_control.bFormatIndex = vs_control.bFormatIndex;
+        self.vs_control.bFrameIndex = vs_control.bFrameIndex;
+        self.vs_control.dwMaxVideoFrameSize = get_video_frame_size(fmt.width, fmt.height)?;
+        self.vs_control.dwFrameInterval = vs_control.dwFrameInterval;
         Ok(())
     }
 
