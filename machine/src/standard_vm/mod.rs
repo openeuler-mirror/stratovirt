@@ -1028,6 +1028,26 @@ impl StdMachine {
 
         Ok(())
     }
+
+    /// When windows emu exits, stratovirt should exits too.
+    #[cfg(not(target_env = "musl"))]
+    fn watch_windows_emu_pid(
+        &self,
+        vm_config: &VmConfig,
+        power_button: Arc<EventFd>,
+        shutdown_req: Arc<EventFd>,
+    ) {
+        let emu_pid = vm_config.windows_emu_pid.as_ref();
+        if emu_pid.is_none() {
+            return;
+        }
+        log::info!("Watching on windows emu lifetime");
+        crate::check_windows_emu_pid(
+            "/proc/".to_owned() + emu_pid.unwrap(),
+            power_button,
+            shutdown_req,
+        );
+    }
 }
 
 impl DeviceInterface for StdMachine {
