@@ -238,10 +238,10 @@ impl GtkMenu {
     /// Show window.
     pub(crate) fn show_window(&self, is_full_screen: bool) {
         if is_full_screen {
-            self.menu_bar.hide();
             self.window.fullscreen();
         }
         self.window.show_all();
+        self.menu_bar.hide();
     }
 }
 

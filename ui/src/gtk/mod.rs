@@ -28,7 +28,7 @@ use gtk::{
     cairo::{Format, ImageSurface},
     gdk::{self, Geometry, Gravity, Screen, WindowHints},
     gdk_pixbuf::Colorspace,
-    glib::{self, Priority, SyncSender},
+    glib::{self, set_program_name, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
         CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt,
@@ -451,6 +451,7 @@ impl GtkDisplayScreen {
 struct GtkConfig {
     full_screen: bool,
     zoom_fit: bool,
+    app_name: Option<String>,
     vm_name: String,
     /// Gracefully Shutdown.
     powerdown_button: Option<Arc<EventFd>>,
@@ -464,6 +465,7 @@ pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result
     let gtk_cfg = GtkConfig {
         full_screen: ds_cfg.full_screen,
         zoom_fit: ds_cfg.fix_size,
+        app_name: ds_cfg.app_name.clone(),
         vm_name: ui_context.vm_name,
         powerdown_button: ui_context.power_button,
         shutdown_button: ui_context.shutdown_req,
@@ -494,6 +496,11 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
         .default_width(DEFAULT_SURFACE_WIDTH)
         .default_height(DEFAULT_SURFACE_HEIGHT)
         .build();
+
+    // Set app name if configured.
+    if let Some(name) = &gtk_cfg.app_name {
+        set_program_name(Some(name));
+    }
 
     // Create menu.
     let mut gtk_menu = GtkMenu::new(window);
