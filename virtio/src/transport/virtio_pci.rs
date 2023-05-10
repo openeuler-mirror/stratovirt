@@ -23,8 +23,8 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
-    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
+    STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 
 use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
@@ -1072,11 +1072,14 @@ impl PciDevOps for VirtioPciDevice {
             SUBSYSTEM_VENDOR_ID,
             VIRTIO_PCI_VENDOR_ID,
         )?;
-        le_write_u16(
-            &mut self.config.config,
-            SUBSYSTEM_ID,
-            0x40 + device_type as u16,
-        )?;
+        // For compatibility with windows viogpu as front-end drivers.
+        let subsysid = if device_type == VIRTIO_TYPE_GPU {
+            PCI_SUBDEVICE_ID_QEMU
+        } else {
+            0x40 + device_type as u16
+        };
+        le_write_u16(&mut self.config.config, SUBSYSTEM_ID, subsysid)?;
+
         init_multifunction(
             self.multi_func,
             &mut self.config.config,
