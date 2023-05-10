@@ -31,7 +31,7 @@ use util::{
     test_helper::{add_msix_msg, is_test_enabled},
 };
 
-use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
+use crate::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
@@ -676,7 +676,7 @@ pub fn init_msix(
         )?;
     } else {
         let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
-        bar_size = max(bar_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
+        bar_size = max(bar_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         let region = Region::init_container_region(bar_size);
         Msix::register_memory_region(
             msix.clone(),

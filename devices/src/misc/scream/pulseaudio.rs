@@ -27,7 +27,7 @@ use super::{
 };
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData};
 
-pub const TAGET_LATENCY_MS: u32 = 50;
+pub const TARGET_LATENCY_MS: u32 = 50;
 const MAX_LATENCY_MS: u32 = 100;
 
 const STREAM_NAME: &str = "Audio";
@@ -88,7 +88,7 @@ impl PulseStreamData {
         // Set buffer size for requested latency.
         let buffer_attr = BufferAttr {
             maxlength: ss.usec_to_bytes(MicroSeconds(MAX_LATENCY_MS as u64 * 1000)) as u32,
-            tlength: ss.usec_to_bytes(MicroSeconds(TAGET_LATENCY_MS as u64 * 1000)) as u32,
+            tlength: ss.usec_to_bytes(MicroSeconds(TARGET_LATENCY_MS as u64 * 1000)) as u32,
             prebuf: std::u32::MAX,
             minreq: std::u32::MAX,
             fragsize: std::u32::MAX,
@@ -119,7 +119,7 @@ impl PulseStreamData {
             channel_map,
             buffer_attr,
             stream_fmt,
-            latency: TAGET_LATENCY_MS,
+            latency: TARGET_LATENCY_MS,
             app_name: name.to_string(),
             stream_name: STREAM_NAME.to_string(),
             dir: pa_dir,

@@ -351,7 +351,7 @@ const GC_FC_PROFILE_LIST: u16 = 0x0000;
 /// Mandatory behavior for all devices.
 const GC_FC_CORE: u16 = 0x0001;
 /// The medium may be removed from the device.
-const GC_FC_REMOVEABLE_MEDIUM: u16 = 0x0003;
+const GC_FC_REMOVABLE_MEDIUM: u16 = 0x0003;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ScsiXferMode {
@@ -422,7 +422,7 @@ fn scsi_bus_parse_req_cdb(
     }
 
     // When CDB's Group Code is vendor specific or reserved, len/xfer/lba will be negative.
-    // So, don't need to check again afer checking in cdb length.
+    // So, don't need to check again after checking in cdb length.
     let xfer = scsi_cdb_xfer(&cdb, dev);
     let lba = scsi_cdb_lba(&cdb);
 
@@ -1597,7 +1597,7 @@ fn scsi_command_emulate_get_configuration(
     // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1). Bit 2: Pvnt Jmpr.
     //           Bit 1: DBML. Bit 0: Lock(1).
     // Byte[37-39]: Reserved.
-    BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVEABLE_MEDIUM);
+    BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVABLE_MEDIUM);
     outbuf[34] = 0x0b;
     outbuf[35] = 4;
     outbuf[36] = 0x39;

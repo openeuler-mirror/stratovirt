@@ -234,7 +234,7 @@ pub struct UsbStorage {
     /// Scsi bus attached to this usb-storage device.
     scsi_bus: Arc<Mutex<ScsiBus>>,
     /// Effective scsi backend.
-    // Note: scsi device should attach to scsi bus. Logically, scsi device shoud not be placed in UsbStorage.
+    // Note: scsi device should attach to scsi bus. Logically, scsi device should not be placed in UsbStorage.
     // But scsi device is needed in processing scsi request. Because the three (usb-storage/scsi bus/scsi device)
     // correspond one-to-one, add scsi device member here for the execution efficiency (No need to find a unique
     // device from the hash table of the unique bus).

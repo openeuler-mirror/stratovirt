@@ -42,7 +42,7 @@ impl PciIntxState {
 
 /// INTx structure.
 pub struct Intx {
-    /// Deivce name.
+    /// Device name.
     pub device_name: String,
     /// Physical interrupt pin.
     pub irq_pin: u32,

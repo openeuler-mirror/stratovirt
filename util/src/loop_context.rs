@@ -271,7 +271,7 @@ impl EventLoopContext {
                 break;
             }
             // SAFETY: We will stop removing when reach max_cnt and no other place
-            // removes element of gc. This is to avoid infinite poping if other
+            // removes element of gc. This is to avoid infinite popping if other
             // thread continuously adds element to gc.
             self.gc.write().unwrap().remove(0);
             pop_cnt += 1;
@@ -482,13 +482,13 @@ impl EventLoopContext {
         let timeout = self.timers_min_timeout_ms();
         if timeout == -1 {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
-                for notifer in self.events.read().unwrap().values() {
-                    let status_locked = notifer.status.lock().unwrap();
-                    if *status_locked != EventStatus::Alive || notifer.handler_poll.is_none() {
+                for notifier in self.events.read().unwrap().values() {
+                    let status_locked = notifier.status.lock().unwrap();
+                    if *status_locked != EventStatus::Alive || notifier.handler_poll.is_none() {
                         continue;
                     }
-                    let handler_poll = notifer.handler_poll.as_ref().unwrap();
-                    if handler_poll(EventSet::empty(), notifer.raw_fd).is_some() {
+                    let handler_poll = notifier.handler_poll.as_ref().unwrap();
+                    if handler_poll(EventSet::empty(), notifier.raw_fd).is_some() {
                         break;
                     }
                 }

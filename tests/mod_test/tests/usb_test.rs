@@ -2707,7 +2707,7 @@ fn test_tablet_keyboard_plug() {
 /// TestStep:
 ///   1. Start a domain without tablet and keyboard.
 ///   2. Plug 15 tablets and keyboards.
-///   3. Continue to hotplug tablet and keyboard, exceptation is failure.
+///   3. Continue to hotplug tablet and keyboard, expectation is failure.
 ///   4. Unplug all tablets and keyboards.
 /// Except:
 ///   1/2/4: success.
@@ -2749,10 +2749,10 @@ fn test_max_number_of_device() {
 /// Test abnormal hotplug operation
 /// TestStep:
 ///   1. Start a domain without tablet and keyboard.
-///   2. Unplug tablet and keyboard, exceptation is failure.
+///   2. Unplug tablet and keyboard, expectation is failure.
 ///   3. Hotplug tablet and keyboard.
-///   4. Unplug tablet and keyboard, exceptation is success.
-///   5. Repeat the unplug operation, exceptation is failure.
+///   4. Unplug tablet and keyboard, expectation is success.
+///   5. Repeat the unplug operation, expectation is failure.
 /// Except:
 ///   1/3/4: success.
 ///   2/5: Failed to detach device: id input1 not found.

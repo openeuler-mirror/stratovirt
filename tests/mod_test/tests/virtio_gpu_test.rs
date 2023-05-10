@@ -37,7 +37,7 @@ const D_RES_ID: u32 = 1;
 const D_SCANOUT_ID: u32 = 0;
 const D_INVALID_SCANOUT_ID: u32 = 100;
 const D_FMT: u32 = 2;
-const D_INVALD_FMT: u32 = VIRTIO_GPU_FORMAT_INVALID_UNORM;
+const D_INVALID_FMT: u32 = VIRTIO_GPU_FORMAT_INVALID_UNORM;
 const D_WIDTH: u32 = 64;
 const D_HEIGHT: u32 = 64;
 const D_BYTE_PER_PIXEL: u32 = 4;
@@ -45,7 +45,7 @@ const D_IMG_SIZE: u32 = D_WIDTH * D_HEIGHT * D_BYTE_PER_PIXEL;
 const D_OFFSET: u64 = 0;
 const D_X_COORD: u32 = 0;
 const D_Y_COORD: u32 = 0;
-const D_INVALD_NR_ENTRIES: u32 = 1 + 16384;
+const D_INVALID_NR_ENTRIES: u32 = 1 + 16384;
 
 #[test]
 fn image_display_fun() {
@@ -276,7 +276,7 @@ fn resource_create_dfx() {
         VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
         resource_create(
             &gpu,
-            VirtioGpuResourceCreate2d::new(D_RES_ID, D_INVALD_FMT, D_WIDTH, D_HEIGHT)
+            VirtioGpuResourceCreate2d::new(D_RES_ID, D_INVALID_FMT, D_WIDTH, D_HEIGHT)
         )
         .hdr_type
     );
@@ -391,7 +391,7 @@ fn resource_attach_dfx() {
         VIRTIO_GPU_RESP_ERR_UNSPEC,
         resource_attach_backing(
             &gpu,
-            VirtioGpuResourceAttachBacking::new(D_RES_ID, D_INVALD_NR_ENTRIES),
+            VirtioGpuResourceAttachBacking::new(D_RES_ID, D_INVALID_NR_ENTRIES),
             vec![VirtioGpuMemEntry::new(image_addr, image_size as u32)]
         )
         .hdr_type

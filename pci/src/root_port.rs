@@ -570,7 +570,7 @@ impl HotplugOps for RootPort {
         .unwrap();
 
         if (sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_BLINK {
-            bail!("Guest is still on the fly of another (un)pluging");
+            bail!("Guest is still on the fly of another (un)plugging");
         }
 
         let devfn = dev

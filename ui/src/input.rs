@@ -31,8 +31,8 @@ pub const INPUT_POINT_RIGHT: u8 = 0x04;
 pub const ASCII_A: i32 = 65;
 pub const ASCII_Z: i32 = 90;
 pub const UPPERCASE_TO_LOWERCASE: i32 = 32;
-const ASCII_A_LOWCASE: i32 = 97;
-const ASCII_Z_LOWCASE: i32 = 122;
+const ASCII_A_LOWERCASE: i32 = 97;
+const ASCII_Z_LOWERCASE: i32 = 122;
 const BIT_PER_BYTE: u32 = 8;
 
 // Keycode.
@@ -333,7 +333,7 @@ pub fn point_event(button: u32, x: u32, y: u32) -> Result<()> {
 pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
     let mut locked_input = INPUTS.lock().unwrap();
     let upper = (ASCII_A..=ASCII_Z).contains(&keysym);
-    let is_letter = upper || (ASCII_A_LOWCASE..=ASCII_Z_LOWCASE).contains(&keysym);
+    let is_letter = upper || (ASCII_A_LOWERCASE..=ASCII_Z_LOWERCASE).contains(&keysym);
     let in_keypad = (KEYCODE_KP_7..=KEYCODE_KP_DECIMAL).contains(&keycode);
 
     if down && is_letter {

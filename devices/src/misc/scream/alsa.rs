@@ -24,7 +24,7 @@ use anyhow::Result;
 use log::{debug, error, warn};
 
 use super::{
-    pulseaudio::TAGET_LATENCY_MS, AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData,
+    pulseaudio::TARGET_LATENCY_MS, AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData,
     AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
 };
 
@@ -67,7 +67,7 @@ impl AlsaStreamData {
             bytes_per_sample: 0,
             stream_fmt,
             rate: AUDIO_SAMPLE_RATE_44KHZ,
-            latency: TAGET_LATENCY_MS,
+            latency: TARGET_LATENCY_MS,
             app_name: name.to_string(),
             init: false,
         }

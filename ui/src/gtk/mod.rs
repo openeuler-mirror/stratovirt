@@ -379,7 +379,7 @@ impl GtkDisplayScreen {
         .map_or(DisplaySurface::default(), |s| s);
 
         // SAFETY: The image is created within the function, it can be ensure
-        // that the data ptr is not nullptr and the image size matchs the image data.
+        // that the data ptr is not nullptr and the image size matches the image data.
         let cairo_image = unsafe {
             ImageSurface::create_for_data_unsafe(
                 surface.data() as *mut u8,
@@ -663,9 +663,9 @@ fn gs_show_menu_callback(
 /// 1. Switch operation 1, the gtk display should change the image from a to b.
 /// 2. Switch operation 2, the gtk display should change the image from b to c, but
 /// the channel between stratovirt mainloop and gtk mainloop lost the event.
-/// 3. The gtk display always show th image a.
+/// 3. The gtk display always show the image.
 /// So, the refresh operation will always check if the image has been switched, if
-/// the result is yes, then use the switch operation to switch the  latest image.
+/// the result is yes, then use the switch operation to switch the latest image.
 fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let borrowed_gs = gs.borrow();
     let active_con = borrowed_gs.con.upgrade();
@@ -847,12 +847,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         bail!("Image data is invalid.");
     }
 
-    let source_suface = DisplaySurface {
+    let source_surface = DisplaySurface {
         format: surface.format,
         image: ref_pixman_image(surface.image),
     };
     unref_pixman_image(borrowed_gs.source_surface.image);
-    borrowed_gs.source_surface = source_suface;
+    borrowed_gs.source_surface = source_surface;
     if let Some(s) = borrowed_gs.transfer_surface {
         unref_pixman_image(s.image);
         borrowed_gs.transfer_surface = None;

@@ -142,8 +142,8 @@ def test_microvm_virtio_blk_md5(test_session_root_path, microvm):
     mount_cmd = "mount /dev/vdb /mnt"
     test_vm.serial_cmd(mount_cmd)
 
-    wirte_cmd = "touch /mnt/test_virtioblk.c"
-    test_vm.serial_cmd(wirte_cmd)
+    write_cmd = "touch /mnt/test_virtioblk.c"
+    test_vm.serial_cmd(write_cmd)
 
     _cmd = "md5sum /mnt/test_virtioblk.c"
     _, md5 = test_vm.serial_cmd(_cmd)

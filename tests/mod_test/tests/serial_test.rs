@@ -648,7 +648,7 @@ fn virtserialport_pty_basic() {
 ///   5. Destroy device.
 /// Expect:
 ///   1/5: success.
-///   2/3: Just discard this invalid msg. Nothing happend.
+///   2/3: Just discard this invalid msg. Nothing happened.
 ///   4: report virtio error.
 #[test]
 fn virtconsole_pty_err_out_control_msg() {
@@ -664,11 +664,11 @@ fn virtconsole_pty_err_out_control_msg() {
 
     st.serial_init();
 
-    // Error out control msg which has invalid event. Just discard this invalid msg. Nothing happend.
+    // Error out control msg which has invalid event. Just discard this invalid msg. Nothing happened.
     let invalid_event_msg = VirtioConsoleControl::new(nr as u32, VIRTIO_CONSOLE_PORT_NAME, 1);
     st.out_control_event(invalid_event_msg);
 
-    // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing happend.
+    // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing happened.
     let invalid_event_msg = VirtioConsoleControl::new((nr + 5) as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
     st.out_control_event(invalid_event_msg);
 
@@ -694,7 +694,7 @@ fn virtconsole_pty_err_out_control_msg() {
 ///   4. Destroy device.
 /// Expect:
 ///   1/4: success.
-///   2: Just discard this invalid msg. Nothing happend.
+///   2: Just discard this invalid msg. Nothing happened.
 ///   3: report virtio error.
 #[test]
 fn virtconsole_pty_invalid_in_control_buffer() {
@@ -756,7 +756,7 @@ fn virtconsole_pty_invalid_in_control_buffer() {
 ///   5. Destroy device.
 /// Expect:
 ///   1/4/5: success.
-///   2/3: Just discard these requests. Nothing happend.
+///   2/3: Just discard these requests. Nothing happened.
 #[test]
 fn virtserialport_socket_not_connect() {
     let nr = 1;
@@ -781,11 +781,11 @@ fn virtserialport_socket_not_connect() {
 
     st.serial_init();
 
-    // Requests will be discarded when host (port 1, output queue id: 5) is not connected. Nothing happend.
+    // Requests will be discarded when host (port 1, output queue id: 5) is not connected. Nothing happened.
     let test_data = String::from("Test\n");
     st.virtqueue_add_element(5, Some(test_data.as_bytes()), test_data.len() as u64);
 
-    // Requests will be discarded when it is sent in virtqueue which has no port(port 2, output queue id: 7). Nothing happend.
+    // Requests will be discarded when it is sent in virtqueue which has no port(port 2, output queue id: 7). Nothing happened.
     let test_data = String::from("Test\n");
     st.virtqueue_add_element(7, Some(test_data.as_bytes()), test_data.len() as u64);
 
