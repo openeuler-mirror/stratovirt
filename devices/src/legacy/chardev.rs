@@ -40,6 +40,16 @@ pub trait InputReceiver: Send {
     fn get_remain_space_size(&mut self) -> usize;
 }
 
+/// Provide the trait that notifies device the socket is opened or closed.
+pub trait ChardevNotifyDevice: Send {
+    fn chardev_notify(&mut self, status: ChardevStatus);
+}
+
+pub enum ChardevStatus {
+    Close,
+    Open,
+}
+
 type ReceFn = Option<Arc<dyn Fn(&[u8]) + Send + Sync>>;
 
 /// Character device structure.
@@ -62,6 +72,8 @@ pub struct Chardev {
     receive: ReceFn,
     /// Return the remain space size of receiver buffer.
     get_remain_space_size: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
+    /// Used to notify device the socket is opened or closed.
+    dev: Option<Arc<Mutex<dyn ChardevNotifyDevice>>>,
 }
 
 impl Chardev {
@@ -76,6 +88,7 @@ impl Chardev {
             deactivated: false,
             receive: None,
             get_remain_space_size: None,
+            dev: None,
         }
     }
 
@@ -146,6 +159,10 @@ impl Chardev {
         self.get_remain_space_size = Some(Arc::new(move || {
             cloned_dev.lock().unwrap().get_remain_space_size()
         }));
+    }
+
+    pub fn set_device(&mut self, dev: Arc<Mutex<dyn ChardevNotifyDevice>>) {
+        self.dev = Some(dev.clone());
     }
 }
 
@@ -237,6 +254,10 @@ fn get_notifier_handler(
             locked_chardev.input = Some(stream_arc.clone());
             locked_chardev.output = Some(stream_arc);
 
+            if let Some(dev) = &locked_chardev.dev {
+                dev.lock().unwrap().chardev_notify(ChardevStatus::Open);
+            }
+
             let cloned_chardev = chardev.clone();
             let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
                 let mut locked_chardev = cloned_chardev.lock().unwrap();
@@ -258,6 +279,9 @@ fn get_notifier_handler(
                     None
                 } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
                     // Always allow disconnect even if has deactivated.
+                    if let Some(dev) = &locked_chardev.dev {
+                        dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
+                    }
                     locked_chardev.input = None;
                     locked_chardev.output = None;
                     locked_chardev.stream_fd = None;

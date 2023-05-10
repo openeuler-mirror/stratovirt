@@ -508,32 +508,47 @@ $ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 
 ### 2.4 Virtio-console
 
-Virtio console is a general-purpose serial device for data transfer between the guest and host.
-Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
-To set the virtio console, chardev for redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
+Virtio console device is a simple device for data transfer between the guest and host. A console device may have
+one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux 
+guest will be created once setting a port (Whether it is a console port or not). Character devices at /dev/hvc0 to
+/dev/hvc7 in linux guest will be created once setting console port. To set the virtio console, chardev for
+redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
 
-Two properties can be set for virtconsole.
+Three properties can be set for virtconsole(console port) and virtserialport(generic port).
 * id: unique device-id.
-* chardev: char device of virtio console device.
+* chardev: char device of this console/generic port.
+* nr: unique port number for this port.
 
-For virtio-serial-pci, two more properties are required.
+For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
-* addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it.
+* addr: including slot number and function number. The first number represents slot number of device and the second one represents function number of it.
+* multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* max_ports: max number of ports we can have for a virtio-serial device. Configuration range is [1, 31]. (optional) If not set, default is 31.
+
+For virtio-serial-device, Two more properties are required.
+* bus: bus number of virtio console.
+* addr: including slot number and function number. The first number represents slot number of device and the second one represents function number of it.
 
 ```shell
-# virtio mmio device
+# virtio mmio device using console port
 -device virtio-serial-device[,id=<virtio-serial0>]
 -chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
--device virtconsole,id=<console_id>,chardev=<virtioconsole1>
+-device virtconsole,id=<console_id>,chardev=<virtioconsole1>,nr=0
+
+# virtio mmio device using generic port
+-device virtio-serial-device[,id=<virtio-serial0>]
+-chardev socket,path=<socket_path>,id=<virtioserialport1>,server,nowait
+-device virtserialport,id=<serialport_id>,chardev=<virtioserialport1>,nr=0
 
 # virtio pci device
--device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}]
--chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
--device virtconsole,id=<console_id>,chardev=<virtioconsole1>
+-device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off},max_ports=<number>]
+-chardev socket,path=<socket_path0>,id=<virtioconsole0>,server,nowait
+-device virtconsole,id=<portid0>,chardev=<virtioconsole0>,nr=0
+-chardev socket,path=<socket_path1>,id=<virtioconsole1>,server,nowait
+-device virtserialport,id=<portid1>,chardev=<virtioconsole1>,nr=1
 ```
 NB:
-Currently, only one virtio console device is supported in standard machine.
+Currently, only one virtio console device is supported. Only one port is supported in microvm.
 
 ### 2.5 Virtio-vsock
 
