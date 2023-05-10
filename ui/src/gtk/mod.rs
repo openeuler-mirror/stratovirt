@@ -55,6 +55,10 @@ use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
 use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
+/// Width of default window.
+const DEFAULT_WINDOW_WIDTH: i32 = 1080;
+/// Height of default window.
+const DEFAULT_WINDOW_HEIGHT: i32 = 768;
 pub(crate) const GTK_SCALE_MIN: f64 = 0.25;
 pub(crate) const GTK_ZOOM_STEP: f64 = 0.25;
 
@@ -494,8 +498,8 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title(&gtk_cfg.vm_name)
-        .default_width(DEFAULT_SURFACE_WIDTH)
-        .default_height(DEFAULT_SURFACE_HEIGHT)
+        .default_width(DEFAULT_WINDOW_WIDTH)
+        .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
 
     // Set app name if configured.
