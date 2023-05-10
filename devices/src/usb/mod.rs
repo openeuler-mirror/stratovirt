@@ -16,6 +16,7 @@ pub use error::UsbError;
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
+#[cfg(not(target_env = "musl"))]
 pub mod camera_media_type_guid;
 pub mod config;
 mod descriptor;

@@ -17,6 +17,7 @@
 //! - legacy devices, such as serial devices
 
 pub mod acpi;
+#[cfg(not(target_env = "musl"))]
 pub mod camera_backend;
 mod interrupt_controller;
 pub mod legacy;

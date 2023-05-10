@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
 use util::aio::Iovec;
 
-use self::v4l2::V4l2CameraBackend;
+use self::{demo::DemoCamera, v4l2::V4l2CameraBackend};
 
 /// Frame interval in 100ns units.
 pub const INTERVALS_PER_SEC: u32 = 10_000_000;
@@ -179,16 +179,21 @@ pub trait CameraHostdevOps: Send + Sync {
 }
 
 pub fn camera_ops(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraHostdevOps>>> {
-    let cam = match config.backend {
-        CamBackendType::V4l2 => V4l2CameraBackend::new(
+    let cam: Arc<Mutex<dyn CameraHostdevOps>> = match config.backend {
+        CamBackendType::V4l2 => Arc::new(Mutex::new(V4l2CameraBackend::new(
             config.drive.id.clone().unwrap(),
             config.drive.path.clone().with_context(|| {
                 ConfigError::FieldIsMissing("path".to_string(), "V4L2".to_string())
             })?,
             config.iothread,
-        )?,
-        CamBackendType::Demo => bail!("Not supported type"),
+        )?)),
+        CamBackendType::Demo => Arc::new(Mutex::new(DemoCamera::new(
+            config.id.clone().unwrap(),
+            config.path.with_context(|| {
+                ConfigError::FieldIsMissing("path".to_string(), "Demo".to_string())
+            })?,
+        )?)),
     };
 
-    Ok(Arc::new(Mutex::new(cam)))
+    Ok(cam)
 }
