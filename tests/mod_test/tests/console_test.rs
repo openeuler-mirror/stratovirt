@@ -14,11 +14,14 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::fs::{self, File};
 use std::io::prelude::*;
+use std::mem::size_of;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
 use std::time;
+
+use util::byte_code::ByteCode;
 
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
@@ -35,15 +38,40 @@ const VIRTIO_CONSOLE_F_MULTIPORT: u64 = 1;
 const VIRTIO_CONSOLE_F_EMERG_WRITE: u64 = 2;
 const BUFFER_LEN: usize = 96;
 
+// Default 31 serial ports.
+const DEFAULT_SERIAL_VIRTQUEUES: usize = 64;
+
+const VIRTIO_CONSOLE_PORT_OPEN: u16 = 6;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+struct VirtioConsoleControl {
+    // Port number.
+    id: u32,
+    // The kind of control event.
+    event: u16,
+    // Extra information for event.
+    value: u16,
+}
+
+impl VirtioConsoleControl {
+    fn new(id: u32, event: u16, value: u16) -> VirtioConsoleControl {
+        VirtioConsoleControl { id, event, value }
+    }
+}
+
+impl ByteCode for VirtioConsoleControl {}
+
 fn console_setup(
     console: Rc<RefCell<TestVirtioPciDev>>,
     test_state: Rc<RefCell<TestState>>,
     alloc: Rc<RefCell<GuestAllocator>>,
 ) -> Vec<Rc<RefCell<TestVirtQueue>>> {
     let features = console.borrow().get_device_features();
-    let vqs = console
-        .borrow_mut()
-        .init_device(test_state, alloc, features, 2);
+    let vqs =
+        console
+            .borrow_mut()
+            .init_device(test_state, alloc, features, DEFAULT_SERIAL_VIRTQUEUES);
     vqs
 }
 
@@ -87,6 +115,32 @@ fn get_pty_path(test_state: Rc<RefCell<TestState>>) -> String {
     }
 }
 
+// Send control message by output control queue.
+fn out_control_event(
+    test_state: Rc<RefCell<TestState>>,
+    alloc: Rc<RefCell<GuestAllocator>>,
+    console: Rc<RefCell<TestVirtioPciDev>>,
+    ctrl_msg: VirtioConsoleControl,
+    vqs: &Vec<Rc<RefCell<TestVirtQueue>>>,
+) {
+    let out_control_queue = vqs[3].clone();
+
+    let addr = alloc
+        .borrow_mut()
+        .alloc(size_of::<VirtioConsoleControl>() as u64);
+    test_state.borrow().memwrite(addr, ctrl_msg.as_bytes());
+    let _ = out_control_queue.borrow_mut().add(
+        test_state.clone(),
+        addr,
+        size_of::<VirtioConsoleControl>() as u32,
+        false,
+    );
+
+    console
+        .borrow()
+        .kick_virtqueue(test_state.clone(), out_control_queue.clone());
+}
+
 fn verify_pty_io(
     test_state: Rc<RefCell<TestState>>,
     alloc: Rc<RefCell<GuestAllocator>>,
@@ -98,6 +152,23 @@ fn verify_pty_io(
 
     let pty_path = get_pty_path(test_state.clone());
     assert_ne!(pty_path, String::from(""));
+
+    // Connect Guest.
+    let open_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    out_control_event(
+        test_state.clone(),
+        alloc.clone(),
+        console.clone(),
+        open_msg,
+        &vqs,
+    );
+
+    // Connect Host.
+    let mut input: Option<File> = None;
+    match File::open(&pty_path) {
+        Ok(file) => input = Some(file),
+        Err(e) => assert!(false, "{}", e),
+    }
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
@@ -120,12 +191,6 @@ fn verify_pty_io(
         &mut None,
         false,
     );
-
-    let mut input: Option<File> = None;
-    match File::open(&pty_path) {
-        Ok(file) => input = Some(file),
-        Err(e) => assert!(false, "{}", e),
-    }
 
     verify_input_data(&mut input.unwrap(), &test_data);
 
@@ -217,20 +282,10 @@ fn console_features_negotiate() {
     let (console, test_state, alloc) = create_console(chardev, pci_slot, pci_fn);
 
     let mut features = console.borrow().get_device_features();
-    features |= 1 << VIRTIO_CONSOLE_F_SIZE;
+    features |= 1 << VIRTIO_CONSOLE_F_SIZE | 1 << VIRTIO_CONSOLE_F_MULTIPORT;
     console.borrow_mut().negotiate_features(features);
     console.borrow_mut().set_features_ok();
     assert_eq!(features, console.borrow_mut().get_guest_features());
-
-    let unsupported_features = 1 << VIRTIO_CONSOLE_F_MULTIPORT;
-    features |= unsupported_features;
-    console.borrow_mut().negotiate_features(features);
-    console.borrow_mut().set_features_ok();
-    assert_ne!(features, console.borrow_mut().get_guest_features());
-    assert_eq!(
-        unsupported_features & console.borrow_mut().get_guest_features(),
-        0
-    );
 
     let unsupported_features = 1 << VIRTIO_CONSOLE_F_EMERG_WRITE;
     features |= unsupported_features;
@@ -278,6 +333,16 @@ fn console_socket_basic() {
     let vqs = console_setup(console.clone(), test_state.clone(), alloc.clone());
     let input_queue = vqs[0].clone();
     let output_queue = vqs[1].clone();
+
+    // Connect Guest.
+    let open_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    out_control_event(
+        test_state.clone(),
+        alloc.clone(),
+        console.clone(),
+        open_msg,
+        &vqs,
+    );
 
     let mut stream = UnixStream::connect(socket_path).expect("Couldn't connect socket");
     stream
@@ -370,6 +435,16 @@ fn console_parallel_req() {
     let input_queue = vqs[0].clone();
     let output_queue = vqs[1].clone();
 
+    // Connect Guest.
+    let open_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    out_control_event(
+        test_state.clone(),
+        alloc.clone(),
+        console.clone(),
+        open_msg,
+        &vqs,
+    );
+
     let mut stream = UnixStream::connect(socket_path).expect("Couldn't connect socket");
     stream
         .set_nonblocking(true)
@@ -443,6 +518,15 @@ fn console_parallel_req() {
     let vqs = console_setup(console.clone(), test_state.clone(), alloc.clone());
     let input_queue = vqs[0].clone();
     let output_queue = vqs[1].clone();
+
+    let open_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    out_control_event(
+        test_state.clone(),
+        alloc.clone(),
+        console.clone(),
+        open_msg,
+        &vqs,
+    );
 
     let test_data = String::from("Test\n");
     let addr = alloc.borrow_mut().alloc(test_data.len() as u64);
