@@ -90,6 +90,8 @@ pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 pub const PCI_VENDOR_ID_REDHAT_QUMRANET: u16 = 0x1af4;
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
+/// The sub device ID for Red Hat / Qumranet.
+pub const PCI_SUBDEVICE_ID_QEMU: u16 = 0x1100;
 
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
