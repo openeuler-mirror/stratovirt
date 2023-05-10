@@ -912,3 +912,105 @@ impl ChardevNotifyDevice for SerialPort {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+
+    use machine_manager::config::PciBdf;
+
+    #[test]
+    fn test_set_driver_features() {
+        let mut serial = Serial::new(VirtioSerialInfo {
+            id: "serial".to_string(),
+            pci_bdf: Some(PciBdf {
+                bus: "pcie.0".to_string(),
+                addr: (0, 0),
+            }),
+            multifunction: false,
+            max_ports: 31,
+        });
+
+        // If the device feature is 0, all driver features are not supported.
+        serial.state.device_features = 0;
+        let driver_feature: u32 = 0xFF;
+        let page = 0_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(serial.state.driver_features, 0_u64);
+        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+
+        let driver_feature: u32 = 0xFF;
+        let page = 1_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(serial.state.driver_features, 0_u64);
+        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+
+        // If both the device feature bit and the front-end driver feature bit are
+        // supported at the same time, this driver feature bit is supported.
+        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
+        let page = 0_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(
+            serial.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+        assert_eq!(
+            serial.get_driver_features(page) as u64,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+        serial.state.driver_features = 0;
+
+        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
+        let page = 0_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(serial.state.driver_features, 0);
+        serial.state.driver_features = 0;
+
+        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+            | 1_u64 << VIRTIO_CONSOLE_F_SIZE
+            | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT) as u32;
+        let page = 0_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(
+            serial.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
+        );
+        let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
+        let page = 1_u32;
+        serial.set_driver_features(page, driver_feature);
+        assert_eq!(
+            serial.state.driver_features,
+            (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
+        );
+    }
+
+    #[test]
+    fn test_read_config() {
+        let max_ports: u8 = 31;
+        let serial = Serial::new(VirtioSerialInfo {
+            id: "serial".to_string(),
+            pci_bdf: Some(PciBdf {
+                bus: "pcie.0".to_string(),
+                addr: (0, 0),
+            }),
+            multifunction: false,
+            max_ports: max_ports as u32,
+        });
+
+        // The offset of configuration that needs to be read exceeds the maximum.
+        let offset = size_of::<VirtioConsoleConfig>() as u64;
+        let mut read_data: Vec<u8> = vec![0; 8];
+        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), false);
+
+        // Check the configuration that needs to be read.
+        let offset = 0_u64;
+        let mut read_data: Vec<u8> = vec![0; 12];
+        let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), true);
+        assert_eq!(read_data, expect_data);
+    }
+}
