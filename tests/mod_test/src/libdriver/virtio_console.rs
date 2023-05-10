@@ -74,7 +74,7 @@ pub fn create_console(
     };
     extra_args.append(&mut chardev_args.split(' ').collect());
 
-    let console_args = String::from("-device virtconsole,chardev=charconsole0,id=console0");
+    let console_args = String::from("-device virtconsole,chardev=charconsole0,id=console0,nr=0");
     extra_args.append(&mut console_args.split(' ').collect());
 
     let test_state = Rc::new(RefCell::new(test_init(extra_args)));
