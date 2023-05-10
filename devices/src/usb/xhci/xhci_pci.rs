@@ -20,7 +20,7 @@ use address_space::{AddressSpace, Region};
 use log::debug;
 use machine_manager::config::XhciConfig;
 use pci::config::{
-    PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
+    PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::update_dev_id;
@@ -242,7 +242,7 @@ impl PciDevOps for XhciPciDevice {
         )?;
 
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
-        mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
+        mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         self.pci_config.register_bar(
             0_usize,
             self.mem_region.clone(),

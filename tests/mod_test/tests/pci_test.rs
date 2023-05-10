@@ -433,7 +433,7 @@ fn validate_config_perm_1byte(
     pci_dev: TestPciDev,
     offset: u8,
     expected_value: u8,
-    writed_value: u8,
+    written_value: u8,
     mask: u8,
 ) {
     let config_value =
@@ -446,7 +446,7 @@ fn validate_config_perm_1byte(
     pci_dev
         .pci_bus
         .borrow()
-        .config_writeb(pci_dev.bus_num, pci_dev.devfn, offset, writed_value);
+        .config_writeb(pci_dev.bus_num, pci_dev.devfn, offset, written_value);
 
     let config_value =
         pci_dev
@@ -460,13 +460,13 @@ fn validate_config_perm_2byte(
     pci_dev: TestPciDev,
     offset: u8,
     expected_value: u16,
-    writed_value: u16,
+    written_value: u16,
     mask: u16,
 ) {
     pci_dev
         .pci_bus
         .borrow()
-        .config_writew(pci_dev.bus_num, pci_dev.devfn, offset, writed_value);
+        .config_writew(pci_dev.bus_num, pci_dev.devfn, offset, written_value);
     let config_value =
         pci_dev
             .pci_bus
@@ -479,7 +479,7 @@ fn validate_config_perm_4byte(
     pci_dev: TestPciDev,
     offset: u8,
     expected_value: u32,
-    writed_value: u32,
+    written_value: u32,
     mask: u32,
 ) {
     let config_value =
@@ -492,7 +492,7 @@ fn validate_config_perm_4byte(
     pci_dev
         .pci_bus
         .borrow()
-        .config_writel(pci_dev.bus_num, pci_dev.devfn, offset, writed_value);
+        .config_writel(pci_dev.bus_num, pci_dev.devfn, offset, written_value);
 
     let config_value =
         pci_dev
@@ -1294,7 +1294,7 @@ fn test_pci_type1_reset() {
 
 /// Verify that out-of-bounds access to the configuration space
 #[test]
-fn test_out_boundry_config_access() {
+fn test_out_boundary_config_access() {
     let blk_nums = 0;
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
@@ -1338,7 +1338,7 @@ fn test_out_size_config_access() {
 
 /// Verify that out-of-bounds access to the msix bar space.
 #[test]
-fn test_out_boundry_msix_access() {
+fn test_out_boundary_msix_access() {
     let blk_nums = 0;
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);

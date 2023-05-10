@@ -248,7 +248,7 @@ pub fn fill_transfer_by_type(
                 INTERRUPT_TIMEOUT,
             );
         },
-        _ => error!("Unsupport transfer type: {:?}", transfer_type),
+        _ => error!("Unsupported transfer type: {:?}", transfer_type),
     }
 }
 

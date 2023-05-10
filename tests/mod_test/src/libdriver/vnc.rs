@@ -824,9 +824,9 @@ impl VncClient {
     }
 
     /// Send point event to VncServer.
-    pub fn test_point_event(&mut self, buttom_mask: u8, x: u16, y: u16) -> Result<()> {
+    pub fn test_point_event(&mut self, button_mask: u8, x: u16, y: u16) -> Result<()> {
         println!("Test point event.");
-        let test_event = TestPointEvent::new(buttom_mask, x, y);
+        let test_event = TestPointEvent::new(button_mask, x, y);
         self.write_msg(&mut test_event.to_be_bytes())?;
         Ok(())
     }

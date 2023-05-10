@@ -663,7 +663,7 @@ impl UsbCamera {
         if self.listening {
             return Ok(());
         }
-        let cam_handler = Arc::new(Mutex::new(CameraIoHander::new(
+        let cam_handler = Arc::new(Mutex::new(CameraIoHandler::new(
             &self.camera_fd,
             &self.packet_list,
             &self.camera_dev,
@@ -1016,21 +1016,21 @@ impl UvcPayload {
 }
 
 /// Camere handler for copying frame data to usb packet.
-struct CameraIoHander {
+struct CameraIoHandler {
     camera: Arc<Mutex<dyn CameraHostdevOps>>,
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
 }
 
-impl CameraIoHander {
+impl CameraIoHandler {
     fn new(
         fd: &Arc<EventFd>,
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
         camera: &Arc<Mutex<dyn CameraHostdevOps>>,
         payload: &Arc<Mutex<UvcPayload>>,
     ) -> Self {
-        CameraIoHander {
+        CameraIoHandler {
             camera: camera.clone(),
             fd: fd.clone(),
             packet_list: list.clone(),
@@ -1089,15 +1089,15 @@ impl CameraIoHander {
             iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
                 .with_context(|| format!("Invalid iov size {}", pkt_size))?;
         }
-        let copyed = locked_camera.get_frame(
+        let copied = locked_camera.get_frame(
             iovecs,
             locked_payload.frame_offset,
             frame_data_size as usize,
         )?;
-        pkt.actual_length += copyed as u32;
+        pkt.actual_length += copied as u32;
         debug!(
-            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copyed {}",
-            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copyed
+            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copied {}",
+            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copied
         );
         locked_payload.frame_offset += frame_data_size as usize;
         locked_payload.payload_offset += frame_data_size as usize;
@@ -1113,7 +1113,7 @@ impl CameraIoHander {
     }
 }
 
-impl EventNotifierHelper for CameraIoHander {
+impl EventNotifierHelper for CameraIoHandler {
     fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let cloned_io_handler = io_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
@@ -1324,8 +1324,8 @@ mod test {
 
     #[test]
     fn test_interfaces_table_data_len() {
-        // VC and VS's header differents, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
-        // the rest datas follow the same principle that the 1st element is the very data vector's length.
+        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
+        // the rest data follow the same principle that the 1st element is the very data vector's length.
         test_interface_table_data_len(gen_desc_interface_camera_vc().unwrap(), 5);
         test_interface_table_data_len(gen_desc_interface_camera_vs(list_format()).unwrap(), 4);
     }

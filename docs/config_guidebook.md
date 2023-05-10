@@ -294,7 +294,7 @@ fourteen properties are supported for virtio block device.
 * iothread: indicate which iothread will be used. (optional) if not set, the main thread will be used.
 * throttling.iops-total: used to limit IO operations for block device. (optional)
 * discard: free up unused disk space. (optional) `unmap/ignore` means `on/off`. If not set, default is `ignore`.
-* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If dicard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
+* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If discard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
 * if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
 * format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
@@ -799,7 +799,7 @@ One property can be set for USB Tablet.
 
 Note: Only one tablet can be configured.
 
-### 2.13.4 USB Camera
+#### 2.13.4 USB Camera
 Video Camera Device that based on USB video class protocol. It should be attached to USB controller.
 
 3 properties can be set for USB Camera.
@@ -831,7 +831,7 @@ Three properties can be set for USB Storage.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
-### 2.13.6 USB Host
+#### 2.13.6 USB Host
 USB Host Device that based on USB protocol. It should be attached to USB controller.
 
 Six properties can be set for USB Host.

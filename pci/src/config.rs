@@ -146,9 +146,9 @@ pub const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
 /// The maximum Bar ID numbers of a Type 1 device
 pub const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
 /// mmio bar's minimum size shall be 4KB
-pub const MINMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
+pub const MINIMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
 /// pio bar's minimum size shall be 4B
-pub const MINMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
+pub const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
 /// PCI Express capability registers, same as kernel defines
 
@@ -395,7 +395,7 @@ pub struct PciConfig {
     pub msix: Option<Arc<Mutex<Msix>>>,
     /// Offset of the PCI express capability.
     pub pci_express_cap_offset: u16,
-    /// INTx infomation.
+    /// INTx information.
     pub intx: Option<Arc<Mutex<Intx>>>,
 }
 
@@ -1157,7 +1157,7 @@ impl PciConfig {
 
     fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
         if !size.is_power_of_two()
-            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO as u64)
+            || (bar_type == RegionType::Io && size < MINIMUM_BAR_SIZE_FOR_PIO as u64)
             || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
             || (bar_type == RegionType::Io && size > u16::MAX as u64)
         {

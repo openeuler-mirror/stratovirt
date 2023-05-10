@@ -1921,7 +1921,7 @@ pub struct CmdParameter {
     pub name: String,
     pub help: String,
     #[serde(rename = "type")]
-    pub paramter_type: String,
+    pub parameter_type: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

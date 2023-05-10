@@ -310,8 +310,8 @@ impl HardWareOperations for GpuOpts {
         if self.interrupt_cb.is_none() {
             return;
         }
-        let interrup_cb = self.interrupt_cb.as_ref().unwrap();
-        if let Err(e) = (interrup_cb)(&VirtioInterruptType::Config, None, false) {
+        let interrupt_cb = self.interrupt_cb.as_ref().unwrap();
+        if let Err(e) = (interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
                 "{:?}. {:?}",
                 VirtioError::InterruptTrigger("gpu", VirtioInterruptType::Config),
@@ -407,7 +407,6 @@ struct GpuScanout {
     x: u32,
     y: u32,
     resource_id: u32,
-    // Cursor visable
     cursor_visible: bool,
 }
 
@@ -690,7 +689,7 @@ impl GpuIoHandler {
             ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
         }
 
-        // Windows front-end drvier does not deliver data in format sequence.
+        // Windows front-end driver does not deliver data in format sequence.
         // So we fix it in back-end.
         // TODO: Fix front-end driver is a better solution.
         if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
@@ -1129,7 +1128,7 @@ impl GpuIoHandler {
             data = pixman_image_get_data(res.pixman_image).cast() as *mut u8;
         }
 
-        // When the dedicated area is continous.
+        // When the dedicated area is continuous.
         if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {
             let offset_dst = (trans_info.rect.y_coord * stride) as usize;
             let trans_size = (trans_info.rect.height * stride) as usize;

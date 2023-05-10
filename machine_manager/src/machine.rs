@@ -364,12 +364,12 @@ pub trait DeviceInterface {
             CmdParameter {
                 name: "discard".to_string(),
                 help: "discard operation (unmap|ignore)".to_string(),
-                paramter_type: "string".to_string(),
+                parameter_type: "string".to_string(),
             },
             CmdParameter {
                 name: "detect-zeroes".to_string(),
                 help: "optimize zero writes (unmap|on|off)".to_string(),
-                paramter_type: "string".to_string(),
+                parameter_type: "string".to_string(),
             },
         ];
         let cmd_lines = vec![CmdLine {
