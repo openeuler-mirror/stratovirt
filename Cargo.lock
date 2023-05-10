@@ -1107,6 +1107,7 @@ dependencies = [
  "hex",
  "machine",
  "rand",
+ "serde",
  "serde_json",
  "util",
  "virtio",
