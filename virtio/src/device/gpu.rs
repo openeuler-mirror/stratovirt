@@ -120,6 +120,7 @@ struct VirtioGpuRect {
 
 impl ByteCode for VirtioGpuRect {}
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayOne {
     rect: VirtioGpuRect,
@@ -129,6 +130,7 @@ struct VirtioGpuDisplayOne {
 
 impl ByteCode for VirtioGpuDisplayOne {}
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
@@ -144,6 +146,7 @@ struct VirtioGpuGetEdid {
 }
 impl ByteCode for VirtioGpuGetEdid {}
 
+#[repr(C)]
 #[allow(unused)]
 // data which transfer to frontend need padding
 #[derive(Clone, Copy)]
@@ -714,7 +717,7 @@ impl GpuIoHandler {
             self.output_states[edid_req.scanouts as usize].width,
             self.output_states[edid_req.scanouts as usize].height,
         );
-        edid_info.edid_array_fulfill(&mut edid_resp.edid.to_vec());
+        edid_info.edid_array_fulfill(&mut edid_resp.edid);
         edid_resp.size = edid_resp.edid.len() as u32;
 
         self.send_response(req, &edid_resp)?;
