@@ -35,7 +35,7 @@ use gtk::{
     },
     Application, ApplicationWindow, DrawingArea, RadioMenuItem,
 };
-use log::error;
+use log::{debug, error};
 
 use crate::{
     console::{
@@ -426,7 +426,8 @@ impl GtkDisplayScreen {
         };
 
         if x.lt(&0.0) || x.gt(&window_width) || y.lt(&0.0) || y.gt(&window_height) {
-            bail!("The coordinate of pointer exceeds limit")
+            debug!("x {} or y {} out of range, use last value.", x, y);
+            return Ok((self.click_state.last_x, self.click_state.last_y));
         }
 
         // There may be unfilled areas between the window and the image.
