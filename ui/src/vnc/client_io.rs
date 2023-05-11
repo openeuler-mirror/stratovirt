@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    console::{console_select, DisplayMouse},
+    console::console_select,
     error::VncError,
     input::{
         key_event, keyboard_modifier_get, keyboard_state_reset, point_event, update_key_state,
@@ -1294,25 +1294,19 @@ pub fn display_cursor_define(
     server: &Arc<VncServer>,
     buf: &mut Vec<u8>,
 ) {
-    let mut cursor: DisplayMouse;
-    let mut mask: Vec<u8>;
     let locked_cursor = server.vnc_cursor.lock().unwrap();
-    match &locked_cursor.cursor {
-        Some(c) => {
-            cursor = c.clone();
-        }
+    let mut cursor = match &locked_cursor.cursor {
+        Some(c) => c.clone(),
         None => {
             return;
         }
-    }
-    match &locked_cursor.mask {
-        Some(m) => {
-            mask = m.clone();
-        }
+    };
+    let mut mask = match &locked_cursor.mask {
+        Some(m) => m.clone(),
         None => {
             return;
         }
-    }
+    };
     drop(locked_cursor);
     if cursor.data.is_empty()
         || cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel()
