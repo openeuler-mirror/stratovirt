@@ -324,16 +324,13 @@ fn start_vnc_thread() -> Result<()> {
                 continue;
             }
 
-            let mut rect_info;
-            match rect_jobs.lock().unwrap().get_mut(0) {
-                Some(rect) => {
-                    rect_info = rect.clone();
-                }
+            let mut rect_info = match rect_jobs.lock().unwrap().get_mut(0) {
+                Some(rect) => rect.clone(),
                 None => {
                     thread::sleep(time::Duration::from_millis(interval));
                     continue;
                 }
-            }
+            };
             rect_jobs.lock().unwrap().remove(0);
 
             let mut num_rects: i32 = 0;
