@@ -209,7 +209,7 @@ impl GtkDisplay {
         // Window scale mode.
         let scale_mode = Rc::new(RefCell::new(ScaleMode {
             full_screen: gtk_cfg.full_screen,
-            free_scale: gtk_cfg.zoom_fit,
+            free_scale: true,
         }));
         // Mapping ASCII to keycode.
         let keysym2keycode: Rc<RefCell<HashMap<u16, u16>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -455,7 +455,6 @@ impl GtkDisplayScreen {
 #[derive(Clone)]
 struct GtkConfig {
     full_screen: bool,
-    zoom_fit: bool,
     app_name: Option<String>,
     vm_name: String,
     /// Gracefully Shutdown.
@@ -469,7 +468,6 @@ struct GtkConfig {
 pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result<()> {
     let gtk_cfg = GtkConfig {
         full_screen: ds_cfg.full_screen,
-        zoom_fit: ds_cfg.fix_size,
         app_name: ds_cfg.app_name.clone(),
         vm_name: ui_context.vm_name,
         powerdown_button: ui_context.power_button,
@@ -513,12 +511,13 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     gtk_menu.set_menu();
     gtk_menu.set_signal(&gd);
 
+    let scale_mode = gd.borrow().scale_mode.clone();
     // Gtk display init.
     graphic_display_init(gd)
         .with_context(|| "Gtk display init failed!")
         .unwrap();
 
-    gtk_menu.show_window(gtk_cfg.full_screen);
+    gtk_menu.show_window(scale_mode);
 }
 
 fn graphic_display_init(gd: Rc<RefCell<GtkDisplay>>) -> Result<()> {

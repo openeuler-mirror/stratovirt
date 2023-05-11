@@ -38,6 +38,8 @@ use crate::{
     },
 };
 
+use super::ScaleMode;
+
 #[derive(Clone)]
 pub(crate) struct GtkMenu {
     pub(crate) window: ApplicationWindow,
@@ -247,10 +249,15 @@ impl GtkMenu {
     }
 
     /// Show window.
-    pub(crate) fn show_window(&self, is_full_screen: bool) {
-        if is_full_screen {
-            self.window.fullscreen();
+    pub(crate) fn show_window(&self, scale_mode: Rc<RefCell<ScaleMode>>) {
+        if scale_mode.borrow().full_screen {
+            self.full_screen_item.activate();
         }
+
+        if scale_mode.borrow().free_scale {
+            self.zoom_fit.activate();
+        }
+
         self.window.show_all();
         self.menu_bar.hide();
     }
