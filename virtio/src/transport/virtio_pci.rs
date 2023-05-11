@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{error, warn};
+use log::{debug, error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
@@ -728,7 +728,7 @@ impl VirtioPciDevice {
         let mut locked_queues = self.queues.lock().unwrap();
         for q_config in queues_config.iter_mut() {
             if !q_config.ready {
-                warn!("queue is not ready, please check your init process");
+                debug!("queue is not ready, please check your init process");
             } else {
                 q_config.addr_cache.desc_table_host = self
                     .sys_mem
@@ -957,11 +957,11 @@ impl VirtioPciDevice {
         }
         let bar_base = self.config.get_bar_address(bar as usize);
         if bar_base == BAR_SPACE_UNMAPPED {
-            warn!("The bar {} of VirtioPciCfgAccessCap is not mapped", bar);
+            debug!("The bar {} of VirtioPciCfgAccessCap is not mapped", bar);
             return;
         }
         if ![1, 2, 4].contains(&len) {
-            warn!("The length {} of VirtioPciCfgAccessCap is illegal", len);
+            debug!("The length {} of VirtioPciCfgAccessCap is illegal", len);
             return;
         }
         if off & (len - 1) != 0 {
