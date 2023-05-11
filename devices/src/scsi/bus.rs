@@ -687,7 +687,7 @@ impl ScsiRequest {
             }
             Err(ref e) => {
                 if not_supported_flag {
-                    info!("emulation scsi command {:#x} is no supported", self.cmd.op);
+                    debug!("emulation scsi command {:#x} is no supported", self.cmd.op);
                     status = CHECK_CONDITION;
                     sense = Some(SCSI_SENSE_INVALID_OPCODE);
                 } else {
