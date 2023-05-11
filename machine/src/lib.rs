@@ -36,7 +36,7 @@ use machine_manager::config::scream::parse_scream;
 use machine_manager::event_loop::EventLoop;
 #[cfg(not(target_env = "musl"))]
 use ui::console::{get_run_stage, VmRunningStage};
-use util::file::{lock_file, unlock_file};
+use util::file::{clear_file, lock_file, unlock_file};
 #[cfg(not(target_env = "musl"))]
 use vmm_sys_util::eventfd::EventFd;
 
@@ -1836,6 +1836,7 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
                 .with_context(|| "Failed to start VM.")?;
         }
         MigrateMode::Unix => {
+            clear_file(path.clone())?;
             let listener = UnixListener::bind(&path)?;
             let (mut sock, _) = listener.accept()?;
             remove_file(&path)?;
