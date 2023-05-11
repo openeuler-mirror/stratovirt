@@ -24,6 +24,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use gettextrs::LocaleCategory;
 use gtk::{
     cairo::{Format, ImageSurface},
     gdk::{self, Geometry, Gravity, Screen, WindowHints},
@@ -61,6 +62,10 @@ const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
 pub(crate) const GTK_SCALE_MIN: f64 = 0.25;
 pub(crate) const GTK_ZOOM_STEP: f64 = 0.25;
+/// Domain name.
+const DOMAIN_NAME: &str = "desktop-app-engine";
+/// The path of message information is located.
+const LOCALE_PATH: &str = "/usr/share/locale";
 
 /// Gtk window display mode.
 #[derive(Clone, PartialEq)]
@@ -487,6 +492,7 @@ fn create_gtk_thread(gtk_cfg: &GtkConfig) {
         .application_id("stratovirt.gtk")
         .build();
     let gtk_cfg_clone = gtk_cfg.clone();
+
     application.connect_activate(move |app| build_ui(app, &gtk_cfg_clone));
     application.run_with_args(&gtk_cfg.gtk_args);
 }
@@ -500,10 +506,9 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
         .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
 
-    // Set app name if configured.
-    if let Some(name) = &gtk_cfg.app_name {
-        set_program_name(Some(name));
-    }
+    set_program_attribute(gtk_cfg)
+        .with_context(|| "Failed to set properties for program")
+        .unwrap();
 
     // Create menu.
     let mut gtk_menu = GtkMenu::new(window);
@@ -518,6 +523,22 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
         .unwrap();
 
     gtk_menu.show_window(scale_mode);
+}
+
+fn set_program_attribute(gtk_cfg: &GtkConfig) -> Result<()> {
+    // Set the program name.
+    if let Some(name) = &gtk_cfg.app_name {
+        set_program_name(Some(name));
+    }
+
+    // Set text attributes for the program.
+    gettextrs::setlocale(LocaleCategory::LcMessages, "");
+    gettextrs::setlocale(LocaleCategory::LcCType, "C.UTF-8");
+    gettextrs::bindtextdomain(DOMAIN_NAME, LOCALE_PATH)?;
+    gettextrs::bind_textdomain_codeset(DOMAIN_NAME, "UTF-8")?;
+    gettextrs::textdomain(DOMAIN_NAME)?;
+
+    Ok(())
 }
 
 fn graphic_display_init(gd: Rc<RefCell<GtkDisplay>>) -> Result<()> {
