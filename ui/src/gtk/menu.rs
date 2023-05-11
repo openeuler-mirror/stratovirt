@@ -19,8 +19,8 @@ use gtk::{
         ffi::{GDK_KEY_equal, GDK_KEY_minus, GDK_KEY_B, GDK_KEY_F, GDK_KEY_M, GDK_KEY_S},
         ModifierType,
     },
-    glib,
-    prelude::{AccelGroupExtManual, NotebookExtManual, WidgetExtManual},
+    glib::{self, object::GObject, translate::ToGlibPtr},
+    prelude::{AccelGroupExtManual, NotebookExtManual, ObjectType, WidgetExtManual},
     traits::{
         BoxExt, CheckMenuItemExt, ContainerExt, DialogExt, GtkMenuExt, GtkMenuItemExt,
         GtkWindowExt, MenuShellExt, NotebookExt, WidgetExt,
@@ -233,6 +233,17 @@ impl GtkMenu {
         self.container.pack_start(&self.menu_bar, false, false, 0);
         self.container.pack_start(&self.note_book, true, true, 0);
         self.window.add(&self.container);
+
+        // Disable the default F10 menu shortcut.
+        if let Some(setting) = self.window.settings() {
+            unsafe {
+                gtk::glib::gobject_ffi::g_object_set_property(
+                    setting.as_ptr() as *mut GObject,
+                    "gtk-menu-bar-accel".to_glib_none().0,
+                    glib::Value::from("").to_glib_none().0,
+                );
+            }
+        }
     }
 
     /// Show window.
