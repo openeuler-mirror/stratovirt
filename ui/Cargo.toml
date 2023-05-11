@@ -20,5 +20,6 @@ rustls-pemfile = "1.0.0"
 sasl2-sys = "0.1.20"
 bitintr = "0.2.0"
 gtk = "0.14.3"
+gettext-rs = "0.7.0"
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
