@@ -56,7 +56,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
 /// Width of default window.
-const DEFAULT_WINDOW_WIDTH: i32 = 1080;
+const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 /// Height of default window.
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
 pub(crate) const GTK_SCALE_MIN: f64 = 0.25;
