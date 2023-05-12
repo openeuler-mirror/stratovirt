@@ -32,7 +32,7 @@ use crate::{
 use address_space::AddressSpace;
 use devices::legacy::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
+    config::{ChardevType, VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -371,14 +371,16 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn new(port_cfg: VirtioSerialPort) -> Self {
+        // Console is default host connected. And pty chardev has opened by default in realize() function.
+        let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
+
         SerialPort {
             name: Some(port_cfg.id),
             chardev: Arc::new(Mutex::new(Chardev::new(port_cfg.chardev))),
             nr: port_cfg.nr,
             is_console: port_cfg.is_console,
             guest_connected: false,
-            // Console is default host connected.
-            host_connected: port_cfg.is_console,
+            host_connected,
             ctrl_handler: None,
         }
     }
