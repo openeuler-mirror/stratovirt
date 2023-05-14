@@ -230,7 +230,7 @@ impl GtkMenu {
 
         // Set the visible of note_book.
         self.note_book.set_show_tabs(false);
-        self.note_book.set_show_border(true);
+        self.note_book.set_show_border(false);
 
         self.window.add_accel_group(&self.accel_group);
         self.container.pack_start(&self.menu_bar, false, false, 0);
