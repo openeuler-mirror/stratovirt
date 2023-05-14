@@ -64,6 +64,12 @@ pub enum VmRunningStage {
     Os,
 }
 
+#[derive(Default)]
+pub struct UiInfo {
+    pub last_width: u32,
+    pub last_height: u32,
+}
+
 /// Image data defined in display.
 #[derive(Clone, Copy)]
 pub struct DisplaySurface {
@@ -171,6 +177,7 @@ pub struct DisplayConsole {
     pub con_type: ConsoleType,
     pub width: i32,
     pub height: i32,
+    pub ui_info: UiInfo,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
     pub dev_opts: Arc<dyn HardWareOperations>,
@@ -192,6 +199,7 @@ impl DisplayConsole {
             con_type,
             width: 0,
             height: 0,
+            ui_info: UiInfo::default(),
             console_list,
             surface: None,
             dev_opts,
@@ -497,25 +505,31 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
     }
 }
 
-pub fn graphic_hardware_ui_info(con_id: Option<usize>, width: u32, height: u32) {
-    let console = CONSOLES.lock().unwrap().get_console_by_id(con_id);
-
-    if let Some(con) = console {
-        let con_opts = con.lock().unwrap().dev_opts.clone();
-        let con_clone = con.clone();
-        let func = Box::new(move || {
-            (*con_opts).hw_ui_info(con_clone.clone(), width, height);
-        });
-
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            let mut con_locked = con.lock().unwrap();
-            if let Some(timer_id) = con_locked.timer_id {
-                ctx.timer_del(timer_id);
-            }
-
-            con_locked.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
-        }
+pub fn graphic_hardware_ui_info(
+    con: Arc<Mutex<DisplayConsole>>,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let mut locked_con = con.lock().unwrap();
+    if locked_con.ui_info.last_width == width && locked_con.ui_info.last_height == height {
+        return Ok(());
     }
+    locked_con.ui_info.last_width = width;
+    locked_con.ui_info.last_height = height;
+
+    let clone_con = con.clone();
+    let con_opts = locked_con.dev_opts.clone();
+    let func = Box::new(move || {
+        (*con_opts).hw_ui_info(clone_con.clone(), width, height);
+    });
+
+    if let Some(ctx) = EventLoop::get_ctx(None) {
+        if let Some(timer_id) = locked_con.timer_id {
+            ctx.timer_del(timer_id);
+        }
+        locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+    }
+    Ok(())
 }
 
 /// Get the weak reference of all active consoles from the console lists.

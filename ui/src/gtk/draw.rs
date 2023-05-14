@@ -108,11 +108,10 @@ fn da_configure_callback(
         Some(c) => c,
         None => return Ok(()),
     };
-    let con_id = con.lock().unwrap().con_id;
+    drop(borrowed_gs);
     let (width, height) = event_configure.size();
 
-    graphic_hardware_ui_info(Some(con_id), width, height);
-    Ok(())
+    graphic_hardware_ui_info(con, width, height)
 }
 
 fn da_key_callback(
