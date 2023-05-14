@@ -263,15 +263,15 @@ fn da_draw_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, cr: &cairo::Context) -> 
         borrowed_gs.scale_y = scale_x.min(scale_y);
     }
 
-    surface_width = (surface_width * borrowed_gs.scale_x).floor();
-    surface_height = (surface_height * borrowed_gs.scale_y).floor();
+    surface_width *= borrowed_gs.scale_x;
+    surface_height *= borrowed_gs.scale_y;
 
     let mut mx: f64 = 0.0;
     let mut my: f64 = 0.0;
-    if window_width > surface_width {
+    if window_width.gt(&surface_width) {
         mx = (window_width - surface_width) / (2.0);
     }
-    if window_height > surface_height {
+    if window_height.gt(&surface_height) {
         my = (window_height - surface_height) / (2.0);
     }
 
