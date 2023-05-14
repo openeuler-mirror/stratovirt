@@ -104,6 +104,10 @@ fn da_configure_callback(
     event_configure: &gdk::EventConfigure,
 ) -> Result<()> {
     let borrowed_gs = gs.borrow();
+    if !borrowed_gs.scale_mode.borrow().is_free_scale() {
+        return Ok(());
+    }
+
     let con = match borrowed_gs.con.upgrade() {
         Some(c) => c,
         None => return Ok(()),
