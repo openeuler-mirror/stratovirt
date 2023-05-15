@@ -32,9 +32,9 @@ use gtk::{
     glib::{self, set_program_name, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
-        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt,
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt, HeaderBarExt,
     },
-    Application, ApplicationWindow, DrawingArea, RadioMenuItem,
+    Application, ApplicationWindow, DrawingArea, RadioMenuItem, HeaderBar,
 };
 use log::{debug, error};
 
@@ -493,12 +493,11 @@ fn create_gtk_thread(gtk_cfg: &GtkConfig) {
 fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     let window = ApplicationWindow::builder()
         .application(app)
-        .title(&gtk_cfg.vm_name)
         .default_width(DEFAULT_WINDOW_WIDTH)
         .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
 
-    set_program_attribute(gtk_cfg)
+    set_program_attribute(gtk_cfg, &window)
         .with_context(|| "Failed to set properties for program")
         .unwrap();
 
@@ -517,7 +516,13 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     gtk_menu.show_window(scale_mode);
 }
 
-fn set_program_attribute(gtk_cfg: &GtkConfig) -> Result<()> {
+fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Result<()> {
+    // Set title bar.
+    let header = HeaderBar::new();
+    header.set_show_close_button(true);
+    header.set_title(Some(&gtk_cfg.vm_name));
+    window.set_titlebar(Some(&header));
+
     // Set the program name.
     if let Some(name) = &gtk_cfg.app_name {
         set_program_name(Some(name));
