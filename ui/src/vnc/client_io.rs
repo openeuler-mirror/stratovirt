@@ -1281,7 +1281,6 @@ pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
         buf.append(&mut (0_u8).to_be_bytes().to_vec());
         buf.append(&mut (1_u16).to_be_bytes().to_vec());
         framebuffer_update(0, 0, client_width, client_height, ENCODING_WMVI, buf);
-        buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
         pixel_format_message(client, buf);
     } else if !locked_dpm.pf.is_default_pixel_format() {
         locked_dpm.convert = true;
