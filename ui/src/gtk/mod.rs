@@ -29,12 +29,13 @@ use gtk::{
     cairo::{Format, ImageSurface},
     gdk::{self, Geometry, Gravity, WindowHints},
     gdk_pixbuf::Colorspace,
-    glib::{self, set_program_name, Priority, SyncSender},
+    glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
-        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt, HeaderBarExt,
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, MenuShellExt,
+        RadioMenuItemExt, WidgetExt,
     },
-    Application, ApplicationWindow, DrawingArea, RadioMenuItem, HeaderBar,
+    Application, ApplicationWindow, DrawingArea, HeaderBar, RadioMenuItem,
 };
 use log::{debug, error};
 
@@ -463,13 +464,17 @@ struct GtkConfig {
 
 /// Gtk display init.
 pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result<()> {
+    let mut gtk_args: Vec<String> = vec![];
+    if let Some(app_name) = &ds_cfg.app_name {
+        gtk_args.push(app_name.clone());
+    }
     let gtk_cfg = GtkConfig {
         full_screen: ds_cfg.full_screen,
         app_name: ds_cfg.app_name.clone(),
         vm_name: ui_context.vm_name,
         powerdown_button: ui_context.power_button,
         shutdown_button: ui_context.shutdown_req,
-        gtk_args: vec![],
+        gtk_args,
     };
     let _handle = thread::Builder::new()
         .name("gtk display".to_string())
@@ -523,9 +528,9 @@ fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Res
     header.set_title(Some(&gtk_cfg.vm_name));
     window.set_titlebar(Some(&header));
 
-    // Set the program name.
-    if let Some(name) = &gtk_cfg.app_name {
-        set_program_name(Some(name));
+    // Set default icon.
+    if let Some(app_name) = &gtk_cfg.app_name {
+        window.set_icon_name(Some(app_name));
     }
 
     // Set text attributes for the program.
