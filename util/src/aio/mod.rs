@@ -17,6 +17,7 @@ mod uring;
 use std::clone::Clone;
 use std::io::Write;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
 
@@ -158,8 +159,10 @@ pub struct Aio<T: Clone + 'static> {
     ctx: Option<Box<dyn AioContext<T>>>,
     engine: AioEngine,
     pub fd: EventFd,
-    pub aio_in_queue: CbList<T>,
-    pub aio_in_flight: CbList<T>,
+    aio_in_queue: CbList<T>,
+    aio_in_flight: CbList<T>,
+    /// IO in aio_in_queue and aio_in_flight.
+    pub incomplete_cnt: Arc<AtomicU64>,
     max_events: usize,
     complete_func: Arc<AioCompleteFunc<T>>,
 }
@@ -195,6 +198,7 @@ impl<T: Clone + 'static> Aio<T> {
             fd,
             aio_in_queue: List::new(),
             aio_in_flight: List::new(),
+            incomplete_cnt: Arc::new(AtomicU64::new(0)),
             max_events,
             complete_func: func,
         })
@@ -292,10 +296,12 @@ impl<T: Clone + 'static> Aio<T> {
                     -1
                 };
 
-                (self.complete_func)(&(*node).value, res)?;
+                let res = (self.complete_func)(&(*node).value, res);
                 self.aio_in_flight.unlink(&(*node));
+                self.incomplete_cnt.fetch_sub(1, Ordering::SeqCst);
                 // Construct Box to free mem automatically.
                 drop(Box::from_raw(node));
+                res?;
             }
         }
         self.process_list()?;
@@ -342,6 +348,7 @@ impl<T: Clone + 'static> Aio<T> {
             if is_err {
                 // Fail one request, retry the rest.
                 if let Some(node) = self.aio_in_queue.pop_tail() {
+                    self.incomplete_cnt.fetch_sub(1, Ordering::SeqCst);
                     (self.complete_func)(&(node).value, -1)?;
                 }
             } else if nr == 0 {
@@ -358,6 +365,7 @@ impl<T: Clone + 'static> Aio<T> {
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
 
         self.aio_in_queue.add_head(node);
+        self.incomplete_cnt.fetch_add(1, Ordering::SeqCst);
         if self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
             self.process_list()?;
         }
