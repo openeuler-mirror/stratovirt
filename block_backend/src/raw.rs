@@ -68,6 +68,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         self.driver.flush_request()
     }
 
+    fn drain_request(&self) {
+        self.driver.drain_request();
+    }
+
     fn register_io_event(
         &mut self,
         broken: Arc<AtomicBool>,
