@@ -32,10 +32,7 @@ use log::error;
 
 use crate::{
     console::{get_run_stage, VmRunningStage},
-    gtk::{
-        renew_image, update_cursor_display, update_window_size, GtkDisplay, ZoomOperate,
-        GTK_SCALE_MIN, GTK_ZOOM_STEP,
-    },
+    gtk::{renew_image, update_window_size, GtkDisplay, ZoomOperate, GTK_SCALE_MIN, GTK_ZOOM_STEP},
 };
 
 use super::ScaleMode;
@@ -320,7 +317,7 @@ fn full_screen_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         update_window_size(&gs)?;
     };
 
-    update_cursor_display(&gs)
+    Ok(())
 }
 
 /// Zoom in/out the display.

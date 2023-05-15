@@ -617,8 +617,7 @@ fn gs_show_menu_callback(
 
     borrowed_gs.draw_area.grab_focus();
     drop(borrowed_gs);
-    update_window_size(gs)?;
-    update_cursor_display(gs)
+    update_window_size(gs)
 }
 
 /// Refresh image.
@@ -950,21 +949,5 @@ pub(crate) fn renew_image(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     borrowed_gs
         .draw_area
         .queue_draw_area(0, 0, width as i32, height as i32);
-    Ok(())
-}
-
-/// Hide the external Cursor.
-pub(crate) fn update_cursor_display(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
-    let borrowed_gs = gs.borrow();
-    if !borrowed_gs.draw_area.is_realized() {
-        return Ok(());
-    }
-
-    if let Some(win) = borrowed_gs.draw_area.window() {
-        let dpy = borrowed_gs.window.display();
-        let c = gdk::Cursor::for_display(&dpy, gdk::CursorType::BlankCursor);
-        win.set_cursor(Some(&c));
-    }
-
     Ok(())
 }
