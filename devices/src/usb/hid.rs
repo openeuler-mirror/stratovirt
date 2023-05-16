@@ -72,7 +72,7 @@ const HID_CODE: [u8; 0x100] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 /// Tablet report descriptor
-const TABLET_REPORT_DESCRIPTOR: [u8; 74] = [
+const TABLET_REPORT_DESCRIPTOR: [u8; 89] = [
     0x05, 0x01, // Usage Page (Generic Desktop)
     0x09, 0x02, // Usage (Mouse)
     0xa1, 0x01, // Collection (Application)
@@ -105,6 +105,13 @@ const TABLET_REPORT_DESCRIPTOR: [u8; 74] = [
     0x25, 0x7f, // Logical Maximum (0x7f)
     0x35, 0x00, // Physical Minimum (same as logical)
     0x45, 0x00, // Physical Maximum (same as logical)
+    0x75, 0x08, // Report Size (8)
+    0x95, 0x01, // Report Count (1)
+    0x81, 0x06, // Input (Data, Variable, Relative)
+    0x05, 0x0c, // Usage Page (Consumer Device)
+    0x0a, 0x38, 0x02, // Usage (AC Pan)
+    0x15, 0x81, // Logical Minimum (-0x7f)
+    0x25, 0x7f, // Logical Maximum (0x7f)
     0x75, 0x08, // Report Size (8)
     0x95, 0x01, // Report Count (1)
     0x81, 0x06, // Input (Data, Variable, Relative)
@@ -190,8 +197,10 @@ pub struct HidPointerEvent {
     pub pos_x: u32,
     /// Direction: up to down.
     pub pos_y: u32,
-    /// Wheel up or down.
-    pub pos_z: i32,
+    /// Vertical scroll wheel.
+    pub v_wheel: i32,
+    /// Horizontal scroll wheel.
+    pub h_wheel: i32,
     pub button_state: u32,
 }
 
@@ -341,7 +350,8 @@ impl Hid {
             (evt.pos_x >> 8) as u8,
             evt.pos_y as u8,
             (evt.pos_y >> 8) as u8,
-            evt.pos_z as u8,
+            evt.v_wheel as u8,
+            evt.h_wheel as u8,
         ]
     }
 
