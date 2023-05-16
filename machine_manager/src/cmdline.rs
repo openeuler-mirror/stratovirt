@@ -464,6 +464,15 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("watch on the external windows emu pid")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("smbios")
+            .multiple(true)
+            .long("smbios")
+            .value_name("<parameters>")
+            .help("\n\t\tadd type0 table: -smbios type=0[,vendor=str][,version=str][,date=str]; \
+                   \n\t\tadd type1 table: -smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str];")
+            .takes_values(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -530,6 +539,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
     add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
+    add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;

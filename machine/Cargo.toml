@@ -19,6 +19,7 @@ anyhow = "1.0"
 strum = "0.24.1"
 strum_macros = "0.24.3"
 acpi = { path = "../acpi" }
+smbios = { path = "../smbios" }
 address_space = { path = "../address_space" }
 boot_loader = { path = "../boot_loader" }
 cpu = { path = "../cpu" }
