@@ -224,6 +224,58 @@ trait StdMachineOps: AcpiBuilder {
         Ok(())
     }
 
+    fn register_pause_event(
+        &self,
+        pause_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let pause_req_fd = pause_req.as_raw_fd();
+        let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = pause_req.read();
+            if !clone_vm.lock().unwrap().pause() {
+                error!("VM pause failed");
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            pause_req_fd,
+            None,
+            EventSet::IN,
+            vec![pause_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
+    fn register_resume_event(
+        &self,
+        resume_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let resume_req_fd = resume_req.as_raw_fd();
+        let resume_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = resume_req.read();
+            if !clone_vm.lock().unwrap().resume() {
+                error!("VM resume failed!");
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            resume_req_fd,
+            None,
+            EventSet::IN,
+            vec![resume_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
     fn register_shutdown_event(
         &self,
         shutdown_req: Arc<EventFd>,
@@ -233,7 +285,7 @@ trait StdMachineOps: AcpiBuilder {
 
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = shutdown_req.read().unwrap();
+            let _ret = shutdown_req.read();
             if clone_vm.lock().unwrap().destroy() {
                 Some(gen_delete_notifiers(&[shutdown_req_fd]))
             } else {

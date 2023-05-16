@@ -159,6 +159,10 @@ pub struct StdMachine {
     shutdown_req: Arc<EventFd>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
+    /// Pause request, handle VM `Pause` event.
+    pause_req: Arc<EventFd>,
+    /// Resume request, handle VM `Resume` event.
+    resume_req: Arc<EventFd>,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
     /// List of guest NUMA nodes information.
@@ -225,6 +229,14 @@ impl StdMachine {
             reset_req: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
+            ),
+            pause_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("pause_req".to_string()))?,
+            ),
+            resume_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("resume_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),
             numa_nodes: None,
@@ -549,6 +561,13 @@ impl MachineOps for StdMachine {
         locked_vm
             .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
+        locked_vm
+            .register_pause_event(locked_vm.pause_req.clone(), vm.clone())
+            .with_context(|| "Fail to register pause event")?;
+        locked_vm
+            .register_resume_event(locked_vm.resume_req.clone(), vm.clone())
+            .with_context(|| "Fail to register resume event")?;
+
         locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -680,6 +699,8 @@ impl MachineOps for StdMachine {
                     vm_name: vm_config.guest_name.clone(),
                     power_button: Some(self.power_button.clone()),
                     shutdown_req: Some(self.shutdown_req.clone()),
+                    pause_req: Some(self.pause_req.clone()),
+                    resume_req: Some(self.resume_req.clone()),
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;

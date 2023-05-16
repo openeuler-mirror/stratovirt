@@ -207,6 +207,8 @@ pub(crate) struct GtkDisplay {
     pagenum2ds: HashMap<u32, Rc<RefCell<GtkDisplayScreen>>>,
     powerdown_button: Option<Arc<EventFd>>,
     shutdown_button: Option<Arc<EventFd>>,
+    pause_button: Option<Arc<EventFd>>,
+    resume_button: Option<Arc<EventFd>>,
     keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
 }
 
@@ -230,6 +232,8 @@ impl GtkDisplay {
             pagenum2ds: HashMap::new(),
             powerdown_button: gtk_cfg.powerdown_button.clone(),
             shutdown_button: gtk_cfg.shutdown_button.clone(),
+            pause_button: gtk_cfg.pause_button.clone(),
+            resume_button: gtk_cfg.resume_button.clone(),
             keysym2keycode,
         }
     }
@@ -319,6 +323,24 @@ impl GtkDisplay {
             button
                 .write(1)
                 .unwrap_or_else(|e| error!("Vm shut down failed: {:?}", e));
+        }
+    }
+
+    /// Pause Virtual Machine.
+    pub(crate) fn vm_pause(&self) {
+        if let Some(button) = &self.pause_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm pause failed: {:?}", e));
+        }
+    }
+
+    /// Resume Virtual Machine.
+    pub(crate) fn vm_resume(&self) {
+        if let Some(button) = &self.resume_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm resume failed: {:?}", e));
         }
     }
 }
@@ -459,6 +481,10 @@ struct GtkConfig {
     powerdown_button: Option<Arc<EventFd>>,
     /// Forced Shutdown.
     shutdown_button: Option<Arc<EventFd>>,
+    /// Pause Virtual Machine.
+    pause_button: Option<Arc<EventFd>>,
+    /// Resume Virtual Machine.
+    resume_button: Option<Arc<EventFd>>,
     gtk_args: Vec<String>,
 }
 
@@ -474,6 +500,8 @@ pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result
         vm_name: ui_context.vm_name,
         powerdown_button: ui_context.power_button,
         shutdown_button: ui_context.shutdown_req,
+        pause_button: ui_context.pause_req,
+        resume_button: ui_context.resume_req,
         gtk_args,
     };
     let _handle = thread::Builder::new()
