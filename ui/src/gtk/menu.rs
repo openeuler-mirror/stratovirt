@@ -13,6 +13,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{bail, Result};
+use gettextrs::gettext;
 use gtk::{
     gdk::{
         self,
@@ -71,16 +72,16 @@ impl GtkMenu {
             accel_group: AccelGroup::default(),
             menu_bar: MenuBar::new(),
             machine_menu: Menu::new(),
-            machine_item: MenuItem::with_label("Machine"),
-            shutdown_item: MenuItem::with_label("Shut Down"),
+            machine_item: MenuItem::with_mnemonic(&gettext("_Machine")),
+            shutdown_item: MenuItem::with_mnemonic(&gettext("Power _Down")),
             view_menu: Menu::new(),
-            view_item: MenuItem::with_label("View"),
-            full_screen_item: MenuItem::with_label("Full Screen"),
-            zoom_in_item: MenuItem::with_label("Zoom In"),
-            zoom_out_item: MenuItem::with_label("Zoom Out"),
-            zoom_fit: CheckMenuItem::with_label("Zoom Fit"),
-            best_fit_item: MenuItem::with_label("Best Fit"),
-            show_menu_bar: CheckMenuItem::with_label("Show MenuBar"),
+            view_item: MenuItem::with_mnemonic(&gettext("_View")),
+            full_screen_item: MenuItem::with_mnemonic(&gettext("_Fullscreen")),
+            zoom_in_item: MenuItem::with_mnemonic(&gettext("Zoom _In")),
+            zoom_out_item: MenuItem::with_mnemonic(&gettext("Zoom _Out")),
+            zoom_fit: CheckMenuItem::with_mnemonic(&gettext("Zoom To _Fit")),
+            best_fit_item: MenuItem::with_mnemonic(&gettext("Best _Fit")),
+            show_menu_bar: CheckMenuItem::with_mnemonic(&gettext("Show Menubar")),
         }
     }
 
@@ -383,9 +384,11 @@ fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
             DialogFlags::DESTROY_WITH_PARENT,
             MessageType::Question,
             ButtonsType::YesNo,
-            "Forced shutdown may cause installation failure, blue screen, unusable and other abnormalities.",
+            &gettext("Forced shutdown may cause installation failure, blue screen, unusable and other abnormalities."),
         );
-        dialog.set_title("Please confirm whether to exit the virtual machine");
+        dialog.set_title(&gettext(
+            "Please confirm whether to exit the virtual machine",
+        ));
         let answer = dialog.run();
         // SAFETY: Dialog is created in the current function and can be guaranteed not to be empty.
         unsafe { dialog.destroy() };
