@@ -380,10 +380,13 @@ fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         dialog.set_title(&gettext(
             "Please confirm whether to exit the virtual machine",
         ));
+        borrowed_gd.vm_pause();
         let answer = dialog.run();
         // SAFETY: Dialog is created in the current function and can be guaranteed not to be empty.
         unsafe { dialog.destroy() };
+
         if answer != gtk::ResponseType::Yes {
+            borrowed_gd.vm_resume();
             return Ok(());
         }
     }
