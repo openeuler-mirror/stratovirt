@@ -63,6 +63,7 @@ impl From<u8> for GpuEvent {
 }
 
 pub struct DemoGpu {
+    dev_id: String,
     sys_mem: Arc<AddressSpace>,
     con: Option<Weak<Mutex<DisplayConsole>>>,
     width: u32,
@@ -73,8 +74,9 @@ pub struct DemoGpu {
 unsafe impl Send for DemoGpu {}
 
 impl DemoGpu {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+    pub fn new(sys_mem: Arc<AddressSpace>, dev_id: String) -> Self {
         Self {
+            dev_id,
             sys_mem,
             con: None,
             width: 0,
@@ -212,7 +214,7 @@ impl DeviceTypeOperation for DemoGpu {
 
     fn realize(&mut self) -> Result<()> {
         let con_opts = Arc::new(HwOpts {});
-        self.con = console_init("demo-gpu".to_string(), ConsoleType::Graphic, con_opts);
+        self.con = console_init(self.dev_id.clone(), ConsoleType::Graphic, con_opts);
 
         // Create Image.
         self.width = 640;
