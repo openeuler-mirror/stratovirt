@@ -57,6 +57,11 @@ const KEYCODE_KP_DECIMAL: u16 = 0x53;
 pub const NUM_LOCK_LED: u8 = 0x1;
 pub const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
+/// Input button state.
+pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
+pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
+pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x20;
+pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x40;
 
 static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
 
