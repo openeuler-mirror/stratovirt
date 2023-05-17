@@ -948,11 +948,13 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
         Some(image) => (image.width() as f64, image.height() as f64),
         None => (0.0, 0.0),
     };
-    let (scale_width, scale_height) = if scale_mode.is_free_scale() {
+    let (mut scale_width, mut scale_height) = if scale_mode.is_free_scale() {
         (width * GTK_SCALE_MIN, height * GTK_SCALE_MIN)
     } else {
         (width * borrowed_gs.scale_x, height * borrowed_gs.scale_y)
     };
+    scale_width = scale_width.max(DEFAULT_SURFACE_WIDTH as f64);
+    scale_height = scale_height.max(DEFAULT_SURFACE_HEIGHT as f64);
 
     let geo: Geometry = Geometry {
         min_width: scale_width as i32,
