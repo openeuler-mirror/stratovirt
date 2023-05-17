@@ -933,7 +933,11 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
 
 /// Activate the current screen.
 fn do_set_major_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
-    gs.borrow().show_menu.activate();
+    let borrowed_gs = gs.borrow();
+    if borrowed_gs.show_menu.is_active() {
+        return Ok(());
+    }
+    borrowed_gs.show_menu.activate();
     Ok(())
 }
 
