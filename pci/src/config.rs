@@ -825,7 +825,7 @@ impl PciConfig {
     }
 
     fn is_bar_region_empty(
-        &mut self,
+        &self,
         id: usize,
         #[cfg(target_arch = "x86_64")] io_region: Option<&Region>,
         mem_region: Option<&Region>,
