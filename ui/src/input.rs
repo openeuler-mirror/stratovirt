@@ -142,7 +142,7 @@ impl KeyBoardState {
             KEYCODE_SHIFT | KEYCODE_SHIFT_R => {
                 self.keyboard_modstate_update(
                     KEYCODE_SHIFT,
-                    KEYCODE_SHIFT,
+                    KEYCODE_SHIFT_R,
                     KeyboardModifier::KeyModShift,
                 )?;
             }
