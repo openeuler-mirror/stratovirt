@@ -27,7 +27,7 @@ use anyhow::{bail, Context, Result};
 use gettextrs::LocaleCategory;
 use gtk::{
     cairo::{Format, ImageSurface},
-    gdk::{self, Geometry, Gravity, Screen, WindowHints},
+    gdk::{self, Geometry, Gravity, WindowHints},
     gdk_pixbuf::Colorspace,
     glib::{self, set_program_name, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
@@ -397,14 +397,6 @@ impl GtkDisplayScreen {
             w_width = win.width() as f64;
             w_height = win.height() as f64;
         };
-
-        if self.scale_mode.borrow().is_full_screen() {
-            // Get the size of desktop.
-            if let Some(screen) = Screen::default() {
-                w_width = screen.width() as f64;
-                w_height = screen.height() as f64;
-            }
-        }
 
         if w_width.eq(&0.0) || w_height.eq(&0.0) {
             bail!("The window size can not be zero!");

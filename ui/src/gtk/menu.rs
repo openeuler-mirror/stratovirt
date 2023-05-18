@@ -16,7 +16,6 @@ use anyhow::{bail, Result};
 use gettextrs::gettext;
 use gtk::{
     gdk::{
-        self,
         ffi::{GDK_KEY_equal, GDK_KEY_minus, GDK_KEY_B, GDK_KEY_F, GDK_KEY_M, GDK_KEY_S},
         ModifierType,
     },
@@ -230,7 +229,7 @@ impl GtkMenu {
 
         // Set the visible of note_book.
         self.note_book.set_show_tabs(false);
-        self.note_book.set_show_border(true);
+        self.note_book.set_show_border(false);
 
         self.window.add_accel_group(&self.accel_group);
         self.container.pack_start(&self.menu_bar, false, false, 0);
@@ -307,11 +306,6 @@ fn full_screen_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         gtk_menu.note_book.set_show_tabs(false);
         gtk_menu.menu_bar.hide();
         gs.borrow().draw_area.set_size_request(-1, -1);
-        if let Some(screen) = gdk::Screen::default() {
-            let width = screen.width();
-            let height = screen.height();
-            gs.borrow().window.set_default_size(width, height);
-        }
         gtk_menu.window.fullscreen();
         borrowed_scale.full_screen = true;
     } else {
