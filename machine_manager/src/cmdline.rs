@@ -22,9 +22,6 @@ use crate::{
     temp_cleaner::TempCleaner,
 };
 
-// Read the programe version in `Cargo.toml`.
-const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
-
 /// This macro is to run struct $z 's function $s whose arg is $x 's inner member.
 /// There is a multi-macro-cast in cases of vec and bool.
 ///
@@ -74,7 +71,7 @@ macro_rules! add_args_to_config_multi {
 /// This function is to define all commandline arguments.
 pub fn create_args_parser<'a>() -> ArgParser<'a> {
     ArgParser::new("StratoVirt")
-        .version(VERSION.unwrap_or("unknown"))
+        .version(util::VERSION)
         .author("The StratoVirt Project Developers")
         .about("A light kvm-based hypervisor.")
         .arg(

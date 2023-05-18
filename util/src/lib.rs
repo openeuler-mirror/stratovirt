@@ -46,6 +46,13 @@ use once_cell::sync::Lazy;
 use std::{any::Any, sync::Mutex};
 use vmm_sys_util::terminal::Terminal;
 
+/// Read the program version in `Cargo.toml` and concat with git commit id.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " commit-id ",
+    include_str!(concat!(env!("OUT_DIR"), "/GIT_COMMIT"))
+);
+
 pub static TERMINAL_MODE: Lazy<Mutex<Option<termios>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn set_termi_raw_mode() -> std::io::Result<()> {
