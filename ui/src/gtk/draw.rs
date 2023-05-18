@@ -27,7 +27,8 @@ use crate::{
     console::graphic_hardware_ui_info,
     gtk::GtkDisplayScreen,
     input::{
-        self, point_event, press_mouse, update_key_state, ABS_MAX, INPUT_POINT_LEFT,
+        self, point_event, press_mouse, update_key_state, ABS_MAX, INPUT_BUTTON_WHEEL_DOWN,
+        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_LEFT,
         INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
     },
 };
@@ -221,9 +222,11 @@ fn da_scroll_callback(
         Some(image) => (image.width() as f64, image.height() as f64),
         None => return Ok(()),
     };
-    let button_mask: u8 = match scroll_event.direction() {
-        ScrollDirection::Up => 0x8,
-        ScrollDirection::Down => 0x10,
+    let button_mask = match scroll_event.direction() {
+        ScrollDirection::Up => INPUT_BUTTON_WHEEL_UP,
+        ScrollDirection::Down => INPUT_BUTTON_WHEEL_DOWN,
+        ScrollDirection::Left => INPUT_BUTTON_WHEEL_LEFT,
+        ScrollDirection::Right => INPUT_BUTTON_WHEEL_RIGHT,
         _ => 0x0,
     };
 
