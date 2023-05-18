@@ -1891,6 +1891,7 @@ fn check_windows_emu_pid(
     powerdown_req: Arc<EventFd>,
     shutdown_req: Arc<EventFd>,
 ) {
+    let mut check_delay = Duration::from_millis(4000);
     if !Path::new(&pid_path).exists() {
         log::info!("Detect windows emu exited, let VM exits now");
         if get_run_stage() == VmRunningStage::Os {
@@ -1900,16 +1901,18 @@ fn check_windows_emu_pid(
         } else if let Err(e) = shutdown_req.write(1) {
             log::error!("Failed to send shutdown request after emu exits: {:?}", e);
         }
-    } else {
-        let check_emu_alive = Box::new(move || {
-            check_windows_emu_pid(
-                pid_path.clone(),
-                powerdown_req.clone(),
-                shutdown_req.clone(),
-            );
-        });
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.timer_add(check_emu_alive, Duration::from_millis(4000));
-        }
+        // Continue checking to prevent exit failed.
+        check_delay = Duration::from_millis(1000);
+    }
+
+    let check_emu_alive = Box::new(move || {
+        check_windows_emu_pid(
+            pid_path.clone(),
+            powerdown_req.clone(),
+            shutdown_req.clone(),
+        );
+    });
+    if let Some(ctx) = EventLoop::get_ctx(None) {
+        ctx.timer_add(check_emu_alive, check_delay);
     }
 }
