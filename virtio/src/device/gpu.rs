@@ -518,20 +518,17 @@ pub fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) 
 }
 
 fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
-    if rect
+    let x_in = rect
         .x_coord
         .checked_add(rect.width)
         .filter(|&sum| sum <= res.width)
-        .is_some()
-        && rect
-            .y_coord
-            .checked_add(rect.height)
-            .filter(|&sum| sum <= res.height)
-            .is_some()
-    {
-        return true;
-    }
-    false
+        .is_some();
+    let y_in = rect
+        .y_coord
+        .checked_add(rect.height)
+        .filter(|&sum| sum <= res.height)
+        .is_some();
+    x_in && y_in
 }
 
 impl GpuIoHandler {
@@ -995,80 +992,72 @@ impl GpuIoHandler {
         let mut info_res_flush = VirtioGpuResourceFlush::default();
         self.get_request(req, &mut info_res_flush)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_res_flush.resource_id)
-        {
-            let res = &self.resources_list[res_index];
-            if !is_rect_in_resource(&info_res_flush.rect, res) {
-                error!(
-                    "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
-                    res.resource_id, res.width, res.height,
-                    info_res_flush.rect.width, info_res_flush.rect.height,
-                    info_res_flush.rect.x_coord, info_res_flush.rect.y_coord,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
-            }
-
-            unsafe {
-                let mut flush_reg = pixman_region16_t::default();
-                let flush_reg_ptr: *mut pixman_region16_t =
-                    &mut flush_reg as *mut pixman_region16_t;
-                pixman_region_init_rect(
-                    flush_reg_ptr,
-                    info_res_flush.rect.x_coord as i32,
-                    info_res_flush.rect.y_coord as i32,
-                    info_res_flush.rect.width,
-                    info_res_flush.rect.height,
-                );
-                for i in 0..self.num_scanouts {
-                    // Flushes any scanouts the resource is being used on.
-                    if res.scanouts_bitmask & (1 << i) != 0 {
-                        let scanout = &self.scanouts[i as usize];
-                        let mut rect_reg = pixman_region16_t::default();
-                        let mut final_reg = pixman_region16_t::default();
-                        let rect_reg_ptr: *mut pixman_region16_t =
-                            &mut rect_reg as *mut pixman_region16_t;
-                        let final_reg_ptr: *mut pixman_region16_t =
-                            &mut final_reg as *mut pixman_region16_t;
-
-                        pixman_region_init(final_reg_ptr);
-                        pixman_region_init_rect(
-                            rect_reg_ptr,
-                            scanout.x as i32,
-                            scanout.y as i32,
-                            scanout.width,
-                            scanout.height,
-                        );
-                        pixman_region_intersect(final_reg_ptr, flush_reg_ptr, rect_reg_ptr);
-                        pixman_region_translate(
-                            final_reg_ptr,
-                            -(scanout.x as i32),
-                            -(scanout.y as i32),
-                        );
-                        let extents = pixman_region_extents(final_reg_ptr);
-                        display_graphic_update(
-                            &scanout.con,
-                            (*extents).x1 as i32,
-                            (*extents).y1 as i32,
-                            ((*extents).x2 - (*extents).x1) as i32,
-                            ((*extents).y2 - (*extents).y1) as i32,
-                        )?;
-                        pixman_region_fini(rect_reg_ptr);
-                        pixman_region_fini(final_reg_ptr);
-                    }
-                }
-                pixman_region_fini(flush_reg_ptr);
-            }
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
+        let res_index = self.get_resource_idx(info_res_flush.resource_id);
+        if res_index.is_none() {
             error!(
                 "GuestError: The resource_id {} in resource flush request is not existed.",
                 info_res_flush.resource_id
             );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
+
+        let res = &self.resources_list[res_index.unwrap()];
+        if !is_rect_in_resource(&info_res_flush.rect, res) {
+            error!(
+                "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
+                res.resource_id, res.width, res.height,
+                info_res_flush.rect.width, info_res_flush.rect.height,
+                info_res_flush.rect.x_coord, info_res_flush.rect.y_coord,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+        }
+
+        unsafe {
+            let mut flush_reg = pixman_region16_t::default();
+            let flush_reg_ptr = &mut flush_reg as *mut pixman_region16_t;
+            pixman_region_init_rect(
+                flush_reg_ptr,
+                info_res_flush.rect.x_coord as i32,
+                info_res_flush.rect.y_coord as i32,
+                info_res_flush.rect.width,
+                info_res_flush.rect.height,
+            );
+            for i in 0..self.num_scanouts {
+                // Flushes any scanouts the resource is being used on.
+                if res.scanouts_bitmask & (1 << i) == 0 {
+                    continue;
+                }
+                let scanout = &self.scanouts[i as usize];
+
+                let mut rect_reg = pixman_region16_t::default();
+                let mut final_reg = pixman_region16_t::default();
+                let rect_reg_ptr = &mut rect_reg as *mut pixman_region16_t;
+                let final_reg_ptr = &mut final_reg as *mut pixman_region16_t;
+                pixman_region_init(final_reg_ptr);
+                pixman_region_init_rect(
+                    rect_reg_ptr,
+                    scanout.x as i32,
+                    scanout.y as i32,
+                    scanout.width,
+                    scanout.height,
+                );
+
+                pixman_region_intersect(final_reg_ptr, flush_reg_ptr, rect_reg_ptr);
+                pixman_region_translate(final_reg_ptr, -(scanout.x as i32), -(scanout.y as i32));
+                let extents = pixman_region_extents(final_reg_ptr);
+                display_graphic_update(
+                    &scanout.con,
+                    (*extents).x1 as i32,
+                    (*extents).y1 as i32,
+                    ((*extents).x2 - (*extents).x1) as i32,
+                    ((*extents).y2 - (*extents).y1) as i32,
+                )?;
+                pixman_region_fini(rect_reg_ptr);
+                pixman_region_fini(final_reg_ptr);
+            }
+            pixman_region_fini(flush_reg_ptr);
+        }
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_transfer_to_host_2d_params_check(
