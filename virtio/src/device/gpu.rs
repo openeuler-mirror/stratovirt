@@ -33,6 +33,7 @@ use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::slice::from_raw_parts_mut;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 use ui::console::{
@@ -41,7 +42,7 @@ use ui::console::{
     DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::pixman::unref_pixman_image;
-use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
+use util::aio::{iov_from_buf_direct, iov_to_buf_direct};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -533,15 +534,11 @@ fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
 
 impl GpuIoHandler {
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
-        if header.out_len < size_of::<T>() as u32 {
-            bail!("Invalid header for gpu request: len {}.", header.out_len)
-        }
-
-        iov_to_buf_direct(&header.out_iovec, req.as_mut_bytes()).and_then(|size| {
+        iov_to_buf_direct(&header.out_iovec, 0, req.as_mut_bytes()).and_then(|size| {
             if size == size_of::<T>() {
                 Ok(())
             } else {
-                bail!("Invalid header for gpu request: len {}.", size)
+                Err(anyhow!("Invalid header for gpu request: len {}.", size))
             }
         })
     }
@@ -1208,95 +1205,68 @@ impl GpuIoHandler {
         let mut info_attach_backing = VirtioGpuResourceAttachBacking::default();
         self.get_request(req, &mut info_attach_backing)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_attach_backing.resource_id)
-        {
-            let res = &mut self.resources_list[res_index];
-            if !res.iov.is_empty() {
-                error!(
-                    "GuestError: The resource_id {} in resource attach backing request already has iov.",
-                    info_attach_backing.resource_id
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
-
-            if info_attach_backing.nr_entries > 16384 {
-                error!(
-                    "GuestError: The nr_entries in resource attach backing request is too large ( {} > 16384).",
-                    info_attach_backing.nr_entries
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
-
-            let esize =
-                size_of::<VirtioGpuMemEntry>() as u64 * info_attach_backing.nr_entries as u64;
-            if esize > req.out_len as u64 {
-                error!(
-                    "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
-                    info_attach_backing.nr_entries, req.out_len,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
-
-            let mut data_iovec = req.out_iovec.clone();
-            // Move to entries part first.
-            data_iovec = iov_discard_front_direct(
-                &mut data_iovec,
-                size_of::<VirtioGpuResourceAttachBacking>() as u64,
-            )
-            .unwrap()
-            .to_vec();
-
-            for i in 0..info_attach_backing.nr_entries {
-                if i != 0 {
-                    data_iovec = iov_discard_front_direct(
-                        &mut data_iovec,
-                        size_of::<VirtioGpuMemEntry>() as u64,
-                    )
-                    .unwrap()
-                    .to_vec();
-                }
-
-                let mut entry = VirtioGpuMemEntry::default();
-                if let Err(e) =
-                    iov_to_buf_direct(&data_iovec, entry.as_mut_bytes()).and_then(|size| {
-                        if size == size_of::<VirtioGpuMemEntry>() {
-                            Ok(())
-                        } else {
-                            bail!(
-                                "GuestError: Invalid size of gpu request data: len {}.",
-                                size
-                            );
-                        }
-                    })
-                {
-                    res.iov.clear();
-                    error!("{:?}", e);
-                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                }
-
-                if let Some(iov_base) = self.mem_space.get_host_address(GuestAddress(entry.addr)) {
-                    let iov_item = Iovec {
-                        iov_base,
-                        iov_len: entry.length as u64,
-                    };
-                    res.iov.push(iov_item);
-                } else {
-                    res.iov.clear();
-                    error!("GuestError: Map desc base {:?} failed.", entry.addr);
-                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                }
-            }
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
+        let res_idx = self.get_resource_idx(info_attach_backing.resource_id);
+        if res_idx.is_none() {
             error!(
                 "The resource_id {} in attach backing request request is not existed.",
                 info_attach_backing.resource_id
             );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
+
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        if !res.iov.is_empty() {
+            error!(
+                "GuestError: The resource_id {} in resource attach backing request already has iov.",
+                info_attach_backing.resource_id
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
+
+        if info_attach_backing.nr_entries > 16384 {
+            error!(
+                "GuestError: The nr_entries in resource attach backing request is too large ( {} > 16384).",
+                info_attach_backing.nr_entries
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
+
+        let entries = info_attach_backing.nr_entries;
+        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * entries as u64;
+        let head_size = size_of::<VirtioGpuResourceAttachBacking>() as u64;
+        if (req.out_len as u64) < (ents_size + head_size) {
+            error!(
+                "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
+                info_attach_backing.nr_entries, req.out_len,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
+
+        // Start reading and parsing.
+        let mut ents = Vec::<VirtioGpuMemEntry>::new();
+        ents.resize(entries as usize, VirtioGpuMemEntry::default());
+        let ents_buf =
+            unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
+        iov_to_buf_direct(&req.out_iovec, head_size, ents_buf).and_then(|v| {
+            if v as u64 == ents_size {
+                Ok(())
+            } else {
+                Err(anyhow!("Load no enough ents when attach backing"))
+            }
+        })?;
+
+        for entry in ents.iter() {
+            let iov_base = self
+                .mem_space
+                .get_host_address(GuestAddress(entry.addr))
+                .with_context(|| format!("Map entry base {:?} failed", entry.addr))?;
+            let iov_item = Iovec {
+                iov_base,
+                iov_len: entry.length as u64,
+            };
+            res.iov.push(iov_item);
+        }
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_detach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {

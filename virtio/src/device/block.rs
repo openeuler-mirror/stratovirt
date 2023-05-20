@@ -380,7 +380,7 @@ impl Request {
 
         // Get and check the discard segment.
         let mut segment = DiscardWriteZeroesSeg::default();
-        iov_to_buf_direct(&self.iovec, segment.as_mut_bytes()).and_then(|v| {
+        iov_to_buf_direct(&self.iovec, 0, segment.as_mut_bytes()).and_then(|v| {
             if v as u64 == size {
                 Ok(())
             } else {
