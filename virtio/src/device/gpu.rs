@@ -511,17 +511,6 @@ fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
     false
 }
 
-// Mask resource's scanout bit before disable a scanout.
-fn disable_scanout(scanout: &mut GpuScanout) {
-    if scanout.resource_id == 0 {
-        return;
-    }
-    // TODO: present 'Guest disabled display.' in surface.
-    display_replace_surface(&scanout.con, None)
-        .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
-    scanout.clear();
-}
-
 impl GpuIoHandler {
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
         if header.out_len < size_of::<T>() as u32 {
@@ -600,6 +589,55 @@ impl GpuIoHandler {
         }
 
         self.send_response(req, &resp)
+    }
+
+    // Mask resource's scanout bit before disable a scanout.
+    fn disable_scanout(&mut self, scanout_id: usize) {
+        let resource_id = self.scanouts[scanout_id].resource_id;
+        if resource_id == 0 {
+            return;
+        }
+
+        if let Some(res_idx) = self.get_resource_idx(resource_id) {
+            let res = &mut self.resources_list[res_idx];
+            res.scanouts_bitmask &= !(1 << scanout_id);
+        }
+
+        // TODO: present 'Guest disabled display.' in surface.
+        let scanout = &mut self.scanouts[scanout_id];
+        display_replace_surface(&scanout.con, None)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+        scanout.clear();
+    }
+
+    fn get_resource_idx(&self, resource_id: u32) -> Option<usize> {
+        self.resources_list
+            .iter()
+            .position(|x| x.resource_id == resource_id)
+    }
+
+    fn get_backed_resource_idx(&self, res_id: u32, caller: &str) -> (Option<usize>, u32) {
+        match self.get_resource_idx(res_id) {
+            None => {
+                error!(
+                    "GuestError: The resource_id {} in {} request does not existed",
+                    res_id, caller,
+                );
+                (None, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID)
+            }
+            Some(res_idx) => {
+                let res = &self.resources_list[res_idx];
+                if res.iov.is_empty() || res.pixman_image.is_null() {
+                    error!(
+                        "GuestError: The resource_id {} in {} request has no backing storage.",
+                        res_id, caller,
+                    );
+                    (None, VIRTIO_GPU_RESP_ERR_UNSPEC)
+                } else {
+                    (Some(res_idx), 0)
+                }
+            }
+        }
     }
 
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -827,18 +865,16 @@ impl GpuIoHandler {
     }
 
     fn resource_destroy(&mut self, res_index: usize) {
-        let res = &mut self.resources_list[res_index];
-
-        if res.scanouts_bitmask != 0 {
+        let scanouts_bitmask = self.resources_list[res_index].scanouts_bitmask;
+        if scanouts_bitmask != 0 {
             for i in 0..self.num_scanouts {
-                if (res.scanouts_bitmask & (1 << i)) != 0 {
-                    let scanout = &mut self.scanouts[i as usize];
-                    res.scanouts_bitmask &= !(1 << i);
-                    disable_scanout(scanout);
+                if (scanouts_bitmask & (1 << i)) != 0 {
+                    self.disable_scanout(i as usize);
                 }
             }
         }
 
+        let res = &mut self.resources_list[res_index];
         unref_pixman_image(res.pixman_image);
         self.used_hostmem -= res.host_mem;
         res.iov.clear();
@@ -877,118 +913,84 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, req);
         }
 
-        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
         if info_set_scanout.resource_id == 0 {
             // Set resource_id to 0 means disable the scanout.
-            if let Some(res_index) = self
-                .resources_list
-                .iter()
-                .position(|x| x.resource_id == scanout.resource_id)
-            {
-                let res = &mut self.resources_list[res_index];
-                res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
-            }
-            disable_scanout(scanout);
+            self.disable_scanout(info_set_scanout.scanout_id as usize);
             return self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req);
         }
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_set_scanout.resource_id)
-        {
-            let res = &self.resources_list[res_index];
-            if info_set_scanout.rect.width < 16
-                || info_set_scanout.rect.height < 16
-                || !is_rect_in_resource(&info_set_scanout.rect, res)
-            {
-                error!(
-                    "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
-                    res.resource_id,
-                    res.width,
-                    res.height,
-                    info_set_scanout.scanout_id,
-                    info_set_scanout.rect.width,
-                    info_set_scanout.rect.height,
-                    info_set_scanout.rect.x_coord,
-                    info_set_scanout.rect.y_coord,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
-            }
-
-            let pixman_format = unsafe { pixman_image_get_format(res.pixman_image) };
-            let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-            let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
-            let offset = info_set_scanout.rect.x_coord * bpp
-                + info_set_scanout.rect.y_coord * pixman_stride as u32;
-            let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
-            let res_data_offset = unsafe { res_data.offset(offset as isize) };
-
-            match scanout.surface {
-                None => {
-                    if create_surface(
-                        scanout,
-                        info_set_scanout,
-                        res,
-                        pixman_format,
-                        pixman_stride,
-                        res_data_offset,
-                    )
-                    .image
-                    .is_null()
-                    {
-                        error!("HostError: surface image create failed, check pixman library.");
-                        return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                    }
-                }
-                Some(sur) => {
-                    let scanout_data = unsafe { pixman_image_get_data(sur.image) };
-                    if (res_data_offset != scanout_data
-                        || scanout.width != info_set_scanout.rect.width
-                        || scanout.height != info_set_scanout.rect.height)
-                        && create_surface(
-                            scanout,
-                            info_set_scanout,
-                            res,
-                            pixman_format,
-                            pixman_stride,
-                            res_data_offset,
-                        )
-                        .image
-                        .is_null()
-                    {
-                        error!("HostError: surface pixman image create failed, please check pixman library.");
-                        return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                    }
-                }
-            }
-
-            if let Some(old_res_index) = self
-                .resources_list
-                .iter()
-                .position(|x| x.resource_id == scanout.resource_id)
-            {
-                // Update old resource scanout bitmask.
-                self.resources_list[old_res_index].scanouts_bitmask &=
-                    !(1 << info_set_scanout.scanout_id);
-            }
-            // Update new resource scanout bitmask.
-            self.resources_list[res_index].scanouts_bitmask |= 1 << info_set_scanout.scanout_id;
-            // Update scanout configure.
-            scanout.resource_id = info_set_scanout.resource_id;
-            scanout.x = info_set_scanout.rect.x_coord;
-            scanout.y = info_set_scanout.rect.y_coord;
-            scanout.width = info_set_scanout.rect.width;
-            scanout.height = info_set_scanout.rect.height;
-
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "GuestError: The resource_id {} in set_scanout {} request is not existed.",
-                info_set_scanout.resource_id, info_set_scanout.scanout_id
-            );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+        // Check if resource is valid.
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_set_scanout.resource_id, "cmd_set_scanout");
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
+
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        if info_set_scanout.rect.width < 16
+            || info_set_scanout.rect.height < 16
+            || !is_rect_in_resource(&info_set_scanout.rect, res)
+        {
+            error!(
+                "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
+                res.resource_id,
+                res.width,
+                res.height,
+                info_set_scanout.scanout_id,
+                info_set_scanout.rect.width,
+                info_set_scanout.rect.height,
+                info_set_scanout.rect.x_coord,
+                info_set_scanout.rect.y_coord,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+        }
+
+        let pixman_format = unsafe { pixman_image_get_format(res.pixman_image) };
+        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
+        let offset = info_set_scanout.rect.x_coord * bpp
+            + info_set_scanout.rect.y_coord * pixman_stride as u32;
+        let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
+        let res_data_offset = unsafe { res_data.offset(offset as isize) };
+
+        // Create surface for the scanout.
+        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
+        if scanout.surface.is_none()
+            || unsafe { pixman_image_get_data(scanout.surface.unwrap().image) } != res_data_offset
+            || scanout.width != info_set_scanout.rect.width
+            || scanout.height != info_set_scanout.rect.height
+        {
+            let surface = create_surface(
+                scanout,
+                info_set_scanout,
+                res,
+                pixman_format,
+                pixman_stride,
+                res_data_offset,
+            );
+            if surface.image.is_null() {
+                error!("HostError: surface image create failed, check pixman library.");
+                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+            }
+        }
+
+        // Unlink old resource.
+        let old_res_id = scanout.resource_id;
+        if let Some(old_res_idx) = self.get_resource_idx(old_res_id) {
+            let old_res = &mut self.resources_list[old_res_idx];
+            old_res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
+        }
+        // Link new resource.
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        res.scanouts_bitmask |= 1 << info_set_scanout.scanout_id;
+        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
+        scanout.resource_id = info_set_scanout.resource_id;
+        scanout.x = info_set_scanout.rect.x_coord;
+        scanout.y = info_set_scanout.rect.y_coord;
+        scanout.width = info_set_scanout.rect.width;
+        scanout.height = info_set_scanout.rect.height;
+
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_flush(&mut self, req: &VirtioGpuRequest) -> Result<()> {
