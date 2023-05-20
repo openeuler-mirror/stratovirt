@@ -1550,12 +1550,12 @@ pub struct VirtioGpuConfig {
     events_read: u32,
     events_clear: u32,
     num_scanouts: u32,
-    reserved: u32,
+    _reserved: u32,
 }
 
 /// State of gpu device.
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct GpuState {
     /// Bitmask of features supported by the backend.
     device_features: u64,
@@ -1563,16 +1563,6 @@ pub struct GpuState {
     driver_features: u64,
     /// Config space of the GPU device.
     config_space: Arc<Mutex<VirtioGpuConfig>>,
-}
-
-impl Default for GpuState {
-    fn default() -> Self {
-        GpuState {
-            device_features: 0,
-            driver_features: 0,
-            config_space: Arc::new(Mutex::new(VirtioGpuConfig::default())),
-        }
-    }
 }
 
 /// GPU device structure.
@@ -1610,7 +1600,6 @@ impl Gpu {
     fn build_device_config_space(&mut self) {
         let mut config_space = self.state.config_space.lock().unwrap();
         config_space.num_scanouts = self.cfg.max_outputs;
-        config_space.reserved = 0;
     }
 }
 
