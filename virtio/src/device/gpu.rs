@@ -1063,29 +1063,14 @@ impl GpuIoHandler {
     fn cmd_transfer_to_host_2d_params_check(
         &mut self,
         info_transfer: &VirtioGpuTransferToHost2d,
-    ) -> u32 {
-        let res_idx = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_transfer.resource_id);
-
+    ) -> (Option<usize>, u32) {
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_transfer.resource_id, "cmd_transfer_to_host_2d");
         if res_idx.is_none() {
-            error!(
-                "GuestError: The resource_id {} in transfer to host 2d request is not existed.",
-                info_transfer.resource_id
-            );
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+            return (None, error);
         }
 
         let res = &self.resources_list[res_idx.unwrap()];
-        if res.iov.is_empty() {
-            error!(
-                "GuestError: The resource_id {} in transfer to host 2d request don't have iov.",
-                info_transfer.resource_id
-            );
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-
         if !is_rect_in_resource(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
@@ -1098,22 +1083,18 @@ impl GpuIoHandler {
                 info_transfer.rect.x_coord,
                 info_transfer.rect.y_coord,
             );
-            return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            (None, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER)
+        } else {
+            (res_idx, 0)
         }
-
-        0
     }
 
     fn cmd_transfer_to_host_2d_update_resource(
         &mut self,
         info_transfer: &VirtioGpuTransferToHost2d,
+        res_idx: usize,
     ) {
-        // SAFETY: unwrap is safe because it has been checked in params check.
-        let res = self
-            .resources_list
-            .iter()
-            .find(|&x| x.resource_id == info_transfer.resource_id)
-            .unwrap();
+        let res = &self.resources_list[res_idx];
         let pixman_format;
         let bpp;
         let stride;
@@ -1214,12 +1195,12 @@ impl GpuIoHandler {
         let mut info_transfer = VirtioGpuTransferToHost2d::default();
         self.get_request(req, &mut info_transfer)?;
 
-        let errcode = self.cmd_transfer_to_host_2d_params_check(&info_transfer);
-        if errcode != 0 {
-            return self.response_nodata(errcode, req);
+        let (res_idx, error) = self.cmd_transfer_to_host_2d_params_check(&info_transfer);
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
 
-        self.cmd_transfer_to_host_2d_update_resource(&info_transfer);
+        self.cmd_transfer_to_host_2d_update_resource(&info_transfer, res_idx.unwrap());
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
