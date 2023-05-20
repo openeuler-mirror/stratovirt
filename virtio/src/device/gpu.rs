@@ -1273,28 +1273,16 @@ impl GpuIoHandler {
         let mut info_detach_backing = VirtioGpuResourceDetachBacking::default();
         self.get_request(req, &mut info_detach_backing)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_detach_backing.resource_id)
-        {
-            let res = &mut self.resources_list[res_index];
-            if res.iov.is_empty() {
-                error!(
-                    "GuestError: The resource_id {} in resource detach backing request don't have iov.",
-                    info_detach_backing.resource_id
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
-            res.iov.clear();
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "GuestError: The resource_id {} in detach backing request request is not existed.",
-                info_detach_backing.resource_id
-            );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+        let (res_idx, error) = self.get_backed_resource_idx(
+            info_detach_backing.resource_id,
+            "cmd_resource_detach_backing",
+        );
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
+
+        self.resources_list[res_idx.unwrap()].iov.clear();
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn process_control_queue(&mut self, mut req_queue: Vec<VirtioGpuRequest>) -> Result<()> {
