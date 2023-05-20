@@ -1586,8 +1586,6 @@ pub struct Gpu {
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
-    /// Callback to trigger interrupt.
-    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
 }
@@ -1605,7 +1603,6 @@ impl Gpu {
                 [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS],
             )),
             consoles: Vec::new(),
-            interrupt_cb: None,
             deactivate_evts: Vec::new(),
         }
     }
@@ -1638,14 +1635,15 @@ impl VirtioDevice for Gpu {
         let mut output_states = self.output_states.lock().unwrap();
         output_states[0].width = self.cfg.xres;
         output_states[0].height = self.cfg.yres;
+
+        let gpu_opts = Arc::new(GpuOpts {
+            output_states: self.output_states.clone(),
+            config_space: self.state.config_space.clone(),
+            interrupt_cb: None,
+        });
         for i in 0..self.cfg.max_outputs {
-            let gpu_opts = Arc::new(GpuOpts {
-                output_states: self.output_states.clone(),
-                config_space: self.state.config_space.clone(),
-                interrupt_cb: self.interrupt_cb.clone(),
-            });
             let dev_name = format!("virtio-gpu{}", i);
-            let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
+            let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts.clone());
             let con_ref = con.as_ref().unwrap().upgrade().unwrap();
             output_states[i as usize].con_id = con_ref.lock().unwrap().con_id;
             self.consoles.push(con);
@@ -1756,17 +1754,15 @@ impl VirtioDevice for Gpu {
             )));
         }
 
-        self.interrupt_cb = Some(interrupt_cb.clone());
         let mut scanouts = vec![];
+        let gpu_opts = Arc::new(GpuOpts {
+            output_states: self.output_states.clone(),
+            config_space: self.state.config_space.clone(),
+            interrupt_cb: Some(interrupt_cb.clone()),
+        });
         for con in &self.consoles {
-            let gpu_opts = Arc::new(GpuOpts {
-                output_states: self.output_states.clone(),
-                config_space: self.state.config_space.clone(),
-                interrupt_cb: self.interrupt_cb.clone(),
-            });
-
             let con_ref = con.as_ref().unwrap().upgrade().unwrap();
-            con_ref.lock().unwrap().dev_opts = gpu_opts;
+            con_ref.lock().unwrap().dev_opts = gpu_opts.clone();
 
             let scanout = GpuScanout {
                 con: con.clone(),
