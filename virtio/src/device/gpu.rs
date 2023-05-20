@@ -663,6 +663,42 @@ impl GpuIoHandler {
         }
     }
 
+    fn update_cursor_image(&mut self, info_cursor: &VirtioGpuUpdateCursor) {
+        let res_idx = self.get_resource_idx(info_cursor.resource_id);
+        if res_idx.is_none() {
+            return;
+        }
+
+        let res = &self.resources_list[res_idx.unwrap()];
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        let mse = scanout.mouse.as_mut().unwrap();
+        let mse_data_size = mse.data.len();
+        unsafe {
+            let res_width = pixman_image_get_width(res.pixman_image);
+            let res_height = pixman_image_get_height(res.pixman_image);
+            if res_width as u32 != mse.width || res_height as u32 != mse.height {
+                return;
+            }
+
+            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
+            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+        }
+
+        // Windows front-end drvier does not deliver data in format sequence.
+        // So we fix it in back-end.
+        // TODO: Fix front-end driver is a better solution.
+        if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+            || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+        {
+            let mut i = 0;
+            while i < mse_data_size {
+                mse.data.swap(i, i + 2);
+                i += 4;
+            }
+        }
+        scanout.cursor_visible = true;
+    }
+
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_cursor = VirtioGpuUpdateCursor::default();
         self.get_request(req, &mut info_cursor)?;
@@ -696,63 +732,32 @@ impl GpuIoHandler {
                         *item = 0_u8;
                     }
                 }
-
                 display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
                 scanout.cursor_visible = false;
             }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
-            if scanout.mouse.is_none() {
-                let tmp_mouse = DisplayMouse {
-                    height: 64,
-                    width: 64,
-                    hot_x: info_cursor.hot_x,
-                    hot_y: info_cursor.hot_y,
-                    data: vec![0_u8; 64 * 64 * size_of::<u32>()],
-                };
-                scanout.mouse = Some(tmp_mouse);
-            } else {
-                let mut mse = scanout.mouse.as_mut().unwrap();
-                mse.hot_x = info_cursor.hot_x;
-                mse.hot_y = info_cursor.hot_y;
-            }
-            if info_cursor.resource_id != 0 {
-                if let Some(res_index) = self
-                    .resources_list
-                    .iter()
-                    .position(|x| x.resource_id == info_cursor.resource_id)
-                {
-                    let res = &self.resources_list[res_index];
-                    unsafe {
-                        let res_width = pixman_image_get_width(res.pixman_image);
-                        let res_height = pixman_image_get_height(res.pixman_image);
-                        let mse = scanout.mouse.as_mut().unwrap();
-
-                        if res_width as u32 == mse.width && res_height as u32 == mse.height {
-                            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
-                            let mse_data_size = mse.data.len();
-                            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
-                            // Front-end drvier does not deliver data in format sequence.
-                            // So we fix it in back-end.
-                            //
-                            // TODO: Fix front-end driver is a better solution.
-                            if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
-                                || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
-                            {
-                                let mut i = 0;
-                                while i < mse_data_size {
-                                    mse.data.swap(i, i + 2);
-                                    i += 4;
-                                }
-                            }
-                            scanout.cursor_visible = true;
-                        }
-                    }
+            match &mut scanout.mouse {
+                None => {
+                    let tmp_mouse = DisplayMouse {
+                        height: 64,
+                        width: 64,
+                        hot_x: info_cursor.hot_x,
+                        hot_y: info_cursor.hot_y,
+                        data: vec![0_u8; 64 * 64 * size_of::<u32>()],
+                    };
+                    scanout.mouse = Some(tmp_mouse);
+                }
+                Some(mouse) => {
+                    mouse.hot_x = info_cursor.hot_x;
+                    mouse.hot_y = info_cursor.hot_y;
                 }
             }
 
-            if let Some(mouse) = &mut scanout.mouse {
-                display_cursor_define(&scanout.con, mouse)?;
+            if info_cursor.resource_id > 0 {
+                self.update_cursor_image(&info_cursor);
             }
+            let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+            display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
             scanout.cursor = info_cursor;
         } else {
             bail!("Wrong header type for cursor queue");
@@ -1376,27 +1381,21 @@ impl GpuIoHandler {
                 }
             };
 
-            if let Err(e) = queue.vring.add_used(&self.mem_space, elem.index, 0) {
-                bail!(
-                    "Failed to add used ring(cursor), index {} {:?}",
-                    elem.index,
-                    e
-                );
-            }
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .with_context(|| {
+                    format!("Failed to add used ring(cursor), index {}", elem.index)
+                })?;
 
             if queue
                 .vring
                 .should_notify(&self.mem_space, self.driver_features)
             {
-                if let Err(e) =
-                    (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
-                {
-                    error!("{:?}", e);
-                    return Err(anyhow!(VirtioError::InterruptTrigger(
-                        "gpu cursor",
-                        VirtioInterruptType::Vring
-                    )));
-                }
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        VirtioError::InterruptTrigger("gpu cursor", VirtioInterruptType::Vring)
+                    })?;
             }
         }
 
