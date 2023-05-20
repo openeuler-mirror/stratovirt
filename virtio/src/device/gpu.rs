@@ -880,19 +880,15 @@ impl GpuIoHandler {
         unref_pixman_image(res.pixman_image);
         self.used_hostmem -= res.host_mem;
         res.iov.clear();
+        self.resources_list.remove(res_index);
     }
 
     fn cmd_resource_unref(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_resource_unref = VirtioGpuResourceUnref::default();
         self.get_request(req, &mut info_resource_unref)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_resource_unref.resource_id)
-        {
+        if let Some(res_index) = self.get_resource_idx(info_resource_unref.resource_id) {
             self.resource_destroy(res_index);
-            self.resources_list.remove(res_index);
             self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
         } else {
             error!(
@@ -1493,7 +1489,6 @@ impl Drop for GpuIoHandler {
     fn drop(&mut self) {
         while !self.resources_list.is_empty() {
             self.resource_destroy(0);
-            self.resources_list.remove(0);
         }
     }
 }
