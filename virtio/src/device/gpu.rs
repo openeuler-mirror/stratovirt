@@ -10,6 +10,44 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::io::Write;
+use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
+use std::slice::from_raw_parts_mut;
+use std::sync::{Arc, Mutex, Weak};
+use std::{ptr, vec};
+
+use anyhow::{anyhow, bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+use address_space::{AddressSpace, GuestAddress};
+use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use migration_derive::ByteCode;
+use ui::console::{
+    console_close, console_init, display_cursor_define, display_graphic_update,
+    display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
+    DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
+};
+use ui::pixman::unref_pixman_image;
+use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
+use util::byte_code::ByteCode;
+use util::edid::EdidInfo;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
+use util::num_ops::read_u32;
+use util::pixman::{
+    pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
+    pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
+    pixman_image_get_width, pixman_image_ref, pixman_image_set_destroy_function, pixman_image_t,
+    pixman_image_unref, pixman_region16_t, pixman_region_extents, pixman_region_fini,
+    pixman_region_init, pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
+    virtio_gpu_unref_resource_callback,
+};
+
 use crate::{
     gpa_hva_iovec_map, iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError,
     VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
@@ -23,41 +61,6 @@ use crate::{
     VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
-use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
-use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use migration_derive::ByteCode;
-use std::io::Write;
-use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::rc::Rc;
-use std::slice::from_raw_parts_mut;
-use std::sync::{Arc, Mutex, Weak};
-use std::{ptr, vec};
-use ui::console::{
-    console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
-    DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
-};
-use ui::pixman::unref_pixman_image;
-use util::aio::{iov_from_buf_direct, iov_to_buf_direct};
-use util::byte_code::ByteCode;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-use util::num_ops::read_u32;
-use util::pixman::{
-    pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
-    pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
-    pixman_image_get_width, pixman_image_ref, pixman_image_set_destroy_function, pixman_image_t,
-    pixman_image_unref, pixman_region16_t, pixman_region_extents, pixman_region_fini,
-    pixman_region_init, pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
-    virtio_gpu_unref_resource_callback,
-};
-use util::{aio::Iovec, edid::EdidInfo};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 /// Number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
