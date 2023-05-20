@@ -533,6 +533,20 @@ fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
 }
 
 impl GpuIoHandler {
+    fn change_run_stage(&self) -> Result<()> {
+        if get_run_stage() == VmRunningStage::Bios && !self.scanouts.is_empty() {
+            match &self.scanouts[0].con.as_ref().and_then(|c| c.upgrade()) {
+                Some(con) => {
+                    let dev_name = con.lock().unwrap().dev_name.clone();
+                    display_set_major_screen(&dev_name)?;
+                    set_run_stage(VmRunningStage::Os);
+                }
+                None => {}
+            };
+        }
+        Ok(())
+    }
+
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
         iov_to_buf_direct(&header.out_iovec, 0, req.as_mut_bytes()).and_then(|size| {
             if size == size_of::<T>() {
@@ -767,6 +781,7 @@ impl GpuIoHandler {
 
     fn cmd_get_edid(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut edid_req = VirtioGpuGetEdid::default();
+        self.change_run_stage()?;
         self.get_request(req, &mut edid_req)?;
 
         if edid_req.scanouts >= self.num_scanouts {
@@ -804,12 +819,11 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
 
-        if let Some(res) = self
-            .resources_list
-            .iter()
-            .find(|&x| x.resource_id == info_create_2d.resource_id)
-        {
-            error!("GuestError: resource {} already exists.", res.resource_id);
+        if self.get_resource_idx(info_create_2d.resource_id).is_some() {
+            error!(
+                "GuestError: resource {} already exists.",
+                info_create_2d.resource_id
+            );
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
 
@@ -1296,23 +1310,10 @@ impl GpuIoHandler {
                 VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D => self.cmd_transfer_to_host_2d(req),
                 VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => self.cmd_resource_attach_backing(req),
                 VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => self.cmd_resource_detach_backing(req),
-                VIRTIO_GPU_CMD_GET_EDID => {
-                    if get_run_stage() == VmRunningStage::Bios && !self.scanouts.is_empty() {
-                        match &self.scanouts[0].con.as_ref().and_then(|c| c.upgrade()) {
-                            Some(con) => {
-                                let dev_name = con.lock().unwrap().dev_name.clone();
-                                display_set_major_screen(&dev_name)?;
-                                set_run_stage(VmRunningStage::Os);
-                            }
-                            None => {}
-                        };
-                    }
-                    self.cmd_get_edid(req)
-                }
+                VIRTIO_GPU_CMD_GET_EDID => self.cmd_get_edid(req),
                 _ => self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req),
             } {
                 error!("Fail to handle GPU request, {:?}.", e);
-                self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)?;
             }
         }
 
@@ -1322,8 +1323,6 @@ impl GpuIoHandler {
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
         let mut req_queue = Vec::new();
-        let mut need_break = false;
-        let mut invalid_elem_index = 0;
 
         loop {
             let mut elem = queue
@@ -1340,23 +1339,15 @@ impl GpuIoHandler {
                 Err(e) => {
                     error!(
                         "GuestError: Request will be ignored, because request header is incomplete and {:?}. \
-                         Also, be aware that the virtual machine may suspended if response does not  \
-                         carry the necessary information.",
+                         Also, be aware that the virtual machine may suspended as response is not sent.",
                         e
                     );
-                    need_break = true;
-                    invalid_elem_index = elem.index;
-                    break;
                 }
             }
         }
-
         drop(queue);
 
         self.process_control_queue(req_queue)?;
-        if need_break {
-            self.complete_one_request(invalid_elem_index, 0)?;
-        }
         Ok(())
     }
 
