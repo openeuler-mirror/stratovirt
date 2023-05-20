@@ -150,7 +150,6 @@ struct VirtioGpuGetEdid {
 impl ByteCode for VirtioGpuGetEdid {}
 
 #[repr(C)]
-#[allow(unused)]
 // data which transfer to frontend need padding
 #[derive(Clone, Copy)]
 struct VirtioGpuRespEdid {
@@ -292,7 +291,6 @@ impl HardWareOperations for GpuOpts {
     }
 }
 
-#[allow(unused)]
 #[derive(Default, Clone)]
 struct VirtioGpuRequest {
     header: VirtioGpuCtrlHdr,
@@ -300,11 +298,11 @@ struct VirtioGpuRequest {
     out_iovec: Vec<Iovec>,
     out_len: u32,
     in_iovec: Vec<Iovec>,
-    in_len: u32,
+    _in_len: u32,
 }
 
 impl VirtioGpuRequest {
-    fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
+    fn new(mem_space: &Arc<AddressSpace>, elem: &mut Element) -> Result<Self> {
         // Report errors for out_iovec invalid here, deal with in_iovec
         // error in cmd process.
         if elem.out_iovec.is_empty() {
@@ -324,31 +322,25 @@ impl VirtioGpuRequest {
             Ok(())
         })?;
 
-        // Note: in_iov and out_iov total len is no more than 1<<32, and
-        // out_iov is more than 1, so in_len and out_len will not overflow.
-        let mut request = VirtioGpuRequest {
-            header,
-            index: elem.index,
-            out_iovec: Vec::with_capacity(elem.desc_num as usize),
-            out_len: 0,
-            in_iovec: Vec::with_capacity(elem.desc_num as usize),
-            in_len: 0,
-        };
-
-        let mut out_iovec = elem.out_iovec.clone();
         // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
         // it is possible to get none back.
-        let data_iovec = iov_discard_front(&mut out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
-            .unwrap_or_default();
-        let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
-        request.out_len = data_len as u32;
-        request.out_iovec = iovec;
+        let data_iovec =
+            iov_discard_front(&mut elem.out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
+                .unwrap_or_default();
 
-        let (data_len, iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
-        request.in_len = data_len as u32;
-        request.in_iovec = iovec;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
 
-        Ok(request)
+        // Note: in_iov and out_iov total len is no more than 1<<32, and
+        // out_iov is more than 1, so in_len and out_len will not overflow.
+        Ok(VirtioGpuRequest {
+            header,
+            index: elem.index,
+            out_iovec,
+            out_len: out_len as u32,
+            in_iovec,
+            _in_len: in_len as u32,
+        })
     }
 }
 
@@ -1406,14 +1398,14 @@ impl GpuIoHandler {
         let mut invalid_elem_index = 0;
 
         loop {
-            let elem = queue
+            let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
 
-            match VirtioGpuRequest::new(&self.mem_space, &elem) {
+            match VirtioGpuRequest::new(&self.mem_space, &mut elem) {
                 Ok(req) => {
                     req_queue.push(req);
                 }
@@ -1445,14 +1437,14 @@ impl GpuIoHandler {
         let mut queue = cursor_queue.lock().unwrap();
 
         loop {
-            let elem = queue
+            let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
 
-            match VirtioGpuRequest::new(&self.mem_space, &elem) {
+            match VirtioGpuRequest::new(&self.mem_space, &mut elem) {
                 Ok(req) => match self.cmd_update_cursor(&req) {
                     Ok(_) => {}
                     Err(e) => {
@@ -1512,7 +1504,7 @@ impl EventNotifierHelper for GpuIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
-                error!("Failed to process queue for virtio gpu, err: {:?}", e,);
+                error!("Failed to process ctrlq for virtio gpu, err: {:?}", e);
             }
             None
         });
@@ -1529,7 +1521,7 @@ impl EventNotifierHelper for GpuIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = handler_clone.lock().unwrap().cursor_queue_evt_handler() {
-                error!("Failed to process queue for virtio gpu, err: {:?}", e,);
+                error!("Failed to process cursorq for virtio gpu, err: {:?}", e);
             }
             None
         });
