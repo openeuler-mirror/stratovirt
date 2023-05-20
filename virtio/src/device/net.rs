@@ -335,6 +335,7 @@ impl CtrlInfo {
         if ack == VIRTIO_NET_ERR {
             return ack;
         }
+        vid = LittleEndian::read_u16(vid.as_bytes());
         if vid >= CTRL_MAX_VLAN {
             return VIRTIO_NET_ERR;
         }
@@ -770,10 +771,13 @@ impl NetIoHandler {
 
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
-        let mut queue = self.rx.queue.lock().unwrap();
+        if self.tap.is_none() {
+            return Ok(());
+        }
 
+        let mut queue = self.rx.queue.lock().unwrap();
         let mut rx_packets = 0;
-        while let Some(tap) = self.tap.as_mut() {
+        loop {
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -799,7 +803,7 @@ impl NetIoHandler {
             }
 
             // Read the data from the tap device.
-            let size = NetIoHandler::read_from_tap(&iovecs, tap);
+            let size = NetIoHandler::read_from_tap(&iovecs, self.tap.as_mut().unwrap());
             if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as i32 {
                 queue.vring.push_back();
                 break;
