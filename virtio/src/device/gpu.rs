@@ -24,7 +24,7 @@ use crate::{
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -100,6 +100,10 @@ struct VirtioGpuOutputState {
     y_coor: i32,
 }
 
+trait CtrlHdr {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr;
+}
+
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuCtrlHdr {
@@ -111,6 +115,12 @@ struct VirtioGpuCtrlHdr {
 }
 
 impl ByteCode for VirtioGpuCtrlHdr {}
+
+impl CtrlHdr for VirtioGpuCtrlHdr {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        self
+    }
+}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -139,7 +149,14 @@ struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
     pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_OUTPUTS],
 }
+
 impl ByteCode for VirtioGpuDisplayInfo {}
+
+impl CtrlHdr for VirtioGpuDisplayInfo {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        &mut self.header
+    }
+}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -159,6 +176,14 @@ struct VirtioGpuRespEdid {
     edid: [u8; 1024],
 }
 
+impl ByteCode for VirtioGpuRespEdid {}
+
+impl CtrlHdr for VirtioGpuRespEdid {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        &mut self.header
+    }
+}
+
 impl Default for VirtioGpuRespEdid {
     fn default() -> Self {
         VirtioGpuRespEdid {
@@ -169,8 +194,6 @@ impl Default for VirtioGpuRespEdid {
         }
     }
 }
-
-impl ByteCode for VirtioGpuRespEdid {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -529,48 +552,47 @@ impl GpuIoHandler {
     fn complete_one_request(&mut self, index: u16, len: u32) -> Result<()> {
         let mut queue_lock = self.ctrl_queue.lock().unwrap();
 
-        if let Err(e) = queue_lock.vring.add_used(&self.mem_space, index, len) {
-            bail!(
-                "Failed to add used ring(gpu ctrl), index {}, len {} {:?}.",
-                index,
-                len,
-                e,
-            );
-        }
+        queue_lock
+            .vring
+            .add_used(&self.mem_space, index, len)
+            .with_context(|| {
+                format!(
+                    "Failed to add used ring(gpu ctrl), index {}, len {}",
+                    index, len,
+                )
+            })?;
 
         if queue_lock
             .vring
             .should_notify(&self.mem_space, self.driver_features)
         {
-            if let Err(e) =
-                (*self.interrupt_cb.as_ref())(&VirtioInterruptType::Vring, Some(&queue_lock), false)
-            {
-                bail!("Failed to trigger interrupt(gpu ctrl), error is {:?}.", e);
-            }
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| "Failed to trigger interrupt(gpu ctrl)")?;
         }
 
         Ok(())
     }
 
-    fn send_response<T: ByteCode>(&mut self, req: &VirtioGpuRequest, resp: &T) -> Result<()> {
-        let mut len = 0;
-        if let Err(e) = iov_from_buf_direct(&req.in_iovec, resp.as_bytes()).and_then(|size| {
-            len = size;
-            if size == size_of::<T>() {
-                Ok(())
-            } else {
-                bail!(
-                    "Expected response length is {}, actual get response length {}.",
-                    size_of::<T>(),
-                    size
-                );
-            }
-        }) {
+    fn send_response<T: ByteCode + CtrlHdr>(
+        &mut self,
+        req: &VirtioGpuRequest,
+        resp: &mut T,
+    ) -> Result<()> {
+        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
+            let mut header = resp.mut_ctrl_hdr();
+            header.flags |= VIRTIO_GPU_FLAG_FENCE;
+            header.fence_id = req.header.fence_id;
+            header.ctx_id = req.header.ctx_id;
+        }
+
+        let len = iov_from_buf_direct(&req.in_iovec, resp.as_bytes())?;
+        if len != size_of::<T>() {
             error!(
-                "GuestError: An incomplete response will be used instead of the expected, because {:?}. \
+                "GuestError: An incomplete response will be used instead of the expected: expected \
+                 length is {}, actual length is {}. \
                  Also, be aware that the virtual machine may suspended if response is too short to  \
                  carry the necessary information.",
-                e
+                 size_of::<T>(), len,
             );
         }
         self.complete_one_request(req.index, len as u32)
@@ -581,14 +603,7 @@ impl GpuIoHandler {
             hdr_type: resp_head_type,
             ..Default::default()
         };
-
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            resp.flags |= VIRTIO_GPU_FLAG_FENCE;
-            resp.fence_id = req.header.fence_id;
-            resp.ctx_id = req.header.ctx_id;
-        }
-
-        self.send_response(req, &resp)
+        self.send_response(req, &mut resp)
     }
 
     // Mask resource's scanout bit before disable a scanout.
@@ -753,13 +768,7 @@ impl GpuIoHandler {
             }
         }
         drop(output_states_lock);
-
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            display_info.header.flags |= VIRTIO_GPU_FLAG_FENCE;
-            display_info.header.fence_id = req.header.fence_id;
-            display_info.header.ctx_id = req.header.ctx_id;
-        }
-        self.send_response(req, &display_info)
+        self.send_response(req, &mut display_info)
     }
 
     fn cmd_get_edid(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -776,11 +785,6 @@ impl GpuIoHandler {
 
         let mut edid_resp = VirtioGpuRespEdid::default();
         edid_resp.header.hdr_type = VIRTIO_GPU_RESP_OK_EDID;
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            edid_resp.header.flags |= VIRTIO_GPU_FLAG_FENCE;
-            edid_resp.header.fence_id = req.header.fence_id;
-            edid_resp.header.ctx_id = req.header.ctx_id;
-        }
 
         let output_states_lock = self.output_states.lock().unwrap();
         let mut edid_info = EdidInfo::new(
@@ -794,9 +798,7 @@ impl GpuIoHandler {
         edid_info.edid_array_fulfill(&mut edid_resp.edid);
         edid_resp.size = edid_resp.edid.len() as u32;
 
-        self.send_response(req, &edid_resp)?;
-
-        Ok(())
+        self.send_response(req, &mut edid_resp)
     }
 
     fn cmd_resource_create_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
