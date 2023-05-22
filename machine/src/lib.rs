@@ -276,6 +276,7 @@ pub trait MachineOps {
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         if cfg_args.contains("vhost-vsock-device") {
             let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
+            vsock.lock().unwrap().disable_irqfd = true;
             MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
