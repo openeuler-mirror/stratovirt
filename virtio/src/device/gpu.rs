@@ -1636,6 +1636,8 @@ impl VirtioDevice for Gpu {
         }
 
         let mut output_states = self.output_states.lock().unwrap();
+        output_states[0].width = self.cfg.xres;
+        output_states[0].height = self.cfg.yres;
         for i in 0..self.cfg.max_outputs {
             let gpu_opts = Arc::new(GpuOpts {
                 output_states: self.output_states.clone(),
@@ -1755,12 +1757,6 @@ impl VirtioDevice for Gpu {
         }
 
         self.interrupt_cb = Some(interrupt_cb.clone());
-
-        let mut output_states = self.output_states.lock().unwrap();
-        output_states[0].width = self.cfg.xres;
-        output_states[0].height = self.cfg.yres;
-        drop(output_states);
-
         let mut scanouts = vec![];
         for con in &self.consoles {
             let gpu_opts = Arc::new(GpuOpts {
