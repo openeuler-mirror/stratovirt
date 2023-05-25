@@ -297,14 +297,14 @@ pub const HEADER_LENGTH: usize = 4096;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum FileFormat {
     Device,
     MemoryFull,
 }
 
 /// The endianness of byte order.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize)]
 enum EndianType {
     Little = 1,
     Big = 2,
@@ -345,7 +345,7 @@ fn cpu_model() -> [u8; 16] {
 }
 
 /// Structure used to mark some message in migration.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
 pub struct MigrationHeader {
     /// Magic number for migration file/stream.
     magic_num: [u8; 16],
