@@ -21,14 +21,15 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
 use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
-use machine_manager::event_loop::unregister_event_helper;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
 
-use super::super::VhostOps;
-use super::{VhostBackend, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
+use super::super::{VhostNotify, VhostOps};
+use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use crate::{
     Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
 };
@@ -106,6 +107,8 @@ pub struct Vsock {
     broken: Arc<AtomicBool>,
     /// Save irqfd used for vhost-vsock
     call_events: Vec<Arc<EventFd>>,
+    /// Whether irqfd can be used.
+    pub disable_irqfd: bool,
 }
 
 impl Vsock {
@@ -120,6 +123,7 @@ impl Vsock {
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             call_events: Vec::new(),
+            disable_irqfd: false,
         }
     }
 
@@ -246,6 +250,10 @@ impl VirtioDevice for Vsock {
     }
 
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
+        if self.disable_irqfd {
+            return Err(anyhow!("The irqfd cannot be used on the current machine."));
+        }
+
         for fd in queue_evts.iter() {
             self.call_events.push(fd.clone());
         }
@@ -265,6 +273,7 @@ impl VirtioDevice for Vsock {
         let cid = self.vsock_cfg.guest_cid;
         // The receive queue and transmit queue will be handled in vhost.
         let vhost_queues = queues[..2].to_vec();
+        let mut host_notifies = Vec::new();
         // This event queue will be handled.
         self.event_queue = Some(queues[2].clone());
         self.interrupt_cb = Some(interrupt_cb.clone());
@@ -308,8 +317,22 @@ impl VirtioDevice for Vsock {
                 })?;
             drop(queue);
 
+            let event = if self.disable_irqfd {
+                let host_notify = VhostNotify {
+                    notify_evt: Arc::new(
+                        EventFd::new(libc::EFD_NONBLOCK)
+                            .with_context(|| VirtioError::EventFdCreate)?,
+                    ),
+                    queue: queue_mutex.clone(),
+                };
+                let event = host_notify.notify_evt.clone();
+                host_notifies.push(host_notify);
+                event
+            } else {
+                self.call_events[queue_index].clone()
+            };
             backend
-                .set_vring_call(queue_index, self.call_events[queue_index].clone())
+                .set_vring_call(queue_index, event)
                 .with_context(|| {
                     format!("Failed to set vring call for vsock, index: {}", queue_index)
                 })?;
@@ -318,6 +341,16 @@ impl VirtioDevice for Vsock {
         backend.set_guest_cid(cid)?;
         backend.set_running(true)?;
 
+        if self.disable_irqfd {
+            let handler = VhostIoHandler {
+                interrupt_cb: interrupt_cb.clone(),
+                host_notifies,
+                device_broken: self.broken.clone(),
+            };
+            let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+        }
+
         self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
@@ -325,7 +358,10 @@ impl VirtioDevice for Vsock {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.deactivate_evts)?;
-        self.call_events.clear();
+        if !self.disable_irqfd {
+            self.call_events.clear();
+        }
+
         Ok(())
     }
 

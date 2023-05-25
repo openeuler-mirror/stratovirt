@@ -710,6 +710,7 @@ impl MachineOps for LightMachine {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         if device_cfg.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
+            net.lock().unwrap().disable_irqfd = true;
             let device = VirtioMmioDevice::new(&self.sys_mem, net);
             self.realize_virtio_mmio_device(device)?;
         } else {
