@@ -29,12 +29,13 @@ use gtk::{
     cairo::{Format, ImageSurface},
     gdk::{self, Geometry, Gravity, WindowHints},
     gdk_pixbuf::Colorspace,
-    glib::{self, set_program_name, Priority, SyncSender},
+    glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
-        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt,
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, MenuShellExt,
+        RadioMenuItemExt, WidgetExt,
     },
-    Application, ApplicationWindow, DrawingArea, RadioMenuItem,
+    Application, ApplicationWindow, DrawingArea, HeaderBar, RadioMenuItem,
 };
 use log::{debug, error};
 
@@ -463,13 +464,17 @@ struct GtkConfig {
 
 /// Gtk display init.
 pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result<()> {
+    let mut gtk_args: Vec<String> = vec![];
+    if let Some(app_name) = &ds_cfg.app_name {
+        gtk_args.push(app_name.clone());
+    }
     let gtk_cfg = GtkConfig {
         full_screen: ds_cfg.full_screen,
         app_name: ds_cfg.app_name.clone(),
         vm_name: ui_context.vm_name,
         powerdown_button: ui_context.power_button,
         shutdown_button: ui_context.shutdown_req,
-        gtk_args: vec![],
+        gtk_args,
     };
     let _handle = thread::Builder::new()
         .name("gtk display".to_string())
@@ -493,12 +498,11 @@ fn create_gtk_thread(gtk_cfg: &GtkConfig) {
 fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     let window = ApplicationWindow::builder()
         .application(app)
-        .title(&gtk_cfg.vm_name)
         .default_width(DEFAULT_WINDOW_WIDTH)
         .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
 
-    set_program_attribute(gtk_cfg)
+    set_program_attribute(gtk_cfg, &window)
         .with_context(|| "Failed to set properties for program")
         .unwrap();
 
@@ -517,10 +521,16 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     gtk_menu.show_window(scale_mode);
 }
 
-fn set_program_attribute(gtk_cfg: &GtkConfig) -> Result<()> {
-    // Set the program name.
-    if let Some(name) = &gtk_cfg.app_name {
-        set_program_name(Some(name));
+fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Result<()> {
+    // Set title bar.
+    let header = HeaderBar::new();
+    header.set_show_close_button(true);
+    header.set_title(Some(&gtk_cfg.vm_name));
+    window.set_titlebar(Some(&header));
+
+    // Set default icon.
+    if let Some(app_name) = &gtk_cfg.app_name {
+        window.set_icon_name(Some(app_name));
     }
 
     // Set text attributes for the program.
