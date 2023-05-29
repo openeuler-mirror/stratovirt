@@ -272,6 +272,8 @@ impl StdMachine {
             event!(Reset; reset_msg);
         }
 
+        locked_vm.irq_chip.as_ref().unwrap().reset()?;
+
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
