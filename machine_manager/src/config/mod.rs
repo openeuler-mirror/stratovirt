@@ -31,6 +31,7 @@ pub use ramfb::*;
 pub use rng::*;
 pub use sasl_auth::*;
 pub use scsi::*;
+pub use smbios::*;
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
@@ -58,6 +59,7 @@ mod rng;
 mod sasl_auth;
 pub mod scream;
 mod scsi;
+mod smbios;
 mod tls_creds;
 mod usb;
 mod vfio;
@@ -126,6 +128,7 @@ pub struct VmConfig {
     pub display: Option<DisplayConfig>,
     pub camera_backend: HashMap<String, CameraDevConfig>,
     pub windows_emu_pid: Option<String>,
+    pub smbios: SmbiosConfig,
 }
 
 impl VmConfig {

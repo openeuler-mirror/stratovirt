@@ -481,10 +481,15 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if migrate.0 == MigrateMode::Unknown && fwcfg.is_some() {
-            locked_vm
-                .build_acpi_tables(&fwcfg.unwrap())
-                .with_context(|| "Failed to create ACPI tables")?;
+        if migrate.0 == MigrateMode::Unknown {
+            if let Some(fw_cfg) = fwcfg {
+                locked_vm
+                    .build_acpi_tables(&fw_cfg)
+                    .with_context(|| "Failed to create ACPI tables")?;
+                locked_vm
+                    .build_smbios(&fw_cfg)
+                    .with_context(|| "Failed to create smbios tables")?;
+            }
         }
 
         locked_vm

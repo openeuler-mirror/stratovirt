@@ -247,6 +247,15 @@ And you can also restore StratoVirt's **pid number** to a file by:
 -pidfile <pidfile_path>
 ```
 
+### 1.11 Smbios
+The SMBIOS specification defines the data structures and information that will enter the data structures associated with the system. Having these fields populate the data associated with each system enables system administrators to identify and manage these systems remotely.
+
+```shell
+# cmdline
+-smbios type=0[,vendor=str][,version=str][,date=str]
+-smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str]
+```
+
 ## 2. Device Configuration
 
 For machine type "microvm", only virtio-mmio and legacy devices are supported.

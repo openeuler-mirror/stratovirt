@@ -80,6 +80,8 @@ use machine_manager::config::{
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
+use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType};
@@ -109,6 +111,24 @@ pub trait MachineOps {
     /// A array of ranges, it's element represents (start_addr, size).
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
+
+    fn build_smbios(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
+        let smbioscfg = self.get_vm_config().lock().unwrap().smbios.clone();
+
+        let mut smbios = SmbiosTable::new();
+        let table = smbios.build_smbios_tables(smbioscfg);
+        let ep = build_smbios_ep30(table.len() as u32);
+
+        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+        locked_fw_cfg
+            .add_file_entry(SMBIOS_TABLE_FILE, table)
+            .with_context(|| "Failed to add smbios table file entry")?;
+        locked_fw_cfg
+            .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
+            .with_context(|| "Failed to add smbios anchor file entry")?;
+
+        Ok(())
+    }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
 

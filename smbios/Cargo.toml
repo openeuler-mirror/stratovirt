@@ -1,0 +1,14 @@
+[package]
+name = "smbios"
+version = "2.2.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+description = "smbios module"
+
+[dependencies]
+byteorder = "1.4.3"
+anyhow = "1.0"
+
+util = {path = "../util"}
+machine_manager = { path = "../machine_manager" }
