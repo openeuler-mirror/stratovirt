@@ -52,6 +52,7 @@ const NR_GICR_IPRIORITYR: usize = 8;
 /// SGI and PPI Redistributor registers, offsets from RD_base
 const GICR_IGROUPR0: u64 = 0x1_0080;
 const GICR_ISENABLER0: u64 = 0x1_0100;
+const GICR_ICENABLER0: u64 = 0x1_0180;
 const GICR_ISPENDR0: u64 = 0x1_0200;
 const GICR_ICPENDR0: u64 = 0x1_0280;
 const GICR_ISACTIVER0: u64 = 0x1_0300;
@@ -244,7 +245,7 @@ impl GICv3 {
         self.access_gic_redistributor(GICR_STATUSR, redist.vcpu, &mut redist.gicr_statusr, true)?;
         self.access_gic_redistributor(GICR_WAKER, redist.vcpu, &mut redist.gicr_waker, true)?;
         self.access_gic_redistributor(GICR_IGROUPR0, redist.vcpu, &mut redist.gicr_igroupr0, true)?;
-        self.access_gic_redistributor(GICR_ISENABLER0, redist.vcpu, &mut !0, true)?;
+        self.access_gic_redistributor(GICR_ICENABLER0, redist.vcpu, &mut !0, true)?;
         self.access_gic_redistributor(
             GICR_ISENABLER0,
             redist.vcpu,
