@@ -78,4 +78,6 @@ impl AudioInterface for AudioDemo {
 
         size == data.len()
     }
+
+    fn destroy(&mut self) {}
 }

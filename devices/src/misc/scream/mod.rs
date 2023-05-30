@@ -166,6 +166,7 @@ impl StreamData {
 
     fn wait_for_ready(
         &mut self,
+        interface: Arc<Mutex<dyn AudioInterface>>,
         dir: ScreamDirection,
         poll_delay_us: u64,
         hva: u64,
@@ -182,6 +183,7 @@ impl StreamData {
 
         loop {
             if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+                interface.lock().unwrap().destroy();
                 while header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
                     thread::sleep(time::Duration::from_millis(10));
                     header =
@@ -218,24 +220,6 @@ impl StreamData {
         }
     }
 
-    fn update_play_buffer(&mut self, hva: u64) {
-        // SAFETY: hva is the shared memory base address. It already verifies the validity
-        // of the address range during the header check.
-        let header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
-        let play = header.play;
-
-        self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
-
-        // If the difference between the currently processed chunk_idx and the chunk_idx in
-        // the shared memory is greater than 3, the processing of the backend device is too
-        // slow and the backward data is skipped.
-        if (play.chunk_idx + play.max_chunks - self.chunk_idx) % play.max_chunks > 3 {
-            self.chunk_idx = (play.chunk_idx + play.max_chunks - 1) % play.max_chunks;
-        }
-
-        self.update_buffer_by_chunk_idx(hva, &play);
-    }
-
     fn update_buffer_by_chunk_idx(&mut self, hva: u64, stream_header: &ShmemStreamHeader) {
         self.audio_size = stream_header.chunk_size;
         self.audio_base = hva
@@ -243,25 +227,46 @@ impl StreamData {
             + (stream_header.chunk_size as u64) * (self.chunk_idx as u64);
     }
 
-    fn update_capt_buffer(&mut self, hva: u64) {
+    fn playback_trans(&mut self, hva: u64, interface: Arc<Mutex<dyn AudioInterface>>) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
+        let play = &header.play;
 
-        self.update_buffer_by_chunk_idx(hva, &header.capt);
+        while play.fmt.fmt_generation == self.fmt.fmt_generation && self.chunk_idx != play.chunk_idx
+        {
+            // If the difference between the currently processed chunk_idx and the chunk_idx in
+            // the shared memory is greater than 4, the processing of the backend device is too
+            // slow and the backward data is skipped.
+            if (play.chunk_idx + play.max_chunks - self.chunk_idx) % play.max_chunks > 4 {
+                self.chunk_idx = (play.chunk_idx + play.max_chunks - 1) % play.max_chunks;
+            } else {
+                self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
+            }
+
+            self.update_buffer_by_chunk_idx(hva, play);
+            interface.lock().unwrap().send(self);
+        }
     }
 
-    fn update_capt_idx(&mut self, hva: u64) {
+    fn capture_trans(&mut self, hva: u64, interface: Arc<Mutex<dyn AudioInterface>>) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
+        let capt = &mut header.capt;
 
-        self.chunk_idx = (self.chunk_idx + 1) % header.capt.max_chunks;
+        while capt.is_started != 0 {
+            self.update_buffer_by_chunk_idx(hva, capt);
 
-        // Make sure chunk_idx write does not bypass audio chunk write.
-        fence(Ordering::SeqCst);
+            if interface.lock().unwrap().receive(self) {
+                self.chunk_idx = (self.chunk_idx + 1) % capt.max_chunks;
 
-        header.capt.chunk_idx = self.chunk_idx;
+                // Make sure chunk_idx write does not bypass audio chunk write.
+                fence(Ordering::SeqCst);
+
+                capt.chunk_idx = self.chunk_idx;
+            }
+        }
     }
 }
 
@@ -306,23 +311,23 @@ impl Scream {
     fn start_play_thread_fn(&self) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
-        let interface = self.interface_init("Scream", ScreamDirection::Playback);
+        let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
-                let mut interface_locked = interface.lock().unwrap();
+                let clone_interface = interface.clone();
                 let mut play_data = StreamData::default();
 
                 loop {
                     play_data.wait_for_ready(
+                        clone_interface.clone(),
                         ScreamDirection::Playback,
                         POLL_DELAY_US,
                         hva,
                         shmem_size,
                     );
-                    play_data.update_play_buffer(hva);
 
-                    interface_locked.send(&play_data);
+                    play_data.playback_trans(hva, clone_interface.clone());
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
@@ -336,21 +341,19 @@ impl Scream {
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
-                let mut interface_locked = interface.lock().unwrap();
+                let clone_interface = interface.clone();
                 let mut capt_data = StreamData::default();
 
                 loop {
                     capt_data.wait_for_ready(
+                        clone_interface.clone(),
                         ScreamDirection::Record,
                         POLL_DELAY_US,
                         hva,
                         shmem_size,
                     );
-                    capt_data.update_capt_buffer(hva);
 
-                    if interface_locked.receive(&capt_data) {
-                        capt_data.update_capt_idx(hva);
-                    }
+                    capt_data.capture_trans(hva, clone_interface.clone());
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
@@ -391,4 +394,5 @@ impl Scream {
 pub trait AudioInterface: Send {
     fn send(&mut self, recv_data: &StreamData);
     fn receive(&mut self, recv_data: &StreamData) -> bool;
+    fn destroy(&mut self);
 }
