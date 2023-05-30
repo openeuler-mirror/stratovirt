@@ -228,6 +228,167 @@ fn test_boot_index() {
 }
 
 #[test]
+fn test_smbios_tyep0() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let mut extra_args = "-smbios type=0,vendor=vendor0,version=version0,date=date0"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+    assert_eq!(talble_len, 109);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    let talbe_type0_len = 24;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[talbe_type0_len..talbe_type0_len + 7]),
+        "vendor0"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 8..talbe_type0_len + 16]),
+        "version0"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 17..talbe_type0_len + 22]),
+        "date0"
+    );
+
+    test_state.borrow_mut().stop();
+}
+
+#[test]
+fn test_smbios_tyep1() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let mut extra_args = "-smbios type=0,vendor=vendor0,version=version0,date=date0"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let mut extra_args = "-smbios type=1,manufacturer=manufacturer1,product=product1,\
+    version=12.2.2,serial=181a6bdf-ff98-4c5e-97ec-bff35fe41f6c,uuid=181a6bdf-ff98-4c5e-97ec-bff35fe41f6c,\
+    family=Virtual,sku=sku1"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+    assert_eq!(talble_len, 162);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    let talbe_type0_len = 24;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[talbe_type0_len..talbe_type0_len + 7]),
+        "vendor0"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 8..talbe_type0_len + 16]),
+        "version0"
+    );
+    assert_eq!(read_table_date[48], 1);
+    assert_eq!(read_table_date[49], 27 as u8);
+    let handle1 = LittleEndian::read_u16(&read_table_date[50..]);
+    assert_eq!(handle1, 0x100);
+
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[75..88]),
+        "manufacturer1"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[89..97]),
+        "product1"
+    );
+    assert_eq!(String::from_utf8_lossy(&read_table_date[98..104]), "12.2.2");
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[105..141]),
+        "181a6bdf-ff98-4c5e-97ec-bff35fe41f6c"
+    );
+    assert_eq!(String::from_utf8_lossy(&read_table_date[142..146]), "sku1");
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[147..154]),
+        "Virtual"
+    );
+    // check uuid
+    assert_eq!(read_table_date[56], 0xdf);
+    assert_eq!(read_table_date[57], 0x6b);
+    assert_eq!(read_table_date[58], 0x1a);
+    assert_eq!(read_table_date[59], 0x18);
+
+    assert_eq!(read_table_date[60], 0x98);
+    assert_eq!(read_table_date[61], 0xff);
+
+    assert_eq!(read_table_date[62], 0x5e);
+    assert_eq!(read_table_date[63], 0x4c);
+
+    assert_eq!(read_table_date[64], 0x97);
+    assert_eq!(read_table_date[65], 0xec);
+
+    assert_eq!(read_table_date[66], 0xbf);
+    assert_eq!(read_table_date[67], 0xf3);
+    assert_eq!(read_table_date[68], 0x5f);
+    assert_eq!(read_table_date[69], 0xe4);
+    assert_eq!(read_table_date[70], 0x1f);
+    assert_eq!(read_table_date[71], 0x6c);
+
+    test_state.borrow_mut().stop();
+}
+
+#[test]
 fn test_exception_by_ctrl_reg() {
     let mut args = Vec::new();
     bios_args(&mut args);
