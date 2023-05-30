@@ -280,6 +280,20 @@ impl AudioInterface for PulseStreamData {
 
         true
     }
+
+    fn destroy(&mut self) {
+        if self.simple.is_none() {
+            return;
+        }
+        if self.dir == Direction::Playback {
+            if let Err(e) = self.simple.as_ref().unwrap().drain() {
+                error!("Failed to drain Playback stream: {:?}", e);
+            }
+        } else if let Err(e) = self.simple.as_ref().unwrap().flush() {
+            error!("Failed to flush Capture stream: {:?}", e);
+        }
+        self.simple = None;
+    }
 }
 
 #[cfg(test)]
