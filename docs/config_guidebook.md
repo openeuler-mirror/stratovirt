@@ -1033,7 +1033,8 @@ ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to 
 Nine properties are supported for ivshmem-scream device.
 * id: unique device id.
 * memdev: configuration of the back-end memory device used by the ivshmem.
-* interface: configuring audio playback and recording interfaces, currently can be set to `PulseAudio` or `Demo`.
+* interface: configuring audio playback and recording interfaces, currently can be set to `ALSA`, `PulseAudio` or `Demo`.
+`ALSA` is used by default.
 * playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
 * record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
 * bus: bus number of the device.
