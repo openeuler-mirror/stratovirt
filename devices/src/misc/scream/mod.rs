@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod alsa;
 mod audio_demo;
 mod pulseaudio;
 
@@ -27,11 +28,16 @@ use anyhow::{bail, Context, Result};
 use core::time;
 use log::{error, warn};
 
-use self::audio_demo::AudioDemo;
+use self::{alsa::AlsaStreamData, audio_demo::AudioDemo};
 use super::ivshmem::Ivshmem;
 use machine_manager::config::scream::ScreamConfig;
 use pci::{PciBus, PciDevOps};
 use pulseaudio::{PulseStreamData, TAGET_LATENCY_MS};
+
+pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
+pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
+
+pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -292,6 +298,7 @@ impl Scream {
 
     fn interface_init(&self, name: &str, dir: ScreamDirection) -> Arc<Mutex<dyn AudioInterface>> {
         match self.interface.as_str() {
+            "ALSA" => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
             "PulseAudio" => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
             "Demo" => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
@@ -300,10 +307,10 @@ impl Scream {
             ))),
             _ => {
                 error!(
-                    "Unsupported audio interface {}, falling back to Pulseaudio",
+                    "Unsupported audio interface {}, falling back to ALSA",
                     self.interface
                 );
-                Arc::new(Mutex::new(PulseStreamData::init(name, dir)))
+                Arc::new(Mutex::new(AlsaStreamData::init(name, dir)))
             }
         }
     }

@@ -25,7 +25,7 @@ impl ScreamConfig {
     pub fn new() -> Self {
         Self {
             memdev: "".to_string(),
-            interface: "PulseAudio".to_string(),
+            interface: "ALSA".to_string(),
             playback: "".to_string(),
             record: "".to_string(),
         }

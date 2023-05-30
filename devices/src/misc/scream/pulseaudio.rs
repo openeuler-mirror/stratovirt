@@ -22,12 +22,10 @@ use pulse::{
     time::MicroSeconds,
 };
 
-use super::AudioInterface;
+use super::{
+    AudioInterface, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
+};
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData};
-
-const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
-const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
-const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 
 pub const TAGET_LATENCY_MS: u32 = 50;
 const MAX_LATENCY_MS: u32 = 100;
