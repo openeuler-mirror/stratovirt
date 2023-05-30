@@ -9,13 +9,20 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use crate::temp_cleaner::TempCleaner;
+
 use std::io::Write;
 
 use libc::{c_int, c_void, siginfo_t};
 use util::set_termi_canon_mode;
 use vmm_sys_util::signal::register_signal_handler;
 
+use crate::{
+    event,
+    qmp::{qmp_schema, QmpChannel},
+    temp_cleaner::TempCleaner,
+};
+
+const VM_EXIT_SUCCESS: i32 = 0;
 pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
 
@@ -34,6 +41,14 @@ pub fn exit_with_code(code: i32) {
 }
 
 extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+    if QmpChannel::is_connected() {
+        let shutdown_msg = qmp_schema::Shutdown {
+            guest: false,
+            reason: "Guest shutdown by signal ".to_string() + &num.to_string(),
+        };
+        event!(Shutdown; shutdown_msg);
+    }
+
     basic_clean();
     write!(
         &mut std::io::stderr(),
@@ -41,7 +56,7 @@ extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) 
         num
     )
     .expect("Failed to write to stderr");
-    exit_with_code(VM_EXIT_GENE_ERR);
+    exit_with_code(VM_EXIT_SUCCESS);
 }
 
 extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) {
@@ -64,4 +79,6 @@ pub fn register_kill_signal() {
         .expect("Register signal handler for SIGSYS failed!");
     register_signal_handler(libc::SIGINT, handle_signal_kill)
         .expect("Register signal handler for SIGINT failed!");
+    register_signal_handler(libc::SIGHUP, handle_signal_kill)
+        .expect("Register signal handler for SIGHUP failed!");
 }
