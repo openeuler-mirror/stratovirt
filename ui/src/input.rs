@@ -359,6 +359,26 @@ pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
         .keyboard_state_update(keycode, down)
 }
 
+/// Release all pressed key.
+pub fn release_all_key() -> Result<()> {
+    let mut locked_input = INPUTS.lock().unwrap();
+    for &(_, keycode) in KEYSYM2KEYCODE.iter() {
+        if locked_input
+            .keyboard_state
+            .keystate
+            .contain(keycode as usize)?
+        {
+            locked_input
+                .keyboard_state
+                .keyboard_state_update(keycode, false)?;
+            if let Some(k) = locked_input.get_active_kbd().as_ref() {
+                k.lock().unwrap().do_key_event(keycode, false)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn get_kbd_led_state(state: u8) -> bool {
     LED_STATE.lock().unwrap().kbd_led & state == state
 }
