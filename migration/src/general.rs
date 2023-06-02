@@ -21,11 +21,13 @@ use crate::protocol::{
 };
 use crate::{MigrationError, MigrationManager};
 use anyhow::{anyhow, Context, Result};
-use util::{byte_code::ByteCode, unix::host_page_size};
+use util::unix::host_page_size;
 
 impl MigrationManager {
     /// Write `MigrationHeader` to `Write` trait object as bytes.
     /// `MigrationHeader` will occupy the first 4096 bytes in snapshot file.
+    /// bytes 0-8: the length of the header that's in serde style from struct MigrationHeader.
+    /// bytes 8-4096: the header that's in serde style from struct MigrationHeader, and tailing 0s.
     ///
     /// # Arguments
     ///
@@ -43,8 +45,17 @@ impl MigrationManager {
             header.desc_len = Self::desc_db_len()?;
         }
 
+        let header_serde = serde_json::to_vec(&header)?;
+        if header_serde.len() > HEADER_LENGTH - 8 {
+            return Err(anyhow!(MigrationError::SaveVmMemoryErr(
+                "header too long".to_string()
+            )));
+        }
+        let header_len = header_serde.len().to_le_bytes();
         let mut input_slice = [0u8; HEADER_LENGTH];
-        input_slice[0..size_of::<MigrationHeader>()].copy_from_slice(header.as_bytes());
+        input_slice[0..8].copy_from_slice(&header_len);
+        input_slice[8..header_serde.len() + 8].copy_from_slice(&header_serde);
+
         fd.write(&input_slice)
             .with_context(|| "Failed to save migration header")?;
 
@@ -57,14 +68,41 @@ impl MigrationManager {
     ///
     /// * `fd` - The `Read` trait object to read header message.
     pub fn restore_header(fd: &mut dyn Read) -> Result<MigrationHeader> {
-        let mut header_bytes = [0u8; size_of::<MigrationHeader>()];
+        // 1. reader header length
+        let mut header_len = [0u8; 8];
+        fd.read_exact(&mut header_len)?;
+        let header_len = u64::from_le_bytes(header_len);
+        if header_len > HEADER_LENGTH as u64 - 8 {
+            return Err(anyhow!(MigrationError::FromBytesError(
+                "migration header length too large"
+            )));
+        }
+
+        // 2. read header according to its length
+        let mut header_bytes = Vec::new();
+        header_bytes.resize(header_len as usize, 0);
         fd.read_exact(&mut header_bytes)?;
 
-        let mut place_holder = [0u8; HEADER_LENGTH - size_of::<MigrationHeader>()];
+        // 3. change the binary format header into struct
+        let deserializer = serde_json::Deserializer::from_slice(&header_bytes);
+        let mut migration_header: Option<MigrationHeader> = None;
+        for header in deserializer.into_iter::<MigrationHeader>() {
+            migration_header = match header {
+                Ok(h) => Some(h),
+                Err(_) => {
+                    return Err(anyhow!(MigrationError::FromBytesError(
+                        "Invalid migration header"
+                    )))
+                }
+            };
+        }
+
+        // 4. read the extra bits
+        let mut place_holder = vec![0u8; HEADER_LENGTH - 8 - header_len as usize];
         fd.read_exact(&mut place_holder)?;
 
-        Ok(*MigrationHeader::from_bytes(&header_bytes)
-            .with_context(|| MigrationError::FromBytesError("HEADER"))?)
+        // SAFETY: migration_header is Some here.
+        Ok(migration_header.unwrap())
     }
 
     /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.
