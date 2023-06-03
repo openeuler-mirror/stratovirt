@@ -1110,6 +1110,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "smbios",
  "util",
  "virtio",
  "vmm-sys-util",
