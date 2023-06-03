@@ -22,10 +22,11 @@ use anyhow::{anyhow, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::DeviceFd;
 use log::error;
+use log::info;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::{
     snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
-    MigrationManager,
+    MigrationManager, StateTransfer,
 };
 use util::device_tree::{self, FdtBuilder};
 
@@ -245,6 +246,20 @@ impl GICv3 {
     fn device_fd(&self) -> &DeviceFd {
         &self.fd
     }
+
+    fn reset_its_state(&self) -> Result<()> {
+        if let Some(its) = &self.its_dev {
+            its.reset()?;
+        }
+
+        Ok(())
+    }
+
+    fn reset_gic_state(&self) -> Result<()> {
+        let reset_state = self.create_reset_state()?;
+        self.set_state(&reset_state)
+            .with_context(|| "Failed to reset gic")
+    }
 }
 
 impl MachineLifecycle for GICv3 {
@@ -442,6 +457,13 @@ impl GICDevice for GICv3 {
         Ok(())
     }
 
+    fn reset(&self) -> Result<()> {
+        info!("Reset gicv3");
+
+        self.reset_its_state()?;
+        self.reset_gic_state()
+    }
+
     fn get_redist_count(&self) -> u8 {
         self.redist_regions.len() as u8
     }
@@ -538,6 +560,18 @@ impl GICv3Its {
             std::ptr::null::<u64>() as u64,
             true,
         )
+    }
+
+    pub(crate) fn reset(&self) -> Result<()> {
+        info!("Reset gicv3 its");
+        KvmDevice::kvm_device_access(
+            &self.fd,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
+            u64::from(kvm_bindings::KVM_DEV_ARM_ITS_CTRL_RESET),
+            std::ptr::null::<u64>() as u64,
+            true,
+        )
+        .with_context(|| "Failed to reset ITS")
     }
 }
 
