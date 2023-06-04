@@ -1110,104 +1110,57 @@ impl GpuIoHandler {
 
     fn cmd_transfer_to_host_2d_update_resource(
         &mut self,
-        info_transfer: &VirtioGpuTransferToHost2d,
+        trans_info: &VirtioGpuTransferToHost2d,
         res_idx: usize,
-    ) {
+    ) -> Result<()> {
         let res = &self.resources_list[res_idx];
         let pixman_format;
+        let width;
         let bpp;
         let stride;
         let data;
+        // SAFETY: res.pixman_image has been checked valid.
         unsafe {
             pixman_format = pixman_image_get_format(res.pixman_image);
+            width = pixman_image_get_width(res.pixman_image) as u32;
             bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-            stride = pixman_image_get_stride(res.pixman_image);
-            data = pixman_image_get_data(res.pixman_image);
-        }
-        let data_cast: *mut u8 = data.cast();
-        let mut dst_ofs: usize = (info_transfer.rect.y_coord * stride as u32
-            + info_transfer.rect.x_coord * bpp) as usize;
-        // It can be considered that PARTIAL or complete image data is stored in
-        // the res.iov[]. And info_transfer.offset is the offset from res.iov[0].base
-        // to the start position of the resource we really want to update.
-        let mut src_ofs: usize = info_transfer.offset as usize;
-        // current iov's index
-        let mut iov_idx: usize = 0;
-        // current iov's offset
-        let mut iov_ofs: usize = 0;
-        let mut iov_len_sum: usize = 0;
-
-        // move to correct iov
-        loop {
-            if iov_len_sum == src_ofs || iov_idx >= res.iov.len() {
-                break;
-            }
-
-            if res.iov[iov_idx].iov_len as usize + iov_len_sum <= src_ofs {
-                iov_len_sum += res.iov[iov_idx].iov_len as usize;
-                iov_idx += 1;
-            } else {
-                iov_ofs = src_ofs - iov_len_sum;
-                break;
-            }
+            stride = pixman_image_get_stride(res.pixman_image) as u32;
+            data = pixman_image_get_data(res.pixman_image).cast() as *mut u8;
         }
 
-        if iov_idx >= res.iov.len() {
-            warn!("GuestWarn: the start pos of transfer data from guest is longer than resource's len.");
-            return;
-        }
-
-        // We divide regions into that need to be copied and can be skipped.
-        let src_cpy_section: usize = (info_transfer.rect.width * bpp) as usize;
-        let src_expected: usize = info_transfer.offset as usize
-            + ((info_transfer.rect.height - 1) * stride as u32) as usize
-            + (info_transfer.rect.width * bpp) as usize;
-
-        loop {
-            if src_ofs >= src_expected || iov_idx >= res.iov.len() {
-                break;
-            }
-
-            let iov_left = res.iov[iov_idx].iov_len as usize - iov_ofs;
-
-            let pos = (src_ofs - info_transfer.offset as usize) % (stride as usize);
-            if pos >= src_cpy_section {
-                if pos + iov_left <= stride as usize {
-                    src_ofs += iov_left;
-                    dst_ofs += iov_left;
-                    iov_idx += 1;
-                    iov_ofs = 0;
-                } else {
-                    src_ofs += stride as usize - pos;
-                    dst_ofs += stride as usize - pos;
-                    iov_ofs += stride as usize - pos;
+        // When the dedicated area is continous.
+        if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {
+            let offset_dst = (trans_info.rect.y_coord * stride) as usize;
+            let trans_size = (trans_info.rect.height * stride) as usize;
+            // SAFETY: offset_dst and trans_size do not exceeds data size.
+            let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), trans_size) };
+            iov_to_buf_direct(&res.iov, trans_info.offset, dst).map(|v| {
+                if v < trans_size {
+                    warn!("No enough data is copied for transfer_to_host_2d");
                 }
-            } else if pos + iov_left <= src_cpy_section {
-                unsafe {
-                    ptr::copy(
-                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
-                        data_cast.add(dst_ofs),
-                        iov_left,
-                    );
-                }
-                src_ofs += iov_left;
-                dst_ofs += iov_left;
-                iov_idx += 1;
-                iov_ofs = 0;
-            } else {
-                // pos + iov_left > src_cpy_section
-                unsafe {
-                    ptr::copy(
-                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
-                        data_cast.add(dst_ofs),
-                        src_cpy_section - pos,
-                    );
-                }
-                src_ofs += src_cpy_section - pos;
-                dst_ofs += src_cpy_section - pos;
-                iov_ofs += src_cpy_section - pos;
-            }
+                v
+            })?;
+            return Ok(());
         }
+
+        // Otherwise transfer data line by line.
+        let mut offset_src = trans_info.offset as usize;
+        let mut offset_dst =
+            (trans_info.rect.y_coord * stride + trans_info.rect.x_coord * bpp) as usize;
+        let line_size = (trans_info.rect.width * bpp) as usize;
+        for _ in 0..trans_info.rect.height {
+            // SAFETY: offset_dst and line_size do not exceeds data size.
+            let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), line_size) };
+            iov_to_buf_direct(&res.iov, offset_src as u64, dst).map(|v| {
+                if v < line_size {
+                    warn!("No enough data is copied for transfer_to_host_2d");
+                }
+                v
+            })?;
+            offset_src += stride as usize;
+            offset_dst += stride as usize;
+        }
+        Ok(())
     }
 
     fn cmd_transfer_to_host_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -1219,7 +1172,7 @@ impl GpuIoHandler {
             return self.response_nodata(error, req);
         }
 
-        self.cmd_transfer_to_host_2d_update_resource(&info_transfer, res_idx.unwrap());
+        self.cmd_transfer_to_host_2d_update_resource(&info_transfer, res_idx.unwrap())?;
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
