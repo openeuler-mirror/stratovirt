@@ -508,7 +508,7 @@ impl UsbHost {
                 device_req.value,
                 device_req.index,
                 &self.usb_device.data_buf[..device_req.length as usize],
-                Duration::from_millis(10),
+                Duration::from_millis(1000),
             ) {
                 error!("Failed to write control by usb host: {:?}", e);
                 packet.status = UsbPacketStatus::Stall;
@@ -521,7 +521,7 @@ impl UsbHost {
                 device_req.value,
                 device_req.index,
                 &mut self.usb_device.data_buf[..device_req.length as usize],
-                Duration::from_millis(10),
+                Duration::from_millis(1000),
             ) {
                 Ok(n) => n as u32,
                 Err(e) => {
