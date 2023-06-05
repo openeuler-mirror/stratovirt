@@ -27,9 +27,9 @@ use crate::{
     console::graphic_hardware_ui_info,
     gtk::GtkDisplayScreen,
     input::{
-        self, point_event, press_mouse, update_key_state, ABS_MAX, INPUT_BUTTON_WHEEL_DOWN,
-        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_LEFT,
-        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
+        self, point_event, press_mouse, release_all_key, update_key_state, ABS_MAX,
+        INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+        INPUT_BUTTON_WHEEL_UP, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
     },
 };
 
@@ -85,6 +85,13 @@ pub(crate) fn set_callback_for_draw_area(
         ),
     );
 
+    draw_area.connect_focus_out_event(
+        glib::clone!(@weak gs => @default-return Inhibit(false), move |_, _| {
+            da_focus_out_callback().unwrap_or_else(|e|error!("Focus out event: {:?}", e));
+            Inhibit(false)}
+        ),
+    );
+
     let event_mask = EventMask::BUTTON_PRESS_MASK
         | EventMask::BUTTON_RELEASE_MASK
         | EventMask::BUTTON_MOTION_MASK
@@ -92,6 +99,7 @@ pub(crate) fn set_callback_for_draw_area(
         | EventMask::KEY_PRESS_MASK
         | EventMask::KEY_RELEASE_MASK
         | EventMask::BUTTON1_MOTION_MASK
+        | EventMask::FOCUS_CHANGE_MASK
         | EventMask::POINTER_MOTION_MASK;
     draw_area.add_events(event_mask);
 
@@ -117,6 +125,10 @@ fn da_configure_callback(
     let (width, height) = event_configure.size();
 
     graphic_hardware_ui_info(con, width, height)
+}
+
+fn da_focus_out_callback() -> Result<()> {
+    release_all_key()
 }
 
 fn da_key_callback(
