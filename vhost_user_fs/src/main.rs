@@ -25,7 +25,6 @@ pub mod virtio_fs;
 
 use std::collections::HashSet;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -132,9 +131,9 @@ fn parse_capabilities(cmd_args: &arg_parser::ArgMatches) -> Result<HashSet<Strin
 fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
 
-    if let Some(logfile_path) = cmd_args.value_of("display log") {
-        init_log(logfile_path)?;
-    }
+    let logfile_path = cmd_args.value_of("display log").unwrap_or_default();
+    logger::init_log(logfile_path)?;
+
     signal_handler::register_kill_signal();
     set_panic_hook();
     match real_main(&cmd_args) {
@@ -204,26 +203,6 @@ fn update_capabilities(cmd_args: &ArgMatches) -> Result<()> {
     if let Err(e) = capng::apply(capng::Set::BOTH) {
         bail!("can't apply the child capabilities: {}", e);
     }
-    Ok(())
-}
-
-fn init_log(logfile_path: String) -> Result<()> {
-    if logfile_path.is_empty() {
-        logger::init_logger_with_env(Some(Box::new(std::io::stdout())))
-            .with_context(|| "Failed to init logger")?;
-    } else {
-        let logfile = std::fs::OpenOptions::new()
-            .read(false)
-            .write(true)
-            .append(true)
-            .create(true)
-            .mode(0o640)
-            .open(logfile_path.clone())
-            .with_context(|| format!("Failed to open log file {}", logfile_path))?;
-        logger::init_logger_with_env(Some(Box::new(logfile)))
-            .with_context(|| format!("Failed to init logger {}", logfile_path))?;
-    }
-
     Ok(())
 }
 
