@@ -224,10 +224,17 @@ fn get_notifier_handler(
     match backend {
         ChardevType::Stdio | ChardevType::Pty => Rc::new(move |_, _| {
             let locked_chardev = chardev.lock().unwrap();
+            let get_remain_space_size = locked_chardev
+                .get_remain_space_size
+                .as_ref()
+                .unwrap()
+                .clone();
+            drop(locked_chardev);
+            let buff_size = get_remain_space_size();
+            let locked_chardev = chardev.lock().unwrap();
             if locked_chardev.deactivated {
                 return None;
             }
-            let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
             let mut buffer = vec![0_u8; buff_size];
             let input_h = locked_chardev.input.clone();
             let receive = locked_chardev.receive.clone();
@@ -264,10 +271,17 @@ fn get_notifier_handler(
             let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
                 let mut locked_chardev = cloned_chardev.lock().unwrap();
                 if event == EventSet::IN {
+                    let get_remain_space_size = locked_chardev
+                        .get_remain_space_size
+                        .as_ref()
+                        .unwrap()
+                        .clone();
+                    drop(locked_chardev);
+                    let buff_size = get_remain_space_size();
+                    let locked_chardev = cloned_chardev.lock().unwrap();
                     if locked_chardev.deactivated {
                         return None;
                     }
-                    let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
                     let mut buffer = vec![0_u8; buff_size];
                     if let Some(input) = locked_chardev.input.clone() {
                         if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
