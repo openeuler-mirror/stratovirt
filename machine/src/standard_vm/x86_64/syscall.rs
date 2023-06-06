@@ -134,6 +134,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         madvise_rule(),
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
+        BpfRule::new(libc::SYS_renameat),
         BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_socket),
         #[cfg(target_env = "gnu")]

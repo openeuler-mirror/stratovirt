@@ -121,6 +121,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_unlink),
         #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_unlinkat),
+        BpfRule::new(libc::SYS_renameat),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_mkdir),
         #[cfg(target_arch = "aarch64")]
