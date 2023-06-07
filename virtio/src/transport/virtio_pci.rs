@@ -657,11 +657,11 @@ impl VirtioPciDevice {
                     VirtioInterruptType::Config => {
                         if needs_reset {
                             device_status.fetch_or(CONFIG_STATUS_NEEDS_RESET, Ordering::SeqCst);
-                            if device_status.load(Ordering::Acquire) & CONFIG_STATUS_DRIVER_OK == 0
-                            {
-                                return Ok(());
-                            }
                         }
+                        if device_status.load(Ordering::Acquire) & CONFIG_STATUS_DRIVER_OK == 0 {
+                            return Ok(());
+                        }
+
                         // Use (CONFIG | VRING) instead of CONFIG, it can be used to solve the
                         // IO stuck problem by change the device configure.
                         interrupt_status.fetch_or(
