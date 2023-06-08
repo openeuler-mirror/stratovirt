@@ -130,7 +130,7 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "USB Camera",
     "1",
     "USB Camera Configuration",
-    "USB Camera Interface Associated Description",
+    "StratoVirt Camera",
     "Video Control",
     "Input Terminal",
     "Output Terminal",
