@@ -26,6 +26,10 @@ pub struct UiContext {
     pub power_button: Option<Arc<EventFd>>,
     /// Forced Shutdown.
     pub shutdown_req: Option<Arc<EventFd>>,
+    /// Pause Virtual Machine.
+    pub pause_req: Option<Arc<EventFd>>,
+    /// Resume Virtual Machine.
+    pub resume_req: Option<Arc<EventFd>>,
 }
 
 /// GTK related configuration.
