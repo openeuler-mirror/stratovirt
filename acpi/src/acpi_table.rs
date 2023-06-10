@@ -160,7 +160,7 @@ impl AcpiTable {
     /// `new_value` - The new value that will be set in the field.
     pub fn set_field<T: ByteCode>(&mut self, byte_index: usize, new_value: T) {
         let value_len = std::mem::size_of::<T>();
-        if byte_index >= self.entries.len() || byte_index + value_len >= self.entries.len() {
+        if byte_index >= self.entries.len() || byte_index + value_len > self.entries.len() {
             panic!("Set field in table failed: overflow occurs.");
         }
         self.entries[byte_index..(byte_index + value_len)].copy_from_slice(new_value.as_bytes());
@@ -184,13 +184,13 @@ impl AmlBuilder for AcpiTable {
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]
 pub struct ProcessorHierarchyNode {
-    pub r#type: u8,
-    pub length: u8,
-    pub reserved: u16,
-    pub flags: u32,
-    pub parent: u32,
-    pub acpi_processor_id: u32,
-    pub num_private_resources: u32,
+    r#type: u8,
+    length: u8,
+    reserved: u16,
+    flags: u32,
+    parent: u32,
+    acpi_processor_id: u32,
+    num_private_resources: u32,
 }
 
 impl ByteCode for ProcessorHierarchyNode {}
@@ -202,15 +202,120 @@ impl AmlBuilder for ProcessorHierarchyNode {
 }
 
 impl ProcessorHierarchyNode {
-    pub fn new(r#type: u8, flags: u32, parent: u32, acpi_processor_id: u32) -> Self {
+    pub fn new(
+        flags: u32,
+        parent: u32,
+        acpi_processor_id: u32,
+        num_private_resources: u32,
+    ) -> Self {
         Self {
-            r#type,
-            length: 20,
+            r#type: 0,
+            length: 20 + num_private_resources as u8 * 4,
             reserved: 0,
             flags,
             parent,
             acpi_processor_id,
-            num_private_resources: 0,
+            num_private_resources,
+        }
+    }
+}
+
+pub fn processor_append_priv_res(pptt: &mut AcpiTable, priv_resources: Vec<u32>) {
+    let start = pptt.table_len();
+    pptt.set_table_len(start + priv_resources.len() * 4);
+    for (i, priv_res) in priv_resources.iter().enumerate() {
+        pptt.set_field(start + i * 4, *priv_res);
+    }
+}
+
+/// The Type of the hardcoded cache info
+pub enum CacheType {
+    L1D,
+    L1I,
+    L2,
+    L3,
+}
+
+struct CacheNode {
+    size: u32,
+    sets: u32,
+    associativity: u8,
+    attributes: u8,
+    line_size: u16,
+}
+
+const CACHE_NODES: [CacheNode; CacheType::L3 as usize + 1] = [
+    // L1 data cache
+    CacheNode {
+        size: 65536,
+        sets: 256,
+        associativity: 4,
+        attributes: 2,
+        line_size: 64,
+    },
+    // L1 instruction cache
+    CacheNode {
+        size: 65536,
+        sets: 256,
+        associativity: 4,
+        attributes: 4,
+        line_size: 64,
+    },
+    // L2 unified cache
+    CacheNode {
+        size: 524228,
+        sets: 1024,
+        associativity: 8,
+        attributes: 10,
+        line_size: 64,
+    },
+    // L3 unified cache
+    CacheNode {
+        size: 33554432,
+        sets: 2048,
+        associativity: 15,
+        attributes: 10,
+        line_size: 128,
+    },
+];
+
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct CacheHierarchyNode {
+    r#type: u8,
+    length: u8,
+    reserved: u16,
+    flags: u32,
+    next_level: u32,
+    size: u32,
+    number_sets: u32,
+    associativity: u8,
+    attributes: u8,
+    line_size: u16,
+}
+
+impl ByteCode for CacheHierarchyNode {}
+
+impl AmlBuilder for CacheHierarchyNode {
+    fn aml_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+
+impl CacheHierarchyNode {
+    pub fn new(next_level: u32, cache_type: CacheType) -> Self {
+        let cache_node = &CACHE_NODES[cache_type as usize];
+        Self {
+            r#type: 1,
+            length: 24,
+            reserved: 0,
+            flags: 127,
+            next_level,
+            size: cache_node.size,
+            number_sets: cache_node.sets,
+            associativity: cache_node.associativity,
+            attributes: cache_node.attributes,
+            line_size: cache_node.line_size,
         }
     }
 }

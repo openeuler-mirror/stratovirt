@@ -32,15 +32,16 @@ use vmm_sys_util::eventfd::EventFd;
 use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
 
 use acpi::{
-    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
-    AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, ProcessorHierarchyNode, TableLoader,
-    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
-    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
-    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
-    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
-    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
-    ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT, ROOT_COMPLEX_ENTRY_SIZE,
+    processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
+    AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
+    AmlNameDecl, AmlScope, AmlScopeBuilder, AmlString, CacheHierarchyNode, CacheType,
+    ProcessorHierarchyNode, TableLoader, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ,
+    ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ,
+    ACPI_GTDT_CAP_ALWAYS_ON, ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP,
+    ACPI_IORT_NODE_PCI_ROOT_COMPLEX, ACPI_MADT_GENERIC_CPU_INTERFACE,
+    ACPI_MADT_GENERIC_DISTRIBUTOR, ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR,
+    ARCH_GIC_MAINT_IRQ, ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    ROOT_COMPLEX_ENTRY_SIZE,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -296,21 +297,34 @@ impl StdMachine {
 
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
         for core in 0..self.cpu_topo.cores {
+            let mut priv_resources = vec![0; 3];
+            priv_resources[0] = pptt.table_len() as u32;
+            let mut cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L2);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+            priv_resources[1] = pptt.table_len() as u32;
+            cache_hierarchy_node = CacheHierarchyNode::new(priv_resources[0], CacheType::L1D);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+            priv_resources[2] = pptt.table_len() as u32;
+            cache_hierarchy_node = CacheHierarchyNode::new(priv_resources[0], CacheType::L1I);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+
             if self.cpu_topo.threads > 1 {
                 let core_offset = pptt.table_len();
                 let core_hierarchy_node =
-                    ProcessorHierarchyNode::new(0, 0x0, cluster_offset, core as u32);
+                    ProcessorHierarchyNode::new(0x0, cluster_offset, core as u32, 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
+                processor_append_priv_res(pptt, priv_resources);
                 for _thread in 0..self.cpu_topo.threads {
                     let thread_hierarchy_node =
-                        ProcessorHierarchyNode::new(0, 0xE, core_offset as u32, *uid);
+                        ProcessorHierarchyNode::new(0xE, core_offset as u32, *uid, 0);
                     pptt.append_child(&thread_hierarchy_node.aml_bytes());
                     (*uid) += 1;
                 }
             } else {
-                let core_hierarchy_node = ProcessorHierarchyNode::new(0, 0xA, cluster_offset, *uid);
+                let core_hierarchy_node = ProcessorHierarchyNode::new(0xA, cluster_offset, *uid, 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
                 (*uid) += 1;
+                processor_append_priv_res(pptt, priv_resources);
             }
         }
     }
@@ -319,7 +333,7 @@ impl StdMachine {
         for cluster in 0..self.cpu_topo.clusters {
             let cluster_offset = pptt.table_len();
             let cluster_hierarchy_node =
-                ProcessorHierarchyNode::new(0, 0x0, socket_offset, cluster as u32);
+                ProcessorHierarchyNode::new(0x0, socket_offset, cluster as u32, 0);
             pptt.append_child(&cluster_hierarchy_node.aml_bytes());
             self.build_pptt_cores(pptt, cluster_offset as u32, uid);
         }
@@ -327,9 +341,15 @@ impl StdMachine {
 
     fn build_pptt_sockets(&self, pptt: &mut AcpiTable, uid: &mut u32) {
         for socket in 0..self.cpu_topo.sockets {
+            let priv_resources = vec![pptt.table_len() as u32];
+            let cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L3);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+
             let socket_offset = pptt.table_len();
-            let socket_hierarchy_node = ProcessorHierarchyNode::new(0, 0x1, 0, socket as u32);
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, socket as u32, 1);
             pptt.append_child(&socket_hierarchy_node.aml_bytes());
+            processor_append_priv_res(pptt, priv_resources);
+
             self.build_pptt_clusters(pptt, socket_offset as u32, uid);
         }
     }
