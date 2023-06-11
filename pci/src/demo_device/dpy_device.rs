@@ -121,7 +121,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
         }
 
         let mut i = 0;
-        let mut offset = y * stride as i32 + x * bpp as i32 / 8;
+        let mut offset = y * stride + x * bpp as i32 / 8;
         let count = w * bpp as i32 / 8;
         while i < h {
             error!(
@@ -144,7 +144,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
                 offset + count,
                 ds.image[offset as usize]
             );
-            offset += stride as i32;
+            offset += stride;
             i += 1;
         }
         Ok(())

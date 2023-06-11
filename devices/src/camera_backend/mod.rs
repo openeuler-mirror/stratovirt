@@ -81,17 +81,12 @@ pub struct CamLensFmt {
     // TODO: to be extended.
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Default)]
 pub enum FmtType {
+    #[default]
     Yuy2 = 0,
     Rgb565,
     Mjpg,
-}
-
-impl Default for FmtType {
-    fn default() -> Self {
-        FmtType::Yuy2
-    }
 }
 
 #[derive(Clone, Debug)]

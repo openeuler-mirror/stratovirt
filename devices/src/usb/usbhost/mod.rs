@@ -246,7 +246,7 @@ impl UsbHost {
         self.ifs_num = conf.num_interfaces();
 
         for i in 0..self.ifs_num {
-            if !match self.handle.as_ref().unwrap().kernel_driver_active(i as u8) {
+            if !match self.handle.as_ref().unwrap().kernel_driver_active(i) {
                 Ok(rc) => {
                     if !rc {
                         self.ifs[i as usize].detached = true;
@@ -263,7 +263,7 @@ impl UsbHost {
             self.handle
                 .as_mut()
                 .unwrap()
-                .detach_kernel_driver(i as u8)
+                .detach_kernel_driver(i)
                 .unwrap_or_else(|e| error!("Failed to detach kernel driver: {:?}", e));
             self.ifs[i as usize].detached = true;
         }
@@ -288,7 +288,7 @@ impl UsbHost {
             self.handle
                 .as_mut()
                 .unwrap()
-                .attach_kernel_driver(i as u8)
+                .attach_kernel_driver(i)
                 .unwrap_or_else(|e| error!("Failed to attach kernel driver: {:?}", e));
             self.ifs[i as usize].detached = false;
         }
@@ -301,7 +301,7 @@ impl UsbHost {
             Err(_) => return,
         };
 
-        for (i, intf) in conf.interfaces().into_iter().enumerate() {
+        for (i, intf) in conf.interfaces().enumerate() {
             // The usb_deviec.altsetting indexs alternate settings by the interface number.
             // Get the 0th alternate setting first so that we can grap the interface number,
             // and then correct the alternate setting value if necessary.
@@ -383,7 +383,7 @@ impl UsbHost {
             self.handle
                 .as_mut()
                 .unwrap()
-                .release_interface(i as u8)
+                .release_interface(i)
                 .unwrap_or_else(|e| error!("Failed to release interface: {:?}", e));
             self.ifs[i as usize].claimed = false;
         }
@@ -408,13 +408,7 @@ impl UsbHost {
 
         let mut claimed = 0;
         for i in 0..self.ifs_num {
-            if self
-                .handle
-                .as_mut()
-                .unwrap()
-                .claim_interface(i as u8)
-                .is_ok()
-            {
+            if self.handle.as_mut().unwrap().claim_interface(i).is_ok() {
                 self.ifs[i as usize].claimed = true;
                 claimed += 1;
                 if claimed == conf.num_interfaces() {
@@ -482,13 +476,7 @@ impl UsbHost {
     }
 
     fn clear_halt(&mut self, pid: u8, index: u8) {
-        if self
-            .handle
-            .as_mut()
-            .unwrap()
-            .clear_halt(index as u8)
-            .is_err()
-        {
+        if self.handle.as_mut().unwrap().clear_halt(index).is_err() {
             warn!("Failed to clear halt");
         }
         self.usb_device

@@ -376,7 +376,7 @@ fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
         (0..PCI_PIN_NUM).for_each(|pin| {
             let gsi = (pin + slot) % PCI_PIN_NUM;
             let mut pkg = AmlPackage::new(4);
-            pkg.append_child(AmlDWord(((slot as u32) << 16) as u32 | 0xFFFF));
+            pkg.append_child(AmlDWord((slot as u32) << 16 | 0xFFFF));
             pkg.append_child(AmlDWord(pin as u32));
             pkg.append_child(AmlName(format!("GSI{}", gsi)));
             pkg.append_child(AmlZero);
@@ -492,10 +492,10 @@ impl AmlBuilder for PciHost {
                 AmlCacheable::NonCacheable,
                 AmlReadAndWrite::ReadWrite,
                 0,
-                high_pcie_mmio.0 as u64,
-                (high_pcie_mmio.0 + high_pcie_mmio.1) as u64 - 1,
+                high_pcie_mmio.0,
+                high_pcie_mmio.0 + high_pcie_mmio.1 - 1,
                 0,
-                high_pcie_mmio.1 as u64,
+                high_pcie_mmio.1,
             ));
         }
         crs.append_child(AmlDWordDesc::new_memory(

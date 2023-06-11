@@ -261,7 +261,7 @@ impl ImageFrame {
 }
 
 fn read_config(path: &str) -> Result<DeviceConfig> {
-    let str = read_to_string(&path)?;
+    let str = read_to_string(path)?;
     let conf = serde_json::from_str::<DeviceConfig>(&str)?;
     Ok(conf)
 }

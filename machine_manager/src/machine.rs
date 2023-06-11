@@ -227,7 +227,7 @@ pub trait DeviceInterface {
         let target = Target {
             arch: "aarch64".to_string(),
         };
-        Response::create_response(serde_json::to_value(&target).unwrap(), None)
+        Response::create_response(serde_json::to_value(target).unwrap(), None)
     }
 
     /// Query all events of StratoVirt.
@@ -248,7 +248,7 @@ pub trait DeviceInterface {
             enabled: true,
             present: true,
         };
-        Response::create_response(serde_json::to_value(&kvm).unwrap(), None)
+        Response::create_response(serde_json::to_value(kvm).unwrap(), None)
     }
 
     /// Query machine types supported by StratoVirt.

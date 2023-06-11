@@ -453,7 +453,7 @@ impl VhostUserClient {
                 )?;
                 let inflight = VhostInflight {
                     file,
-                    addr: hva as u64,
+                    addr: hva,
                     inner: vhost_user_inflight,
                 };
                 self.inflight = Some(inflight);

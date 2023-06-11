@@ -1246,9 +1246,7 @@ pub fn desktop_resize(
     let locked_surface = server.vnc_surface.lock().unwrap();
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
-    if !(0..=MAX_IMAGE_SIZE as i32).contains(&width)
-        || !(0..=MAX_IMAGE_SIZE as i32).contains(&height)
-    {
+    if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
         return Err(anyhow!(VncError::InvalidImageSize(width, height)));
     }
     drop(locked_surface);
