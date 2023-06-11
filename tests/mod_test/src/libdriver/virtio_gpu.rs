@@ -436,13 +436,14 @@ impl TestVirtioGpu {
         self.device.borrow_mut().set_driver_ok();
     }
 
-    pub fn request_complete<T: ByteCode>(
+    pub fn submit_request<T: ByteCode>(
         &mut self,
         ctrl_q: bool,
         hdr: &[u8],
         hdr_ctx: Option<&[u8]>,
         ctx: Option<&[u8]>,
         resp: Option<&mut T>,
+        wait_resp: bool,
     ) {
         let mut offset = 0;
         let mut vec = Vec::new();
@@ -519,14 +520,16 @@ impl TestVirtioGpu {
                 .borrow_mut()
                 .kick_virtqueue(self.state.clone(), self.ctrl_q.clone());
 
-            self.device.borrow_mut().poll_used_elem(
-                self.state.clone(),
-                self.ctrl_q.clone(),
-                free_head,
-                TIMEOUT_US,
-                &mut None,
-                true,
-            );
+            if wait_resp {
+                self.device.borrow_mut().poll_used_elem(
+                    self.state.clone(),
+                    self.ctrl_q.clone(),
+                    free_head,
+                    TIMEOUT_US,
+                    &mut None,
+                    true,
+                );
+            }
         } else {
             let free_head = self
                 .cursor_q
@@ -537,14 +540,16 @@ impl TestVirtioGpu {
                 .borrow_mut()
                 .kick_virtqueue(self.state.clone(), self.cursor_q.clone());
 
-            self.device.borrow_mut().poll_used_elem(
-                self.state.clone(),
-                self.cursor_q.clone(),
-                free_head,
-                TIMEOUT_US,
-                &mut None,
-                true,
-            );
+            if wait_resp {
+                self.device.borrow_mut().poll_used_elem(
+                    self.state.clone(),
+                    self.cursor_q.clone(),
+                    free_head,
+                    TIMEOUT_US,
+                    &mut None,
+                    true,
+                );
+            }
         }
 
         if resp.is_some() {
@@ -558,6 +563,17 @@ impl TestVirtioGpu {
 
             *resp.unwrap() = slice[0].clone();
         }
+    }
+
+    pub fn request_complete<T: ByteCode>(
+        &mut self,
+        ctrl_q: bool,
+        hdr: &[u8],
+        hdr_ctx: Option<&[u8]>,
+        ctx: Option<&[u8]>,
+        resp: Option<&mut T>,
+    ) {
+        self.submit_request(ctrl_q, hdr, hdr_ctx, ctx, resp, true);
     }
 }
 
