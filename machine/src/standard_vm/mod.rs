@@ -1194,7 +1194,7 @@ impl DeviceInterface for StdMachine {
     fn query_vnc(&self) -> Response {
         #[cfg(not(target_env = "musl"))]
         if let Some(vnc_info) = qmp_query_vnc() {
-            return Response::create_response(serde_json::to_value(&vnc_info).unwrap(), None);
+            return Response::create_response(serde_json::to_value(vnc_info).unwrap(), None);
         }
         Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(
@@ -1661,7 +1661,7 @@ impl DeviceInterface for StdMachine {
                     std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
-                        .open(&file_name)
+                        .open(file_name)
                         .unwrap(),
                 );
             }

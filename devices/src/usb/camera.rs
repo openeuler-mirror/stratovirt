@@ -1002,7 +1002,7 @@ impl UvcPayload {
             if iov_size <= header_len as u64 {
                 bail!("Invalid iov size {}", iov_size);
             }
-            frame_data_size = iov_size as u64 - header_len as u64;
+            frame_data_size = iov_size - header_len as u64;
         }
         Ok(frame_data_size)
     }
@@ -1084,7 +1084,7 @@ impl CameraIoHander {
         if locked_payload.payload_offset == 0 {
             // Payload start, add header.
             pkt.transfer_packet(&mut locked_payload.header, header_len);
-            locked_payload.payload_offset += header_len as usize;
+            locked_payload.payload_offset += header_len;
             iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
                 .with_context(|| format!("Invalid iov size {}", pkt_size))?;
         }

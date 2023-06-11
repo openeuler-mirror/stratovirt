@@ -1254,9 +1254,10 @@ pub struct StatusInfo {
     pub status: RunState,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum RunState {
     #[serde(rename = "debug")]
+    #[default]
     debug,
     #[serde(rename = "inmigrate")]
     inmigrate,
@@ -1290,12 +1291,6 @@ pub enum RunState {
     colo,
     #[serde(rename = "preconfig")]
     preconfig,
-}
-
-impl Default for RunState {
-    fn default() -> Self {
-        RunState::debug
-    }
 }
 
 /// migrate

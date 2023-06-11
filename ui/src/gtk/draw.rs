@@ -139,7 +139,7 @@ fn da_key_callback(
     let keysym2keycode = gs.borrow().keysym2keycode.clone();
     let org_key_value = key_event.keyval().into_glib() as i32;
     let key_value: u16 = key_event.keyval().to_lower().into_glib() as u16;
-    let keycode: u16 = match keysym2keycode.borrow().get(&(key_value as u16)) {
+    let keycode: u16 = match keysym2keycode.borrow().get(&key_value) {
         Some(k) => *k,
         None => 0,
     };
@@ -242,12 +242,10 @@ fn da_scroll_callback(
         _ => 0x0,
     };
 
-    let standard_x =
-        (((borrowed_gs.click_state.last_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y =
-        (((borrowed_gs.click_state.last_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((borrowed_gs.click_state.last_x as u64 * ABS_MAX) / width as u64) as u16;
+    let standard_y = ((borrowed_gs.click_state.last_y as u64 * ABS_MAX) / height as u64) as u16;
     drop(borrowed_gs);
-    point_event(button_mask as u32, standard_x as u32, standard_y as u32)?;
+    point_event(button_mask, standard_x as u32, standard_y as u32)?;
     Ok(())
 }
 

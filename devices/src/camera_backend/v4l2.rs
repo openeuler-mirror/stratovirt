@@ -174,7 +174,7 @@ impl V4l2CameraBackend {
                 break;
             }
             // NOTE: Only support discrete now.
-            if (frmsize.type_) != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE as u32 {
+            if (frmsize.type_) != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
             let width = unsafe { frmsize.__bindgen_anon_1.discrete.width };
