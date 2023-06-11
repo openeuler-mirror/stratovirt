@@ -1222,24 +1222,30 @@ impl GpuIoHandler {
         ents.resize(entries as usize, VirtioGpuMemEntry::default());
         let ents_buf =
             unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
-        iov_to_buf_direct(&req.out_iovec, head_size, ents_buf).and_then(|v| {
-            if v as u64 == ents_size {
-                Ok(())
-            } else {
-                Err(anyhow!("Load no enough ents when attach backing"))
-            }
-        })?;
+        let v = iov_to_buf_direct(&req.out_iovec, head_size, ents_buf)?;
+        if v as u64 != ents_size {
+            error!(
+                "Virtio-GPU: Load no enough ents buf when attach backing, {} vs {}",
+                v, ents_size
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
 
         for entry in ents.iter() {
-            let iov_base = self
-                .mem_space
-                .get_host_address(GuestAddress(entry.addr))
-                .with_context(|| format!("Map entry base {:?} failed", entry.addr))?;
-            let iov_item = Iovec {
-                iov_base,
-                iov_len: entry.length as u64,
-            };
-            res.iov.push(iov_item);
+            match self.mem_space.get_host_address(GuestAddress(entry.addr)) {
+                Some(iov_base) => {
+                    let iov_item = Iovec {
+                        iov_base,
+                        iov_len: entry.length as u64,
+                    };
+                    res.iov.push(iov_item);
+                }
+                None => {
+                    error!("Virtio-GPU: Map entry base {:?} failed", entry.addr);
+                    res.iov.clear();
+                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+                }
+            }
         }
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
