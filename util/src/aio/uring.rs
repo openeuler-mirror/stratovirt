@@ -51,7 +51,7 @@ impl<T: Clone> AioContext<T> for IoUringContext {
         for iocb in iocbp.iter() {
             // SAFETY: iocb is valid until request is finished.
             let cb = unsafe { &*(*iocb) };
-            let offset = cb.offset as libc::off_t;
+            let offset = cb.offset as u64;
             let data = cb.user_data;
             let len = cb.iovec.len();
             let iovs = cb.iovec.as_ptr();

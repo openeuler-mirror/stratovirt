@@ -950,24 +950,25 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
         (width * borrowed_gs.scale_x, height * borrowed_gs.scale_y)
     };
 
-    let geo: Geometry = Geometry {
-        min_width: scale_width as i32,
-        min_height: scale_height as i32,
-        max_width: 0,
-        max_height: 0,
-        base_width: 0,
-        base_height: 0,
-        width_inc: 0,
-        height_inc: 0,
-        min_aspect: 0.0,
-        max_aspect: 0.0,
-        win_gravity: Gravity::Center,
-    };
+    let geo: Geometry = Geometry::new(
+        scale_width as i32,
+        scale_height as i32,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        0.0,
+        Gravity::Center,
+    );
+
     let geo_mask = WindowHints::MIN_SIZE;
 
     borrowed_gs
         .draw_area
-        .set_size_request(geo.min_width, geo.min_height);
+        .set_size_request(geo.min_width(), geo.min_height());
     if let Some(window) = borrowed_gs.draw_area.window() {
         window.set_geometry_hints(&geo, geo_mask)
     }
