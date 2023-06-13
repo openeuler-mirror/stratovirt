@@ -37,9 +37,12 @@ use std::sync::{Arc, Mutex};
 use vmm_sys_util::eventfd::EventFd;
 
 #[derive(Clone, Copy)]
-enum AcpiEvent {
+pub enum AcpiEvent {
     Nothing = 0,
     PowerDown = 1,
+    AcadSt = 2,
+    BatteryInf = 4,
+    BatterySt = 8,
 }
 
 const AML_GED_EVT_REG: &str = "EREG";
@@ -49,6 +52,7 @@ const AML_GED_EVT_SEL: &str = "ESEL";
 pub struct Ged {
     interrupt_evt: Arc<Option<EventFd>>,
     notification_type: Arc<AtomicU32>,
+    battery_present: bool,
     /// System resource.
     res: SysRes,
 }
@@ -58,6 +62,7 @@ impl Default for Ged {
         Self {
             interrupt_evt: Arc::new(None),
             notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
+            battery_present: false,
             res: SysRes::default(),
         }
     }
@@ -68,18 +73,22 @@ impl Ged {
         mut self,
         sysbus: &mut SysBus,
         power_button: Arc<EventFd>,
+        battery_present: bool,
         region_base: u64,
         region_size: u64,
-    ) -> Result<()> {
+    ) -> Result<Arc<Mutex<Ged>>> {
         self.interrupt_evt = Arc::new(Some(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
+        self.battery_present = battery_present;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
 
         let ged = dev.lock().unwrap();
         ged.register_acpi_powerdown_event(power_button)
+            .with_context(|| "Failed to register ACPI powerdown event.")?;
+        Ok(dev.clone())
     }
 
     fn register_acpi_powerdown_event(&self, power_button: Arc<EventFd>) -> Result<()> {
@@ -110,6 +119,12 @@ impl Ged {
         Ok(())
     }
 
+    pub fn inject_acpi_event(&self, evt: AcpiEvent) {
+        self.notification_type
+            .fetch_or(evt as u32, Ordering::SeqCst);
+        self.inject_interrupt();
+    }
+
     fn inject_interrupt(&self) {
         if let Some(evt_fd) = self.interrupt_evt() {
             evt_fd
@@ -127,7 +142,6 @@ impl SysBusDevOps for Ged {
         let value = self
             .notification_type
             .swap(AcpiEvent::Nothing as u32, Ordering::SeqCst);
-
         write_data_u32(data, value)
     }
 
@@ -184,15 +198,34 @@ impl AmlBuilder for Ged {
         let mut method = AmlMethod::new("_EVT", 1, true);
         let store = AmlStore::new(AmlName(AML_GED_EVT_SEL.to_string()), AmlLocal(0));
         method.append_child(store);
-        let mut if_scope = AmlIf::new(AmlEqual::new(
-            AmlAnd::new(AmlLocal(0), AmlInteger(1), AmlLocal(0)),
-            AmlInteger(1),
-        ));
-        if_scope.append_child(AmlNotify::new(
-            AmlName("PWRB".to_string()),
-            AmlInteger(0x80),
-        ));
-        method.append_child(if_scope);
+
+        struct PowerDevEvent(AcpiEvent, &'static str, u64);
+        let events: [PowerDevEvent; 4] = [
+            PowerDevEvent(AcpiEvent::PowerDown, "PWRB", 0x80),
+            PowerDevEvent(AcpiEvent::AcadSt, "ACAD", 0x80),
+            PowerDevEvent(AcpiEvent::BatteryInf, "BAT0", 0x81),
+            PowerDevEvent(AcpiEvent::BatterySt, "BAT0", 0x80),
+        ];
+
+        for event in events.into_iter() {
+            let evt = event.0 as u64;
+            let dev = event.1;
+            let notify = event.2;
+
+            if !self.battery_present
+                && (evt > AcpiEvent::PowerDown as u64 && evt <= AcpiEvent::BatterySt as u64)
+            {
+                break;
+            }
+
+            let mut if_scope = AmlIf::new(AmlEqual::new(
+                AmlAnd::new(AmlLocal(0), AmlInteger(evt), AmlLocal(1)),
+                AmlInteger(evt),
+            ));
+            if_scope.append_child(AmlNotify::new(AmlName(dev.to_string()), AmlInteger(notify)));
+            method.append_child(if_scope);
+        }
+
         acpi_dev.append_child(method);
 
         acpi_dev.aml_bytes()
