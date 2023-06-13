@@ -276,12 +276,12 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<ServerConfig>> {
             client_auth_roots.add(&root)?;
         }
         if CLIENT_REQUIRE_AUTH {
-            AllowAnyAuthenticatedClient::new(client_auth_roots)
+            AllowAnyAuthenticatedClient::new(client_auth_roots).boxed()
         } else {
-            AllowAnyAnonymousOrAuthenticatedClient::new(client_auth_roots)
+            AllowAnyAnonymousOrAuthenticatedClient::new(client_auth_roots).boxed()
         }
     } else {
-        NoClientAuth::new()
+        NoClientAuth::boxed()
     };
 
     // Cipher suiter.
