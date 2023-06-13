@@ -99,7 +99,7 @@ impl PointerOpts for TestPciPointer {
     fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
         let msg = PointerMessage {
             event_type: InputEvent::PointerEvent,
-            button: button as u32,
+            button,
             x,
             y,
             ..Default::default()
@@ -108,17 +108,12 @@ impl PointerOpts for TestPciPointer {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum InputEvent {
     KbdEvent = 0,
     PointerEvent = 1,
+    #[default]
     InvalidEvent = 2,
-}
-
-impl Default for InputEvent {
-    fn default() -> Self {
-        InputEvent::InvalidEvent
-    }
 }
 
 impl From<u8> for InputEvent {

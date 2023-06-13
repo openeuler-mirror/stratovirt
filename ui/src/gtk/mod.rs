@@ -69,7 +69,7 @@ const DOMAIN_NAME: &str = "desktop-app-engine";
 const LOCALE_PATH: &str = "/usr/share/locale";
 
 /// Gtk window display mode.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ScaleMode {
     /// Display fill desktop.
     full_screen: bool,
@@ -91,7 +91,7 @@ impl ScaleMode {
 /// Zoom in the display.
 /// Zoom out the display.
 /// Window adapt to display.
-#[derive(PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum ZoomOperate {
     ZoomIn,
     ZoomOut,
@@ -802,10 +802,10 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
     let mut mx: f64 = 0.0;
     let mut my: f64 = 0.0;
     if window_width > scale_width {
-        mx = ((window_width - scale_width) as f64) / (2.0);
+        mx = (window_width - scale_width) / (2.0);
     }
     if window_height > scale_height {
-        my = ((window_height - scale_height) as f64) / (2.0);
+        my = (window_height - scale_height) / (2.0);
     }
 
     borrowed_gs.draw_area.queue_draw_area(

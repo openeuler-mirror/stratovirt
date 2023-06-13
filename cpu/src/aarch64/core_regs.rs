@@ -118,8 +118,8 @@ impl From<Arm64CoreRegs> for u64 {
         // KVM_REG_SIZE_* => KVM_REG_SIZE_U32/KVM_REG_SIZE_U64/KVM_REG_SIZE_U128
 
         // calculate reg_id
-        KVM_REG_ARM64 as u64
-            | register_size as u64
+        KVM_REG_ARM64
+            | register_size
             | u64::from(KVM_REG_ARM_CORE)
             | (reg_offset / size_of::<u32>()) as u64
     }

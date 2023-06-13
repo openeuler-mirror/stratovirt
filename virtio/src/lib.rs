@@ -527,7 +527,7 @@ fn gpa_hva_iovec_map(
             )
         })?;
         hva_iovec.push(Iovec {
-            iov_base: hva as u64,
+            iov_base: hva,
             iov_len: u64::from(elem.len),
         });
         iov_size += elem.len as u64;
