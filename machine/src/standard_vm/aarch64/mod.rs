@@ -15,6 +15,7 @@ mod syscall;
 
 pub use crate::error::MachineError;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
+use devices::acpi::power::PowerDev;
 use log::{error, info, warn};
 use machine_manager::config::ShutdownAction;
 #[cfg(not(target_env = "musl"))]
@@ -93,6 +94,7 @@ pub enum LayoutEntryType {
     Rtc,
     FwCfg,
     Ged,
+    PowerDev,
     Mmio,
     PcieMmio,
     PciePio,
@@ -112,6 +114,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0901_0000, 0x0000_1000),    // Rtc
     (0x0902_0000, 0x0000_0018),    // FwCfg
     (0x0908_0000, 0x0000_0004),    // Ged
+    (0x0909_0000, 0x0000_1000),    // PowerDev
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
@@ -534,14 +537,26 @@ impl MachineOps for StdMachine {
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
+        let battery_present = self.vm_config.lock().unwrap().machine_config.battery;
         let ged = Ged::default();
-        ged.realize(
-            &mut self.sysbus,
-            self.power_button.clone(),
-            MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
-            MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
-        )
-        .with_context(|| "Failed to realize Ged")?;
+        let ged_dev = ged
+            .realize(
+                &mut self.sysbus,
+                self.power_button.clone(),
+                battery_present,
+                MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
+                MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
+            )
+            .with_context(|| "Failed to realize Ged")?;
+        if battery_present {
+            let pdev = PowerDev::new(ged_dev);
+            pdev.realize(
+                &mut self.sysbus,
+                MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
+                MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
+            )
+            .with_context(|| "Failed to realize PowerDev")?;
+        }
         Ok(())
     }
 
