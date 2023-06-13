@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use mod_test::libdriver::virtio::VirtioDeviceOps;
 use mod_test::libdriver::virtio_gpu::{
     current_curosr_check, current_surface_check, get_display_info, get_edid, invalid_cmd_test,
     resource_attach_backing, resource_attach_backing_with_invalid_ctx_len, resource_create,
@@ -20,6 +21,7 @@ use mod_test::libdriver::virtio_gpu::{
     VirtioGpuSetScanout, VirtioGpuTransferToHost2d,
 };
 use mod_test::libdriver::virtio_gpu::{set_up, tear_down};
+use std::time::{Duration, Instant};
 use std::vec;
 use util::byte_code::ByteCode;
 use virtio::{
@@ -492,7 +494,7 @@ fn resource_transfer_dfx() {
 
     // have not attach any data source
     assert_eq!(
-        VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
+        VIRTIO_GPU_RESP_ERR_UNSPEC,
         transfer_to_host(
             &gpu,
             VirtioGpuTransferToHost2d::new(
@@ -541,7 +543,7 @@ fn scanout_set_dfx() {
     gpu_cfg.max_hostmem = image_size;
 
     let (dpy, gpu) = set_up(&gpu_cfg);
-    gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
+    let image_addr = gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
     // invalid scanout id
     assert_eq!(
@@ -577,6 +579,17 @@ fn scanout_set_dfx() {
         resource_create(
             &gpu,
             VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH, D_HEIGHT)
+        )
+        .hdr_type
+    );
+
+    // attach backing
+    assert_eq!(
+        VIRTIO_GPU_RESP_OK_NODATA,
+        resource_attach_backing(
+            &gpu,
+            VirtioGpuResourceAttachBacking::new(D_RES_ID, 1),
+            vec![VirtioGpuMemEntry::new(image_addr, image_size as u32)]
         )
         .hdr_type
     );
@@ -718,30 +731,61 @@ fn crash_dfx() {
     // invalid request header length
     let mut hdr = VirtioGpuCtrlHdr::default();
     hdr.hdr_type = VIRTIO_GPU_CMD_GET_DISPLAY_INFO;
-
     let mut resp = VirtioGpuDisplayInfo::default();
     resp.header.hdr_type = 0x1234; // will not change because req has been ignored
 
     let temp = hdr.as_bytes();
     let slice = &temp[4..];
     gpu.borrow_mut()
-        .request_complete(true, slice, None, None, Some(&mut resp));
-    assert_eq!(0x1234, resp.header.hdr_type);
+        .submit_request(true, slice, None, None, Some(&mut resp), false);
+
+    // expect has no resp from backend.
+    let time_out = Instant::now() + Duration::from_secs(2);
+    loop {
+        gpu.borrow_mut().state.borrow().clock_step();
+        assert!(!gpu
+            .borrow()
+            .device
+            .borrow()
+            .queue_was_notified(gpu.borrow().ctrl_q.clone()));
+        if Instant::now() > time_out {
+            assert_eq!(0x1234, resp.header.hdr_type);
+            break;
+        }
+    }
 
     // invalid hdr_ctx
     let mut hdr = VirtioGpuCtrlHdr::default();
     hdr.hdr_type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D;
-
     let hdr_ctx = VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH, D_HEIGHT);
-
     let mut resp = VirtioGpuCtrlHdr::default();
+    resp.hdr_type = 0x1234; // will not change because req has been ignored
 
     let temp = hdr_ctx.as_bytes();
     let slice = &temp[4..];
+    gpu.borrow_mut().submit_request(
+        true,
+        hdr.as_bytes(),
+        Some(slice),
+        None,
+        Some(&mut resp),
+        false,
+    );
 
-    gpu.borrow_mut()
-        .request_complete(true, hdr.as_bytes(), Some(slice), None, Some(&mut resp));
-    assert_eq!(VIRTIO_GPU_RESP_ERR_UNSPEC, resp.hdr_type);
+    // expect has no resp from backend.
+    let time_out = Instant::now() + Duration::from_secs(2);
+    loop {
+        gpu.borrow_mut().state.borrow().clock_step();
+        assert!(!gpu
+            .borrow()
+            .device
+            .borrow()
+            .queue_was_notified(gpu.borrow().ctrl_q.clone()));
+        if Instant::now() > time_out {
+            assert_eq!(0x1234, resp.hdr_type);
+            break;
+        }
+    }
 
     tear_down(dpy, gpu);
 }
