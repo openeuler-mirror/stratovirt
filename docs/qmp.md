@@ -146,6 +146,48 @@ Remove a network backend.
 -> {"return": {}}
 ```
 
+## Camera device backend management
+
+### cameradev_add
+
+Add a camera backend.
+
+#### Arguments
+
+* `id` : the device's ID, must be unique.
+* `driver` : the backend camera type, eg. v4l2 or demo.
+* `path` : the backend camera file's path, eg. /dev/video0
+
+#### Notes
+
+* MicroVM is not supported.
+
+#### Example
+
+```json
+<- {"execute":"cameradev_add", "arguments":{"id":"cam-0",  "driver": "v4l2", "path":"/dev/video0"}}
+-> {"return": {}}
+```
+
+### cameradev_del
+
+Remove a camera backend.
+
+#### Arguments
+
+* `id` : the device's ID.
+
+#### Notes
+
+* MicroVM is not supported.
+
+#### Example
+
+```json
+<- {"execute": "cameradev_del", "arguments": {"id": "cam-0"}}
+-> {"return": {}}
+```
+
 ## Character device backend management
 
 Currently, It only supports Standard VM.

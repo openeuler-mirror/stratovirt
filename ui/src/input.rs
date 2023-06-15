@@ -11,12 +11,15 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::Result;
+use log::debug;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 use util::bitmap::Bitmap;
+
+use crate::data::keycode::KEYSYM2KEYCODE;
 
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;
@@ -28,6 +31,8 @@ pub const INPUT_POINT_RIGHT: u8 = 0x04;
 pub const ASCII_A: i32 = 65;
 pub const ASCII_Z: i32 = 90;
 pub const UPPERCASE_TO_LOWERCASE: i32 = 32;
+const ASCII_A_LOWCASE: i32 = 97;
+const ASCII_Z_LOWCASE: i32 = 122;
 const BIT_PER_BYTE: u32 = 8;
 
 // Keycode.
@@ -42,8 +47,26 @@ const KEYCODE_CAPS_LOCK: u16 = 58;
 const KEYCODE_NUM_LOCK: u16 = 69;
 const KEYCODE_CTRL_R: u16 = 157;
 const KEYCODE_ALT_R: u16 = 184;
+const KEYPAD_1: u16 = 0xffb0;
+const KEYPAD_9: u16 = 0xffb9;
+const KEYPAD_SEPARATOR: u16 = 0xffac;
+const KEYPAD_DECIMAL: u16 = 0xffae;
+const KEYCODE_KP_7: u16 = 0x47;
+const KEYCODE_KP_DECIMAL: u16 = 0x53;
+// Led (HID)
+pub const NUM_LOCK_LED: u8 = 0x1;
+pub const CAPS_LOCK_LED: u8 = 0x2;
+pub const SCROLL_LOCK_LED: u8 = 0x4;
+/// Input button state.
+pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
+pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
+pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x20;
+pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x40;
 
 static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
+
+static LED_STATE: Lazy<Arc<Mutex<LedState>>> =
+    Lazy::new(|| Arc::new(Mutex::new(LedState::default())));
 
 // Keyboard Modifier State
 pub enum KeyboardModifier {
@@ -67,6 +90,16 @@ pub struct KeyBoardState {
     pub keymods: Bitmap<u8>,
 }
 
+impl Default for KeyBoardState {
+    fn default() -> Self {
+        let mut max_keycode: u16 = 0;
+        for &(_, v) in KEYSYM2KEYCODE.iter() {
+            max_keycode = std::cmp::max(max_keycode, v);
+        }
+        KeyBoardState::new(max_keycode as usize)
+    }
+}
+
 impl KeyBoardState {
     pub fn new(key_num: usize) -> Self {
         Self {
@@ -78,7 +111,7 @@ impl KeyBoardState {
     }
 
     /// Get the corresponding keyboard modifier.
-    pub fn keyboard_modifier_get(&self, key_mod: KeyboardModifier) -> bool {
+    fn keyboard_modifier_get(&self, key_mod: KeyboardModifier) -> bool {
         match self.keymods.contain(key_mod as usize) {
             Ok(res) => res,
             Err(_e) => false,
@@ -86,12 +119,12 @@ impl KeyBoardState {
     }
 
     /// Reset all keyboard modifier state.
-    pub fn keyboard_state_reset(&mut self) {
+    fn keyboard_state_reset(&mut self) {
         self.keymods.clear_all();
     }
 
     /// Record the press and up state in the keyboard.
-    pub fn keyboard_state_update(&mut self, keycode: u16, down: bool) -> Result<()> {
+    fn keyboard_state_update(&mut self, keycode: u16, down: bool) -> Result<()> {
         // Key is not pressed and the incoming key action is up.
         if !down && !self.keystate.contain(keycode as usize)? {
             return Ok(());
@@ -109,7 +142,7 @@ impl KeyBoardState {
             KEYCODE_SHIFT | KEYCODE_SHIFT_R => {
                 self.keyboard_modstate_update(
                     KEYCODE_SHIFT,
-                    KEYCODE_SHIFT,
+                    KEYCODE_SHIFT_R,
                     KeyboardModifier::KeyModShift,
                 )?;
             }
@@ -172,12 +205,19 @@ impl KeyBoardState {
         Ok(())
     }
 }
+
+#[derive(Default)]
+struct LedState {
+    kbd_led: u8,
+}
+
 #[derive(Default)]
 struct Inputs {
     kbd_ids: Vec<String>,
     kbd_lists: HashMap<String, Arc<Mutex<dyn KeyboardOpts>>>,
     tablet_ids: Vec<String>,
     tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
+    keyboard_state: KeyBoardState,
 }
 
 impl Inputs {
@@ -230,6 +270,19 @@ impl Inputs {
             None
         }
     }
+
+    fn press_key(&mut self, keycode: u16) -> Result<()> {
+        self.keyboard_state.keyboard_state_update(keycode, true)?;
+        let kbd = self.get_active_kbd();
+        if let Some(k) = kbd.as_ref() {
+            k.lock().unwrap().do_key_event(keycode, true)?;
+        }
+        self.keyboard_state.keyboard_state_update(keycode, false)?;
+        if let Some(k) = kbd.as_ref() {
+            k.lock().unwrap().do_key_event(keycode, false)?;
+        }
+        Ok(())
+    }
 }
 
 pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
@@ -273,6 +326,84 @@ pub fn point_event(button: u32, x: u32, y: u32) -> Result<()> {
         m.lock().unwrap().do_point_event(button, x, y)?;
     }
     Ok(())
+}
+
+/// 1. Keep the key state in keyboard_state.
+/// 2. Sync the caps lock and num lock state to guest.
+pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
+    let mut locked_input = INPUTS.lock().unwrap();
+    let upper = (ASCII_A..=ASCII_Z).contains(&keysym);
+    let is_letter = upper || (ASCII_A_LOWCASE..=ASCII_Z_LOWCASE).contains(&keysym);
+    let in_keypad = (KEYCODE_KP_7..=KEYCODE_KP_DECIMAL).contains(&keycode);
+
+    if down && is_letter {
+        let shift = locked_input
+            .keyboard_state
+            .keyboard_modifier_get(KeyboardModifier::KeyModShift);
+        let in_upper = get_kbd_led_state(CAPS_LOCK_LED);
+        if (shift && upper == in_upper) || (!shift && upper != in_upper) {
+            debug!("Correct caps lock {} inside {}", upper, in_upper);
+            locked_input.press_key(KEYCODE_CAPS_LOCK)?;
+        }
+    } else if down && in_keypad {
+        let numlock = keysym_is_num_lock(keysym);
+        let in_numlock = get_kbd_led_state(NUM_LOCK_LED);
+        if in_numlock != numlock {
+            debug!("Correct num lock {} inside {}", numlock, in_numlock);
+            locked_input.press_key(KEYCODE_NUM_LOCK)?;
+        }
+    }
+
+    locked_input
+        .keyboard_state
+        .keyboard_state_update(keycode, down)
+}
+
+/// Release all pressed key.
+pub fn release_all_key() -> Result<()> {
+    let mut locked_input = INPUTS.lock().unwrap();
+    for &(_, keycode) in KEYSYM2KEYCODE.iter() {
+        if locked_input
+            .keyboard_state
+            .keystate
+            .contain(keycode as usize)?
+        {
+            locked_input
+                .keyboard_state
+                .keyboard_state_update(keycode, false)?;
+            if let Some(k) = locked_input.get_active_kbd().as_ref() {
+                k.lock().unwrap().do_key_event(keycode, false)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn get_kbd_led_state(state: u8) -> bool {
+    LED_STATE.lock().unwrap().kbd_led & state == state
+}
+
+pub fn set_kbd_led_state(state: u8) {
+    LED_STATE.lock().unwrap().kbd_led = state;
+}
+
+pub fn keyboard_modifier_get(key_mod: KeyboardModifier) -> bool {
+    INPUTS
+        .lock()
+        .unwrap()
+        .keyboard_state
+        .keyboard_modifier_get(key_mod)
+}
+
+pub fn keyboard_state_reset() {
+    INPUTS.lock().unwrap().keyboard_state.keyboard_state_reset();
+}
+
+fn keysym_is_num_lock(sym: i32) -> bool {
+    matches!(
+        (sym & 0xffff) as u16,
+        KEYPAD_1..=KEYPAD_9 | KEYPAD_SEPARATOR | KEYPAD_DECIMAL
+    )
 }
 
 pub trait KeyboardOpts: Send {

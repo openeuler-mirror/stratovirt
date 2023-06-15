@@ -15,8 +15,8 @@ use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 use anyhow::{anyhow, Result};
 use log::warn;
 
-/// The maximum number of scanouts.
-pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
+/// The maximum number of outputs.
+pub const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
 
 pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
@@ -46,12 +46,12 @@ impl Default for GpuDevConfig {
 impl ConfigCheck for GpuDevConfig {
     fn check(&self) -> Result<()> {
         check_arg_too_long(&self.id, "id")?;
-        if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 || self.max_outputs == 0 {
+        if self.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 || self.max_outputs == 0 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "max_outputs".to_string(),
                 0,
                 false,
-                VIRTIO_GPU_MAX_SCANOUTS as u64,
+                VIRTIO_GPU_MAX_OUTPUTS as u64,
                 true
             )));
         }

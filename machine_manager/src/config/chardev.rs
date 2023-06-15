@@ -23,6 +23,9 @@ use crate::qmp::qmp_schema;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
+/// Default value of max ports for virtio-serial.
+const DEFAULT_SERIAL_PORTS_NUMBER: u32 = 31;
+
 /// Character device options.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChardevType {
@@ -36,11 +39,19 @@ pub enum ChardevType {
     File(String),
 }
 
-/// Config structure for virtio-console.
+/// Config structure for virtio-serial-port.
 #[derive(Debug, Clone)]
-pub struct VirtioConsole {
+pub struct VirtioSerialPort {
     pub id: String,
     pub chardev: ChardevConfig,
+    pub nr: u32,
+    pub is_console: bool,
+}
+
+impl ConfigCheck for VirtioSerialPort {
+    fn check(&self) -> Result<()> {
+        check_arg_too_long(&self.id, "chardev id")
+    }
 }
 
 /// Config structure for character device.
@@ -252,26 +263,36 @@ pub fn get_chardev_socket_path(chardev: &str, vm_config: &mut VmConfig) -> Resul
     }
 }
 
-pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<VirtioConsole> {
-    let mut cmd_parser = CmdParser::new("virtconsole");
-    cmd_parser.push("").push("id").push("chardev");
+pub fn parse_virtserialport(
+    vm_config: &mut VmConfig,
+    config_args: &str,
+    is_console: bool,
+) -> Result<VirtioSerialPort> {
+    let mut cmd_parser = CmdParser::new("virtserialport");
+    cmd_parser.push("").push("id").push("chardev").push("nr");
     cmd_parser.parse(config_args)?;
 
     let chardev_name = cmd_parser
         .get_value::<String>("chardev")?
         .with_context(|| {
-            ConfigError::FieldIsMissing("chardev".to_string(), "virtconsole".to_string())
+            ConfigError::FieldIsMissing("chardev".to_string(), "virtserialport".to_string())
         })?;
-
     let id = cmd_parser.get_value::<String>("id")?.with_context(|| {
-        ConfigError::FieldIsMissing("id".to_string(), "virtconsole".to_string())
+        ConfigError::FieldIsMissing("id".to_string(), "virtserialport".to_string())
+    })?;
+    let nr = cmd_parser.get_value::<u32>("nr")?.with_context(|| {
+        ConfigError::FieldIsMissing("nr".to_string(), "virtserialport".to_string())
     })?;
 
-    if let Some(char_dev) = vm_config.chardev.remove(&chardev_name) {
-        return Ok(VirtioConsole {
+    if let Some(chardev) = vm_config.chardev.remove(&chardev_name) {
+        let port_cfg = VirtioSerialPort {
             id,
-            chardev: char_dev,
-        });
+            chardev,
+            nr,
+            is_console,
+        };
+        port_cfg.check()?;
+        return Ok(port_cfg);
     }
     bail!("Chardev {:?} not found or is in use", &chardev_name);
 }
@@ -424,56 +445,79 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     Ok(vsock)
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VirtioSerialInfo {
     pub id: String,
     pub pci_bdf: Option<PciBdf>,
     pub multifunction: bool,
+    pub max_ports: u32,
 }
 
 impl ConfigCheck for VirtioSerialInfo {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "virtio-serial id")
+        check_arg_too_long(&self.id, "virtio-serial id")?;
+
+        if self.max_ports < 1 || self.max_ports > DEFAULT_SERIAL_PORTS_NUMBER {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "Virtio-serial max_ports".to_string(),
+                1,
+                true,
+                DEFAULT_SERIAL_PORTS_NUMBER as u64,
+                true
+            )));
+        }
+
+        Ok(())
     }
 }
 
-pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Result<()> {
+pub fn parse_virtio_serial(
+    vm_config: &mut VmConfig,
+    serial_config: &str,
+) -> Result<VirtioSerialInfo> {
     let mut cmd_parser = CmdParser::new("virtio-serial");
     cmd_parser
         .push("")
         .push("id")
         .push("bus")
         .push("addr")
-        .push("multifunction");
+        .push("multifunction")
+        .push("max_ports");
     cmd_parser.parse(serial_config)?;
     pci_args_check(&cmd_parser)?;
 
-    if vm_config.virtio_serial.is_none() {
-        let id = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
-        let multifunction = cmd_parser
-            .get_value::<ExBool>("multifunction")?
-            .map_or(false, |switch| switch.into());
-        let virtio_serial = if serial_config.contains("-pci") {
-            let pci_bdf = get_pci_bdf(serial_config)?;
-            VirtioSerialInfo {
-                id,
-                pci_bdf: Some(pci_bdf),
-                multifunction,
-            }
-        } else {
-            VirtioSerialInfo {
-                id,
-                pci_bdf: None,
-                multifunction,
-            }
-        };
-        virtio_serial.check()?;
-        vm_config.virtio_serial = Some(virtio_serial);
-    } else {
+    if vm_config.virtio_serial.is_some() {
         bail!("Only one virtio serial device is supported");
     }
 
-    Ok(())
+    let id = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
+    let multifunction = cmd_parser
+        .get_value::<ExBool>("multifunction")?
+        .map_or(false, |switch| switch.into());
+    let max_ports = cmd_parser
+        .get_value::<u32>("max_ports")?
+        .unwrap_or(DEFAULT_SERIAL_PORTS_NUMBER);
+    let virtio_serial = if serial_config.contains("-pci") {
+        let pci_bdf = get_pci_bdf(serial_config)?;
+        VirtioSerialInfo {
+            id,
+            pci_bdf: Some(pci_bdf),
+            multifunction,
+            max_ports,
+        }
+    } else {
+        VirtioSerialInfo {
+            id,
+            pci_bdf: None,
+            multifunction,
+            // Micro_vm does not support multi-ports in virtio-serial-device.
+            max_ports: 1,
+        }
+    };
+    virtio_serial.check()?;
+    vm_config.virtio_serial = Some(virtio_serial.clone());
+
+    Ok(virtio_serial)
 }
 
 #[cfg(test)]
@@ -488,9 +532,10 @@ mod tests {
         assert!(vm_config
             .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
-        let virt_console = parse_virtconsole(
+        let virt_console = parse_virtserialport(
             &mut vm_config,
-            "virtconsole,chardev=test_console,id=console1",
+            "virtconsole,chardev=test_console,id=console1,nr=1",
+            true,
         );
         assert!(virt_console.is_ok());
         let console_cfg = virt_console.unwrap();
@@ -518,9 +563,10 @@ mod tests {
         assert!(vm_config
             .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
-        let virt_console = parse_virtconsole(
+        let virt_console = parse_virtserialport(
             &mut vm_config,
-            "virtconsole,chardev=test_console1,id=console1",
+            "virtconsole,chardev=test_console1,id=console1,nr=1",
+            true,
         );
         // test_console1 does not exist.
         assert!(virt_console.is_err());
@@ -536,9 +582,10 @@ mod tests {
         assert!(vm_config
             .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
-        let virt_console = parse_virtconsole(
+        let virt_console = parse_virtserialport(
             &mut vm_config,
-            "virtconsole,chardev=test_console,id=console1",
+            "virtconsole,chardev=test_console,id=console1,nr=1",
+            true,
         );
         assert!(virt_console.is_ok());
         let console_cfg = virt_console.unwrap();

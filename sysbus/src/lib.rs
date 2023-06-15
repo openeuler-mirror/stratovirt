@@ -11,14 +11,17 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
+
+pub use anyhow::{bail, Context, Result};
 pub use error::SysBusError;
+
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-pub use anyhow::{bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
+use util::AsAny;
 use vmm_sys_util::eventfd::EventFd;
 
 // Now that the serial device use a hardcoded IRQ number (4), and the starting
@@ -211,7 +214,7 @@ pub enum SysBusDevType {
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Send + AmlBuilder {
+pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
     /// Read function of device.
     ///
     /// # Arguments

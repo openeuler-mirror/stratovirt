@@ -19,7 +19,7 @@ use util::byte_code::ByteCode;
 use super::config::*;
 use super::UsbDevice;
 
-const USB_MAX_INTERFACES: u32 = 16;
+pub const USB_MAX_INTERFACES: u32 = 16;
 const USB_DESCRIPTOR_TYPE_SHIFT: u32 = 8;
 const USB_DESCRIPTOR_INDEX_MASK: u32 = 0xff;
 
@@ -143,6 +143,50 @@ struct UsbStringDescriptor {
 
 impl ByteCode for UsbStringDescriptor {}
 
+/// USB binary device object store descriptor for transfer.
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+struct UsbBOSDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub wTotalLength: u16,
+    pub bNumDeviceCaps: u8,
+}
+
+impl ByteCode for UsbBOSDescriptor {}
+
+/// USB super speed capability descriptor for transfer.
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+struct UsbSuperSpeedCapDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bDevCapabilityType: u8,
+    pub bmAttributes: u8,
+    pub wSpeedsSupported: u16,
+    pub bFunctionalitySupport: u8,
+    pub bU1DevExitLat: u8,
+    pub wU2DevExitLat: u16,
+}
+
+impl ByteCode for UsbSuperSpeedCapDescriptor {}
+
+/// USB super speed endpoint companion descriptor for transfer.
+#[allow(non_snake_case)]
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct UsbSuperSpeedEndpointCompDescriptor {
+    pub bLength: u8,
+    pub bDescriptorType: u8,
+    pub bMaxBurst: u8,
+    pub bmAttributes: u8,
+    pub wBytesPerInterval: u16,
+}
+
+impl ByteCode for UsbSuperSpeedEndpointCompDescriptor {}
+
 /// USB device descriptor.
 pub struct UsbDescDevice {
     pub device_desc: UsbDeviceDescriptor,
@@ -199,7 +243,7 @@ pub struct UsbDescOther {
 /// USB endpoint descriptor.
 pub struct UsbDescEndpoint {
     pub endpoint_desc: UsbEndpointDescriptor,
-    pub extra: Option<Arc<u8>>,
+    pub extra: Vec<u8>,
 }
 
 /// USB Descriptor.
@@ -302,7 +346,9 @@ impl UsbDescriptor {
 
     fn get_endpoint_descriptor(&self, ep: &UsbDescEndpoint) -> Result<Vec<u8>> {
         let desc = ep.endpoint_desc;
-        Ok(desc.as_bytes().to_vec())
+        let mut buf = desc.as_bytes().to_vec();
+        buf.append(&mut ep.extra.clone());
+        Ok(buf)
     }
 
     fn get_string_descriptor(&self, index: u32) -> Result<Vec<u8>> {
@@ -340,6 +386,39 @@ impl UsbDescriptor {
     fn get_debug_descriptor(&self) -> Result<Vec<u8>> {
         log::debug!("usb DEBUG descriptor");
         Ok(vec![])
+    }
+
+    fn get_bos_descriptor(&self, speed: u32) -> Result<Vec<u8>> {
+        let mut total = USB_DT_BOS_SIZE as u16;
+        let mut cap = Vec::new();
+        let mut cap_num = 0;
+
+        if speed == USB_SPEED_SUPER {
+            let super_cap = UsbSuperSpeedCapDescriptor {
+                bLength: USB_DT_SS_CAP_SIZE,
+                bDescriptorType: USB_DT_DEVICE_CAPABILITY,
+                bDevCapabilityType: USB_SS_DEVICE_CAP,
+                bmAttributes: 0,
+                wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER,
+                bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER,
+                bU1DevExitLat: 0xa,
+                wU2DevExitLat: 0x20,
+            };
+            let mut super_buf = super_cap.as_bytes().to_vec();
+            cap_num += 1;
+            total += super_buf.len() as u16;
+            cap.append(&mut super_buf);
+        }
+
+        let bos = UsbBOSDescriptor {
+            bLength: USB_DT_BOS_SIZE,
+            bDescriptorType: USB_DT_BOS,
+            wTotalLength: total,
+            bNumDeviceCaps: cap_num,
+        };
+        let mut buf = bos.as_bytes().to_vec();
+        buf.append(&mut cap);
+        Ok(buf)
     }
 
     fn find_interface(&self, nif: u32, alt: u32) -> Option<Arc<UsbDescIface>> {
@@ -389,12 +468,6 @@ pub trait UsbDescriptorOps {
 
     /// Init descriptor with the device descriptor and string descriptors.
     fn init_descriptor(&mut self, desc: Arc<UsbDescDevice>, str: Vec<String>) -> Result<()>;
-
-    /// Init device qualifier descriptor.
-    fn init_device_qualifier_descriptor(
-        &mut self,
-        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
-    ) -> Result<()>;
 }
 
 impl UsbDescriptorOps for UsbDevice {
@@ -407,6 +480,7 @@ impl UsbDescriptorOps for UsbDevice {
             USB_DT_STRING => self.descriptor.get_string_descriptor(index)?,
             USB_DT_DEVICE_QUALIFIER => self.descriptor.get_device_qualifier_descriptor()?,
             USB_DT_DEBUG => self.descriptor.get_debug_descriptor()?,
+            USB_DT_BOS => self.descriptor.get_bos_descriptor(self.speed)?,
             _ => {
                 bail!("Unknown descriptor type {}", desc_type);
             }
@@ -489,14 +563,6 @@ impl UsbDescriptorOps for UsbDevice {
         self.descriptor.device_desc = Some(device_desc);
         self.descriptor.strings = str;
         self.set_config_descriptor(0)?;
-        Ok(())
-    }
-
-    fn init_device_qualifier_descriptor(
-        &mut self,
-        device_qualifier_desc: Arc<UsbDescDeviceQualifier>,
-    ) -> Result<()> {
-        self.descriptor.device_qualifier_desc = Some(device_qualifier_desc);
         Ok(())
     }
 }

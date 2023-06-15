@@ -20,8 +20,6 @@ use crate::fs_ops::open;
 use crate::fuse_msg::FUSE_OK;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
-// Read the programe version in `Cargo.toml`.
-const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 const MAX_PATH_LENGTH: usize = 4096;
 // Maximum length of the socket path is restricted by linux.
 const MAX_SOCK_PATH_LENGTH: usize = 108;
@@ -29,7 +27,7 @@ const MAX_SOCK_PATH_LENGTH: usize = 108;
 /// This function is to define all command line arguments.
 pub fn create_args_parser<'a>() -> ArgParser<'a> {
     ArgParser::new("VhostUserFs")
-        .version(VERSION.unwrap_or("unknown"))
+        .version(util::VERSION)
         .author("Huawei Technologies Co., Ltd")
         .about("The process of Virtio fs for StratoVirt.")
         .arg(

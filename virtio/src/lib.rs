@@ -41,18 +41,18 @@ use vmm_sys_util::eventfd::EventFd;
 
 use address_space::AddressSpace;
 use machine_manager::config::ConfigCheck;
-use util::aio::mem_to_buf;
+use util::aio::{mem_to_buf, Iovec};
 use util::num_ops::write_u32;
 use util::AsAny;
 
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState};
-pub use device::console::{Console, VirtioConsoleState};
 #[cfg(not(target_env = "musl"))]
 pub use device::gpu::*;
 pub use device::net::*;
 pub use device::rng::{Rng, RngState};
 pub use device::scsi_cntlr as ScsiCntlr;
+pub use device::serial::{find_port_by_nr, Serial, SerialPort, VirtioSerialState};
 pub use error::VirtioError;
 pub use error::*;
 pub use queue::*;
@@ -135,6 +135,12 @@ pub const VIRTIO_NET_F_MQ: u32 = 22;
 pub const VIRTIO_NET_F_CTRL_MAC_ADDR: u32 = 23;
 /// Configuration cols and rows are valid.
 pub const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
+/// Device has support for multiple ports.
+/// max_nr_ports is valid and control virtqueues will be used.
+pub const VIRTIO_CONSOLE_F_MULTIPORT: u64 = 1;
+/// Device has support for emergency write.
+/// Configuration field emerg_wr is valid.
+pub const VIRTIO_CONSOLE_F_EMERG_WRITE: u64 = 2;
 /// Maximum size of any single segment is in size_max.
 pub const VIRTIO_BLK_F_SIZE_MAX: u32 = 1;
 /// Maximum number of segments in a request is in seg_max.
@@ -502,4 +508,30 @@ pub fn iov_discard_back(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [
         size -= iov.len as u64;
     }
     None
+}
+
+/// Convert GPA buffer iovec to HVA buffer iovec.
+/// If don't need the entire iovec, use iov_discard_front/iov_discard_back firstly.
+fn gpa_hva_iovec_map(
+    gpa_elemiovec: &[ElemIovec],
+    mem_space: &AddressSpace,
+) -> Result<(u64, Vec<Iovec>)> {
+    let mut iov_size = 0;
+    let mut hva_iovec = Vec::new();
+
+    for elem in gpa_elemiovec.iter() {
+        let hva = mem_space.get_host_address(elem.addr).with_context(|| {
+            format!(
+                "Map iov base {:x?}, iov len {:?} failed",
+                elem.addr, elem.len
+            )
+        })?;
+        hva_iovec.push(Iovec {
+            iov_base: hva,
+            iov_len: u64::from(elem.len),
+        });
+        iov_size += elem.len as u64;
+    }
+
+    Ok((iov_size, hva_iovec))
 }

@@ -50,7 +50,7 @@ impl EdidInfo {
         }
     }
 
-    pub fn edid_array_fulfill(&mut self, edid_array: &mut Vec<u8>) {
+    pub fn edid_array_fulfill(&mut self, edid_array: &mut [u8; 1024]) {
         // The format follows VESA ENHANCED EXTENDED DISPLAY IDENTIFICATION DATA STANDARD
         if self.vendor.len() != 3 {
             // HWV for 'HUAWEI TECHNOLOGIES CO., INC.'

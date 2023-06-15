@@ -98,6 +98,10 @@ impl Iovec {
             iov_len: len,
         }
     }
+
+    pub fn is_none(&self) -> bool {
+        self.iov_base == 0 && self.iov_len == 0
+    }
 }
 
 /// The trait for Asynchronous IO operation.
@@ -492,7 +496,7 @@ impl<T: Clone + 'static> Aio<T> {
                             real_nbytes as usize,
                         )
                     };
-                    iov_to_buf_direct(iovecs, dst).and_then(|v| {
+                    iov_to_buf_direct(iovecs, 0, dst).and_then(|v| {
                         if v == real_nbytes as usize {
                             Ok(())
                         } else {
@@ -595,11 +599,34 @@ pub fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
 }
 
 /// Read iovec to buf and return the read number of bytes.
-pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
+pub fn iov_to_buf_direct(iovec: &[Iovec], offset: u64, buf: &mut [u8]) -> Result<usize> {
+    let mut iovec2: Option<&[Iovec]> = None;
     let mut start: usize = 0;
     let mut end: usize = 0;
 
-    for iov in iovec {
+    if offset == 0 {
+        iovec2 = Some(iovec);
+    } else {
+        let mut offset = offset;
+        for (index, iov) in iovec.iter().enumerate() {
+            if iov.iov_len > offset {
+                end = cmp::min((iov.iov_len - offset) as usize, buf.len());
+                mem_to_buf(&mut buf[..end], iov.iov_base + offset)?;
+                if end >= buf.len() || index >= (iovec.len() - 1) {
+                    return Ok(end);
+                }
+                start = end;
+                iovec2 = Some(&iovec[index + 1..]);
+                break;
+            }
+            offset -= iov.iov_len;
+        }
+        if iovec2.is_none() {
+            return Ok(0);
+        }
+    }
+
+    for iov in iovec2.unwrap() {
         end = cmp::min(start + iov.iov_len as usize, buf.len());
         mem_to_buf(&mut buf[start..end], iov.iov_base)?;
         if end >= buf.len() {
@@ -613,12 +640,12 @@ pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
 /// Discard "size" bytes of the front of iovec.
 pub fn iov_discard_front_direct(iovec: &mut [Iovec], mut size: u64) -> Option<&mut [Iovec]> {
     for (index, iov) in iovec.iter_mut().enumerate() {
-        if iov.iov_len as u64 > size {
+        if iov.iov_len > size {
             iov.iov_base += size;
-            iov.iov_len -= size as u64;
+            iov.iov_len -= size;
             return Some(&mut iovec[index..]);
         }
-        size -= iov.iov_len as u64;
+        size -= iov.iov_len;
     }
     None
 }

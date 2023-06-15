@@ -239,19 +239,6 @@ impl StdMachine {
         Ok(())
     }
 
-    pub fn handle_shutdown_request(vm: &Arc<Mutex<Self>>) -> bool {
-        let locked_vm = vm.lock().unwrap();
-        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            if let Err(e) = cpu.destroy() {
-                error!("Failed to destroy vcpu{}, error is {:?}", cpu_index, e);
-            }
-        }
-
-        let mut vmstate = locked_vm.vm_state.0.lock().unwrap();
-        *vmstate = KvmVmState::Shutdown;
-        true
-    }
-
     fn arch_init() -> Result<()> {
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
@@ -287,7 +274,7 @@ impl StdMachine {
         )?;
         self.register_reset_event(self.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
-        self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
+        self.register_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
         ich.realize()?;
         Ok(())
@@ -494,10 +481,15 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if migrate.0 == MigrateMode::Unknown && fwcfg.is_some() {
-            locked_vm
-                .build_acpi_tables(&fwcfg.unwrap())
-                .with_context(|| "Failed to create ACPI tables")?;
+        if migrate.0 == MigrateMode::Unknown {
+            if let Some(fw_cfg) = fwcfg {
+                locked_vm
+                    .build_acpi_tables(&fw_cfg)
+                    .with_context(|| "Failed to create ACPI tables")?;
+                locked_vm
+                    .build_smbios(&fw_cfg)
+                    .with_context(|| "Failed to create smbios tables")?;
+            }
         }
 
         locked_vm
@@ -508,6 +500,13 @@ impl MachineOps for StdMachine {
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
+
+        #[cfg(not(target_env = "musl"))]
+        locked_vm.watch_windows_emu_pid(
+            vm_config,
+            locked_vm.shutdown_req.clone(),
+            locked_vm.shutdown_req.clone(),
+        );
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
@@ -590,7 +589,10 @@ impl MachineOps for StdMachine {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
-                    power_button: self.shutdown_req.clone(),
+                    power_button: None,
+                    shutdown_req: Some(self.shutdown_req.clone()),
+                    pause_req: None,
+                    resume_req: None,
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;
@@ -884,8 +886,13 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
-            .is_ok()
+        if let Err(e) =
+            self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
+        {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
     }
 }
 

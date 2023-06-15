@@ -353,8 +353,8 @@ impl SocketRWHandler {
 
     fn parse_fd(&mut self, mhdr: &msghdr) {
         // At least it should has one RawFd.
-        let min_cmsg_len = unsafe { CMSG_LEN(size_of::<RawFd>() as u32) as usize };
-        if (mhdr.msg_controllen as usize) < min_cmsg_len {
+        let min_cmsg_len = unsafe { CMSG_LEN(size_of::<RawFd>() as u32) as u64 };
+        if (mhdr.msg_controllen as u64) < min_cmsg_len {
             return;
         }
 
@@ -363,9 +363,12 @@ impl SocketRWHandler {
             let scm = cmsg_hdr.unwrap();
             if scm.cmsg_level == SOL_SOCKET
                 && scm.cmsg_type == SCM_RIGHTS
-                && scm.cmsg_len as usize >= min_cmsg_len
+                && scm.cmsg_len as u64 >= min_cmsg_len
             {
                 let fds = unsafe {
+                    #[cfg(not(target_env = "musl"))]
+                    let fd_num = (scm.cmsg_len - CMSG_LEN(0) as usize) / size_of::<RawFd>();
+                    #[cfg(target_env = "musl")]
                     let fd_num =
                         (scm.cmsg_len as usize - CMSG_LEN(0) as usize) / size_of::<RawFd>();
                     std::slice::from_raw_parts(CMSG_DATA(scm) as *const RawFd, fd_num)

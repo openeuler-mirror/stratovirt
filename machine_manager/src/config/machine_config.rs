@@ -130,26 +130,16 @@ pub struct CpuConfig {
     pub pmu: PmuConfig,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum PmuConfig {
     On,
+    #[default]
     Off,
 }
 
-impl Default for PmuConfig {
-    fn default() -> Self {
-        PmuConfig::Off
-    }
-}
-
-impl Default for ShutdownAction {
-    fn default() -> Self {
-        ShutdownAction::ShutdownActionPoweroff
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum ShutdownAction {
+    #[default]
     ShutdownActionPoweroff,
     ShutdownActionPause,
 }

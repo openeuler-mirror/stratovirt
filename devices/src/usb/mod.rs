@@ -16,8 +16,11 @@ pub use error::UsbError;
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
+#[cfg(not(target_env = "musl"))]
+pub mod camera_media_type_guid;
 pub mod config;
 mod descriptor;
+#[cfg(not(target_env = "musl"))]
 pub mod hid;
 
 #[cfg(not(target_env = "musl"))]
@@ -26,6 +29,8 @@ pub mod keyboard;
 pub mod storage;
 #[cfg(not(target_env = "musl"))]
 pub mod tablet;
+#[cfg(not(target_env = "musl"))]
+pub mod usbhost;
 pub mod xhci;
 
 use std::cmp::min;
@@ -35,6 +40,7 @@ use anyhow::{bail, Context};
 use log::{debug, error};
 use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 
+use self::descriptor::USB_MAX_INTERFACES;
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
 use machine_manager::qmp::send_device_deleted_msg;
@@ -72,6 +78,8 @@ pub struct UsbEndpoint {
     pub ep_number: u8,
     pub in_direction: bool,
     pub ep_type: u8,
+    pub ifnum: u8,
+    pub halted: bool,
 }
 
 impl UsbEndpoint {
@@ -80,6 +88,7 @@ impl UsbEndpoint {
             ep_number,
             in_direction,
             ep_type,
+            ..Default::default()
         }
     }
 }
@@ -98,6 +107,8 @@ pub struct UsbDevice {
     pub descriptor: UsbDescriptor,
     /// The usb device id which is hot unplugged.
     pub unplugged_id: Option<String>,
+    /// The index of the interfaces.
+    pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
 impl UsbDevice {
@@ -113,6 +124,7 @@ impl UsbDevice {
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
             unplugged_id: None,
+            altsetting: [0_u32; USB_MAX_INTERFACES as usize],
         };
 
         for i in 0..USB_MAX_ENDPOINTS as u8 {
@@ -245,6 +257,16 @@ impl UsbDevice {
                 USB_REQUEST_SET_FEATURE => {
                     if value == USB_DEVICE_REMOTE_WAKEUP {
                         self.remote_wakeup = 1;
+                    }
+                }
+                USB_REQUEST_SET_SEL => {
+                    if self.speed == USB_SPEED_SUPER {
+                        return Ok(true);
+                    }
+                }
+                USB_REQUEST_SET_ISOCH_DELAY => {
+                    if self.speed == USB_SPEED_SUPER {
+                        return Ok(true);
                     }
                 }
                 _ => {

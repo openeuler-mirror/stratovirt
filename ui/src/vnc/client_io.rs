@@ -11,11 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    console::{console_select, DisplayMouse},
+    console::console_select,
     error::VncError,
     input::{
-        key_event, point_event, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT,
-        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+        key_event, keyboard_modifier_get, keyboard_state_reset, point_event, update_key_state,
+        KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
+        INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
     },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
@@ -910,14 +911,14 @@ impl ClientIoHandler {
         }
         let buf = self.read_incoming_msg();
         let down: bool = buf[1] != 0;
-        let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let org_keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let mut keysym = org_keysym;
         let server = self.server.clone();
 
         // Uppercase -> Lowercase.
         if (ASCII_A..=ASCII_Z).contains(&keysym) {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
-        let mut kbd_state = server.keyboard_state.borrow_mut();
 
         let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
             Some(k) => *k,
@@ -929,14 +930,14 @@ impl ClientIoHandler {
         if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
             && down
             && self.server.display_listener.is_some()
-            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
-            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+            && keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && keyboard_modifier_get(KeyboardModifier::KeyModAlt)
         {
-            kbd_state.keyboard_state_reset();
+            keyboard_state_reset();
             console_select(Some((keycode - KEYCODE_1) as usize))?;
         }
 
-        kbd_state.keyboard_state_update(keycode, down)?;
+        update_key_state(down, org_keysym, keycode)?;
         key_event(keycode, down)?;
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
@@ -1245,9 +1246,7 @@ pub fn desktop_resize(
     let locked_surface = server.vnc_surface.lock().unwrap();
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
-    if !(0..=MAX_IMAGE_SIZE as i32).contains(&width)
-        || !(0..=MAX_IMAGE_SIZE as i32).contains(&height)
-    {
+    if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
         return Err(anyhow!(VncError::InvalidImageSize(width, height)));
     }
     drop(locked_surface);
@@ -1280,7 +1279,6 @@ pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
         buf.append(&mut (0_u8).to_be_bytes().to_vec());
         buf.append(&mut (1_u16).to_be_bytes().to_vec());
         framebuffer_update(0, 0, client_width, client_height, ENCODING_WMVI, buf);
-        buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
         pixel_format_message(client, buf);
     } else if !locked_dpm.pf.is_default_pixel_format() {
         locked_dpm.convert = true;
@@ -1293,25 +1291,19 @@ pub fn display_cursor_define(
     server: &Arc<VncServer>,
     buf: &mut Vec<u8>,
 ) {
-    let mut cursor: DisplayMouse;
-    let mut mask: Vec<u8>;
     let locked_cursor = server.vnc_cursor.lock().unwrap();
-    match &locked_cursor.cursor {
-        Some(c) => {
-            cursor = c.clone();
-        }
+    let mut cursor = match &locked_cursor.cursor {
+        Some(c) => c.clone(),
         None => {
             return;
         }
-    }
-    match &locked_cursor.mask {
-        Some(m) => {
-            mask = m.clone();
-        }
+    };
+    let mut mask = match &locked_cursor.mask {
+        Some(m) => m.clone(),
         None => {
             return;
         }
-    }
+    };
     drop(locked_cursor);
     if cursor.data.is_empty()
         || cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel()

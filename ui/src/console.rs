@@ -56,6 +56,20 @@ pub enum ConsoleType {
     Text,
 }
 
+/// Run stage of virtual machine.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VmRunningStage {
+    Init,
+    Bios,
+    Os,
+}
+
+#[derive(Default)]
+pub struct UiInfo {
+    pub last_width: u32,
+    pub last_height: u32,
+}
+
 /// Image data defined in display.
 #[derive(Clone, Copy)]
 pub struct DisplaySurface {
@@ -119,12 +133,18 @@ pub trait DisplayChangeListenerOperations {
     fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<()>;
     /// Update the cursor data.
     fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()>;
+    /// Set the current display as major.
+    fn dpy_set_major(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Callback functions registered by graphic hardware.
 pub trait HardWareOperations {
     /// Update image.
     fn hw_update(&self, _con: Arc<Mutex<DisplayConsole>>) {}
+    /// Ui configuration changed.
+    fn hw_ui_info(&self, _con: Arc<Mutex<DisplayConsole>>, _width: u32, _height: u32) {}
 }
 
 /// Listen to the change of image and call the related
@@ -157,9 +177,11 @@ pub struct DisplayConsole {
     pub con_type: ConsoleType,
     pub width: i32,
     pub height: i32,
+    pub ui_info: UiInfo,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
-    dev_opts: Arc<dyn HardWareOperations>,
+    pub dev_opts: Arc<dyn HardWareOperations>,
+    pub timer_id: Option<u64>,
     active: bool,
 }
 
@@ -177,9 +199,11 @@ impl DisplayConsole {
             con_type,
             width: 0,
             height: 0,
+            ui_info: UiInfo::default(),
             console_list,
             surface: None,
             dev_opts,
+            timer_id: None,
             active: true,
         }
     }
@@ -187,6 +211,8 @@ impl DisplayConsole {
 
 /// The state of console layer.
 pub struct DisplayState {
+    /// Running stage.
+    pub run_stage: VmRunningStage,
     /// Refresh interval, which can be dynamic changed.
     pub interval: u64,
     /// Whether there is a refresh task.
@@ -204,11 +230,31 @@ unsafe impl Send for DisplayState {}
 impl DisplayState {
     fn new() -> Self {
         Self {
+            run_stage: VmRunningStage::Init,
             interval: DISPLAY_UPDATE_INTERVAL_DEFAULT,
             is_refresh: false,
             listeners: Vec::new(),
             refresh_num: 0,
         }
+    }
+
+    // Get all related display by con_id.
+    fn get_related_display(&self, con_id: usize) -> Result<Vec<Arc<Mutex<DisplayChangeListener>>>> {
+        let mut related_dpys: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
+        let active_id = CONSOLES.lock().unwrap().activate_id;
+        for dcl in self.listeners.iter().flatten() {
+            match dcl.lock().unwrap().con_id {
+                Some(id) if con_id == id => {
+                    related_dpys.push(dcl.clone());
+                }
+                None if Some(con_id) == active_id => {
+                    related_dpys.push(dcl.clone());
+                }
+                _ => {}
+            }
+        }
+
+        Ok(related_dpys)
     }
 }
 
@@ -234,6 +280,19 @@ impl ConsoleList {
         }
     }
 
+    // Get console by device name.
+    fn get_console_by_dev_name(&mut self, dev_name: String) -> Option<Arc<Mutex<DisplayConsole>>> {
+        let mut target: Option<Arc<Mutex<DisplayConsole>>> = None;
+        for con in self.console_list.iter().flatten() {
+            let locked_con = con.lock().unwrap();
+            if locked_con.dev_name == dev_name {
+                target = Some(con.clone());
+                break;
+            }
+        }
+        target
+    }
+
     /// Get the console by id.
     fn get_console_by_id(&mut self, con_id: Option<usize>) -> Option<Arc<Mutex<DisplayConsole>>> {
         if con_id.is_none() && self.activate_id.is_none() {
@@ -249,6 +308,16 @@ impl ConsoleList {
 
         self.console_list.get(target_id)?.clone()
     }
+}
+
+/// Set currently running stage for virtual machine.
+pub fn set_run_stage(run_stage: VmRunningStage) {
+    DISPLAY_STATE.lock().unwrap().run_stage = run_stage
+}
+
+/// Get currently running stage.
+pub fn get_run_stage() -> VmRunningStage {
+    DISPLAY_STATE.lock().unwrap().run_stage
 }
 
 /// Refresh display image.
@@ -298,7 +367,7 @@ pub fn setup_refresh(update_interval: u64) {
 
     if update_interval != 0 {
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(func, Duration::from_millis(update_interval));
+            ctx.timer_add(func, Duration::from_millis(update_interval));
         }
     }
 }
@@ -336,21 +405,7 @@ pub fn display_replace_surface(
     }
     drop(locked_con);
 
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
-
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Some(s) = &con.lock().unwrap().surface.clone() {
@@ -389,21 +444,7 @@ pub fn display_graphic_update(
     let con_id = locked_con.con_id;
     drop(locked_con);
 
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
-
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         (*dcl_opts).dpy_image_update(x, y, w, h)?;
@@ -425,25 +466,33 @@ pub fn display_cursor_define(
         Some(c) => c,
         None => return Ok(()),
     };
-    let activate_id = CONSOLES.lock().unwrap().activate_id;
     let con_id = con.lock().unwrap().con_id;
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    let locked_state = DISPLAY_STATE.lock().unwrap();
-    for dcl in locked_state.listeners.iter().flatten() {
-        let mut dcl_id = dcl.lock().unwrap().con_id;
-        if dcl_id.is_none() {
-            dcl_id = activate_id;
-        }
-
-        if Some(con_id) == dcl_id {
-            related_listeners.push(dcl.clone());
-        }
-    }
-    drop(locked_state);
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
 
     for dcl in related_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         (*dcl_opts).dpy_cursor_update(cursor)?;
+    }
+    Ok(())
+}
+
+/// Set specific screen as the main display screen.
+pub fn display_set_major_screen(dev_name: &str) -> Result<()> {
+    let con = match CONSOLES
+        .lock()
+        .unwrap()
+        .get_console_by_dev_name(dev_name.to_string())
+    {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    let con_id = con.lock().unwrap().con_id;
+    console_select(Some(con_id))?;
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
+
+    for dcl in related_listeners.iter() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        (*dcl_opts).dpy_set_major()?;
     }
     Ok(())
 }
@@ -454,6 +503,33 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
         let con_opts = con.lock().unwrap().dev_opts.clone();
         (*con_opts).hw_update(con);
     }
+}
+
+pub fn graphic_hardware_ui_info(
+    con: Arc<Mutex<DisplayConsole>>,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let mut locked_con = con.lock().unwrap();
+    if locked_con.ui_info.last_width == width && locked_con.ui_info.last_height == height {
+        return Ok(());
+    }
+    locked_con.ui_info.last_width = width;
+    locked_con.ui_info.last_height = height;
+
+    let clone_con = con.clone();
+    let con_opts = locked_con.dev_opts.clone();
+    let func = Box::new(move || {
+        (*con_opts).hw_ui_info(clone_con.clone(), width, height);
+    });
+
+    if let Some(ctx) = EventLoop::get_ctx(None) {
+        if let Some(timer_id) = locked_con.timer_id {
+            ctx.timer_del(timer_id);
+        }
+        locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+    }
+    Ok(())
 }
 
 /// Get the weak reference of all active consoles from the console lists.

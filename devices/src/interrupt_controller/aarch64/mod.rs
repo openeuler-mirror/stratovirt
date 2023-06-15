@@ -125,6 +125,11 @@ pub trait GICDevice: MachineLifecycle {
     /// Realize function for kvm_based `GIC` device.
     fn realize(&self) -> Result<()>;
 
+    /// Reset 'GIC'
+    fn reset(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Constructs `fdt` node for `GIC`.
     ///
     /// # Arguments
@@ -168,6 +173,11 @@ impl InterruptController {
             .realize()
             .with_context(|| "Failed to realize GIC")?;
         Ok(())
+    }
+
+    /// Reset the InterruptController
+    pub fn reset(&self) -> Result<()> {
+        self.gic.reset().with_context(|| "Failed to reset GIC")
     }
 
     /// Change `InterruptController` lifecycle state to `Stopped`.

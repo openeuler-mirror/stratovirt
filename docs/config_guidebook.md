@@ -247,6 +247,15 @@ And you can also restore StratoVirt's **pid number** to a file by:
 -pidfile <pidfile_path>
 ```
 
+### 1.11 Smbios
+The SMBIOS specification defines the data structures and information that will enter the data structures associated with the system. Having these fields populate the data associated with each system enables system administrators to identify and manage these systems remotely.
+
+```shell
+# cmdline
+-smbios type=0[,vendor=str][,version=str][,date=str]
+-smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str]
+```
+
 ## 2. Device Configuration
 
 For machine type "microvm", only virtio-mmio and legacy devices are supported.
@@ -508,32 +517,47 @@ $ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 
 ### 2.4 Virtio-console
 
-Virtio console is a general-purpose serial device for data transfer between the guest and host.
-Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
-To set the virtio console, chardev for redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
+Virtio console device is a simple device for data transfer between the guest and host. A console device may have
+one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux 
+guest will be created once setting a port (Whether it is a console port or not). Character devices at /dev/hvc0 to
+/dev/hvc7 in linux guest will be created once setting console port. To set the virtio console, chardev for
+redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
 
-Two properties can be set for virtconsole.
+Three properties can be set for virtconsole(console port) and virtserialport(generic port).
 * id: unique device-id.
-* chardev: char device of virtio console device.
+* chardev: char device of this console/generic port.
+* nr: unique port number for this port.
 
-For virtio-serial-pci, two more properties are required.
+For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
-* addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it.
+* addr: including slot number and function number. The first number represents slot number of device and the second one represents function number of it.
+* multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* max_ports: max number of ports we can have for a virtio-serial device. Configuration range is [1, 31]. (optional) If not set, default is 31.
+
+For virtio-serial-device, Two more properties are required.
+* bus: bus number of virtio console.
+* addr: including slot number and function number. The first number represents slot number of device and the second one represents function number of it.
 
 ```shell
-# virtio mmio device
+# virtio mmio device using console port
 -device virtio-serial-device[,id=<virtio-serial0>]
 -chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
--device virtconsole,id=<console_id>,chardev=<virtioconsole1>
+-device virtconsole,id=<console_id>,chardev=<virtioconsole1>,nr=0
+
+# virtio mmio device using generic port
+-device virtio-serial-device[,id=<virtio-serial0>]
+-chardev socket,path=<socket_path>,id=<virtioserialport1>,server,nowait
+-device virtserialport,id=<serialport_id>,chardev=<virtioserialport1>,nr=0
 
 # virtio pci device
--device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}]
--chardev socket,path=<socket_path>,id=<virtioconsole1>,server,nowait
--device virtconsole,id=<console_id>,chardev=<virtioconsole1>
+-device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off},max_ports=<number>]
+-chardev socket,path=<socket_path0>,id=<virtioconsole0>,server,nowait
+-device virtconsole,id=<portid0>,chardev=<virtioconsole0>,nr=0
+-chardev socket,path=<socket_path1>,id=<virtioconsole1>,server,nowait
+-device virtserialport,id=<portid1>,chardev=<virtioconsole1>,nr=1
 ```
 NB:
-Currently, only one virtio console device is supported in standard machine.
+Currently, only one virtio console device is supported. Only one port is supported in microvm.
 
 ### 2.5 Virtio-vsock
 
@@ -807,6 +831,40 @@ Three properties can be set for USB Storage.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
+### 2.13.6 USB Host
+USB Host Device that based on USB protocol. It should be attached to USB controller.
+
+Six properties can be set for USB Host.
+
+* id: unique device id.
+* hostbus: the bus number of the usb host device.
+* hostaddr: the addr number of the usb host device.
+* hostport: the physical number of the usb host device.
+* vendorid: the vendor ID of the usb host device.
+* productid: the product ID of the usb host device.
+
+Pass through the host device identified by bus and addr:
+
+```shell
+-device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>
+```
+
+Pass through the host device identified by bus and physical port:
+
+```shell
+-device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>
+```
+
+Pass through the host device identified by the vendor and product ID:
+
+```shell
+-device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>
+```
+
+Note:
+1. The combination of vendor and product ID takes precedence over the combination of bus number and physical port number.
+2. The combination of bus and physical port takes precedence over the combination of bus number and addr number.
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
@@ -975,7 +1033,8 @@ ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to 
 Nine properties are supported for ivshmem-scream device.
 * id: unique device id.
 * memdev: configuration of the back-end memory device used by the ivshmem.
-* interface: configuring audio playback and recording interfaces, currently can be set to `PulseAudio` or `Demo`.
+* interface: configuring audio playback and recording interfaces, currently can be set to `ALSA`, `PulseAudio` or `Demo`.
+`ALSA` is used by default.
 * playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
 * record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
 * bus: bus number of the device.

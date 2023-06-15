@@ -52,6 +52,7 @@ const NR_GICR_IPRIORITYR: usize = 8;
 /// SGI and PPI Redistributor registers, offsets from RD_base
 const GICR_IGROUPR0: u64 = 0x1_0080;
 const GICR_ISENABLER0: u64 = 0x1_0100;
+const GICR_ICENABLER0: u64 = 0x1_0180;
 const GICR_ISPENDR0: u64 = 0x1_0200;
 const GICR_ICPENDR0: u64 = 0x1_0280;
 const GICR_ISACTIVER0: u64 = 0x1_0300;
@@ -244,7 +245,7 @@ impl GICv3 {
         self.access_gic_redistributor(GICR_STATUSR, redist.vcpu, &mut redist.gicr_statusr, true)?;
         self.access_gic_redistributor(GICR_WAKER, redist.vcpu, &mut redist.gicr_waker, true)?;
         self.access_gic_redistributor(GICR_IGROUPR0, redist.vcpu, &mut redist.gicr_igroupr0, true)?;
-        self.access_gic_redistributor(GICR_ISENABLER0, redist.vcpu, &mut !0, true)?;
+        self.access_gic_redistributor(GICR_ICENABLER0, redist.vcpu, &mut !0, true)?;
         self.access_gic_redistributor(
             GICR_ISENABLER0,
             redist.vcpu,
@@ -547,6 +548,43 @@ impl GICv3 {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn create_reset_state(&self) -> Result<Vec<u8>> {
+        let mut gic_state = GICv3State::default();
+
+        self.access_gic_redistributor(GICR_TYPER, 0, &mut gic_state.redist_typer_l, false)
+            .with_context(|| "create_reset_state: redist_typer_l")?;
+        self.access_gic_redistributor(GICR_TYPER + 4, 0, &mut gic_state.redist_typer_h, false)
+            .with_context(|| "create_reset_state: redist_typer_h")?;
+
+        // process cpu-state and redistriburor
+        gic_state.iccr_len = self.vcpu_count as usize;
+        gic_state.redist_len = self.vcpu_count as usize;
+        for cpu in 0..self.vcpu_count {
+            let mut gic_cpu = GICv3CPUState {
+                vcpu: cpu as usize,
+                ..Default::default()
+            };
+
+            gic_cpu.icc_sre_el1 = 0x7;
+
+            // initialize to hardware supported configuration
+            self.access_gic_cpu(ICC_CTLR_EL1, cpu as usize, &mut gic_cpu.icc_ctlr_el1, false)
+                .with_context(|| format!("create_reset_state: VCPU-{} icc_ctlr_el1", cpu))?;
+
+            gic_state.vcpu_iccr[cpu as usize] = gic_cpu;
+            // setup redist state
+            gic_state.vcpu_redist[cpu as usize] = GICv3RedistState {
+                vcpu: cpu as usize,
+                ..Default::default()
+            }
+        }
+
+        // process distributor
+        gic_state.dist_len = (self.nr_irqs / 32) as usize;
+
+        Ok(gic_state.as_bytes().to_vec())
     }
 }
 

@@ -13,26 +13,29 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{bail, Result};
+use gettextrs::gettext;
 use gtk::{
     gdk::{
-        self,
         ffi::{GDK_KEY_equal, GDK_KEY_minus, GDK_KEY_B, GDK_KEY_F, GDK_KEY_M, GDK_KEY_S},
         ModifierType,
     },
-    glib,
-    prelude::{AccelGroupExtManual, NotebookExtManual},
+    glib::{self, object::GObject, translate::ToGlibPtr},
+    prelude::{AccelGroupExtManual, NotebookExtManual, ObjectType, WidgetExtManual},
     traits::{
-        BoxExt, CheckMenuItemExt, ContainerExt, GtkMenuExt, GtkMenuItemExt, GtkWindowExt,
-        MenuShellExt, NotebookExt, WidgetExt,
+        BoxExt, CheckMenuItemExt, ContainerExt, DialogExt, GtkMenuExt, GtkMenuItemExt,
+        GtkWindowExt, MenuShellExt, NotebookExt, WidgetExt,
     },
-    AccelFlags, AccelGroup, ApplicationWindow, CheckMenuItem, Inhibit, Menu, MenuBar, MenuItem,
-    Orientation, RadioMenuItem,
+    AccelFlags, AccelGroup, ApplicationWindow, ButtonsType, CheckMenuItem, DialogFlags, Inhibit,
+    Menu, MenuBar, MenuItem, MessageDialog, MessageType, Orientation, RadioMenuItem,
 };
 use log::error;
 
-use crate::gtk::{
-    renew_image, update_window_size, GtkDisplay, ZoomOperate, GTK_SCALE_MIN, GTK_ZOOM_STEP,
+use crate::{
+    console::{get_run_stage, VmRunningStage},
+    gtk::{renew_image, update_window_size, GtkDisplay, ZoomOperate, GTK_SCALE_MIN, GTK_ZOOM_STEP},
 };
+
+use super::ScaleMode;
 
 #[derive(Clone)]
 pub(crate) struct GtkMenu {
@@ -65,16 +68,16 @@ impl GtkMenu {
             accel_group: AccelGroup::default(),
             menu_bar: MenuBar::new(),
             machine_menu: Menu::new(),
-            machine_item: MenuItem::with_label("Machine"),
-            shutdown_item: MenuItem::with_label("Shut Down"),
+            machine_item: MenuItem::with_mnemonic(&gettext("_Machine")),
+            shutdown_item: MenuItem::with_mnemonic(&gettext("Power _Down")),
             view_menu: Menu::new(),
-            view_item: MenuItem::with_label("View"),
-            full_screen_item: MenuItem::with_label("Full Screen"),
-            zoom_in_item: MenuItem::with_label("Zoom In"),
-            zoom_out_item: MenuItem::with_label("Zoom Out"),
-            zoom_fit: CheckMenuItem::with_label("Zoom Fit"),
-            best_fit_item: MenuItem::with_label("Best Fit"),
-            show_menu_bar: CheckMenuItem::with_label("Show MenuBar"),
+            view_item: MenuItem::with_mnemonic(&gettext("_View")),
+            full_screen_item: MenuItem::with_mnemonic(&gettext("_Fullscreen")),
+            zoom_in_item: MenuItem::with_mnemonic(&gettext("Zoom _In")),
+            zoom_out_item: MenuItem::with_mnemonic(&gettext("Zoom _Out")),
+            zoom_fit: CheckMenuItem::with_mnemonic(&gettext("Zoom To _Fit")),
+            best_fit_item: MenuItem::with_mnemonic(&gettext("Best _Fit")),
+            show_menu_bar: CheckMenuItem::with_mnemonic(&gettext("Show Menubar")),
         }
     }
 
@@ -189,8 +192,8 @@ impl GtkMenu {
         // Connect delete for window.
         self.window.connect_delete_event(
             glib::clone!(@weak gd => @default-return Inhibit(false), move |_, _| {
-                power_down_callback(&gd).unwrap_or_else(|e| error!("Standard vm write power button failed: {:?}", e));
-                Inhibit(false)
+                window_close_callback(&gd).unwrap_or_else(|e| error!("Standard vm shut down failed: {:?}", e));
+                Inhibit(true)
             }),
         );
 
@@ -223,28 +226,49 @@ impl GtkMenu {
 
         // Set the visible of note_book.
         self.note_book.set_show_tabs(false);
-        self.note_book.set_show_border(true);
+        self.note_book.set_show_border(false);
 
         self.window.add_accel_group(&self.accel_group);
         self.container.pack_start(&self.menu_bar, false, false, 0);
         self.container.pack_start(&self.note_book, true, true, 0);
         self.window.add(&self.container);
+
+        // Disable the default F10 menu shortcut.
+        if let Some(setting) = self.window.settings() {
+            unsafe {
+                gtk::glib::gobject_ffi::g_object_set_property(
+                    setting.as_ptr() as *mut GObject,
+                    "gtk-menu-bar-accel".to_glib_none().0,
+                    glib::Value::from("").to_glib_none().0,
+                );
+            }
+        }
     }
 
     /// Show window.
-    pub(crate) fn show_window(&self, is_full_screen: bool) {
-        if is_full_screen {
-            self.menu_bar.hide();
-            self.window.fullscreen();
+    pub(crate) fn show_window(&self, scale_mode: Rc<RefCell<ScaleMode>>) {
+        if scale_mode.borrow().full_screen {
+            self.full_screen_item.activate();
         }
+
+        if scale_mode.borrow().free_scale {
+            self.zoom_fit.activate();
+        }
+
         self.window.show_all();
+        self.menu_bar.hide();
     }
 }
 
 /// Fixed the window size.
 fn power_down_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
-    let power_button = gd.borrow().power_button.clone();
-    power_button.write(1)?;
+    let borrowed_gd = gd.borrow();
+    if borrowed_gd.powerdown_button.is_some() {
+        borrowed_gd.vm_powerdown();
+    } else {
+        drop(borrowed_gd);
+        window_close_callback(gd)?;
+    }
     Ok(())
 }
 
@@ -279,11 +303,6 @@ fn full_screen_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         gtk_menu.note_book.set_show_tabs(false);
         gtk_menu.menu_bar.hide();
         gs.borrow().draw_area.set_size_request(-1, -1);
-        if let Some(screen) = gdk::Screen::default() {
-            let width = screen.width();
-            let height = screen.height();
-            gs.borrow().window.set_default_size(width, height);
-        }
         gtk_menu.window.fullscreen();
         borrowed_scale.full_screen = true;
     } else {
@@ -345,4 +364,38 @@ fn zoom_fit_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
 
     update_window_size(&gs)?;
     renew_image(&gs)
+}
+
+/// Close window.
+fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
+    let borrowed_gd = gd.borrow();
+    if get_run_stage() != VmRunningStage::Os || borrowed_gd.powerdown_button.is_none() {
+        let dialog = MessageDialog::new(
+            Some(&borrowed_gd.gtk_menu.window),
+            DialogFlags::DESTROY_WITH_PARENT,
+            MessageType::Question,
+            ButtonsType::YesNo,
+            &gettext("Forced shutdown may cause installation failure, blue screen, unusable and other abnormalities."),
+        );
+        dialog.set_title(&gettext(
+            "Please confirm whether to exit the virtual machine",
+        ));
+        borrowed_gd.vm_pause();
+        let answer = dialog.run();
+        // SAFETY: Dialog is created in the current function and can be guaranteed not to be empty.
+        unsafe { dialog.destroy() };
+
+        if answer != gtk::ResponseType::Yes {
+            borrowed_gd.vm_resume();
+            return Ok(());
+        }
+    }
+
+    if get_run_stage() == VmRunningStage::Os && borrowed_gd.powerdown_button.is_some() {
+        borrowed_gd.vm_powerdown();
+    } else {
+        borrowed_gd.vm_shutdown();
+    }
+
+    Ok(())
 }

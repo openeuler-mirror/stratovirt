@@ -24,7 +24,6 @@ use crate::{
     },
     data::keycode::KEYSYM2KEYCODE,
     error::VncError,
-    input::KeyBoardState,
     pixman::{
         bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
         get_image_width, ref_pixman_image, unref_pixman_image,
@@ -48,12 +47,10 @@ use machine_manager::{
 };
 use once_cell::sync::Lazy;
 use std::{
-    cell::RefCell,
     cmp,
     collections::HashMap,
     net::TcpListener,
     ptr,
-    rc::Rc,
     sync::{Arc, Mutex},
     thread,
 };
@@ -282,23 +279,16 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         .expect("Set noblocking for vnc socket failed");
 
     let mut keysym2keycode: HashMap<u16, u16> = HashMap::new();
-
-    let mut max_keycode: u16 = 0;
     // Mapping ASCII to keycode.
     for &(k, v) in KEYSYM2KEYCODE.iter() {
-        max_keycode = cmp::max(max_keycode, v);
         keysym2keycode.insert(k, v);
     }
-    // Record keyboard state.
-    let keyboard_state: Rc<RefCell<KeyBoardState>> =
-        Rc::new(RefCell::new(KeyBoardState::new(max_keycode as usize)));
 
     let vnc_opts = Arc::new(VncInterface::default());
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));
 
     let server = Arc::new(VncServer::new(
         get_client_image(),
-        keyboard_state,
         keysym2keycode,
         Some(Arc::downgrade(&dcl)),
     ));
@@ -334,16 +324,13 @@ fn start_vnc_thread() -> Result<()> {
                 continue;
             }
 
-            let mut rect_info;
-            match rect_jobs.lock().unwrap().get_mut(0) {
-                Some(rect) => {
-                    rect_info = rect.clone();
-                }
+            let mut rect_info = match rect_jobs.lock().unwrap().get_mut(0) {
+                Some(rect) => rect.clone(),
                 None => {
                     thread::sleep(time::Duration::from_millis(interval));
                     continue;
                 }
-            }
+            };
             rect_jobs.lock().unwrap().remove(0);
 
             let mut num_rects: i32 = 0;

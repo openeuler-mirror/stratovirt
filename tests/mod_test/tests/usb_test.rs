@@ -23,12 +23,13 @@ use devices::usb::xhci::{TRBCCode, TRBType, TRB_SIZE};
 use devices::usb::UsbDeviceRequest;
 use mod_test::libdriver::pci::{PCI_DEVICE_ID, PCI_VENDOR_ID};
 use mod_test::libdriver::usb::{
-    clear_iovec, qmp_send_key_event, qmp_send_multi_key_event, qmp_send_pointer_event, TestIovec,
-    TestNormalTRB, TestUsbBuilder, CONTROL_ENDPOINT_ID, HID_DEVICE_ENDPOINT_ID, HID_KEYBOARD_LEN,
-    HID_POINTER_LEN, KEYCODE_NUM1, KEYCODE_SPACE, PCI_CLASS_PI, PRIMARY_INTERRUPTER_ID,
-    TD_TRB_LIMIT, XHCI_PCI_CAP_OFFSET, XHCI_PCI_DOORBELL_OFFSET, XHCI_PCI_FUN_NUM,
-    XHCI_PCI_OPER_OFFSET, XHCI_PCI_PORT_OFFSET, XHCI_PCI_RUNTIME_OFFSET, XHCI_PCI_SLOT_NUM,
-    XHCI_PORTSC_OFFSET,
+    clear_iovec, qmp_event_read, qmp_plug_keyboard_event, qmp_plug_tablet_event,
+    qmp_send_key_event, qmp_send_multi_key_event, qmp_send_pointer_event, qmp_unplug_usb_event,
+    TestIovec, TestNormalTRB, TestUsbBuilder, CONTROL_ENDPOINT_ID, HID_DEVICE_ENDPOINT_ID,
+    HID_KEYBOARD_LEN, HID_POINTER_LEN, KEYCODE_NUM1, KEYCODE_SPACE, PCI_CLASS_PI,
+    PRIMARY_INTERRUPTER_ID, TD_TRB_LIMIT, XHCI_PCI_CAP_OFFSET, XHCI_PCI_DOORBELL_OFFSET,
+    XHCI_PCI_FUN_NUM, XHCI_PCI_OPER_OFFSET, XHCI_PCI_PORT_OFFSET, XHCI_PCI_RUNTIME_OFFSET,
+    XHCI_PCI_SLOT_NUM, XHCI_PORTSC_OFFSET,
 };
 
 #[test]
@@ -2080,13 +2081,14 @@ fn test_xhci_tablet_basic() {
                 (i * 10 >> 8) as u8,
                 (i * 20) as u8,
                 (i * 20 >> 8) as u8,
+                0,
                 0
             ]
         );
     }
 
     for _ in 0..cnt {
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x8);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x28);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
     }
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
@@ -2094,11 +2096,11 @@ fn test_xhci_tablet_basic() {
         let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::Success as u32);
         let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-        assert_eq!(buf, [0, 10, 0, 20, 0, 1]);
+        assert_eq!(buf, [0, 10, 0, 20, 0, 1, 255]);
     }
 
     for _ in 0..cnt {
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x10);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x50);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
     }
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
@@ -2106,7 +2108,7 @@ fn test_xhci_tablet_basic() {
         let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::Success as u32);
         let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-        assert_eq!(buf, [0, 10, 0, 20, 0, 255]);
+        assert_eq!(buf, [0, 10, 0, 20, 0, 255, 1]);
     }
     test_state.borrow_mut().stop();
 }
@@ -2141,7 +2143,7 @@ fn test_xhci_tablet_over_hid_buffer() {
             let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
             assert_eq!(evt.ccode, TRBCCode::Success as u32);
             let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-            assert_eq!(buf, [0, i as u8, 0, (i + 100) as u8, 0, 0]);
+            assert_eq!(buf, [0, i as u8, 0, (i + 100) as u8, 0, 0, 0]);
         } else {
             // event lost.
             assert!(xhci.fetch_event(PRIMARY_INTERRUPTER_ID).is_none());
@@ -2176,7 +2178,7 @@ fn test_xhci_tablet_over_ring_limit() {
             let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
             assert_eq!(evt.ccode, TRBCCode::Success as u32);
             let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-            assert_eq!(buf, [0, 50, 0, 100, 0, 0]);
+            assert_eq!(buf, [0, 50, 0, 100, 0, 0, 0]);
         }
         if i == 0 {
             // Fake link new address.
@@ -2218,7 +2220,7 @@ fn test_xhci_tablet_invalid_value() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
     let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-    assert_eq!(buf, [7, 255, 127, 255, 127, 0]);
+    assert_eq!(buf, [7, 255, 127, 255, 127, 1, 255]);
 
     xhci.test_pointer_event(slot_id, test_state.clone());
     test_state.borrow_mut().stop();
@@ -2251,7 +2253,7 @@ fn test_xhci_tablet_device_init_control_command() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
     let buf = xhci.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, HID_POINTER_LEN);
-    assert_eq!(buf, [0, 0, 0, 0, 0, 0]);
+    assert_eq!(buf, [0, 0, 0, 0, 0, 0, 0]);
 
     xhci.test_pointer_event(slot_id, test_state.clone());
     test_state.borrow_mut().stop();
@@ -2366,7 +2368,7 @@ fn test_xhci_tablet_flush() {
     xhci.stop_endpoint(slot_id, HID_DEVICE_ENDPOINT_ID);
     // No data, the xhci report short packet.
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-    assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
+    assert_eq!(evt.ccode, TRBCCode::Stopped as u32);
     // Stop command return success.
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
@@ -2442,7 +2444,7 @@ fn test_xhci_disable_interrupt() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
     let buf = xhci.get_transfer_data_direct(evt.ptr, HID_POINTER_LEN);
-    assert_eq!(buf, [0, 100, 0, 200, 0, 0]);
+    assert_eq!(buf, [0, 100, 0, 200, 0, 0, 0]);
 
     // Case: disable IMAN_IE
     qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0);
@@ -2465,7 +2467,7 @@ fn test_xhci_disable_interrupt() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
     let buf = xhci.get_transfer_data_direct(evt.ptr, HID_POINTER_LEN);
-    assert_eq!(buf, [0, 100, 0, 200, 0, 0]);
+    assert_eq!(buf, [0, 100, 0, 200, 0, 0, 0]);
 
     test_state.borrow_mut().stop();
 }
@@ -2581,8 +2583,213 @@ fn test_xhci_tablet_invalid_trb() {
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
     let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_POINTER_LEN);
-    assert_eq!(buf, [0, 100, 0, 200, 0, 0]);
+    assert_eq!(buf, [0, 100, 0, 200, 0, 0, 0]);
 
     xhci.test_pointer_event(slot_id, test_state.clone());
+    test_state.borrow_mut().stop();
+}
+
+/// Test basic hotplug function.
+/// TestStep:
+///   1. Start a domain without tablet and keyboard.
+///   2. Hotplug tablet and keyboard.
+///   3. Test the tablet and keyboard functions.
+///   4. Unplug tablet and keyboard.
+/// Except:
+///   1/2/3/4: success.
+#[test]
+fn test_plug_usb_basic() {
+    let (xhci, test_state, _) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+    let mut xhci = xhci.borrow_mut();
+
+    qmp_plug_keyboard_event(test_state.borrow_mut(), 1);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    let port_id = 1;
+    xhci.device_config.insert(String::from("keyboard"), true);
+    let slot_id = xhci.init_device(port_id);
+    xhci.test_keyboard_event(slot_id, test_state.clone());
+
+    qmp_plug_tablet_event(test_state.borrow_mut(), 2);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    let port_id = 2;
+    xhci.device_config.insert(String::from("tablet"), true);
+    let slot_id = xhci.init_device(port_id);
+    xhci.test_pointer_event(slot_id, test_state.clone());
+
+    qmp_unplug_usb_event(test_state.borrow_mut(), 1);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    qmp_unplug_usb_event(test_state.borrow_mut(), 2);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    test_state.borrow_mut().stop();
+}
+
+/// Test basic hotplug functions
+/// TestStep:
+///   1. Start a domain with tablet and keyboard.
+///   2. Hotplug the new tablet and keyboard, unplug the old.
+///   3. Test the tablet and keyboard functions.
+///   4. Unplug tablet and keyboard.
+/// Except:
+///   1/2/3/4: success.
+#[test]
+fn test_tablet_keyboard_plug() {
+    let (xhci, test_state, _) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_usb_tablet("input1")
+        .with_usb_keyboard("input2")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+    let mut xhci = xhci.borrow_mut();
+
+    let port_id = 1;
+    xhci.device_config.insert(String::from("keyboard"), false);
+    xhci.device_config.insert(String::from("tablet"), true);
+    let slot_id = xhci.init_device(port_id);
+    xhci.test_pointer_event(slot_id, test_state.clone());
+
+    let port_id = 2;
+    xhci.device_config.insert(String::from("keyboard"), true);
+    xhci.device_config.insert(String::from("tablet"), false);
+    let slot_id = xhci.init_device(port_id);
+    xhci.test_keyboard_event(slot_id, test_state.clone());
+
+    qmp_plug_tablet_event(test_state.borrow_mut(), 3);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    let port_id = 3;
+    xhci.device_config.insert(String::from("keyboard"), false);
+    xhci.device_config.insert(String::from("tablet"), true);
+    let slot_id_tbt = xhci.init_device(port_id);
+
+    qmp_plug_keyboard_event(test_state.borrow_mut(), 4);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    let port_id = 4;
+    xhci.device_config.insert(String::from("keyboard"), true);
+    xhci.device_config.insert(String::from("tablet"), false);
+    let slot_id_kbd = xhci.init_device(port_id);
+
+    qmp_unplug_usb_event(test_state.borrow_mut(), 1);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    qmp_unplug_usb_event(test_state.borrow_mut(), 2);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    xhci.test_pointer_event(slot_id_tbt, test_state.clone());
+    xhci.test_keyboard_event(slot_id_kbd, test_state.clone());
+
+    qmp_unplug_usb_event(test_state.borrow_mut(), 3);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+    qmp_unplug_usb_event(test_state.borrow_mut(), 4);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    test_state.borrow_mut().stop();
+}
+
+/// Test stratovirt maximum specification
+/// TestStep:
+///   1. Start a domain without tablet and keyboard.
+///   2. Plug 15 tablets and keyboards.
+///   3. Continue to hotplug tablet and keyboard, exceptation is failure.
+///   4. Unplug all tablets and keyboards.
+/// Except:
+///   1/2/4: success.
+///   3: No available USB port.
+#[test]
+fn test_max_number_of_device() {
+    let max_num_of_port2 = 15;
+    let (xhci, test_state, _) = TestUsbBuilder::new()
+        .with_xhci_config("xhci", max_num_of_port2, 0)
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+    let mut xhci = xhci.borrow_mut();
+
+    let mut i = 1;
+    while i <= max_num_of_port2 {
+        qmp_plug_keyboard_event(test_state.borrow_mut(), i);
+        let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+        assert_eq!(evt.ccode, TRBCCode::Success as u32);
+        i += 1;
+    }
+
+    let value = qmp_plug_keyboard_event(test_state.borrow_mut(), 16);
+    let status = value["error"]["desc"].as_str().unwrap().to_string();
+    assert_eq!(status, "No available USB port.".to_string());
+
+    let value = qmp_plug_tablet_event(test_state.borrow_mut(), 16);
+    let status = value["error"]["desc"].as_str().unwrap().to_string();
+    assert_eq!(status, "No available USB port.".to_string());
+
+    i = 1;
+    while i <= max_num_of_port2 {
+        qmp_unplug_usb_event(test_state.borrow_mut(), i);
+        i += 1;
+    }
+    test_state.borrow_mut().stop();
+}
+
+/// Test abnormal hotplug operation
+/// TestStep:
+///   1. Start a domain without tablet and keyboard.
+///   2. Unplug tablet and keyboard, exceptation is failure.
+///   3. Hotplug tablet and keyboard.
+///   4. Unplug tablet and keyboard, exceptation is success.
+///   5. Repeat the unplug operation, exceptation is failure.
+/// Except:
+///   1/3/4: success.
+///   2/5: Failed to detach device: id input1 not found.
+#[test]
+fn test_unplug_usb_device() {
+    let (xhci, test_state, _) = TestUsbBuilder::new()
+        .with_xhci("xhci")
+        .with_config("auto_run", true)
+        .with_config("command_auto_doorbell", true)
+        .build();
+    let mut xhci = xhci.borrow_mut();
+
+    let value = qmp_unplug_usb_event(test_state.borrow_mut(), 1);
+    let status = value["error"]["desc"].as_str().unwrap().to_string();
+    assert_eq!(
+        status,
+        "Failed to detach device: id input1 not found".to_string()
+    );
+
+    qmp_plug_keyboard_event(test_state.borrow_mut(), 1);
+    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+    assert_eq!(evt.ccode, TRBCCode::Success as u32);
+
+    let port_id = 1;
+    xhci.device_config.insert(String::from("keyboard"), true);
+    xhci.device_config.insert(String::from("tablet"), false);
+    let slot_id = xhci.init_device(port_id);
+    xhci.test_keyboard_event(slot_id, test_state.clone());
+
+    qmp_unplug_usb_event(test_state.borrow_mut(), 1);
+    qmp_event_read(test_state.borrow_mut());
+
+    let value = qmp_unplug_usb_event(test_state.borrow_mut(), 1);
+    let status = value["error"]["desc"].as_str().unwrap().to_string();
+    assert_eq!(
+        status,
+        "Failed to detach device: id input1 not found".to_string()
+    );
     test_state.borrow_mut().stop();
 }

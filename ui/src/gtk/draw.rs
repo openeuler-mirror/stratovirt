@@ -24,10 +24,12 @@ use gtk::{
 use log::error;
 
 use crate::{
+    console::graphic_hardware_ui_info,
     gtk::GtkDisplayScreen,
     input::{
-        self, point_event, press_mouse, ABS_MAX, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
-        INPUT_POINT_RIGHT,
+        self, point_event, press_mouse, release_all_key, update_key_state, ABS_MAX,
+        INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+        INPUT_BUTTON_WHEEL_UP, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
     },
 };
 
@@ -76,6 +78,19 @@ pub(crate) fn set_callback_for_draw_area(
             Inhibit(false)}
         ),
     );
+    draw_area.connect_configure_event(
+        glib::clone!(@weak gs => @default-return false, move |_, event_configure| {
+            da_configure_callback(&gs, event_configure).unwrap_or_else(|e|error!("Configure event: {}", e));
+            false}
+        ),
+    );
+
+    draw_area.connect_focus_out_event(
+        glib::clone!(@weak gs => @default-return Inhibit(false), move |_, _| {
+            da_focus_out_callback().unwrap_or_else(|e|error!("Focus out event: {:?}", e));
+            Inhibit(false)}
+        ),
+    );
 
     let event_mask = EventMask::BUTTON_PRESS_MASK
         | EventMask::BUTTON_RELEASE_MASK
@@ -84,10 +99,36 @@ pub(crate) fn set_callback_for_draw_area(
         | EventMask::KEY_PRESS_MASK
         | EventMask::KEY_RELEASE_MASK
         | EventMask::BUTTON1_MOTION_MASK
+        | EventMask::FOCUS_CHANGE_MASK
         | EventMask::POINTER_MOTION_MASK;
     draw_area.add_events(event_mask);
 
     Ok(())
+}
+
+/// When the window size changes,
+/// the image resolution adapts to the window.
+fn da_configure_callback(
+    gs: &Rc<RefCell<GtkDisplayScreen>>,
+    event_configure: &gdk::EventConfigure,
+) -> Result<()> {
+    let borrowed_gs = gs.borrow();
+    if !borrowed_gs.scale_mode.borrow().is_free_scale() {
+        return Ok(());
+    }
+
+    let con = match borrowed_gs.con.upgrade() {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    drop(borrowed_gs);
+    let (width, height) = event_configure.size();
+
+    graphic_hardware_ui_info(con, width, height)
+}
+
+fn da_focus_out_callback() -> Result<()> {
+    release_all_key()
 }
 
 fn da_key_callback(
@@ -96,11 +137,13 @@ fn da_key_callback(
     press: bool,
 ) -> Result<()> {
     let keysym2keycode = gs.borrow().keysym2keycode.clone();
+    let org_key_value = key_event.keyval().into_glib() as i32;
     let key_value: u16 = key_event.keyval().to_lower().into_glib() as u16;
-    let keycode: u16 = match keysym2keycode.borrow().get(&(key_value as u16)) {
+    let keycode: u16 = match keysym2keycode.borrow().get(&key_value) {
         Some(k) => *k,
         None => 0,
     };
+    update_key_state(press, org_key_value, keycode)?;
     input::key_event(keycode, press)?;
     Ok(())
 }
@@ -126,8 +169,8 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
         None => return Ok(()),
     };
     let (real_x, real_y) = borrowed_gs.convert_coord(x, y)?;
-    let standard_x = (((real_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y = (((real_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
+    let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
 
     point_event(
         borrowed_gs.click_state.button_mask as u32,
@@ -156,8 +199,8 @@ fn da_pointer_callback(
     let (x, y) = button_event.position();
     let (real_x, real_y) = borrowed_gs.convert_coord(x, y)?;
 
-    let standard_x = (((real_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y = (((real_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
+    let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
 
     match button_event.event_type() {
         gdk::EventType::ButtonRelease => {
@@ -191,18 +234,18 @@ fn da_scroll_callback(
         Some(image) => (image.width() as f64, image.height() as f64),
         None => return Ok(()),
     };
-    let button_mask: u8 = match scroll_event.direction() {
-        ScrollDirection::Up => 0x8,
-        ScrollDirection::Down => 0x10,
+    let button_mask = match scroll_event.direction() {
+        ScrollDirection::Up => INPUT_BUTTON_WHEEL_UP,
+        ScrollDirection::Down => INPUT_BUTTON_WHEEL_DOWN,
+        ScrollDirection::Left => INPUT_BUTTON_WHEEL_LEFT,
+        ScrollDirection::Right => INPUT_BUTTON_WHEEL_RIGHT,
         _ => 0x0,
     };
 
-    let standard_x =
-        (((borrowed_gs.click_state.last_x as u64 * ABS_MAX) / width as u64) as u16) as u16;
-    let standard_y =
-        (((borrowed_gs.click_state.last_y as u64 * ABS_MAX) / height as u64) as u16) as u16;
+    let standard_x = ((borrowed_gs.click_state.last_x as u64 * ABS_MAX) / width as u64) as u16;
+    let standard_y = ((borrowed_gs.click_state.last_y as u64 * ABS_MAX) / height as u64) as u16;
     drop(borrowed_gs);
-    point_event(button_mask as u32, standard_x as u32, standard_y as u32)?;
+    point_event(button_mask, standard_x as u32, standard_y as u32)?;
     Ok(())
 }
 
@@ -230,15 +273,15 @@ fn da_draw_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, cr: &cairo::Context) -> 
         borrowed_gs.scale_y = scale_x.min(scale_y);
     }
 
-    surface_width = (surface_width * borrowed_gs.scale_x).floor();
-    surface_height = (surface_height * borrowed_gs.scale_y).floor();
+    surface_width *= borrowed_gs.scale_x;
+    surface_height *= borrowed_gs.scale_y;
 
     let mut mx: f64 = 0.0;
     let mut my: f64 = 0.0;
-    if window_width > surface_width {
+    if window_width.gt(&surface_width) {
         mx = (window_width - surface_width) / (2.0);
     }
-    if window_height > surface_height {
+    if window_height.gt(&surface_height) {
         my = (window_height - surface_height) / (2.0);
     }
 

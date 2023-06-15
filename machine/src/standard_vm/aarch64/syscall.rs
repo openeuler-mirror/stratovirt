@@ -13,6 +13,11 @@
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
+use util::v4l2::{
+    VIDIOC_DQBUF, VIDIOC_ENUM_FMT, VIDIOC_ENUM_FRAMEINTERVALS, VIDIOC_ENUM_FRAMESIZES,
+    VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
+    VIDIOC_STREAMON, VIDIOC_S_FMT, VIDIOC_S_PARM,
+};
 use vfio::{
     VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_IRQ_INFO,
     VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION,
@@ -267,6 +272,20 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYCAP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_G_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_FMT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_REQBUFS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_DQBUF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMON() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMOFF() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32)
 }
 
 fn madvise_rule() -> BpfRule {

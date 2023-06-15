@@ -14,15 +14,13 @@ use std::os::unix::net::UnixListener;
 
 use anyhow::{bail, Context, Result};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
+use util::file::clear_file;
 use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
     config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
     temp_cleaner::TempCleaner,
 };
-
-// Read the programe version in `Cargo.toml`.
-const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
 /// This macro is to run struct $z 's function $s whose arg is $x 's inner member.
 /// There is a multi-macro-cast in cases of vec and bool.
@@ -73,7 +71,7 @@ macro_rules! add_args_to_config_multi {
 /// This function is to define all commandline arguments.
 pub fn create_args_parser<'a>() -> ArgParser<'a> {
     ArgParser::new("StratoVirt")
-        .version(VERSION.unwrap_or("unknown"))
+        .version(util::VERSION)
         .author("The StratoVirt Project Developers")
         .about("A light kvm-based hypervisor.")
         .arg(
@@ -155,6 +153,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .value_name("<parameters>")
             .help("\n\t\tset numa node: -numa node,nodeid=<0>,cpus=<0-1>,memdev=<mem0>; \
                    \n\t\tset numa distance: -numa dist,src=<0>,dst=<1>,val=<20> ")
+            .takes_values(true),
+        )
+        .arg(
+            Arg::with_name("cameradev")
+            .multiple(true)
+            .long("cameradev")
+            .value_name("<parameters>")
+            .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
             .takes_values(true),
         )
         .arg(
@@ -450,6 +456,23 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("set display for virtual machine: currently only supports gtk")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("windows_emu_pid")
+            .multiple(false)
+            .long("windows_emu_pid")
+            .value_name("pid")
+            .help("watch on the external windows emu pid")
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("smbios")
+            .multiple(true)
+            .long("smbios")
+            .value_name("<parameters>")
+            .help("\n\t\tadd type0 table: -smbios type=0[,vendor=str][,version=str][,date=str]; \
+                   \n\t\tadd type1 table: -smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str];")
+            .takes_values(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -486,6 +509,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
     add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
     add_args_to_config!(
+        (args.value_of("windows_emu_pid")),
+        vm_cfg,
+        add_windows_emu_pid
+    );
+    add_args_to_config!(
         (args.is_present("no-shutdown")),
         vm_cfg,
         add_no_shutdown,
@@ -510,6 +538,8 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
     add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
+    add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
+    add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;
@@ -608,6 +638,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 }
 
 fn bind_socket(path: String) -> Result<UnixListener> {
+    clear_file(path.clone())?;
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("Failed to bind socket file {}", &path))?;
     // Add file to temporary pool, so it could be cleaned when vm exits.

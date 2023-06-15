@@ -28,10 +28,11 @@ use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
-use ui::input::{register_pointer, unregister_pointer, PointerOpts};
+use ui::input::{
+    register_pointer, unregister_pointer, PointerOpts, INPUT_BUTTON_WHEEL_DOWN,
+    INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP,
+};
 
-const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
-const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
 const INPUT_BUTTON_MASK: u32 = 0x7;
 const INPUT_COORDINATES_MAX: u32 = 0x7fff;
 
@@ -86,7 +87,7 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
         },
         other_desc: vec![Arc::new(UsbDescOther {
             /// HID descriptor
-            data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0],
+            data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 89, 0x0],
         })],
         endpoints: vec![Arc::new(UsbDescEndpoint {
             endpoint_desc: UsbEndpointDescriptor {
@@ -97,7 +98,7 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                 wMaxPacketSize: 8,
                 bInterval: 0xa,
             },
-            extra: None,
+            extra: Vec::new(),
         })],
     })
 });
@@ -144,12 +145,19 @@ impl PointerOpts for UsbTabletAdapter {
         }
         let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
         let mut evt = &mut locked_tablet.hid.pointer.queue[index];
-        if button == INPUT_BUTTON_WHEEL_UP {
-            evt.pos_z = 1;
-        } else if button == INPUT_BUTTON_WHEEL_DOWN {
-            evt.pos_z = -1;
+        if button & INPUT_BUTTON_WHEEL_UP == INPUT_BUTTON_WHEEL_UP {
+            evt.v_wheel = 1;
+        } else if button & INPUT_BUTTON_WHEEL_DOWN == INPUT_BUTTON_WHEEL_DOWN {
+            evt.v_wheel = -1;
         } else {
-            evt.pos_z = 0;
+            evt.v_wheel = 0;
+        }
+        if button & INPUT_BUTTON_WHEEL_LEFT == INPUT_BUTTON_WHEEL_LEFT {
+            evt.h_wheel = -1;
+        } else if button & INPUT_BUTTON_WHEEL_RIGHT == INPUT_BUTTON_WHEEL_RIGHT {
+            evt.h_wheel = 1;
+        } else {
+            evt.h_wheel = 0;
         }
         evt.button_state = button & INPUT_BUTTON_MASK;
         evt.pos_x = min(x, INPUT_COORDINATES_MAX);

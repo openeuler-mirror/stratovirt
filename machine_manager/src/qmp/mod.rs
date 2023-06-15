@@ -452,12 +452,14 @@ fn qmp_command_exec(
         (blockdev_del, blockdev_del, node_name),
         (netdev_del, netdev_del, id),
         (chardev_remove, chardev_remove, id),
+        (cameradev_del, cameradev_del,id),
         (balloon, balloon, value),
         (migrate, migrate, uri);
         (device_add, device_add),
         (blockdev_add, blockdev_add),
         (netdev_add, netdev_add),
         (chardev_add, chardev_add),
+        (cameradev_add, cameradev_add),
         (update_region, update_region),
         (human_monitor_command, human_monitor_command)
     );

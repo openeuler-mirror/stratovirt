@@ -10,17 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{path::Path, str::FromStr};
-
 use anyhow::{anyhow, bail, Context, Result};
-use strum::{EnumCount, IntoEnumIterator};
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use super::error::ConfigError;
+use super::{error::ConfigError, get_cameradev_by_id, UnsignedInteger};
 use crate::config::{
-    check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, ScsiDevConfig, VmConfig,
+    check_arg_nonexist, check_arg_too_long, CamBackendType, CameraDevConfig, CmdParser,
+    ConfigCheck, ScsiDevConfig, VmConfig,
 };
 use util::aio::AioEngine;
+
+const USBHOST_ADDR_MAX: u8 = 127;
 
 /// XHCI controller configuration.
 #[derive(Debug)]
@@ -152,43 +151,37 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     Ok(dev)
 }
 
-#[derive(Clone, Copy, Debug, EnumCountMacro, EnumIter)]
-pub enum CamBackendType {
-    V4l2,
-    Demo,
-}
-
-impl FromStr for CamBackendType {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        for i in CamBackendType::iter() {
-            if s == CAM_OPT_STR_BACKEND_TYPES[i as usize] {
-                return Ok(i);
-            }
-        }
-
-        Err(())
-    }
-}
-
-pub const CAM_OPT_STR_BACKEND_TYPES: [&str; CamBackendType::COUNT] = ["v4l2", "demo"];
-
-pub fn parse_usb_camera(conf: &str) -> Result<UsbCameraConfig> {
+pub fn parse_usb_camera(vm_config: &mut VmConfig, conf: &str) -> Result<UsbCameraConfig> {
     let mut cmd_parser = CmdParser::new("usb-camera");
-    cmd_parser.push("").push("id").push("backend").push("path");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("cameradev")
+        .push("iothread");
     cmd_parser.parse(conf)?;
 
     let mut dev = UsbCameraConfig::new();
+    let drive = cmd_parser
+        .get_value::<String>("cameradev")
+        .with_context(|| "`cameradev` is missing for usb-camera")?;
+    let cameradev = get_cameradev_by_id(vm_config, drive.clone().unwrap()).with_context(|| {
+        format!(
+            "no cameradev found with id {:?} for usb-camera",
+            drive.unwrap()
+        )
+    })?;
+
     dev.id = cmd_parser.get_value::<String>("id")?;
-    dev.backend = cmd_parser.get_value::<CamBackendType>("backend")?.unwrap();
-    dev.path = cmd_parser.get_value::<String>("path")?;
+    dev.backend = cameradev.backend;
+    dev.path = cameradev.path.clone();
+    dev.drive = cameradev;
+    dev.iothread = cmd_parser.get_value::<String>("iothread")?;
 
     dev.check()?;
     Ok(dev)
 }
 
-fn check_id(id: Option<String>, device: &str) -> Result<()> {
+pub fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
     check_arg_too_long(&id.unwrap(), "id")?;
 
@@ -200,6 +193,8 @@ pub struct UsbCameraConfig {
     pub id: Option<String>,
     pub backend: CamBackendType,
     pub path: Option<String>,
+    pub iothread: Option<String>,
+    pub drive: CameraDevConfig,
 }
 
 impl UsbCameraConfig {
@@ -208,6 +203,8 @@ impl UsbCameraConfig {
             id: None,
             backend: CamBackendType::Demo,
             path: None,
+            iothread: None,
+            drive: CameraDevConfig::new(),
         }
     }
 }
@@ -220,21 +217,12 @@ impl Default for UsbCameraConfig {
 
 impl ConfigCheck for UsbCameraConfig {
     fn check(&self) -> Result<()> {
-        // Note: backend has already been checked during args parsing.
         check_id(self.id.clone(), "usb-camera")?;
-        check_camera_path(self.path.clone())
+        if self.iothread.is_some() {
+            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
+        }
+        Ok(())
     }
-}
-
-fn check_camera_path(path: Option<String>) -> Result<()> {
-    check_arg_nonexist(path.clone(), "path", "usb-camera")?;
-
-    let path = path.unwrap();
-    if !Path::new(&path).exists() {
-        bail!(ConfigError::FileNotExist(path));
-    }
-
-    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -302,6 +290,70 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.scsi_cfg.aio_type = drive_arg.aio;
     dev.scsi_cfg.direct = drive_arg.direct;
     dev.media = drive_arg.media.clone();
+
+    dev.check()?;
+    Ok(dev)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UsbHostConfig {
+    /// USB Host device id.
+    pub id: Option<String>,
+    /// The bus number of the USB Host device.
+    pub hostbus: u8,
+    /// The addr number of the USB Host device.
+    pub hostaddr: u8,
+    /// The physical port number of the USB host device.
+    pub hostport: Option<String>,
+    /// The vendor id of the USB Host device.
+    pub vendorid: u16,
+    /// The product id of the USB Host device.
+    pub productid: u16,
+}
+
+impl UsbHostConfig {
+    fn check_range(&self) -> Result<()> {
+        if self.hostaddr > USBHOST_ADDR_MAX {
+            bail!("USB Host hostaddr out of range");
+        }
+        Ok(())
+    }
+}
+
+impl ConfigCheck for UsbHostConfig {
+    fn check(&self) -> Result<()> {
+        check_id(self.id.clone(), "usb-host")?;
+        self.check_range()
+    }
+}
+
+pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
+    let mut cmd_parser = CmdParser::new("usb-host");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("hostbus")
+        .push("hostaddr")
+        .push("hostport")
+        .push("vendorid")
+        .push("productid");
+
+    cmd_parser.parse(cfg_args)?;
+
+    let dev = UsbHostConfig {
+        id: cmd_parser.get_value::<String>("id")?,
+        hostbus: cmd_parser.get_value::<u8>("hostbus")?.unwrap_or(0),
+        hostaddr: cmd_parser.get_value::<u8>("hostaddr")?.unwrap_or(0),
+        hostport: cmd_parser.get_value::<String>("hostport")?,
+        vendorid: cmd_parser
+            .get_value::<UnsignedInteger>("vendorid")?
+            .unwrap_or(UnsignedInteger(0))
+            .0 as u16,
+        productid: cmd_parser
+            .get_value::<UnsignedInteger>("productid")?
+            .unwrap_or(UnsignedInteger(0))
+            .0 as u16,
+    };
 
     dev.check()?;
     Ok(dev)

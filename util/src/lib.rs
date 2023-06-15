@@ -37,6 +37,7 @@ pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;
+pub mod v4l2;
 pub use anyhow::Result;
 pub use error::UtilError;
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
@@ -44,6 +45,13 @@ use log::debug;
 use once_cell::sync::Lazy;
 use std::{any::Any, sync::Mutex};
 use vmm_sys_util::terminal::Terminal;
+
+/// Read the program version in `Cargo.toml` and concat with git commit id.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " commit-id ",
+    include_str!(concat!(env!("OUT_DIR"), "/GIT_COMMIT"))
+);
 
 pub static TERMINAL_MODE: Lazy<Mutex<Option<termios>>> = Lazy::new(|| Mutex::new(None));
 
@@ -90,10 +98,15 @@ pub fn set_termi_canon_mode() -> std::io::Result<()> {
 /// This trait is to cast trait object to struct.
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: Any> AsAny for T {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

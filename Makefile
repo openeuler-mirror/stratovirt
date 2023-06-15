@@ -19,3 +19,7 @@ yum-deps:
 	@yum install libcap-ng-devel
 	@yum install cyrus-sasl-devel
 	@yum install pulseaudio
+	@yum install clang
+	@yum install gtk3-devel
+	@yum install libusbx
+	@yum install alsa-lib-devel

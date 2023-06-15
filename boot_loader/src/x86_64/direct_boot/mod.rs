@@ -88,7 +88,7 @@ fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
 ///
 /// * Write image to guest memory failed.
 fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
-    let curr_loc = image.seek(SeekFrom::Current(0))?;
+    let curr_loc = image.stream_position()?;
     let len = image.seek(SeekFrom::End(0))?;
     image.seek(SeekFrom::Start(curr_loc))?;
 

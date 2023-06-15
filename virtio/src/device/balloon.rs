@@ -1147,6 +1147,13 @@ impl VirtioDevice for Balloon {
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.deactivate_evts)
     }
+
+    fn reset(&mut self) -> Result<()> {
+        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
+            self.num_pages = 0;
+        }
+        Ok(())
+    }
 }
 
 pub fn qmp_balloon(target: u64) -> bool {

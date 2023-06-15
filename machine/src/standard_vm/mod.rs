@@ -23,6 +23,7 @@ pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 #[cfg(not(target_env = "musl"))]
 use ui::{
     input::{key_event, point_event},
@@ -40,6 +41,7 @@ use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
+use std::string::String;
 use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
@@ -222,8 +224,59 @@ trait StdMachineOps: AcpiBuilder {
         Ok(())
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn register_acpi_shutdown_event(
+    fn register_pause_event(
+        &self,
+        pause_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let pause_req_fd = pause_req.as_raw_fd();
+        let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = pause_req.read();
+            if !clone_vm.lock().unwrap().pause() {
+                error!("VM pause failed");
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            pause_req_fd,
+            None,
+            EventSet::IN,
+            vec![pause_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
+    fn register_resume_event(
+        &self,
+        resume_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let resume_req_fd = resume_req.as_raw_fd();
+        let resume_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = resume_req.read();
+            if !clone_vm.lock().unwrap().resume() {
+                error!("VM resume failed!");
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            resume_req_fd,
+            None,
+            EventSet::IN,
+            vec![resume_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
+    fn register_shutdown_event(
         &self,
         shutdown_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
@@ -232,9 +285,12 @@ trait StdMachineOps: AcpiBuilder {
 
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = shutdown_req.read().unwrap();
-            StdMachine::handle_shutdown_request(&clone_vm);
-            Some(gen_delete_notifiers(&[shutdown_req_fd]))
+            let _ret = shutdown_req.read();
+            if clone_vm.lock().unwrap().destroy() {
+                Some(gen_delete_notifiers(&[shutdown_req_fd]))
+            } else {
+                None
+            }
         });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
@@ -956,13 +1012,36 @@ impl StdMachine {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
-        let cfg_args = format!("id={}", args.id);
+        let mut cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
                 self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
             }
             "usb-tablet" => {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
+            }
+            "usb-camera" => {
+                if let Some(cameradev) = &args.cameradev {
+                    cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
+                }
+                if let Some(iothread) = args.iothread.as_ref() {
+                    cfg_args = format!("{},iothread={}", cfg_args, iothread);
+                }
+                self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
+            }
+            "usb-host" => {
+                let default_value = "0".to_string();
+                let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
+                let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
+                let hostport = args.hostport.as_ref().unwrap_or(&default_value);
+                let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
+                let productid = args.productid.as_ref().unwrap_or(&default_value);
+                cfg_args = format!(
+                    "{},hostbus={},hostaddr={},hostport={},vendorid={},productid={}",
+                    cfg_args, hostbus, hostaddr, hostport, vendorid, productid
+                );
+
+                self.add_usb_host(&mut locked_vmconfig, &cfg_args)?;
             }
             _ => {
                 bail!("Invalid usb device driver '{}'", driver);
@@ -1000,6 +1079,26 @@ impl StdMachine {
             .with_context(|| "Failed to plug vfio-pci device.")?;
 
         Ok(())
+    }
+
+    /// When windows emu exits, stratovirt should exits too.
+    #[cfg(not(target_env = "musl"))]
+    fn watch_windows_emu_pid(
+        &self,
+        vm_config: &VmConfig,
+        power_button: Arc<EventFd>,
+        shutdown_req: Arc<EventFd>,
+    ) {
+        let emu_pid = vm_config.windows_emu_pid.as_ref();
+        if emu_pid.is_none() {
+            return;
+        }
+        log::info!("Watching on windows emu lifetime");
+        crate::check_windows_emu_pid(
+            "/proc/".to_owned() + emu_pid.unwrap(),
+            power_button,
+            shutdown_req,
+        );
     }
 }
 
@@ -1095,7 +1194,7 @@ impl DeviceInterface for StdMachine {
     fn query_vnc(&self) -> Response {
         #[cfg(not(target_env = "musl"))]
         if let Some(vnc_info) = qmp_query_vnc() {
-            return Response::create_response(serde_json::to_value(&vnc_info).unwrap(), None);
+            return Response::create_response(serde_json::to_value(vnc_info).unwrap(), None);
         }
         Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(
@@ -1176,7 +1275,7 @@ impl DeviceInterface for StdMachine {
                 }
             }
             #[cfg(not(target_env = "musl"))]
-            "usb-kbd" | "usb-tablet" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
                     error!("{:?}", e);
                     return Response::create_error_response(
@@ -1457,6 +1556,46 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    fn cameradev_add(&mut self, args: qmp_schema::CameraDevAddArgument) -> Response {
+        let config = match get_cameradev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_cameradev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn cameradev_del(&mut self, id: String) -> Response {
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .del_cameradev_by_id(&id)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
         if let Some(fd) = if_fd {
             QmpChannel::set_fd(fd_name, fd);
@@ -1522,7 +1661,7 @@ impl DeviceInterface for StdMachine {
                     std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
-                        .open(&file_name)
+                        .open(file_name)
                         .unwrap(),
                 );
             }

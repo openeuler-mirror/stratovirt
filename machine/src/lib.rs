@@ -24,13 +24,21 @@ use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
+#[cfg(not(target_env = "musl"))]
+use std::time::Duration;
 
 #[cfg(not(target_env = "musl"))]
 use devices::misc::scream::Scream;
 use log::warn;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::scream::parse_scream;
-use util::file::{lock_file, unlock_file};
+#[cfg(not(target_env = "musl"))]
+use machine_manager::event_loop::EventLoop;
+#[cfg(not(target_env = "musl"))]
+use ui::console::{get_run_stage, VmRunningStage};
+use util::file::{clear_file, lock_file, unlock_file};
+#[cfg(not(target_env = "musl"))]
+use vmm_sys_util::eventfd::EventFd;
 
 pub use micro_vm::LightMachine;
 
@@ -51,7 +59,7 @@ use devices::InterruptController;
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
     camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
-    xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+    usbhost::UsbHost, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
 };
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
@@ -59,22 +67,24 @@ use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
     parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
     parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio,
-    parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo,
-    DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
-    NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_vhost_user_blk_pci, parse_virtio_serial, parse_virtserialport, parse_vsock,
+    BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
+    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::{
-    parse_gpu, parse_usb_camera, parse_usb_keyboard, parse_usb_storage, parse_usb_tablet,
-    parse_xhci,
+    parse_gpu, parse_usb_camera, parse_usb_host, parse_usb_keyboard, parse_usb_storage,
+    parse_usb_tablet, parse_xhci,
 };
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
+use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
@@ -83,10 +93,10 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState,
+    balloon_allow_list, find_port_by_nr, vhost, Balloon, Block, BlockState, Rng, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
-    VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
-    VirtioNetState, VirtioPciDevice,
+    Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 
 pub trait MachineOps {
@@ -101,6 +111,24 @@ pub trait MachineOps {
     /// A array of ranges, it's element represents (start_addr, size).
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
+
+    fn build_smbios(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
+        let smbioscfg = self.get_vm_config().lock().unwrap().smbios.clone();
+
+        let mut smbios = SmbiosTable::new();
+        let table = smbios.build_smbios_tables(smbioscfg);
+        let ep = build_smbios_ep30(table.len() as u32);
+
+        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+        locked_fw_cfg
+            .add_file_entry(SMBIOS_TABLE_FILE, table)
+            .with_context(|| "Failed to add smbios table file entry")?;
+        locked_fw_cfg
+            .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
+            .with_context(|| "Failed to add smbios anchor file entry")?;
+
+        Ok(())
+    }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
 
@@ -268,6 +296,7 @@ pub trait MachineOps {
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         if cfg_args.contains("vhost-vsock-device") {
             let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
+            vsock.lock().unwrap().disable_irqfd = true;
             MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
@@ -355,61 +384,127 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add console device.
+    /// Add virtio serial device.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
-    fn add_virtio_console(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_virtconsole(vm_config, cfg_args)?;
-        let sys_mem = self.get_sys_mem();
-        let console = Arc::new(Mutex::new(Console::new(device_cfg.clone())));
-        if let Some(serial) = &vm_config.virtio_serial {
-            if serial.pci_bdf.is_none() {
-                let device = VirtioMmioDevice::new(sys_mem, console.clone());
-                MigrationManager::register_device_instance(
-                    VirtioMmioState::descriptor(),
-                    self.realize_virtio_mmio_device(device)
-                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
-                    &device_cfg.id,
-                );
-            } else {
-                let virtio_serial_info = vm_config
-                    .virtio_serial
-                    .as_ref()
-                    .with_context(|| "No virtio-serial-pci device configured for virtconsole")?;
-                // Reasonable, because for virtio-serial-pci device, the bdf has been checked.
-                let bdf = virtio_serial_info.pci_bdf.clone().unwrap();
-                let multi_func = virtio_serial_info.multifunction;
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-                let sys_mem = self.get_sys_mem().clone();
-                let virtio_pci_device = VirtioPciDevice::new(
-                    device_cfg.id.clone(),
-                    devfn,
-                    sys_mem,
-                    console.clone(),
-                    parent_bus,
-                    multi_func,
-                );
-                virtio_pci_device
-                    .realize()
-                    .with_context(|| "Failed  to add virtio pci console device")?;
-            }
+    fn add_virtio_serial(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let serial_cfg = parse_virtio_serial(vm_config, cfg_args)?;
+        let sys_mem = self.get_sys_mem().clone();
+        let serial = Arc::new(Mutex::new(Serial::new(serial_cfg.clone())));
+
+        if serial_cfg.pci_bdf.is_none() {
+            let device = VirtioMmioDevice::new(&sys_mem, serial.clone());
+            MigrationManager::register_device_instance(
+                VirtioMmioState::descriptor(),
+                self.realize_virtio_mmio_device(device)
+                    .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                &serial_cfg.id,
+            );
         } else {
-            bail!("No virtio-serial-bus specified");
+            let bdf = serial_cfg.pci_bdf.unwrap();
+            let multi_func = serial_cfg.multifunction;
+            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+            let virtio_pci_device = VirtioPciDevice::new(
+                serial_cfg.id.clone(),
+                devfn,
+                sys_mem,
+                serial.clone(),
+                parent_bus,
+                multi_func,
+            );
+            virtio_pci_device
+                .realize()
+                .with_context(|| "Failed to add virtio pci serial device")?;
         }
+
         MigrationManager::register_device_instance(
-            VirtioConsoleState::descriptor(),
-            console,
-            &device_cfg.id,
+            VirtioSerialState::descriptor(),
+            serial,
+            &serial_cfg.id,
         );
 
         Ok(())
     }
 
-    fn add_virtio_serial(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        parse_virtio_serial(vm_config, cfg_args)?;
+    /// Add virtio serial port.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    /// * `is_console` - Whether this virtio serial port is a console port.
+    fn add_virtio_serial_port(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        is_console: bool,
+    ) -> Result<()> {
+        let serialport_cfg = parse_virtserialport(vm_config, cfg_args, is_console)?;
+        let serial_cfg = vm_config
+            .virtio_serial
+            .as_ref()
+            .with_context(|| "No virtio serial device specified")?;
+
+        let mut virtio_device = None;
+        if serial_cfg.pci_bdf.is_none() {
+            // Micro_vm.
+            for dev in self.get_sys_bus().devices.iter() {
+                let locked_busdev = dev.lock().unwrap();
+                if locked_busdev.get_type() == SysBusDevType::VirtioMmio {
+                    let virtio_mmio_dev = locked_busdev
+                        .as_any()
+                        .downcast_ref::<VirtioMmioDevice>()
+                        .unwrap();
+                    if virtio_mmio_dev.device.lock().unwrap().device_type() == VIRTIO_TYPE_CONSOLE {
+                        virtio_device = Some(virtio_mmio_dev.device.clone());
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Standard_vm.
+            let pci_dev = self
+                .get_pci_dev_by_id_and_type(vm_config, Some(&serial_cfg.id), "virtio-serial-pci")
+                .with_context(|| {
+                    format!(
+                        "Can not find virtio serial pci device {} from pci bus",
+                        serial_cfg.id
+                    )
+                })?;
+            let locked_pcidev = pci_dev.lock().unwrap();
+            let virtio_pcidev = locked_pcidev
+                .as_any()
+                .downcast_ref::<VirtioPciDevice>()
+                .unwrap();
+            virtio_device = Some(virtio_pcidev.get_virtio_device().clone());
+        }
+
+        let virtio_dev = virtio_device.with_context(|| "No virtio serial device found")?;
+        let mut virtio_dev_h = virtio_dev.lock().unwrap();
+        let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
+
+        if serialport_cfg.nr >= serial.max_nr_ports {
+            bail!(
+                "virtio serial port nr {} should be less than virtio serial's max_nr_ports {}",
+                serialport_cfg.nr,
+                serial.max_nr_ports
+            );
+        }
+        if find_port_by_nr(&serial.ports, serialport_cfg.nr).is_some() {
+            bail!("Repetitive virtio serial port nr {}.", serialport_cfg.nr,);
+        }
+
+        let mut serial_port = SerialPort::new(serialport_cfg);
+        let port = Arc::new(Mutex::new(serial_port.clone()));
+        serial_port.realize()?;
+        if !is_console {
+            serial_port.chardev.lock().unwrap().set_device(port.clone());
+        }
+        serial.ports.lock().unwrap().push(port);
+
         Ok(())
     }
 
@@ -532,9 +627,9 @@ pub trait MachineOps {
     #[cfg(not(target_env = "musl"))]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let locked_vmconfig = vm_config.lock().unwrap();
         let parent_dev = self
-            .get_pci_dev_by_id_and_type(&mut locked_vmconfig, None, "nec-usb-xhci")
+            .get_pci_dev_by_id_and_type(&locked_vmconfig, None, "nec-usb-xhci")
             .with_context(|| "Can not find parent device from pci bus")?;
         let locked_parent_dev = parent_dev.lock().unwrap();
         let xhci_pci = locked_parent_dev
@@ -1140,7 +1235,7 @@ pub trait MachineOps {
     /// * `dev_type` - Device type name.
     fn get_pci_dev_by_id_and_type(
         &mut self,
-        vm_config: &mut VmConfig,
+        vm_config: &VmConfig,
         id: Option<&str>,
         dev_type: &str,
     ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
@@ -1262,8 +1357,8 @@ pub trait MachineOps {
     /// * `cfg_args` - Camera Configuration.
     #[cfg(not(target_env = "musl"))]
     fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_camera(cfg_args)?;
-        let camera = UsbCamera::new(device_cfg);
+        let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
+        let camera = UsbCamera::new(device_cfg)?;
         let camera = camera.realize()?;
 
         self.attach_usb_to_xhci_controller(vm_config, camera)?;
@@ -1285,6 +1380,25 @@ pub trait MachineOps {
             .with_context(|| "Failed to realize usb storage device")?;
 
         self.attach_usb_to_xhci_controller(vm_config, stg)?;
+
+        Ok(())
+    }
+
+    /// Add usb host.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - USB Host Configuration.
+    #[cfg(not(target_env = "musl"))]
+    fn add_usb_host(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_host(cfg_args)?;
+        let usbhost = UsbHost::new(device_cfg)?;
+
+        let usbhost = usbhost
+            .realize()
+            .with_context(|| "Failed to realize usb host device")?;
+
+        self.attach_usb_to_xhci_controller(vm_config, usbhost)?;
 
         Ok(())
     }
@@ -1357,7 +1471,10 @@ pub trait MachineOps {
                     self.add_virtio_serial(vm_config, cfg_args)?;
                 }
                 "virtconsole" => {
-                    self.add_virtio_console(vm_config, cfg_args)?;
+                    self.add_virtio_serial_port(vm_config, cfg_args, true)?;
+                }
+                "virtserialport" => {
+                    self.add_virtio_serial_port(vm_config, cfg_args, false)?;
                 }
                 "virtio-rng-device" | "virtio-rng-pci" => {
                     self.add_virtio_rng(vm_config, cfg_args)?;
@@ -1390,6 +1507,10 @@ pub trait MachineOps {
                 #[cfg(not(target_env = "musl"))]
                 "usb-storage" => {
                     self.add_usb_storage(vm_config, cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "usb-host" => {
+                    self.add_usb_host(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {
@@ -1736,6 +1857,7 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
                 .with_context(|| "Failed to start VM.")?;
         }
         MigrateMode::Unix => {
+            clear_file(path.clone())?;
             let listener = UnixListener::bind(&path)?;
             let (mut sock, _) = listener.accept()?;
             remove_file(&path)?;
@@ -1782,4 +1904,36 @@ fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_fcntl),
         BpfRule::new(libc::SYS_ftruncate),
     ])
+}
+
+#[cfg(not(target_env = "musl"))]
+fn check_windows_emu_pid(
+    pid_path: String,
+    powerdown_req: Arc<EventFd>,
+    shutdown_req: Arc<EventFd>,
+) {
+    let mut check_delay = Duration::from_millis(4000);
+    if !Path::new(&pid_path).exists() {
+        log::info!("Detect windows emu exited, let VM exits now");
+        if get_run_stage() == VmRunningStage::Os {
+            if let Err(e) = powerdown_req.write(1) {
+                log::error!("Failed to send powerdown request after emu exits: {:?}", e);
+            }
+        } else if let Err(e) = shutdown_req.write(1) {
+            log::error!("Failed to send shutdown request after emu exits: {:?}", e);
+        }
+        // Continue checking to prevent exit failed.
+        check_delay = Duration::from_millis(1000);
+    }
+
+    let check_emu_alive = Box::new(move || {
+        check_windows_emu_pid(
+            pid_path.clone(),
+            powerdown_req.clone(),
+            shutdown_req.clone(),
+        );
+    });
+    if let Some(ctx) = EventLoop::get_ctx(None) {
+        ctx.timer_add(check_emu_alive, check_delay);
+    }
 }

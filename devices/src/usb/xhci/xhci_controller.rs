@@ -155,6 +155,7 @@ impl XhciTransfer {
     }
 
     pub fn complete_transfer(&mut self) -> Result<()> {
+        self.packet.lock().unwrap().is_async = false;
         // NOTE: When entry this function, the transfer must be completed.
         self.complete = true;
 
@@ -1813,7 +1814,7 @@ impl XhciDevice {
         if xfer.running_retry {
             if report != TRBCCode::Invalid {
                 xfer.status = report;
-                xfer.submit_transfer()?;
+                xfer.report_transfer_error()?;
             }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
             epctx.retry = None;

@@ -76,7 +76,7 @@ impl DemoDev {
         // You can choose different device function based on the parameter of device_type.
         let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
             #[cfg(not(target_env = "musl"))]
-            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem))),
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem, cfg.id.clone()))),
             #[cfg(not(target_env = "musl"))]
             "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
             #[cfg(not(target_env = "musl"))]

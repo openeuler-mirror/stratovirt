@@ -166,7 +166,7 @@ impl XhciPciDevice {
         }
         let usb_port = usb_port.unwrap();
         let slot_id = usb_port.lock().unwrap().slot_id;
-        locked_xhci.detach_slot(slot_id as u32)?;
+        locked_xhci.detach_slot(slot_id)?;
         locked_xhci.port_update(&usb_port, true)?;
 
         // Unrealize device and discharge usb port.

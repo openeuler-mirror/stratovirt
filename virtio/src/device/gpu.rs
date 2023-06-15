@@ -10,40 +10,31 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR,
-    VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
-    VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
-    VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
-    VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE, VIRTIO_GPU_F_EDID,
-    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
-    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
-    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
-    VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
-};
-use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Result};
-use log::{error, warn};
-use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
-use migration_derive::{ByteCode, Desc};
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::slice::from_raw_parts_mut;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
+
+use anyhow::{anyhow, bail, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+use address_space::{AddressSpace, GuestAddress};
+use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use migration_derive::ByteCode;
 use ui::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, ConsoleType, DisplayConsole, DisplayMouse, DisplaySurface,
-    HardWareOperations,
+    display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
+    DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::pixman::unref_pixman_image;
-use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
+use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
 use util::byte_code::ByteCode;
+use util::edid::EdidInfo;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -56,11 +47,25 @@ use util::pixman::{
     pixman_region_init, pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
     virtio_gpu_unref_resource_callback,
 };
-use util::{aio::Iovec, edid::EdidInfo};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
-// number of virtqueues
+use crate::{
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError,
+    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
+    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
+    VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
+    VIRTIO_GPU_F_EDID, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
+    VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
+    VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
+};
+
+/// Number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
+/// Display changed event
+const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
 
 #[derive(Debug)]
 struct GpuResource {
@@ -91,11 +96,16 @@ impl Default for GpuResource {
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
-struct VirtioGpuReqState {
+struct VirtioGpuOutputState {
+    con_id: usize,
     width: u32,
     height: u32,
     x_coor: i32,
     y_coor: i32,
+}
+
+trait CtrlHdr {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr;
 }
 
 #[repr(C)]
@@ -110,6 +120,12 @@ struct VirtioGpuCtrlHdr {
 
 impl ByteCode for VirtioGpuCtrlHdr {}
 
+impl CtrlHdr for VirtioGpuCtrlHdr {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        self
+    }
+}
+
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuRect {
@@ -121,6 +137,7 @@ struct VirtioGpuRect {
 
 impl ByteCode for VirtioGpuRect {}
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayOne {
     rect: VirtioGpuRect,
@@ -130,12 +147,20 @@ struct VirtioGpuDisplayOne {
 
 impl ByteCode for VirtioGpuDisplayOne {}
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
-    pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_SCANOUTS],
+    pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_OUTPUTS],
 }
+
 impl ByteCode for VirtioGpuDisplayInfo {}
+
+impl CtrlHdr for VirtioGpuDisplayInfo {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        &mut self.header
+    }
+}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -145,7 +170,7 @@ struct VirtioGpuGetEdid {
 }
 impl ByteCode for VirtioGpuGetEdid {}
 
-#[allow(unused)]
+#[repr(C)]
 // data which transfer to frontend need padding
 #[derive(Clone, Copy)]
 struct VirtioGpuRespEdid {
@@ -153,6 +178,14 @@ struct VirtioGpuRespEdid {
     size: u32,
     padding: u32,
     edid: [u8; 1024],
+}
+
+impl ByteCode for VirtioGpuRespEdid {}
+
+impl CtrlHdr for VirtioGpuRespEdid {
+    fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr {
+        &mut self.header
+    }
 }
 
 impl Default for VirtioGpuRespEdid {
@@ -165,8 +198,6 @@ impl Default for VirtioGpuRespEdid {
         }
     }
 }
-
-impl ByteCode for VirtioGpuRespEdid {}
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -247,11 +278,46 @@ struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
-#[derive(Default)]
-pub struct GpuOpts {}
-impl HardWareOperations for GpuOpts {}
+pub struct GpuOpts {
+    /// Status of the emulated physical outputs.
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
+    /// Config space of the GPU device.
+    config_space: Arc<Mutex<VirtioGpuConfig>>,
+    /// Callback to trigger interrupt.
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+}
 
-#[allow(unused)]
+impl HardWareOperations for GpuOpts {
+    fn hw_ui_info(&self, con: Arc<Mutex<DisplayConsole>>, width: u32, height: u32) {
+        let con_id = con.lock().unwrap().con_id;
+
+        // Update output size.
+        for output_state in self.output_states.lock().unwrap().iter_mut() {
+            if output_state.con_id == con_id {
+                output_state.width = width;
+                output_state.height = height;
+                break;
+            }
+        }
+
+        // Update events_read in config sapce.
+        let mut config_space = self.config_space.lock().unwrap();
+        config_space.events_read |= VIRTIO_GPU_EVENT_DISPLAY;
+
+        if self.interrupt_cb.is_none() {
+            return;
+        }
+        let interrup_cb = self.interrupt_cb.as_ref().unwrap();
+        if let Err(e) = (interrup_cb)(&VirtioInterruptType::Config, None, false) {
+            error!(
+                "{:?}. {:?}",
+                VirtioError::InterruptTrigger("gpu", VirtioInterruptType::Config),
+                e
+            );
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 struct VirtioGpuRequest {
     header: VirtioGpuCtrlHdr,
@@ -259,11 +325,11 @@ struct VirtioGpuRequest {
     out_iovec: Vec<Iovec>,
     out_len: u32,
     in_iovec: Vec<Iovec>,
-    in_len: u32,
+    _in_len: u32,
 }
 
 impl VirtioGpuRequest {
-    fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
+    fn new(mem_space: &Arc<AddressSpace>, elem: &mut Element) -> Result<Self> {
         // Report errors for out_iovec invalid here, deal with in_iovec
         // error in cmd process.
         if elem.out_iovec.is_empty() {
@@ -283,51 +349,25 @@ impl VirtioGpuRequest {
             Ok(())
         })?;
 
+        // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
+        // it is possible to get none back.
+        let data_iovec =
+            iov_discard_front(&mut elem.out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
+                .unwrap_or_default();
+
+        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
+
         // Note: in_iov and out_iov total len is no more than 1<<32, and
         // out_iov is more than 1, so in_len and out_len will not overflow.
-        let mut request = VirtioGpuRequest {
+        Ok(VirtioGpuRequest {
             header,
             index: elem.index,
-            out_iovec: Vec::with_capacity(elem.desc_num as usize),
-            out_len: 0,
-            in_iovec: Vec::with_capacity(elem.desc_num as usize),
-            in_len: 0,
-        };
-
-        let mut out_iovec = elem.out_iovec.clone();
-        // Size of out_iovec no less than sizeo of VirtioGpuCtrlHdr, so
-        // it is possible to get none back.
-        if let Some(data_iovec) =
-            iov_discard_front(&mut out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
-        {
-            for elem_iov in data_iovec {
-                if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
-                    let iov = Iovec {
-                        iov_base: hva,
-                        iov_len: u64::from(elem_iov.len),
-                    };
-                    request.out_iovec.push(iov);
-                    request.out_len += elem_iov.len;
-                } else {
-                    bail!("Map desc base {:?} failed.", elem_iov.addr);
-                }
-            }
-        }
-
-        for elem_iov in elem.in_iovec.iter() {
-            if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
-                let iov = Iovec {
-                    iov_base: hva,
-                    iov_len: u64::from(elem_iov.len),
-                };
-                request.in_iovec.push(iov);
-                request.in_len += elem_iov.len;
-            } else {
-                bail!("Map desc base {:?} failed.", elem_iov.addr);
-            }
-        }
-
-        Ok(request)
+            out_iovec,
+            out_len: out_len as u32,
+            in_iovec,
+            _in_len: in_len as u32,
+        })
     }
 }
 
@@ -366,6 +406,8 @@ struct GpuScanout {
     resource_id: u32,
     // Unused with vnc backend, work in others.
     cursor: VirtioGpuUpdateCursor,
+    // Cursor visable
+    cursor_visible: bool,
 }
 
 impl GpuScanout {
@@ -374,6 +416,7 @@ impl GpuScanout {
         self.surface = None;
         self.width = 0;
         self.height = 0;
+        self.cursor_visible = false;
     }
 }
 
@@ -399,8 +442,8 @@ struct GpuIoHandler {
     enable_output_bitmask: u32,
     /// The number of scanouts
     num_scanouts: u32,
-    /// States of all request in scanout.
-    req_states: [VirtioGpuReqState; VIRTIO_GPU_MAX_SCANOUTS],
+    /// States of all output_states.
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Scanouts of gpu, mouse doesn't realize copy trait, so it is a vector.
     scanouts: Vec<GpuScanout>,
     /// Max host mem for resource.
@@ -479,44 +522,40 @@ pub fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) 
 }
 
 fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
-    if rect
+    let x_in = rect
         .x_coord
         .checked_add(rect.width)
         .filter(|&sum| sum <= res.width)
-        .is_some()
-        && rect
-            .y_coord
-            .checked_add(rect.height)
-            .filter(|&sum| sum <= res.height)
-            .is_some()
-    {
-        return true;
-    }
-    false
-}
-
-// Mask resource's scanout bit before disable a scanout.
-fn disable_scanout(scanout: &mut GpuScanout) {
-    if scanout.resource_id == 0 {
-        return;
-    }
-    // TODO: present 'Guest disabled display.' in surface.
-    display_replace_surface(&scanout.con, None)
-        .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
-    scanout.clear();
+        .is_some();
+    let y_in = rect
+        .y_coord
+        .checked_add(rect.height)
+        .filter(|&sum| sum <= res.height)
+        .is_some();
+    x_in && y_in
 }
 
 impl GpuIoHandler {
-    fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
-        if header.out_len < size_of::<T>() as u32 {
-            bail!("Invalid header for gpu request: len {}.", header.out_len)
+    fn change_run_stage(&self) -> Result<()> {
+        if get_run_stage() == VmRunningStage::Bios && !self.scanouts.is_empty() {
+            match &self.scanouts[0].con.as_ref().and_then(|c| c.upgrade()) {
+                Some(con) => {
+                    let dev_name = con.lock().unwrap().dev_name.clone();
+                    display_set_major_screen(&dev_name)?;
+                    set_run_stage(VmRunningStage::Os);
+                }
+                None => {}
+            };
         }
+        Ok(())
+    }
 
-        iov_to_buf_direct(&header.out_iovec, req.as_mut_bytes()).and_then(|size| {
+    fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
+        iov_to_buf_direct(&header.out_iovec, 0, req.as_mut_bytes()).and_then(|size| {
             if size == size_of::<T>() {
                 Ok(())
             } else {
-                bail!("Invalid header for gpu request: len {}.", size)
+                Err(anyhow!("Invalid header for gpu request: len {}.", size))
             }
         })
     }
@@ -524,48 +563,47 @@ impl GpuIoHandler {
     fn complete_one_request(&mut self, index: u16, len: u32) -> Result<()> {
         let mut queue_lock = self.ctrl_queue.lock().unwrap();
 
-        if let Err(e) = queue_lock.vring.add_used(&self.mem_space, index, len) {
-            bail!(
-                "Failed to add used ring(gpu ctrl), index {}, len {} {:?}.",
-                index,
-                len,
-                e,
-            );
-        }
+        queue_lock
+            .vring
+            .add_used(&self.mem_space, index, len)
+            .with_context(|| {
+                format!(
+                    "Failed to add used ring(gpu ctrl), index {}, len {}",
+                    index, len,
+                )
+            })?;
 
         if queue_lock
             .vring
             .should_notify(&self.mem_space, self.driver_features)
         {
-            if let Err(e) =
-                (*self.interrupt_cb.as_ref())(&VirtioInterruptType::Vring, Some(&queue_lock), false)
-            {
-                bail!("Failed to trigger interrupt(gpu ctrl), error is {:?}.", e);
-            }
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| "Failed to trigger interrupt(gpu ctrl)")?;
         }
 
         Ok(())
     }
 
-    fn send_response<T: ByteCode>(&mut self, req: &VirtioGpuRequest, resp: &T) -> Result<()> {
-        let mut len = 0;
-        if let Err(e) = iov_from_buf_direct(&req.in_iovec, resp.as_bytes()).and_then(|size| {
-            len = size;
-            if size == size_of::<T>() {
-                Ok(())
-            } else {
-                bail!(
-                    "Expected response length is {}, actual get response length {}.",
-                    size_of::<T>(),
-                    size
-                );
-            }
-        }) {
+    fn send_response<T: ByteCode + CtrlHdr>(
+        &mut self,
+        req: &VirtioGpuRequest,
+        resp: &mut T,
+    ) -> Result<()> {
+        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
+            let mut header = resp.mut_ctrl_hdr();
+            header.flags |= VIRTIO_GPU_FLAG_FENCE;
+            header.fence_id = req.header.fence_id;
+            header.ctx_id = req.header.ctx_id;
+        }
+
+        let len = iov_from_buf_direct(&req.in_iovec, resp.as_bytes())?;
+        if len != size_of::<T>() {
             error!(
-                "GuestError: An incomplete response will be used instead of the expected, because {:?}. \
+                "GuestError: An incomplete response will be used instead of the expected: expected \
+                 length is {}, actual length is {}. \
                  Also, be aware that the virtual machine may suspended if response is too short to  \
                  carry the necessary information.",
-                e
+                 size_of::<T>(), len,
             );
         }
         self.complete_one_request(req.index, len as u32)
@@ -576,14 +614,92 @@ impl GpuIoHandler {
             hdr_type: resp_head_type,
             ..Default::default()
         };
+        self.send_response(req, &mut resp)
+    }
 
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            resp.flags |= VIRTIO_GPU_FLAG_FENCE;
-            resp.fence_id = req.header.fence_id;
-            resp.ctx_id = req.header.ctx_id;
+    // Mask resource's scanout bit before disable a scanout.
+    fn disable_scanout(&mut self, scanout_id: usize) {
+        let resource_id = self.scanouts[scanout_id].resource_id;
+        if resource_id == 0 {
+            return;
         }
 
-        self.send_response(req, &resp)
+        if let Some(res_idx) = self.get_resource_idx(resource_id) {
+            let res = &mut self.resources_list[res_idx];
+            res.scanouts_bitmask &= !(1 << scanout_id);
+        }
+
+        // TODO: present 'Guest disabled display.' in surface.
+        let scanout = &mut self.scanouts[scanout_id];
+        display_replace_surface(&scanout.con, None)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+        scanout.clear();
+    }
+
+    fn get_resource_idx(&self, resource_id: u32) -> Option<usize> {
+        self.resources_list
+            .iter()
+            .position(|x| x.resource_id == resource_id)
+    }
+
+    fn get_backed_resource_idx(&self, res_id: u32, caller: &str) -> (Option<usize>, u32) {
+        match self.get_resource_idx(res_id) {
+            None => {
+                error!(
+                    "GuestError: The resource_id {} in {} request does not existed",
+                    res_id, caller,
+                );
+                (None, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID)
+            }
+            Some(res_idx) => {
+                let res = &self.resources_list[res_idx];
+                if res.iov.is_empty() || res.pixman_image.is_null() {
+                    error!(
+                        "GuestError: The resource_id {} in {} request has no backing storage.",
+                        res_id, caller,
+                    );
+                    (None, VIRTIO_GPU_RESP_ERR_UNSPEC)
+                } else {
+                    (Some(res_idx), 0)
+                }
+            }
+        }
+    }
+
+    fn update_cursor_image(&mut self, info_cursor: &VirtioGpuUpdateCursor) {
+        let res_idx = self.get_resource_idx(info_cursor.resource_id);
+        if res_idx.is_none() {
+            return;
+        }
+
+        let res = &self.resources_list[res_idx.unwrap()];
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        let mse = scanout.mouse.as_mut().unwrap();
+        let mse_data_size = mse.data.len();
+        unsafe {
+            let res_width = pixman_image_get_width(res.pixman_image);
+            let res_height = pixman_image_get_height(res.pixman_image);
+            if res_width as u32 != mse.width || res_height as u32 != mse.height {
+                return;
+            }
+
+            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
+            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+        }
+
+        // Windows front-end drvier does not deliver data in format sequence.
+        // So we fix it in back-end.
+        // TODO: Fix front-end driver is a better solution.
+        if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
+            || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
+        {
+            let mut i = 0;
+            while i < mse_data_size {
+                mse.data.swap(i, i + 2);
+                i += 4;
+            }
+        }
+        scanout.cursor_visible = true;
     }
 
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -602,48 +718,49 @@ impl GpuIoHandler {
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
             scanout.cursor.pos.x_coord = info_cursor.hot_x;
             scanout.cursor.pos.y_coord = info_cursor.hot_y;
-        } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
-            if scanout.mouse.is_none() {
-                let tmp_mouse = DisplayMouse {
-                    height: 64,
-                    width: 64,
-                    hot_x: info_cursor.hot_x,
-                    hot_y: info_cursor.hot_y,
-                    data: vec![0_u8; 64 * 64 * size_of::<u32>()],
-                };
-                scanout.mouse = Some(tmp_mouse);
-            } else {
-                let mut mse = scanout.mouse.as_mut().unwrap();
-                mse.hot_x = info_cursor.hot_x;
-                mse.hot_y = info_cursor.hot_y;
-            }
-            if info_cursor.resource_id != 0 {
-                if let Some(res_index) = self
-                    .resources_list
-                    .iter()
-                    .position(|x| x.resource_id == info_cursor.resource_id)
-                {
-                    let res = &self.resources_list[res_index];
-                    unsafe {
-                        let res_width = pixman_image_get_width(res.pixman_image);
-                        let res_height = pixman_image_get_height(res.pixman_image);
-                        let mse = scanout.mouse.as_mut().unwrap();
-
-                        if res_width as u32 == mse.width && res_height as u32 == mse.height {
-                            let pixels = mse.width * mse.height;
-                            let mouse_data_size = pixels * (size_of::<u32>() as u32);
-                            let mut con = vec![0u8; 64 * 64 * 4];
-                            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
-                            ptr::copy(res_data_ptr, con.as_mut_ptr(), mouse_data_size as usize);
-                            mse.data.clear();
-                            mse.data.append(&mut con);
-                        }
+            if info_cursor.resource_id == 0 && scanout.cursor_visible && scanout.mouse.is_some() {
+                let data = &mut scanout.mouse.as_mut().unwrap().data;
+                // In order to improve performance, displaying cursor by virtio-gpu.
+                // But we have to displaying it in guest img if virtio-gpu can't do display job.
+                // In this case, to avoid overlapping displaying two cursor imgs, change
+                // cursor (render by virtio-gpu) color to transparent.
+                //
+                // Only A or X byte in RGBA\X needs to be set.
+                // We sure that the data is assembled in format like RGBA and the minimum unit
+                // is byte, so there is no size end problem.
+                //
+                // TODO: How much impact does it have on performance?
+                for (i, item) in data.iter_mut().enumerate() {
+                    if i % 4 == 3 {
+                        *item = 0_u8;
                     }
                 }
+                display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
+                scanout.cursor_visible = false;
             }
-            if let Some(mouse) = &mut scanout.mouse {
-                display_cursor_define(&scanout.con, mouse)?;
+        } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
+            match &mut scanout.mouse {
+                None => {
+                    let tmp_mouse = DisplayMouse {
+                        height: 64,
+                        width: 64,
+                        hot_x: info_cursor.hot_x,
+                        hot_y: info_cursor.hot_y,
+                        data: vec![0_u8; 64 * 64 * size_of::<u32>()],
+                    };
+                    scanout.mouse = Some(tmp_mouse);
+                }
+                Some(mouse) => {
+                    mouse.hot_x = info_cursor.hot_x;
+                    mouse.hot_y = info_cursor.hot_y;
+                }
             }
+
+            if info_cursor.resource_id > 0 {
+                self.update_cursor_image(&info_cursor);
+            }
+            let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+            display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
             scanout.cursor = info_cursor;
         } else {
             bail!("Wrong header type for cursor queue");
@@ -655,26 +772,24 @@ impl GpuIoHandler {
     fn cmd_get_display_info(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut display_info = VirtioGpuDisplayInfo::default();
         display_info.header.hdr_type = VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
+
+        let output_states_lock = self.output_states.lock().unwrap();
         for i in 0..self.num_scanouts {
             if (self.enable_output_bitmask & (1 << i)) != 0 {
                 let i = i as usize;
                 display_info.pmodes[i].enabled = 1;
-                display_info.pmodes[i].rect.width = self.req_states[i].width;
-                display_info.pmodes[i].rect.height = self.req_states[i].height;
+                display_info.pmodes[i].rect.width = output_states_lock[i].width;
+                display_info.pmodes[i].rect.height = output_states_lock[i].height;
                 display_info.pmodes[i].flags = 0;
             }
         }
-
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            display_info.header.flags |= VIRTIO_GPU_FLAG_FENCE;
-            display_info.header.fence_id = req.header.fence_id;
-            display_info.header.ctx_id = req.header.ctx_id;
-        }
-        self.send_response(req, &display_info)
+        drop(output_states_lock);
+        self.send_response(req, &mut display_info)
     }
 
     fn cmd_get_edid(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut edid_req = VirtioGpuGetEdid::default();
+        self.change_run_stage()?;
         self.get_request(req, &mut edid_req)?;
 
         if edid_req.scanouts >= self.num_scanouts {
@@ -687,25 +802,20 @@ impl GpuIoHandler {
 
         let mut edid_resp = VirtioGpuRespEdid::default();
         edid_resp.header.hdr_type = VIRTIO_GPU_RESP_OK_EDID;
-        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            edid_resp.header.flags |= VIRTIO_GPU_FLAG_FENCE;
-            edid_resp.header.fence_id = req.header.fence_id;
-            edid_resp.header.ctx_id = req.header.ctx_id;
-        }
 
+        let output_states_lock = self.output_states.lock().unwrap();
         let mut edid_info = EdidInfo::new(
             "HWV",
             "STRA Monitor",
             100,
-            self.req_states[edid_req.scanouts as usize].width,
-            self.req_states[edid_req.scanouts as usize].height,
+            output_states_lock[edid_req.scanouts as usize].width,
+            output_states_lock[edid_req.scanouts as usize].height,
         );
-        edid_info.edid_array_fulfill(&mut edid_resp.edid.to_vec());
+        drop(output_states_lock);
+        edid_info.edid_array_fulfill(&mut edid_resp.edid);
         edid_resp.size = edid_resp.edid.len() as u32;
 
-        self.send_response(req, &edid_resp)?;
-
-        Ok(())
+        self.send_response(req, &mut edid_resp)
     }
 
     fn cmd_resource_create_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -717,12 +827,11 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
 
-        if let Some(res) = self
-            .resources_list
-            .iter()
-            .find(|&x| x.resource_id == info_create_2d.resource_id)
-        {
-            error!("GuestError: resource {} already exists.", res.resource_id);
+        if self.get_resource_idx(info_create_2d.resource_id).is_some() {
+            error!(
+                "GuestError: resource {} already exists.",
+                info_create_2d.resource_id
+            );
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
 
@@ -774,34 +883,28 @@ impl GpuIoHandler {
     }
 
     fn resource_destroy(&mut self, res_index: usize) {
-        let res = &mut self.resources_list[res_index];
-
-        if res.scanouts_bitmask != 0 {
+        let scanouts_bitmask = self.resources_list[res_index].scanouts_bitmask;
+        if scanouts_bitmask != 0 {
             for i in 0..self.num_scanouts {
-                if (res.scanouts_bitmask & (1 << i)) != 0 {
-                    let scanout = &mut self.scanouts[i as usize];
-                    res.scanouts_bitmask &= !(1 << i);
-                    disable_scanout(scanout);
+                if (scanouts_bitmask & (1 << i)) != 0 {
+                    self.disable_scanout(i as usize);
                 }
             }
         }
 
+        let res = &mut self.resources_list[res_index];
         unref_pixman_image(res.pixman_image);
         self.used_hostmem -= res.host_mem;
         res.iov.clear();
+        self.resources_list.remove(res_index);
     }
 
     fn cmd_resource_unref(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_resource_unref = VirtioGpuResourceUnref::default();
         self.get_request(req, &mut info_resource_unref)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_resource_unref.resource_id)
-        {
+        if let Some(res_index) = self.get_resource_idx(info_resource_unref.resource_id) {
             self.resource_destroy(res_index);
-            self.resources_list.remove(res_index);
             self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
         } else {
             error!(
@@ -824,226 +927,169 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, req);
         }
 
-        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
         if info_set_scanout.resource_id == 0 {
             // Set resource_id to 0 means disable the scanout.
-            if let Some(res_index) = self
-                .resources_list
-                .iter()
-                .position(|x| x.resource_id == scanout.resource_id)
-            {
-                let res = &mut self.resources_list[res_index];
-                res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
-            }
-            disable_scanout(scanout);
+            self.disable_scanout(info_set_scanout.scanout_id as usize);
             return self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req);
         }
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_set_scanout.resource_id)
-        {
-            let res = &self.resources_list[res_index];
-            if info_set_scanout.rect.width < 16
-                || info_set_scanout.rect.height < 16
-                || !is_rect_in_resource(&info_set_scanout.rect, res)
-            {
-                error!(
-                    "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
-                    res.resource_id,
-                    res.width,
-                    res.height,
-                    info_set_scanout.scanout_id,
-                    info_set_scanout.rect.width,
-                    info_set_scanout.rect.height,
-                    info_set_scanout.rect.x_coord,
-                    info_set_scanout.rect.y_coord,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
-            }
-
-            let pixman_format = unsafe { pixman_image_get_format(res.pixman_image) };
-            let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-            let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
-            let offset = info_set_scanout.rect.x_coord * bpp
-                + info_set_scanout.rect.y_coord * pixman_stride as u32;
-            let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
-            let res_data_offset = unsafe { res_data.offset(offset as isize) };
-
-            match scanout.surface {
-                None => {
-                    if create_surface(
-                        scanout,
-                        info_set_scanout,
-                        res,
-                        pixman_format,
-                        pixman_stride,
-                        res_data_offset,
-                    )
-                    .image
-                    .is_null()
-                    {
-                        error!("HostError: surface image create failed, check pixman library.");
-                        return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                    }
-                }
-                Some(sur) => {
-                    let scanout_data = unsafe { pixman_image_get_data(sur.image) };
-                    if (res_data_offset != scanout_data
-                        || scanout.width != info_set_scanout.rect.width
-                        || scanout.height != info_set_scanout.rect.height)
-                        && create_surface(
-                            scanout,
-                            info_set_scanout,
-                            res,
-                            pixman_format,
-                            pixman_stride,
-                            res_data_offset,
-                        )
-                        .image
-                        .is_null()
-                    {
-                        error!("HostError: surface pixman image create failed, please check pixman library.");
-                        return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                    }
-                }
-            }
-
-            if let Some(old_res_index) = self
-                .resources_list
-                .iter()
-                .position(|x| x.resource_id == scanout.resource_id)
-            {
-                // Update old resource scanout bitmask.
-                self.resources_list[old_res_index].scanouts_bitmask &=
-                    !(1 << info_set_scanout.scanout_id);
-            }
-            // Update new resource scanout bitmask.
-            self.resources_list[res_index].scanouts_bitmask |= 1 << info_set_scanout.scanout_id;
-            // Update scanout configure.
-            scanout.resource_id = info_set_scanout.resource_id;
-            scanout.x = info_set_scanout.rect.x_coord;
-            scanout.y = info_set_scanout.rect.y_coord;
-            scanout.width = info_set_scanout.rect.width;
-            scanout.height = info_set_scanout.rect.height;
-
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "GuestError: The resource_id {} in set_scanout {} request is not existed.",
-                info_set_scanout.resource_id, info_set_scanout.scanout_id
-            );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+        // Check if resource is valid.
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_set_scanout.resource_id, "cmd_set_scanout");
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
+
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        if info_set_scanout.rect.width < 16
+            || info_set_scanout.rect.height < 16
+            || !is_rect_in_resource(&info_set_scanout.rect, res)
+        {
+            error!(
+                "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
+                res.resource_id,
+                res.width,
+                res.height,
+                info_set_scanout.scanout_id,
+                info_set_scanout.rect.width,
+                info_set_scanout.rect.height,
+                info_set_scanout.rect.x_coord,
+                info_set_scanout.rect.y_coord,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+        }
+
+        let pixman_format = unsafe { pixman_image_get_format(res.pixman_image) };
+        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
+        let offset = info_set_scanout.rect.x_coord * bpp
+            + info_set_scanout.rect.y_coord * pixman_stride as u32;
+        let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
+        let res_data_offset = unsafe { res_data.offset(offset as isize) };
+
+        // Create surface for the scanout.
+        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
+        if scanout.surface.is_none()
+            || unsafe { pixman_image_get_data(scanout.surface.unwrap().image) } != res_data_offset
+            || scanout.width != info_set_scanout.rect.width
+            || scanout.height != info_set_scanout.rect.height
+        {
+            let surface = create_surface(
+                scanout,
+                info_set_scanout,
+                res,
+                pixman_format,
+                pixman_stride,
+                res_data_offset,
+            );
+            if surface.image.is_null() {
+                error!("HostError: surface image create failed, check pixman library.");
+                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+            }
+        }
+
+        // Unlink old resource.
+        let old_res_id = scanout.resource_id;
+        if let Some(old_res_idx) = self.get_resource_idx(old_res_id) {
+            let old_res = &mut self.resources_list[old_res_idx];
+            old_res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
+        }
+        // Link new resource.
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        res.scanouts_bitmask |= 1 << info_set_scanout.scanout_id;
+        let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
+        scanout.resource_id = info_set_scanout.resource_id;
+        scanout.x = info_set_scanout.rect.x_coord;
+        scanout.y = info_set_scanout.rect.y_coord;
+        scanout.width = info_set_scanout.rect.width;
+        scanout.height = info_set_scanout.rect.height;
+
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_flush(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_res_flush = VirtioGpuResourceFlush::default();
         self.get_request(req, &mut info_res_flush)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_res_flush.resource_id)
-        {
-            let res = &self.resources_list[res_index];
-            if !is_rect_in_resource(&info_res_flush.rect, res) {
-                error!(
-                    "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
-                    res.resource_id, res.width, res.height,
-                    info_res_flush.rect.width, info_res_flush.rect.height,
-                    info_res_flush.rect.x_coord, info_res_flush.rect.y_coord,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
-            }
-
-            unsafe {
-                let mut flush_reg = pixman_region16_t::default();
-                let flush_reg_ptr: *mut pixman_region16_t =
-                    &mut flush_reg as *mut pixman_region16_t;
-                pixman_region_init_rect(
-                    flush_reg_ptr,
-                    info_res_flush.rect.x_coord as i32,
-                    info_res_flush.rect.y_coord as i32,
-                    info_res_flush.rect.width,
-                    info_res_flush.rect.height,
-                );
-                for i in 0..self.num_scanouts {
-                    // Flushes any scanouts the resource is being used on.
-                    if res.scanouts_bitmask & (1 << i) != 0 {
-                        let scanout = &self.scanouts[i as usize];
-                        let mut rect_reg = pixman_region16_t::default();
-                        let mut final_reg = pixman_region16_t::default();
-                        let rect_reg_ptr: *mut pixman_region16_t =
-                            &mut rect_reg as *mut pixman_region16_t;
-                        let final_reg_ptr: *mut pixman_region16_t =
-                            &mut final_reg as *mut pixman_region16_t;
-
-                        pixman_region_init(final_reg_ptr);
-                        pixman_region_init_rect(
-                            rect_reg_ptr,
-                            scanout.x as i32,
-                            scanout.y as i32,
-                            scanout.width,
-                            scanout.height,
-                        );
-                        pixman_region_intersect(final_reg_ptr, flush_reg_ptr, rect_reg_ptr);
-                        pixman_region_translate(
-                            final_reg_ptr,
-                            -(scanout.x as i32),
-                            -(scanout.y as i32),
-                        );
-                        let extents = pixman_region_extents(final_reg_ptr);
-                        display_graphic_update(
-                            &scanout.con,
-                            (*extents).x1 as i32,
-                            (*extents).y1 as i32,
-                            ((*extents).x2 - (*extents).x1) as i32,
-                            ((*extents).y2 - (*extents).y1) as i32,
-                        )?;
-                        pixman_region_fini(rect_reg_ptr);
-                        pixman_region_fini(final_reg_ptr);
-                    }
-                }
-                pixman_region_fini(flush_reg_ptr);
-            }
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
+        let res_index = self.get_resource_idx(info_res_flush.resource_id);
+        if res_index.is_none() {
             error!(
                 "GuestError: The resource_id {} in resource flush request is not existed.",
                 info_res_flush.resource_id
             );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
         }
+
+        let res = &self.resources_list[res_index.unwrap()];
+        if !is_rect_in_resource(&info_res_flush.rect, res) {
+            error!(
+                "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
+                res.resource_id, res.width, res.height,
+                info_res_flush.rect.width, info_res_flush.rect.height,
+                info_res_flush.rect.x_coord, info_res_flush.rect.y_coord,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+        }
+
+        unsafe {
+            let mut flush_reg = pixman_region16_t::default();
+            let flush_reg_ptr = &mut flush_reg as *mut pixman_region16_t;
+            pixman_region_init_rect(
+                flush_reg_ptr,
+                info_res_flush.rect.x_coord as i32,
+                info_res_flush.rect.y_coord as i32,
+                info_res_flush.rect.width,
+                info_res_flush.rect.height,
+            );
+            for i in 0..self.num_scanouts {
+                // Flushes any scanouts the resource is being used on.
+                if res.scanouts_bitmask & (1 << i) == 0 {
+                    continue;
+                }
+                let scanout = &self.scanouts[i as usize];
+
+                let mut rect_reg = pixman_region16_t::default();
+                let mut final_reg = pixman_region16_t::default();
+                let rect_reg_ptr = &mut rect_reg as *mut pixman_region16_t;
+                let final_reg_ptr = &mut final_reg as *mut pixman_region16_t;
+                pixman_region_init(final_reg_ptr);
+                pixman_region_init_rect(
+                    rect_reg_ptr,
+                    scanout.x as i32,
+                    scanout.y as i32,
+                    scanout.width,
+                    scanout.height,
+                );
+
+                pixman_region_intersect(final_reg_ptr, flush_reg_ptr, rect_reg_ptr);
+                pixman_region_translate(final_reg_ptr, -(scanout.x as i32), -(scanout.y as i32));
+                let extents = pixman_region_extents(final_reg_ptr);
+                display_graphic_update(
+                    &scanout.con,
+                    (*extents).x1 as i32,
+                    (*extents).y1 as i32,
+                    ((*extents).x2 - (*extents).x1) as i32,
+                    ((*extents).y2 - (*extents).y1) as i32,
+                )?;
+                pixman_region_fini(rect_reg_ptr);
+                pixman_region_fini(final_reg_ptr);
+            }
+            pixman_region_fini(flush_reg_ptr);
+        }
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_transfer_to_host_2d_params_check(
         &mut self,
         info_transfer: &VirtioGpuTransferToHost2d,
-    ) -> u32 {
-        let res_idx = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_transfer.resource_id);
-
+    ) -> (Option<usize>, u32) {
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_transfer.resource_id, "cmd_transfer_to_host_2d");
         if res_idx.is_none() {
-            error!(
-                "GuestError: The resource_id {} in transfer to host 2d request is not existed.",
-                info_transfer.resource_id
-            );
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+            return (None, error);
         }
 
         let res = &self.resources_list[res_idx.unwrap()];
-        if res.iov.is_empty() {
-            error!(
-                "GuestError: The resource_id {} in transfer to host 2d request don't have iov.",
-                info_transfer.resource_id
-            );
-            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
-        }
-
         if !is_rect_in_resource(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
@@ -1056,128 +1102,77 @@ impl GpuIoHandler {
                 info_transfer.rect.x_coord,
                 info_transfer.rect.y_coord,
             );
-            return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+            (None, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER)
+        } else {
+            (res_idx, 0)
         }
-
-        0
     }
 
     fn cmd_transfer_to_host_2d_update_resource(
         &mut self,
-        info_transfer: &VirtioGpuTransferToHost2d,
-    ) {
-        // SAFETY: unwrap is safe because it has been checked in params check.
-        let res = self
-            .resources_list
-            .iter()
-            .find(|&x| x.resource_id == info_transfer.resource_id)
-            .unwrap();
+        trans_info: &VirtioGpuTransferToHost2d,
+        res_idx: usize,
+    ) -> Result<()> {
+        let res = &self.resources_list[res_idx];
         let pixman_format;
+        let width;
         let bpp;
         let stride;
         let data;
+        // SAFETY: res.pixman_image has been checked valid.
         unsafe {
             pixman_format = pixman_image_get_format(res.pixman_image);
+            width = pixman_image_get_width(res.pixman_image) as u32;
             bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-            stride = pixman_image_get_stride(res.pixman_image);
-            data = pixman_image_get_data(res.pixman_image);
-        }
-        let data_cast: *mut u8 = data.cast();
-        let mut dst_ofs: usize = (info_transfer.rect.y_coord * stride as u32
-            + info_transfer.rect.x_coord * bpp) as usize;
-        // It can be considered that PARTIAL or complete image data is stored in
-        // the res.iov[]. And info_transfer.offset is the offset from res.iov[0].base
-        // to the start position of the resource we really want to update.
-        let mut src_ofs: usize = info_transfer.offset as usize;
-        // current iov's index
-        let mut iov_idx: usize = 0;
-        // current iov's offset
-        let mut iov_ofs: usize = 0;
-        let mut iov_len_sum: usize = 0;
-
-        // move to correct iov
-        loop {
-            if iov_len_sum == src_ofs || iov_idx >= res.iov.len() {
-                break;
-            }
-
-            if res.iov[iov_idx].iov_len as usize + iov_len_sum <= src_ofs {
-                iov_len_sum += res.iov[iov_idx].iov_len as usize;
-                iov_idx += 1;
-            } else {
-                iov_ofs = src_ofs - iov_len_sum;
-                break;
-            }
+            stride = pixman_image_get_stride(res.pixman_image) as u32;
+            data = pixman_image_get_data(res.pixman_image).cast() as *mut u8;
         }
 
-        if iov_idx >= res.iov.len() {
-            warn!("GuestWarn: the start pos of transfer data from guest is longer than resource's len.");
-            return;
-        }
-
-        // We divide regions into that need to be copied and can be skipped.
-        let src_cpy_section: usize = (info_transfer.rect.width * bpp) as usize;
-        let src_expected: usize = info_transfer.offset as usize
-            + ((info_transfer.rect.height - 1) * stride as u32) as usize
-            + (info_transfer.rect.width * bpp) as usize;
-
-        loop {
-            if src_ofs >= src_expected || iov_idx >= res.iov.len() {
-                break;
-            }
-
-            let iov_left = res.iov[iov_idx].iov_len as usize - iov_ofs;
-
-            let pos = (src_ofs - info_transfer.offset as usize) % (stride as usize);
-            if pos >= src_cpy_section {
-                if pos + iov_left <= stride as usize {
-                    src_ofs += iov_left;
-                    dst_ofs += iov_left;
-                    iov_idx += 1;
-                    iov_ofs = 0;
-                } else {
-                    src_ofs += stride as usize - pos;
-                    dst_ofs += stride as usize - pos;
-                    iov_ofs += stride as usize - pos;
+        // When the dedicated area is continous.
+        if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {
+            let offset_dst = (trans_info.rect.y_coord * stride) as usize;
+            let trans_size = (trans_info.rect.height * stride) as usize;
+            // SAFETY: offset_dst and trans_size do not exceeds data size.
+            let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), trans_size) };
+            iov_to_buf_direct(&res.iov, trans_info.offset, dst).map(|v| {
+                if v < trans_size {
+                    warn!("No enough data is copied for transfer_to_host_2d");
                 }
-            } else if pos + iov_left <= src_cpy_section {
-                unsafe {
-                    ptr::copy(
-                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
-                        data_cast.add(dst_ofs),
-                        iov_left,
-                    );
-                }
-                src_ofs += iov_left;
-                dst_ofs += iov_left;
-                iov_idx += 1;
-                iov_ofs = 0;
-            } else {
-                // pos + iov_left > src_cpy_section
-                unsafe {
-                    ptr::copy(
-                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
-                        data_cast.add(dst_ofs),
-                        src_cpy_section - pos,
-                    );
-                }
-                src_ofs += src_cpy_section - pos;
-                dst_ofs += src_cpy_section - pos;
-                iov_ofs += src_cpy_section - pos;
-            }
+                v
+            })?;
+            return Ok(());
         }
+
+        // Otherwise transfer data line by line.
+        let mut offset_src = trans_info.offset as usize;
+        let mut offset_dst =
+            (trans_info.rect.y_coord * stride + trans_info.rect.x_coord * bpp) as usize;
+        let line_size = (trans_info.rect.width * bpp) as usize;
+        for _ in 0..trans_info.rect.height {
+            // SAFETY: offset_dst and line_size do not exceeds data size.
+            let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), line_size) };
+            iov_to_buf_direct(&res.iov, offset_src as u64, dst).map(|v| {
+                if v < line_size {
+                    warn!("No enough data is copied for transfer_to_host_2d");
+                }
+                v
+            })?;
+            offset_src += stride as usize;
+            offset_dst += stride as usize;
+        }
+        Ok(())
     }
 
     fn cmd_transfer_to_host_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_transfer = VirtioGpuTransferToHost2d::default();
         self.get_request(req, &mut info_transfer)?;
 
-        let errcode = self.cmd_transfer_to_host_2d_params_check(&info_transfer);
-        if errcode != 0 {
-            return self.response_nodata(errcode, req);
+        let (res_idx, error) = self.cmd_transfer_to_host_2d_params_check(&info_transfer);
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
 
-        self.cmd_transfer_to_host_2d_update_resource(&info_transfer);
+        self.cmd_transfer_to_host_2d_update_resource(&info_transfer, res_idx.unwrap())?;
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
@@ -1185,123 +1180,90 @@ impl GpuIoHandler {
         let mut info_attach_backing = VirtioGpuResourceAttachBacking::default();
         self.get_request(req, &mut info_attach_backing)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_attach_backing.resource_id)
-        {
-            let res = &mut self.resources_list[res_index];
-            if !res.iov.is_empty() {
-                error!(
-                    "GuestError: The resource_id {} in resource attach backing request already has iov.",
-                    info_attach_backing.resource_id
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
+        let res_idx = self.get_resource_idx(info_attach_backing.resource_id);
+        if res_idx.is_none() {
+            error!(
+                "The resource_id {} in attach backing request request is not existed.",
+                info_attach_backing.resource_id
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req);
+        }
 
-            if info_attach_backing.nr_entries > 16384 {
-                error!(
-                    "GuestError: The nr_entries in resource attach backing request is too large ( {} > 16384).",
-                    info_attach_backing.nr_entries
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
+        let res = &mut self.resources_list[res_idx.unwrap()];
+        if !res.iov.is_empty() {
+            error!(
+                "GuestError: The resource_id {} in resource attach backing request already has iov.",
+                info_attach_backing.resource_id
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
 
-            let esize =
-                size_of::<VirtioGpuMemEntry>() as u64 * info_attach_backing.nr_entries as u64;
-            if esize > req.out_len as u64 {
-                error!(
-                    "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
-                    info_attach_backing.nr_entries, req.out_len,
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
+        if info_attach_backing.nr_entries > 16384 {
+            error!(
+                "GuestError: The nr_entries in resource attach backing request is too large ( {} > 16384).",
+                info_attach_backing.nr_entries
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
 
-            let mut data_iovec = req.out_iovec.clone();
-            // Move to entries part first.
-            data_iovec = iov_discard_front_direct(
-                &mut data_iovec,
-                size_of::<VirtioGpuResourceAttachBacking>() as u64,
-            )
-            .unwrap()
-            .to_vec();
+        let entries = info_attach_backing.nr_entries;
+        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * entries as u64;
+        let head_size = size_of::<VirtioGpuResourceAttachBacking>() as u64;
+        if (req.out_len as u64) < (ents_size + head_size) {
+            error!(
+                "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
+                info_attach_backing.nr_entries, req.out_len,
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
 
-            for i in 0..info_attach_backing.nr_entries {
-                if i != 0 {
-                    data_iovec = iov_discard_front_direct(
-                        &mut data_iovec,
-                        size_of::<VirtioGpuMemEntry>() as u64,
-                    )
-                    .unwrap()
-                    .to_vec();
-                }
+        // Start reading and parsing.
+        let mut ents = Vec::<VirtioGpuMemEntry>::new();
+        ents.resize(entries as usize, VirtioGpuMemEntry::default());
+        let ents_buf =
+            unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
+        let v = iov_to_buf_direct(&req.out_iovec, head_size, ents_buf)?;
+        if v as u64 != ents_size {
+            error!(
+                "Virtio-GPU: Load no enough ents buf when attach backing, {} vs {}",
+                v, ents_size
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
+        }
 
-                let mut entry = VirtioGpuMemEntry::default();
-                if let Err(e) =
-                    iov_to_buf_direct(&data_iovec, entry.as_mut_bytes()).and_then(|size| {
-                        if size == size_of::<VirtioGpuMemEntry>() {
-                            Ok(())
-                        } else {
-                            bail!(
-                                "GuestError: Invalid size of gpu request data: len {}.",
-                                size
-                            );
-                        }
-                    })
-                {
-                    res.iov.clear();
-                    error!("{:?}", e);
-                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                }
-
-                if let Some(iov_base) = self.mem_space.get_host_address(GuestAddress(entry.addr)) {
+        for entry in ents.iter() {
+            match self.mem_space.get_host_address(GuestAddress(entry.addr)) {
+                Some(iov_base) => {
                     let iov_item = Iovec {
                         iov_base,
                         iov_len: entry.length as u64,
                     };
                     res.iov.push(iov_item);
-                } else {
+                }
+                None => {
+                    error!("Virtio-GPU: Map entry base {:?} failed", entry.addr);
                     res.iov.clear();
-                    error!("GuestError: Map desc base {:?} failed.", entry.addr);
                     return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
                 }
             }
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "The resource_id {} in attach backing request request is not existed.",
-                info_attach_backing.resource_id
-            );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
         }
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_detach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_detach_backing = VirtioGpuResourceDetachBacking::default();
         self.get_request(req, &mut info_detach_backing)?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_detach_backing.resource_id)
-        {
-            let res = &mut self.resources_list[res_index];
-            if res.iov.is_empty() {
-                error!(
-                    "GuestError: The resource_id {} in resource detach backing request don't have iov.",
-                    info_detach_backing.resource_id
-                );
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-            }
-            res.iov.clear();
-            self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "GuestError: The resource_id {} in detach backing request request is not existed.",
-                info_detach_backing.resource_id
-            );
-            self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+        let (res_idx, error) = self.get_backed_resource_idx(
+            info_detach_backing.resource_id,
+            "cmd_resource_detach_backing",
+        );
+        if res_idx.is_none() {
+            return self.response_nodata(error, req);
         }
+
+        self.resources_list[res_idx.unwrap()].iov.clear();
+        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn process_control_queue(&mut self, mut req_queue: Vec<VirtioGpuRequest>) -> Result<()> {
@@ -1319,7 +1281,6 @@ impl GpuIoHandler {
                 _ => self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req),
             } {
                 error!("Fail to handle GPU request, {:?}.", e);
-                self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)?;
             }
         }
 
@@ -1329,41 +1290,31 @@ impl GpuIoHandler {
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
         let mut req_queue = Vec::new();
-        let mut need_break = false;
-        let mut invalid_elem_index = 0;
 
         loop {
-            let elem = queue
+            let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
 
-            match VirtioGpuRequest::new(&self.mem_space, &elem) {
+            match VirtioGpuRequest::new(&self.mem_space, &mut elem) {
                 Ok(req) => {
                     req_queue.push(req);
                 }
                 Err(e) => {
                     error!(
                         "GuestError: Request will be ignored, because request header is incomplete and {:?}. \
-                         Also, be aware that the virtual machine may suspended if response does not  \
-                         carry the necessary information.",
+                         Also, be aware that the virtual machine may suspended as response is not sent.",
                         e
                     );
-                    need_break = true;
-                    invalid_elem_index = elem.index;
-                    break;
                 }
             }
         }
-
         drop(queue);
 
         self.process_control_queue(req_queue)?;
-        if need_break {
-            self.complete_one_request(invalid_elem_index, 0)?;
-        }
         Ok(())
     }
 
@@ -1372,14 +1323,14 @@ impl GpuIoHandler {
         let mut queue = cursor_queue.lock().unwrap();
 
         loop {
-            let elem = queue
+            let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
 
-            match VirtioGpuRequest::new(&self.mem_space, &elem) {
+            match VirtioGpuRequest::new(&self.mem_space, &mut elem) {
                 Ok(req) => match self.cmd_update_cursor(&req) {
                     Ok(_) => {}
                     Err(e) => {
@@ -1392,27 +1343,21 @@ impl GpuIoHandler {
                 }
             };
 
-            if let Err(e) = queue.vring.add_used(&self.mem_space, elem.index, 0) {
-                bail!(
-                    "Failed to add used ring(cursor), index {} {:?}",
-                    elem.index,
-                    e
-                );
-            }
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .with_context(|| {
+                    format!("Failed to add used ring(cursor), index {}", elem.index)
+                })?;
 
             if queue
                 .vring
                 .should_notify(&self.mem_space, self.driver_features)
             {
-                if let Err(e) =
-                    (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
-                {
-                    error!("{:?}", e);
-                    return Err(anyhow!(VirtioError::InterruptTrigger(
-                        "gpu cursor",
-                        VirtioInterruptType::Vring
-                    )));
-                }
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        VirtioError::InterruptTrigger("gpu cursor", VirtioInterruptType::Vring)
+                    })?;
             }
         }
 
@@ -1424,7 +1369,6 @@ impl Drop for GpuIoHandler {
     fn drop(&mut self) {
         while !self.resources_list.is_empty() {
             self.resource_destroy(0);
-            self.resources_list.remove(0);
         }
     }
 }
@@ -1439,7 +1383,7 @@ impl EventNotifierHelper for GpuIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
-                error!("Failed to process queue for virtio gpu, err: {:?}", e,);
+                error!("Failed to process ctrlq for virtio gpu, err: {:?}", e);
             }
             None
         });
@@ -1456,7 +1400,7 @@ impl EventNotifierHelper for GpuIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = handler_clone.lock().unwrap().cursor_queue_evt_handler() {
-                error!("Failed to process queue for virtio gpu, err: {:?}", e,);
+                error!("Failed to process cursorq for virtio gpu, err: {:?}", e);
             }
             None
         });
@@ -1477,20 +1421,19 @@ pub struct VirtioGpuConfig {
     events_read: u32,
     events_clear: u32,
     num_scanouts: u32,
-    reserved: u32,
+    _reserved: u32,
 }
 
 /// State of gpu device.
 #[repr(C)]
-#[derive(Clone, Copy, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default)]
 pub struct GpuState {
     /// Bitmask of features supported by the backend.
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// Config space of the GPU device.
-    config_space: VirtioGpuConfig,
+    config_space: Arc<Mutex<VirtioGpuConfig>>,
 }
 
 /// GPU device structure.
@@ -1500,10 +1443,10 @@ pub struct Gpu {
     cfg: GpuDevConfig,
     /// Status of the GPU device.
     state: GpuState,
+    /// Status of the emulated physical outputs.
+    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
-    /// Callback to trigger interrupt.
-    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
 }
@@ -1517,26 +1460,28 @@ impl Gpu {
         Self {
             cfg,
             state: GpuState::default(),
+            output_states: Arc::new(Mutex::new(
+                [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS],
+            )),
             consoles: Vec::new(),
-            interrupt_cb: None,
             deactivate_evts: Vec::new(),
         }
     }
 
     fn build_device_config_space(&mut self) {
-        self.state.config_space.num_scanouts = self.cfg.max_outputs;
-        self.state.config_space.reserved = 0;
+        let mut config_space = self.state.config_space.lock().unwrap();
+        config_space.num_scanouts = self.cfg.max_outputs;
     }
 }
 
 impl VirtioDevice for Gpu {
     /// Realize virtio gpu device.
     fn realize(&mut self) -> Result<()> {
-        if self.cfg.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
+        if self.cfg.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 {
             bail!(
                 "Invalid max_outputs {} which is bigger than {}",
                 self.cfg.max_outputs,
-                VIRTIO_GPU_MAX_SCANOUTS
+                VIRTIO_GPU_MAX_OUTPUTS
             );
         }
 
@@ -1547,12 +1492,23 @@ impl VirtioDevice for Gpu {
             self.state.device_features |= 1 << VIRTIO_GPU_F_EDID;
         }
 
+        let mut output_states = self.output_states.lock().unwrap();
+        output_states[0].width = self.cfg.xres;
+        output_states[0].height = self.cfg.yres;
+
+        let gpu_opts = Arc::new(GpuOpts {
+            output_states: self.output_states.clone(),
+            config_space: self.state.config_space.clone(),
+            interrupt_cb: None,
+        });
         for i in 0..self.cfg.max_outputs {
-            let gpu_opts = Arc::new(GpuOpts::default());
             let dev_name = format!("virtio-gpu{}", i);
-            let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts);
+            let con = console_init(dev_name, ConsoleType::Graphic, gpu_opts.clone());
+            let con_ref = con.as_ref().unwrap().upgrade().unwrap();
+            output_states[i as usize].con_id = con_ref.lock().unwrap().con_id;
             self.consoles.push(con);
         }
+        drop(output_states);
 
         self.build_device_config_space();
 
@@ -1565,7 +1521,7 @@ impl VirtioDevice for Gpu {
             console_close(con)?;
         }
 
-        MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.cfg.id);
+        // TODO: support migration
         Ok(())
     }
 
@@ -1601,7 +1557,8 @@ impl VirtioDevice for Gpu {
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
+        let config_space = *self.state.config_space.lock().unwrap();
+        let config_slice = config_space.as_bytes();
         let config_len = config_slice.len() as u64;
 
         if offset
@@ -1620,7 +1577,8 @@ impl VirtioDevice for Gpu {
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let mut config_cpy = self.state.config_space;
+        let mut config_space = self.state.config_space.lock().unwrap();
+        let mut config_cpy = *config_space;
         let config_cpy_slice = config_cpy.as_mut_bytes();
         let config_len = config_cpy_slice.len() as u64;
 
@@ -1633,8 +1591,8 @@ impl VirtioDevice for Gpu {
         }
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
-        if self.state.config_space.events_clear != 0 {
-            self.state.config_space.events_read &= !config_cpy.events_clear;
+        if config_space.events_clear != 0 {
+            config_space.events_read &= !config_cpy.events_clear;
         }
 
         Ok(())
@@ -1656,11 +1614,16 @@ impl VirtioDevice for Gpu {
             )));
         }
 
-        self.interrupt_cb = Some(interrupt_cb.clone());
-        let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
-
         let mut scanouts = vec![];
+        let gpu_opts = Arc::new(GpuOpts {
+            output_states: self.output_states.clone(),
+            config_space: self.state.config_space.clone(),
+            interrupt_cb: Some(interrupt_cb.clone()),
+        });
         for con in &self.consoles {
+            let con_ref = con.as_ref().unwrap().upgrade().unwrap();
+            con_ref.lock().unwrap().dev_opts = gpu_opts.clone();
+
             let scanout = GpuScanout {
                 con: con.clone(),
                 ..Default::default()
@@ -1668,7 +1631,7 @@ impl VirtioDevice for Gpu {
             scanouts.push(scanout);
         }
 
-        let mut handler = GpuIoHandler {
+        let handler = GpuIoHandler {
             ctrl_queue: queues[0].clone(),
             cursor_queue: queues[1].clone(),
             mem_space,
@@ -1679,13 +1642,11 @@ impl VirtioDevice for Gpu {
             resources_list: Vec::new(),
             enable_output_bitmask: 1,
             num_scanouts: self.cfg.max_outputs,
-            req_states,
+            output_states: self.output_states.clone(),
             scanouts,
             max_hostmem: self.cfg.max_hostmem,
             used_hostmem: 0,
         };
-        handler.req_states[0].width = self.cfg.xres;
-        handler.req_states[0].height = self.cfg.yres;
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
         register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
@@ -1694,6 +1655,10 @@ impl VirtioDevice for Gpu {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        if get_run_stage() == VmRunningStage::Os {
+            display_set_major_screen("ramfb")?;
+            set_run_stage(VmRunningStage::Bios);
+        }
         unregister_event_helper(None, &mut self.deactivate_evts)
     }
 }

@@ -55,9 +55,11 @@ use devices::legacy::{
 
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::parse_ramfb;
 use machine_manager::config::{
-    parse_incoming_uri, parse_ramfb, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode,
-    NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -153,8 +155,14 @@ pub struct StdMachine {
     pub power_button: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
+    /// Shutdown request, handle VM `shutdown` event.
+    shutdown_req: Arc<EventFd>,
     /// Reset request, handle VM `Reset` event.
     reset_req: Arc<EventFd>,
+    /// Pause request, handle VM `Pause` event.
+    pause_req: Arc<EventFd>,
+    /// Resume request, handle VM `Resume` event.
+    resume_req: Arc<EventFd>,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
     /// List of guest NUMA nodes information.
@@ -214,9 +222,21 @@ impl StdMachine {
                     .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
             ),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
+            shutdown_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
+            ),
             reset_req: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
+            ),
+            pause_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("pause_req".to_string()))?,
+            ),
+            resume_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("resume_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),
             numa_nodes: None,
@@ -263,6 +283,8 @@ impl StdMachine {
             let reset_msg = qmp_schema::Reset { guest: true };
             event!(Reset; reset_msg);
         }
+
+        locked_vm.irq_chip.as_ref().unwrap().reset()?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.resume()
@@ -531,12 +553,21 @@ impl MachineOps for StdMachine {
         use super::error::StandardVmError as StdErrorKind;
 
         let nr_cpus = vm_config.machine_config.nr_cpus;
-        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm
-            .register_reset_event(locked_vm.reset_req.clone(), clone_vm)
+            .register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Fail to register shutdown event")?;
+        locked_vm
+            .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
+        locked_vm
+            .register_pause_event(locked_vm.pause_req.clone(), vm.clone())
+            .with_context(|| "Fail to register pause event")?;
+        locked_vm
+            .register_resume_event(locked_vm.resume_req.clone(), vm.clone())
+            .with_context(|| "Fail to register resume event")?;
+
         locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -596,10 +627,15 @@ impl MachineOps for StdMachine {
         }
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
-        if migrate.0 == MigrateMode::Unknown && fwcfg.is_some() {
-            locked_vm
-                .build_acpi_tables(&fwcfg.unwrap())
-                .with_context(|| "Failed to create ACPI tables")?;
+        if migrate.0 == MigrateMode::Unknown {
+            if let Some(fw_cfg) = fwcfg {
+                locked_vm
+                    .build_acpi_tables(&fw_cfg)
+                    .with_context(|| "Failed to create ACPI tables")?;
+                locked_vm
+                    .build_smbios(&fw_cfg)
+                    .with_context(|| "Failed to create smbios tables")?;
+            }
         }
 
         locked_vm
@@ -610,6 +646,13 @@ impl MachineOps for StdMachine {
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
+
+        #[cfg(not(target_env = "musl"))]
+        locked_vm.watch_windows_emu_pid(
+            vm_config,
+            locked_vm.power_button.clone(),
+            locked_vm.shutdown_req.clone(),
+        );
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
@@ -654,7 +697,10 @@ impl MachineOps for StdMachine {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
-                    power_button: self.power_button.clone(),
+                    power_button: Some(self.power_button.clone()),
+                    shutdown_req: Some(self.shutdown_req.clone()),
+                    pause_req: Some(self.pause_req.clone()),
+                    resume_req: Some(self.resume_req.clone()),
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;
@@ -1073,14 +1119,17 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        self.vm_state_transfer(
+        if let Err(e) = self.vm_state_transfer(
             &self.cpus,
             &self.irq_chip,
             &mut self.vm_state.0.lock().unwrap(),
             old,
             new,
-        )
-        .is_ok()
+        ) {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
     }
 }
 

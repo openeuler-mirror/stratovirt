@@ -24,16 +24,20 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use gettextrs::LocaleCategory;
 use gtk::{
     cairo::{Format, ImageSurface},
-    gdk::{self, Geometry, Gravity, Screen, WindowHints},
+    gdk::{self, Geometry, Gravity, WindowHints},
     gdk_pixbuf::Colorspace,
     glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
-    traits::{GtkMenuItemExt, GtkWindowExt, MenuShellExt, RadioMenuItemExt, WidgetExt},
-    Application, ApplicationWindow, DrawingArea, RadioMenuItem,
+    traits::{
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, MenuShellExt,
+        RadioMenuItemExt, WidgetExt,
+    },
+    Application, ApplicationWindow, DrawingArea, HeaderBar, RadioMenuItem,
 };
-use log::error;
+use log::{debug, error};
 
 use crate::{
     console::{
@@ -53,11 +57,19 @@ use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
 use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
+/// Width of default window.
+const DEFAULT_WINDOW_WIDTH: i32 = 1024;
+/// Height of default window.
+const DEFAULT_WINDOW_HEIGHT: i32 = 768;
 pub(crate) const GTK_SCALE_MIN: f64 = 0.25;
 pub(crate) const GTK_ZOOM_STEP: f64 = 0.25;
+/// Domain name.
+const DOMAIN_NAME: &str = "desktop-app-engine";
+/// The path of message information is located.
+const LOCALE_PATH: &str = "/usr/share/locale";
 
 /// Gtk window display mode.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ScaleMode {
     /// Display fill desktop.
     full_screen: bool,
@@ -79,7 +91,7 @@ impl ScaleMode {
 /// Zoom in the display.
 /// Zoom out the display.
 /// Window adapt to display.
-#[derive(PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum ZoomOperate {
     ZoomIn,
     ZoomOut,
@@ -99,6 +111,7 @@ enum DisplayEventType {
     DisplayUpdate,
     CursorDefine,
     DisplayRefresh,
+    DisplaySetMajor,
 }
 
 impl Default for DisplayEventType {
@@ -179,13 +192,23 @@ impl DisplayChangeListenerOperations for GtkInterface {
         self.dce_sender.send(event)?;
         Ok(())
     }
+
+    fn dpy_set_major(&self) -> Result<()> {
+        let event =
+            DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplaySetMajor);
+        self.dce_sender.send(event)?;
+        Ok(())
+    }
 }
 
 pub(crate) struct GtkDisplay {
     gtk_menu: GtkMenu,
     scale_mode: Rc<RefCell<ScaleMode>>,
     pagenum2ds: HashMap<u32, Rc<RefCell<GtkDisplayScreen>>>,
-    power_button: Arc<EventFd>,
+    powerdown_button: Option<Arc<EventFd>>,
+    shutdown_button: Option<Arc<EventFd>>,
+    pause_button: Option<Arc<EventFd>>,
+    resume_button: Option<Arc<EventFd>>,
     keysym2keycode: Rc<RefCell<HashMap<u16, u16>>>,
 }
 
@@ -194,7 +217,7 @@ impl GtkDisplay {
         // Window scale mode.
         let scale_mode = Rc::new(RefCell::new(ScaleMode {
             full_screen: gtk_cfg.full_screen,
-            free_scale: gtk_cfg.zoom_fit,
+            free_scale: true,
         }));
         // Mapping ASCII to keycode.
         let keysym2keycode: Rc<RefCell<HashMap<u16, u16>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -207,7 +230,10 @@ impl GtkDisplay {
             gtk_menu,
             scale_mode,
             pagenum2ds: HashMap::new(),
-            power_button: gtk_cfg.power_button.clone(),
+            powerdown_button: gtk_cfg.powerdown_button.clone(),
+            shutdown_button: gtk_cfg.shutdown_button.clone(),
+            pause_button: gtk_cfg.pause_button.clone(),
+            resume_button: gtk_cfg.resume_button.clone(),
             keysym2keycode,
         }
     }
@@ -262,25 +288,67 @@ impl GtkDisplay {
         // Create a radio button.
         // Only one screen can be displayed at a time.
         let gs_show_menu = RadioMenuItem::with_label(&label_name);
+        let note_book = self.gtk_menu.note_book.clone();
+        gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |show_menu| {
+            gs_show_menu_callback(&gs, note_book, show_menu).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
+        }));
+        self.gtk_menu.view_menu.append(&gs_show_menu);
+
         if !self.gtk_menu.radio_group.is_empty() {
             let first_radio = &self.gtk_menu.radio_group[0];
             gs_show_menu.join_group(Some(first_radio));
+        } else {
+            gs_show_menu.activate();
         }
-        let note_book = self.gtk_menu.note_book.clone();
-        gs_show_menu.connect_activate(glib::clone!(@weak gs, @weak note_book => move |_| {
-            gs_show_menu_callback(&gs, note_book).unwrap_or_else(|e| error!("Display show menu: {:?}", e));
-        }));
-        self.gtk_menu.view_menu.append(&gs_show_menu);
-        self.gtk_menu.radio_group.push(gs_show_menu);
+
+        self.gtk_menu.radio_group.push(gs_show_menu.clone());
+        gs.borrow_mut().show_menu = gs_show_menu;
         gs.borrow_mut().draw_area = draw_area;
 
         Ok(())
+    }
+
+    /// Gracefully Shutdown.
+    pub(crate) fn vm_powerdown(&self) {
+        if let Some(button) = &self.powerdown_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm power down failed: {:?}", e));
+        }
+    }
+
+    /// Forced Shutdown.
+    pub(crate) fn vm_shutdown(&self) {
+        if let Some(button) = &self.shutdown_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm shut down failed: {:?}", e));
+        }
+    }
+
+    /// Pause Virtual Machine.
+    pub(crate) fn vm_pause(&self) {
+        if let Some(button) = &self.pause_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm pause failed: {:?}", e));
+        }
+    }
+
+    /// Resume Virtual Machine.
+    pub(crate) fn vm_resume(&self) {
+        if let Some(button) = &self.resume_button {
+            button
+                .write(1)
+                .unwrap_or_else(|e| error!("Vm resume failed: {:?}", e));
+        }
     }
 }
 
 pub struct GtkDisplayScreen {
     window: ApplicationWindow,
     dev_name: String,
+    show_menu: RadioMenuItem,
     draw_area: DrawingArea,
     source_surface: DisplaySurface,
     transfer_surface: Option<DisplaySurface>,
@@ -332,6 +400,7 @@ impl GtkDisplayScreen {
             window,
             dev_name,
             draw_area: DrawingArea::default(),
+            show_menu: RadioMenuItem::default(),
             source_surface: surface,
             transfer_surface: None,
             cairo_image,
@@ -351,14 +420,6 @@ impl GtkDisplayScreen {
             w_width = win.width() as f64;
             w_height = win.height() as f64;
         };
-
-        if self.scale_mode.borrow().is_full_screen() {
-            // Get the size of desktop.
-            if let Some(screen) = Screen::default() {
-                w_width = screen.width() as f64;
-                w_height = screen.height() as f64;
-            }
-        }
 
         if w_width.eq(&0.0) || w_height.eq(&0.0) {
             bail!("The window size can not be zero!");
@@ -388,6 +449,11 @@ impl GtkDisplayScreen {
             None => bail!("No display window."),
         };
 
+        if x.lt(&0.0) || x.gt(&window_width) || y.lt(&0.0) || y.gt(&window_height) {
+            debug!("x {} or y {} out of range, use last value.", x, y);
+            return Ok((self.click_state.last_x, self.click_state.last_y));
+        }
+
         // There may be unfilled areas between the window and the image.
         let (mut mx, mut my) = (0.0, 0.0);
         if window_width > scale_width {
@@ -409,20 +475,34 @@ impl GtkDisplayScreen {
 #[derive(Clone)]
 struct GtkConfig {
     full_screen: bool,
-    zoom_fit: bool,
+    app_name: Option<String>,
     vm_name: String,
-    power_button: Arc<EventFd>,
+    /// Gracefully Shutdown.
+    powerdown_button: Option<Arc<EventFd>>,
+    /// Forced Shutdown.
+    shutdown_button: Option<Arc<EventFd>>,
+    /// Pause Virtual Machine.
+    pause_button: Option<Arc<EventFd>>,
+    /// Resume Virtual Machine.
+    resume_button: Option<Arc<EventFd>>,
     gtk_args: Vec<String>,
 }
 
 /// Gtk display init.
 pub fn gtk_display_init(ds_cfg: &DisplayConfig, ui_context: UiContext) -> Result<()> {
+    let mut gtk_args: Vec<String> = vec![];
+    if let Some(app_name) = &ds_cfg.app_name {
+        gtk_args.push(app_name.clone());
+    }
     let gtk_cfg = GtkConfig {
         full_screen: ds_cfg.full_screen,
-        zoom_fit: ds_cfg.fix_size,
+        app_name: ds_cfg.app_name.clone(),
         vm_name: ui_context.vm_name,
-        power_button: ui_context.power_button,
-        gtk_args: vec![],
+        powerdown_button: ui_context.power_button,
+        shutdown_button: ui_context.shutdown_req,
+        pause_button: ui_context.pause_req,
+        resume_button: ui_context.resume_req,
+        gtk_args,
     };
     let _handle = thread::Builder::new()
         .name("gtk display".to_string())
@@ -437,6 +517,7 @@ fn create_gtk_thread(gtk_cfg: &GtkConfig) {
         .application_id("stratovirt.gtk")
         .build();
     let gtk_cfg_clone = gtk_cfg.clone();
+
     application.connect_activate(move |app| build_ui(app, &gtk_cfg_clone));
     application.run_with_args(&gtk_cfg.gtk_args);
 }
@@ -445,10 +526,13 @@ fn create_gtk_thread(gtk_cfg: &GtkConfig) {
 fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     let window = ApplicationWindow::builder()
         .application(app)
-        .title(&gtk_cfg.vm_name)
-        .default_width(DEFAULT_SURFACE_WIDTH)
-        .default_height(DEFAULT_SURFACE_HEIGHT)
+        .default_width(DEFAULT_WINDOW_WIDTH)
+        .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
+
+    set_program_attribute(gtk_cfg, &window)
+        .with_context(|| "Failed to set properties for program")
+        .unwrap();
 
     // Create menu.
     let mut gtk_menu = GtkMenu::new(window);
@@ -456,12 +540,35 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
     gtk_menu.set_menu();
     gtk_menu.set_signal(&gd);
 
+    let scale_mode = gd.borrow().scale_mode.clone();
     // Gtk display init.
     graphic_display_init(gd)
         .with_context(|| "Gtk display init failed!")
         .unwrap();
 
-    gtk_menu.show_window(gtk_cfg.full_screen);
+    gtk_menu.show_window(scale_mode);
+}
+
+fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Result<()> {
+    // Set title bar.
+    let header = HeaderBar::new();
+    header.set_show_close_button(true);
+    header.set_title(Some(&gtk_cfg.vm_name));
+    window.set_titlebar(Some(&header));
+
+    // Set default icon.
+    if let Some(app_name) = &gtk_cfg.app_name {
+        window.set_icon_name(Some(app_name));
+    }
+
+    // Set text attributes for the program.
+    gettextrs::setlocale(LocaleCategory::LcMessages, "");
+    gettextrs::setlocale(LocaleCategory::LcCType, "C.UTF-8");
+    gettextrs::bindtextdomain(DOMAIN_NAME, LOCALE_PATH)?;
+    gettextrs::bind_textdomain_codeset(DOMAIN_NAME, "UTF-8")?;
+    gettextrs::textdomain(DOMAIN_NAME)?;
+
+    Ok(())
 }
 
 fn graphic_display_init(gd: Rc<RefCell<GtkDisplay>>) -> Result<()> {
@@ -524,6 +631,7 @@ fn gd_handle_event(gd: &Rc<RefCell<GtkDisplay>>, event: DisplayChangeEvent) -> R
         DisplayEventType::DisplayUpdate => do_update_event(&ds, event),
         DisplayEventType::CursorDefine => do_cursor_define(&ds, event),
         DisplayEventType::DisplayRefresh => do_refresh_event(&ds),
+        DisplayEventType::DisplaySetMajor => do_set_major_event(&ds),
     }
 }
 
@@ -531,11 +639,23 @@ fn gd_handle_event(gd: &Rc<RefCell<GtkDisplay>>, event: DisplayChangeEvent) -> R
 fn gs_show_menu_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     note_book: gtk::Notebook,
+    show_menu: &RadioMenuItem,
 ) -> Result<()> {
-    let page_num = note_book.page_num(&gs.borrow().draw_area);
+    let borrowed_gs = gs.borrow();
+    let page_num = note_book.page_num(&borrowed_gs.draw_area);
     note_book.set_current_page(page_num);
-    gs.borrow().draw_area.grab_focus();
-    Ok(())
+
+    if borrowed_gs.dev_name == "ramfb" {
+        match borrowed_gs.dcl.upgrade() {
+            Some(dcl) if show_menu.is_active() => dcl.lock().unwrap().update_interval = 30,
+            Some(dcl) if !show_menu.is_active() => dcl.lock().unwrap().update_interval = 0,
+            _ => {}
+        }
+    }
+
+    borrowed_gs.draw_area.grab_focus();
+    drop(borrowed_gs);
+    update_window_size(gs)
 }
 
 /// Refresh image.
@@ -557,10 +677,6 @@ fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let surface = match locked_con.surface {
         Some(s) => s,
         None => return Ok(()),
-    };
-
-    if let Some(dcl) = borrowed_gs.dcl.upgrade() {
-        dcl.lock().unwrap().update_interval = 30;
     };
 
     let width = borrowed_gs.source_surface.width();
@@ -686,10 +802,10 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
     let mut mx: f64 = 0.0;
     let mut my: f64 = 0.0;
     if window_width > scale_width {
-        mx = ((window_width - scale_width) as f64) / (2.0);
+        mx = (window_width - scale_width) / (2.0);
     }
     if window_height > scale_height {
-        my = ((window_height - scale_height) as f64) / (2.0);
+        my = (window_height - scale_height) / (2.0);
     }
 
     borrowed_gs.draw_area.queue_draw_area(
@@ -813,6 +929,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     } else {
         renew_image(gs)
     }
+}
+
+/// Activate the current screen.
+fn do_set_major_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    gs.borrow().show_menu.activate();
+    Ok(())
 }
 
 pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {

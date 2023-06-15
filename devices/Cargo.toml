@@ -19,6 +19,9 @@ drm-fourcc = ">=2.2.0"
 once_cell = "1.9.0"
 strum = "0.24.1"
 strum_macros = "0.24.3"
+v4l2-sys-mit = "0.2.0"
+serde_json = "1.0"
+rand = "0.8.5"
 kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
@@ -35,6 +38,10 @@ ui = { path = "../ui" }
 pci = { path = "../pci" }
 pulse = { version = "2.0", package = "libpulse-binding" }
 psimple = { version = "2.0", package = "libpulse-simple-binding" }
+rusb = "0.9"
+libusb1-sys = "0.6.4"
+cairo-rs = "0.14.9"
+alsa = "0.7.0"
 
 [dev-dependencies]
 serial_test = "0.5.1"

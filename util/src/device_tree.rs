@@ -285,8 +285,7 @@ impl FdtBuilder {
     fn align_structure_blk(&mut self, alignment: usize) {
         let remainder = self.structure_blk.len() % alignment;
         if remainder != 0 {
-            self.structure_blk
-                .extend(vec![0_u8; (alignment - remainder) as usize]);
+            self.structure_blk.extend(vec![0_u8; alignment - remainder]);
         }
     }
 }

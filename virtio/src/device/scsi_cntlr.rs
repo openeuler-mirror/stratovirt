@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::{
-    iov_to_buf, report_virtio_error, ElemIovec, Element, Queue, VirtioDevice, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
+    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use devices::ScsiBus::{
@@ -464,34 +464,6 @@ type CtrlQueueTmfRequest = VirtioScsiRequest<VirtioScsiCtrlTmfReq, VirtioScsiCtr
 // An Requests in Command Queue.
 type CtrlQueueAnRequest = VirtioScsiRequest<VirtioScsiCtrlAnReq, VirtioScsiCtrlAnResp>;
 
-/// Convert GPA buffer iovec to HVA buffer iovec.
-fn gpa_elemiovec_to_hva_iovec(
-    iovec: &[ElemIovec],
-    mem_space: &AddressSpace,
-    mut skip_size: u32,
-    iov_size: &mut u32,
-) -> Result<Vec<Iovec>> {
-    let mut hva_iovec = Vec::new();
-    for elem in iovec.iter() {
-        if skip_size >= elem.len {
-            skip_size -= elem.len;
-        } else {
-            let hva = mem_space
-                .get_host_address(elem.addr)
-                .with_context(|| "Map iov base failed")?;
-            let len = elem.len - skip_size;
-            hva_iovec.push(Iovec {
-                iov_base: hva + skip_size as u64,
-                iov_len: u64::from(len),
-            });
-            *iov_size += len;
-            skip_size = 0;
-        }
-    }
-
-    Ok(hva_iovec)
-}
-
 /// T: request; U:response.
 impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiRequest<T, U> {
     fn new(
@@ -552,22 +524,14 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
         };
 
         // Get possible dataout buffer from virtqueue Element.
-        let mut out_len: u32 = 0;
-        let out_iovec = gpa_elemiovec_to_hva_iovec(
-            &elem.out_iovec,
-            mem_space,
-            size_of::<T>() as u32,
-            &mut out_len,
-        )?;
+        let mut iovec = elem.out_iovec.clone();
+        let elemiov = iov_discard_front(&mut iovec, size_of::<T>() as u64).unwrap_or_default();
+        let (out_len, out_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
 
         // Get possible dataout buffer from virtqueue Element.
-        let mut in_len: u32 = 0;
-        let in_iovec = gpa_elemiovec_to_hva_iovec(
-            &elem.in_iovec,
-            mem_space,
-            size_of::<U>() as u32,
-            &mut in_len,
-        )?;
+        let mut iovec = elem.in_iovec.clone();
+        let elemiov = iov_discard_front(&mut iovec, size_of::<U>() as u64).unwrap_or_default();
+        let (in_len, in_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
 
         if out_len > 0 && in_len > 0 {
             warn!("Wrong scsi request! Don't support both datain and dataout buffer");
@@ -577,11 +541,11 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
 
         if out_len > 0 {
             request.mode = ScsiXferMode::ScsiXferToDev;
-            request.data_len = out_len;
+            request.data_len = out_len as u32;
             request.iovec = out_iovec;
         } else if in_len > 0 {
             request.mode = ScsiXferMode::ScsiXferFromDev;
-            request.data_len = in_len;
+            request.data_len = in_len as u32;
             request.iovec = in_iovec;
         }
 

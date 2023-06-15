@@ -12,6 +12,7 @@
 
 pub use balloon::*;
 pub use boot_source::*;
+pub use camera::*;
 pub use chardev::*;
 pub use demo_dev::*;
 pub use devices::*;
@@ -30,6 +31,7 @@ pub use ramfb::*;
 pub use rng::*;
 pub use sasl_auth::*;
 pub use scsi::*;
+pub use smbios::*;
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
@@ -37,6 +39,7 @@ pub use vnc::*;
 
 mod balloon;
 mod boot_source;
+pub mod camera;
 mod chardev;
 mod demo_dev;
 mod devices;
@@ -56,6 +59,7 @@ mod rng;
 mod sasl_auth;
 pub mod scream;
 mod scsi;
+mod smbios;
 mod tls_creds;
 mod usb;
 mod vfio;
@@ -74,6 +78,7 @@ use log::error;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
+    num_ops::str_to_usize,
     test_helper::is_test_enabled,
     trace::enable_trace_events,
     AsAny,
@@ -121,6 +126,9 @@ pub struct VmConfig {
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
     pub display: Option<DisplayConfig>,
+    pub camera_backend: HashMap<String, CameraDevConfig>,
+    pub windows_emu_pid: Option<String>,
+    pub smbios: SmbiosConfig,
 }
 
 impl VmConfig {
@@ -250,6 +258,19 @@ impl VmConfig {
                 bail!("Global config {} has been added", fast_unplug_key);
             }
         }
+        Ok(())
+    }
+
+    /// Add argument `windows_emu_pid` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `windows_emu_pid` - The args of windows_emu_pid.
+    pub fn add_windows_emu_pid(&mut self, windows_emu_pid: &str) -> Result<()> {
+        if windows_emu_pid.is_empty() {
+            bail!("The arg of windows_emu_pid is empty!");
+        }
+        self.windows_emu_pid = Some(windows_emu_pid.to_string());
         Ok(())
     }
 
@@ -577,6 +598,20 @@ pub fn add_trace_events(config: &str) -> Result<()> {
         return Ok(());
     }
     bail!("trace: events file must be set.");
+}
+
+/// This struct is a wrapper for `usize`.
+/// Hexadecimal string can be converted to integers by this structure method.
+pub struct UnsignedInteger(pub usize);
+
+impl FromStr for UnsignedInteger {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let value = str_to_usize(s.to_string())
+            .map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
+        Ok(UnsignedInteger(value))
+    }
 }
 
 pub struct IntegerList(pub Vec<u64>);

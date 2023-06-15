@@ -99,7 +99,7 @@ static DESC_IFACE_STORAGE: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     wMaxPacketSize: 512,
                     bInterval: 0,
                 },
-                extra: None,
+                extra: Vec::new(),
             }),
             Arc::new(UsbDescEndpoint {
                 endpoint_desc: UsbEndpointDescriptor {
@@ -110,7 +110,7 @@ static DESC_IFACE_STORAGE: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     wMaxPacketSize: 512,
                     bInterval: 0,
                 },
-                extra: None,
+                extra: Vec::new(),
             }),
         ],
     })

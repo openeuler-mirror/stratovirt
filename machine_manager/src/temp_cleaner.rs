@@ -10,23 +10,33 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
 
 static mut GLOBAL_TEMP_CLEANER: Option<TempCleaner> = None;
+
+pub type ExitNotifier = dyn Fn() + Send + Sync;
 
 /// This structure used to keep temporary file which was created by program, and would be deleted
 /// when Vm exit.
 pub struct TempCleaner {
     /// Path of files that should be removed after exiting the vm.
     paths: Vec<String>,
+    /// Notifiers are used to release residual resources after exiting the vm.
+    notifiers: HashMap<String, Arc<ExitNotifier>>,
 }
 
 impl TempCleaner {
     pub fn object_init() {
         unsafe {
             if GLOBAL_TEMP_CLEANER.is_none() {
-                GLOBAL_TEMP_CLEANER = Some(TempCleaner { paths: Vec::new() });
+                GLOBAL_TEMP_CLEANER = Some(TempCleaner {
+                    paths: Vec::new(),
+                    notifiers: HashMap::new(),
+                });
             }
         }
     }
@@ -40,28 +50,66 @@ impl TempCleaner {
         }
     }
 
-    /// Clean the temporary files
+    /// Add exit notifier.
+    pub fn add_exit_notifier(id: String, exit: Arc<ExitNotifier>) {
+        unsafe {
+            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
+                tmp.notifiers.insert(id, exit);
+            }
+        }
+    }
+
+    /// Remove exit notifier by id.
+    pub fn remove_exit_notifier(id: &str) {
+        unsafe {
+            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
+                tmp.notifiers.remove(id);
+            }
+        }
+    }
+
+    fn clean_files(&mut self) {
+        while let Some(path) = self.paths.pop() {
+            if Path::new(&path).exists() {
+                if let Err(ref e) = fs::remove_file(&path) {
+                    write!(
+                        &mut std::io::stderr(),
+                        "Failed to delete console / socket file:{} :{} \r\n",
+                        &path,
+                        e
+                    )
+                    .expect("Failed to write to stderr");
+                } else {
+                    write!(
+                        &mut std::io::stdout(),
+                        "Delete file: {} successfully.\r\n",
+                        &path
+                    )
+                    .expect("Failed to write to stdout");
+                }
+            } else {
+                write!(
+                    &mut std::io::stdout(),
+                    "file: {} has been removed \r\n",
+                    &path
+                )
+                .expect("Failed to write to stdout");
+            }
+        }
+    }
+
+    fn exit_notifier(&mut self) {
+        for (_id, exit) in self.notifiers.iter() {
+            exit();
+        }
+    }
+
+    /// Clean the resources
     pub fn clean() {
         unsafe {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
-                while let Some(path) = tmp.paths.pop() {
-                    if let Err(ref e) = fs::remove_file(&path) {
-                        write!(
-                            &mut std::io::stderr(),
-                            "Failed to delete console / socket file:{} :{} \r\n",
-                            &path,
-                            e
-                        )
-                        .expect("Failed to write to stderr");
-                    } else {
-                        write!(
-                            &mut std::io::stdout(),
-                            "Delete file: {} successfully.\r\n",
-                            &path
-                        )
-                        .expect("Failed to write to stdout");
-                    }
-                }
+                tmp.clean_files();
+                tmp.exit_notifier();
             }
         }
     }

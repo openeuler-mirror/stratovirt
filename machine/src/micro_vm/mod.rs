@@ -710,6 +710,7 @@ impl MachineOps for LightMachine {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         if device_cfg.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
+            net.lock().unwrap().disable_irqfd = true;
             let device = VirtioMmioDevice::new(&self.sys_mem, net);
             self.realize_virtio_mmio_device(device)?;
         } else {
@@ -916,15 +917,18 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        self.vm_state_transfer(
+        if let Err(e) = self.vm_state_transfer(
             &self.cpus,
             #[cfg(target_arch = "aarch64")]
             &self.irq_chip,
             &mut self.vm_state.0.lock().unwrap(),
             old,
             new,
-        )
-        .is_ok()
+        ) {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
     }
 }
 
@@ -1298,6 +1302,24 @@ impl DeviceInterface for LightMachine {
         Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(
                 "chardev_remove not supported yet for microVM".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn cameradev_add(&mut self, _args: qmp_schema::CameraDevAddArgument) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "cameradev_add not supported for MicroVM".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn cameradev_del(&mut self, _id: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "cameradev_del not supported for MicroVM".to_string(),
             ),
             None,
         )

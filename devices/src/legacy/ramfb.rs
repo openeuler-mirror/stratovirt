@@ -26,8 +26,8 @@ use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use ui::console::{
-    console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
-    DisplaySurface, HardWareOperations,
+    console_init, display_graphic_update, display_replace_surface, set_run_stage, ConsoleType,
+    DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::input::{key_event, KEYCODE_RET};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
@@ -69,6 +69,7 @@ impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         let ramfb_opts = Arc::new(RamfbInterface {});
         let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
+        set_run_stage(VmRunningStage::Bios);
         Self {
             surface: None,
             con,
@@ -281,12 +282,12 @@ fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
         });
 
         if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.delay_call(
+            ctx.timer_add(
                 set_press_func,
                 Duration::from_millis(INSTALL_CHECK_INTERVEL_MS),
             );
-            ctx.delay_call(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
-            ctx.delay_call(
+            ctx.timer_add(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
+            ctx.timer_add(
                 release_func,
                 Duration::from_millis(INSTALL_RELEASE_INTERVEL_MS),
             );
