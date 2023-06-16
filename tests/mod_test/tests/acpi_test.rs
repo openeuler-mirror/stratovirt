@@ -12,7 +12,7 @@
 
 use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicRedistributor, AcpiRsdp, AcpiSratGiccAffinity,
-    AcpiSratMemoryAffinity, AcpiTableHeader, ProcessorHierarchyNode,
+    AcpiSratMemoryAffinity, AcpiTableHeader, CacheHierarchyNode, ProcessorHierarchyNode,
 };
 use byteorder::{ByteOrder, LittleEndian};
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
@@ -37,10 +37,10 @@ const IORT_TABLE_DATA_LENGTH: u32 = 128;
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 5610(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 5610;
-// Now acpi tables data length is 31953(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 31953;
+// Now acpi tables data length is 5974(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 5974;
+// Now acpi tables data length is 40415(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 40415;
 
 fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     let file_name = "etc/acpi/rsdp";
@@ -103,7 +103,7 @@ fn check_madt(data: &[u8], cpu: u8) {
     assert_eq!(data[offset + 20], 3);
 
     // Check GIC CPU
-    offset = offset + mem::size_of::<AcpiGicDistributor>();
+    offset += mem::size_of::<AcpiGicDistributor>();
     for i in 0..cpu {
         assert_eq!(data[offset + 1], 80); // The length of this structure
         assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), i as u32); // CPU interface number
@@ -112,7 +112,7 @@ fn check_madt(data: &[u8], cpu: u8) {
         assert_eq!(LittleEndian::read_u32(&data[(offset + 20)..]), 23); // Performance monitoring interrupts
         assert_eq!(LittleEndian::read_u64(&data[(offset + 56)..]), 25); // Virtual GIC maintenance interrupt
         assert_eq!(LittleEndian::read_u64(&data[(offset + 68)..]), i as u64); // MPIDR
-        offset = offset + mem::size_of::<AcpiGicCpu>();
+        offset += mem::size_of::<AcpiGicCpu>();
     }
 
     // Check GIC Redistributor
@@ -120,7 +120,7 @@ fn check_madt(data: &[u8], cpu: u8) {
     assert_eq!(MEM_LAYOUT[LayoutEntryType::GicRedist as usize].0, addr);
 
     // Check GIC Its
-    offset = offset + mem::size_of::<AcpiGicRedistributor>();
+    offset += mem::size_of::<AcpiGicRedistributor>();
     addr = LittleEndian::read_u64(&data[(offset + 8)..]);
     assert_eq!(MEM_LAYOUT[LayoutEntryType::GicIts as usize].0, addr);
 }
@@ -209,13 +209,13 @@ fn check_srat(data: &[u8]) {
             assert_eq!(proximity_domain, i);
             let process_uid = LittleEndian::read_u32(&data[(offset + 6)..]);
             assert_eq!(process_uid, (i * 4) + j);
-            offset = offset + mem::size_of::<AcpiSratGiccAffinity>();
+            offset += mem::size_of::<AcpiSratGiccAffinity>();
         }
         assert_eq!(LittleEndian::read_u64(&data[(offset + 8)..]), base_addr);
         let size = LittleEndian::read_u64(&data[(offset + 16)..]);
         assert_eq!(size, 0x8000_0000);
         base_addr = base_addr + size;
-        offset = offset + mem::size_of::<AcpiSratMemoryAffinity>();
+        offset += mem::size_of::<AcpiSratMemoryAffinity>();
     }
 }
 
@@ -233,7 +233,7 @@ fn check_slit(data: &[u8]) {
             } else {
                 assert_eq!(data[offset], 30);
             }
-            offset = offset + 1;
+            offset += 1;
         }
     }
 }
@@ -244,23 +244,52 @@ fn check_pptt(data: &[u8]) {
     // offset = AcpiTable.len = 36
     let mut offset = 36;
     // sockets = 1, clusters = 1, cores = 4, threads = 2
+    // Check L3 cache type, next_level and attributes.
+    assert_eq!(data[offset], 1);
+    assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), 0);
+    assert_eq!(data[offset + 21], 10);
+
     // Check sockets flags and processor_id.
+    offset += mem::size_of::<CacheHierarchyNode>();
     assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), 1);
     assert_eq!(LittleEndian::read_u32(&data[(offset + 12)..]), 0);
 
     // Check clusters flags and processor_id.
-    offset = offset + mem::size_of::<ProcessorHierarchyNode>();
+    // Sockets have an L3 cache, so it's offset to add 4.
+    offset += mem::size_of::<ProcessorHierarchyNode>() + 4;
     assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), 0);
     assert_eq!(LittleEndian::read_u32(&data[(offset + 12)..]), 0);
 
-    // Check cores flags and processor_id.
     for i in 0..4 {
-        offset = offset + mem::size_of::<ProcessorHierarchyNode>();
+        // Check L2 cache type, next_level and attributes.
+        offset += mem::size_of::<ProcessorHierarchyNode>();
+        assert_eq!(data[offset], 1);
+        assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), 0);
+        assert_eq!(data[offset + 21], 10);
+
+        // Check L1D cache type, next_level and attributes.
+        let next_level = offset as u32;
+        offset += mem::size_of::<CacheHierarchyNode>();
+        assert_eq!(data[offset], 1);
+        assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), next_level);
+        assert_eq!(data[offset + 21], 2);
+
+        // Check L1I cache type, next_level and attributes.
+        offset += mem::size_of::<CacheHierarchyNode>();
+        assert_eq!(data[offset], 1);
+        assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), next_level);
+        assert_eq!(data[offset + 21], 4);
+
+        // Check cores flags and processor_id.
+        offset += mem::size_of::<CacheHierarchyNode>();
         assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), 0);
         assert_eq!(LittleEndian::read_u32(&data[(offset + 12)..]), i);
+
+        // Cores have L2, L1D, L1I cache, so it'3 offset to add 3 * 4;
+        offset += 3 * 4;
         for j in 0..2 {
             // Check threads flags and processor_id.
-            offset = offset + mem::size_of::<ProcessorHierarchyNode>();
+            offset += mem::size_of::<ProcessorHierarchyNode>();
             assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), 0xE);
             assert_eq!(LittleEndian::read_u32(&data[(offset + 12)..]), i * 2 + j);
         }
