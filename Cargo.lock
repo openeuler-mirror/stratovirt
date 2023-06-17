@@ -2049,6 +2049,7 @@ dependencies = [
  "acpi",
  "address_space",
  "anyhow",
+ "block_backend",
  "byteorder",
  "devices",
  "hypervisor",

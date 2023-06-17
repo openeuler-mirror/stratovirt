@@ -13,7 +13,6 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -25,7 +24,7 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use util::aio::{AioCb, Iovec, OpCode, WriteZeroesState};
+use util::aio::{AioCb, Iovec};
 use util::AsAny;
 
 /// Scsi Operation code.
@@ -472,7 +471,7 @@ pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
     Ok(())
 }
 
-pub trait ScsiRequestOps: AsAny {
+pub trait ScsiRequestOps: Send + Sync + AsAny {
     // Will be called in the end of this scsi instruction execution.
     fn scsi_request_complete_cb(&mut self, status: u8, scsisense: Option<ScsiSense>) -> Result<()>;
 }
@@ -545,56 +544,47 @@ impl ScsiRequest {
         let op = self.cmd.op;
         let dev = self.dev.clone();
         let locked_dev = dev.lock().unwrap();
-        let mut aio = locked_dev.aio.as_ref().unwrap().lock().unwrap();
+        // SAFETY: the block_backend is assigned after device realized.
+        let block_backend = locked_dev.block_backend.as_ref().unwrap();
+        let mut locked_backend = block_backend.lock().unwrap();
         let s_req = Arc::new(Mutex::new(self));
 
-        let offset = match locked_dev.scsi_type {
+        let scsicompletecb = ScsiCompleteCb { req: s_req.clone() };
+        let offset_bits = match locked_dev.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
         let locked_req = s_req.lock().unwrap();
-
-        let mut aiocb = AioCb {
-            direct: locked_dev.config.direct,
-            req_align: locked_dev.req_align,
-            buf_align: locked_dev.buf_align,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            file_fd: locked_dev.disk_image.as_ref().unwrap().as_raw_fd(),
-            opcode: OpCode::Noop,
-            iovec: locked_req.iovec.clone(),
-            offset: (locked_req.cmd.lba << offset) as usize,
-            nbytes: locked_req.cmd.xfer as u64,
-            user_data: 0,
-            iocompletecb: ScsiCompleteCb { req: s_req.clone() },
-        };
+        let iovecs = locked_req.iovec.clone();
+        let offset = (locked_req.cmd.lba << offset_bits) as usize;
         drop(locked_req);
 
         if op == SYNCHRONIZE_CACHE {
-            aiocb.opcode = OpCode::Fdsync;
-            aio.submit_request(aiocb)
+            locked_backend
+                .datasync(scsicompletecb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
-            aio.flush_request()?;
+            locked_backend.flush_request()?;
+
             return Ok(s_req);
         }
 
         match mode {
             ScsiXferMode::ScsiXferFromDev => {
-                aiocb.opcode = OpCode::Preadv;
-                aio.submit_request(aiocb)
+                locked_backend
+                    .read_vectored(&iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for reading")?;
             }
             ScsiXferMode::ScsiXferToDev => {
-                aiocb.opcode = OpCode::Pwritev;
-                aio.submit_request(aiocb)
-                    .with_context(|| "Failed to process block request for writing")?;
+                locked_backend
+                    .write_vectored(&iovecs, offset, scsicompletecb)
+                    .with_context(|| "Failed to process scsi request for writing")?;
             }
             _ => {
                 info!("xfer none");
             }
         }
 
-        aio.flush_request()?;
+        locked_backend.flush_request()?;
         Ok(s_req)
     }
 
@@ -634,7 +624,7 @@ impl ScsiRequest {
             }
             TEST_UNIT_READY => {
                 let dev_lock = self.dev.lock().unwrap();
-                if dev_lock.disk_image.is_none() {
+                if dev_lock.block_backend.is_none() {
                     Err(anyhow!("No scsi backend!"))
                 } else {
                     Ok(Vec::new())

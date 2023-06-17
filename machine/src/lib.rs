@@ -845,13 +845,13 @@ pub trait MachineOps {
         {
             bail!("Wrong! Two scsi devices have the same scsi-id and lun");
         }
+        let iothread = cntlr.config.iothread.clone();
+        device.lock().unwrap().realize(iothread)?;
         bus.lock()
             .unwrap()
             .devices
             .insert((device_cfg.target, device_cfg.lun), device.clone());
         device.lock().unwrap().parent_bus = Arc::downgrade(bus);
-
-        device.lock().unwrap().realize()?;
 
         if let Some(bootindex) = device_cfg.boot_index {
             // Eg: OpenFirmware device path(virtio-scsi disk):
