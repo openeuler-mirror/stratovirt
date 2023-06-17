@@ -14,11 +14,15 @@ pub mod raw;
 
 mod file;
 
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    fs::File,
+    sync::{atomic::AtomicBool, Arc, Mutex},
+};
 
 use anyhow::Result;
 
-use util::aio::{Iovec, WriteZeroesState};
+use raw::RawDriver;
+use util::aio::{Aio, Iovec, WriteZeroesState};
 
 /// Callback function which is called when aio handle failed.
 pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
@@ -61,4 +65,14 @@ pub trait BlockDriverOps<T: Clone>: Send {
     ) -> Result<()>;
 
     fn unregister_io_event(&mut self) -> Result<()>;
+}
+
+pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
+    file: File,
+    aio: Aio<T>,
+    prop: BlockProperty,
+) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
+    // NOTE: we only support file backend for raw format now.
+    let raw_file = RawDriver::new(file, aio, prop);
+    Ok(Arc::new(Mutex::new(raw_file)))
 }

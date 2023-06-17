@@ -21,7 +21,6 @@ use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 
 use machine_manager::config::{DriveFile, UsbStorageConfig};
-use util::aio::{Aio, AioEngine};
 
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
@@ -32,8 +31,8 @@ use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 use crate::{
     ScsiBus::{
-        aio_complete_cb, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
-        EMULATE_SCSI_OPS, GOOD, SCSI_CMD_BUF_SIZE,
+        ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
+        SCSI_CMD_BUF_SIZE,
     },
     ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
 };
@@ -520,11 +519,9 @@ impl UsbDeviceOps for UsbStorage {
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
-        let aio = Aio::new(Arc::new(aio_complete_cb), AioEngine::Off)
-            .with_context(|| format!("USB-storage {}: aio creation error!", self.id))?;
+        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
         let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
-        locked_scsi_dev.aio = Some(Arc::new(Mutex::new(aio)));
-        locked_scsi_dev.realize()?;
+        locked_scsi_dev.realize(None)?;
         drop(locked_scsi_dev);
         self.scsi_bus
             .lock()
