@@ -163,6 +163,7 @@ impl ScsiDevice {
 
         let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
         let conf = BlockProperty {
+            format: self.config.format,
             iothread,
             direct: self.config.direct,
             req_align: self.req_align,

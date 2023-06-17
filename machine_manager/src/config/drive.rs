@@ -13,6 +13,7 @@
 use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
+use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -70,6 +71,7 @@ pub struct BlkDevConfig {
     pub queue_size: u16,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
+    pub format: DiskFormat,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +99,25 @@ impl Default for BlkDevConfig {
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiskFormat {
+    Raw,
+    Qcow2,
+}
+
+impl FromStr for DiskFormat {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "raw" => Ok(DiskFormat::Raw),
+            "qcow2" => Ok(DiskFormat::Qcow2),
+            _ => Err(anyhow!("Unknown format type")),
         }
     }
 }
@@ -115,6 +136,7 @@ pub struct DriveConfig {
     pub media: String,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
+    pub format: DiskFormat,
 }
 
 impl Default for DriveConfig {
@@ -129,6 +151,7 @@ impl Default for DriveConfig {
             media: "disk".to_string(),
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
         }
     }
 }
@@ -278,11 +301,8 @@ impl ConfigCheck for BlkDevConfig {
 
 fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     let mut drive = DriveConfig::default();
-
-    if let Some(format) = cmd_parser.get_value::<String>("format")? {
-        if format.ne("raw") {
-            bail!("Only \'raw\' type of block is supported");
-        }
+    if let Some(fmt) = cmd_parser.get_value::<DiskFormat>("format")? {
+        drive.format = fmt;
     }
 
     drive.id = cmd_parser
@@ -376,17 +396,18 @@ pub fn parse_blk(
         blkdevcfg.queue_size = queue_size;
     }
 
-    if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
-        blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
-        blkdevcfg.read_only = drive_arg.read_only;
-        blkdevcfg.direct = drive_arg.direct;
-        blkdevcfg.iops = drive_arg.iops;
-        blkdevcfg.aio = drive_arg.aio;
-        blkdevcfg.discard = drive_arg.discard;
-        blkdevcfg.write_zeroes = drive_arg.write_zeroes;
-    } else {
-        bail!("No drive configured matched for blk device");
-    }
+    let drive_arg = &vm_config
+        .drives
+        .remove(&blkdrive)
+        .with_context(|| "No drive configured matched for blk device")?;
+    blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
+    blkdevcfg.read_only = drive_arg.read_only;
+    blkdevcfg.direct = drive_arg.direct;
+    blkdevcfg.iops = drive_arg.iops;
+    blkdevcfg.aio = drive_arg.aio;
+    blkdevcfg.discard = drive_arg.discard;
+    blkdevcfg.write_zeroes = drive_arg.write_zeroes;
+    blkdevcfg.format = drive_arg.format;
     blkdevcfg.check()?;
     Ok(blkdevcfg)
 }
@@ -514,7 +535,8 @@ impl VmConfig {
             .push("aio")
             .push("media")
             .push("discard")
-            .push("detect-zeroes");
+            .push("detect-zeroes")
+            .push("format");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;

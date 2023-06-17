@@ -1051,6 +1051,7 @@ impl VirtioDevice for Block {
 
             let aio = Aio::new(Arc::new(BlockIoHandler::complete_func), self.blk_cfg.aio)?;
             let conf = BlockProperty {
+                format: self.blk_cfg.format,
                 iothread: self.blk_cfg.iothread.clone(),
                 direct: self.blk_cfg.direct,
                 req_align: self.req_align,

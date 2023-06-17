@@ -19,8 +19,9 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
+use machine_manager::config::DiskFormat;
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -29,6 +30,7 @@ pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct BlockProperty {
+    pub format: DiskFormat,
     pub iothread: Option<String>,
     pub direct: bool,
     pub req_align: u32,
@@ -74,7 +76,13 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     aio: Aio<T>,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
-    // NOTE: we only support file backend for raw format now.
-    let raw_file = RawDriver::new(file, aio, prop);
-    Ok(Arc::new(Mutex::new(raw_file)))
+    match prop.format {
+        DiskFormat::Raw => {
+            let raw_file = RawDriver::new(file, aio, prop);
+            Ok(Arc::new(Mutex::new(raw_file)))
+        }
+        DiskFormat::Qcow2 => {
+            bail!("Disk format qcow2 not supported");
+        }
+    }
 }
