@@ -186,6 +186,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
+name = "block_backend"
+version = "2.2.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "log",
+ "machine_manager",
+ "thiserror",
+ "util",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "boot_loader"
 version = "2.2.0"
 dependencies = [
@@ -359,6 +372,7 @@ dependencies = [
  "address_space",
  "alsa",
  "anyhow",
+ "block_backend",
  "byteorder",
  "cairo-rs",
  "drm-fourcc",
