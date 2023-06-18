@@ -125,6 +125,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_fallocate),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clock_gettime),
         madvise_rule(),
     ]
 }
