@@ -109,6 +109,7 @@ pub(crate) fn set_callback_for_draw_area(
         | EventMask::BUTTON_RELEASE_MASK
         | EventMask::BUTTON_MOTION_MASK
         | EventMask::SCROLL_MASK
+        | EventMask::SMOOTH_SCROLL_MASK
         | EventMask::KEY_PRESS_MASK
         | EventMask::KEY_RELEASE_MASK
         | EventMask::BUTTON1_MOTION_MASK
@@ -284,6 +285,19 @@ fn da_scroll_callback(
         ScrollDirection::Down => INPUT_BUTTON_WHEEL_DOWN,
         ScrollDirection::Left => INPUT_BUTTON_WHEEL_LEFT,
         ScrollDirection::Right => INPUT_BUTTON_WHEEL_RIGHT,
+        ScrollDirection::Smooth => match scroll_event.scroll_deltas() {
+            Some((_, delta_y)) => {
+                if delta_y == 0.0 {
+                    return Ok(());
+                }
+                if delta_y > 0.0 {
+                    INPUT_BUTTON_WHEEL_DOWN
+                } else {
+                    INPUT_BUTTON_WHEEL_UP
+                }
+            }
+            None => return Ok(()),
+        },
         _ => 0x0,
     };
 
