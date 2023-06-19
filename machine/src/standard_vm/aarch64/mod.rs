@@ -15,7 +15,7 @@ mod syscall;
 
 pub use crate::error::MachineError;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
-use log::{error, info};
+use log::{error, info, warn};
 use machine_manager::config::ShutdownAction;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::UiContext;
@@ -1104,6 +1104,10 @@ impl MachineLifecycle for StdMachine {
         };
 
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if self.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
             return false;
         }
 
