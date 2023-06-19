@@ -67,6 +67,9 @@ const QUEUE_NUM_GPU: usize = 2;
 /// Display changed event
 const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
 
+/// The flag indicates that the frame buffer only used in windows.
+const VIRTIO_GPU_RES_WIN_FRAMEBUF: u32 = 0x80000000;
+
 #[derive(Debug)]
 struct GpuResource {
     resource_id: u32,
@@ -964,7 +967,11 @@ impl GpuIoHandler {
         let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
-        let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
+        let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+            res.iov[0].iov_base as *mut u32
+        } else {
+            unsafe { pixman_image_get_data(res.pixman_image) }
+        };
         let res_data_offset = unsafe { res_data.offset(offset as isize) };
 
         // Create surface for the scanout.
@@ -1090,6 +1097,9 @@ impl GpuIoHandler {
         }
 
         let res = &self.resources_list[res_idx.unwrap()];
+        if res.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+            return (None, VIRTIO_GPU_RESP_OK_NODATA);
+        }
         if !is_rect_in_resource(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
