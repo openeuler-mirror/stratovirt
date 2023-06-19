@@ -49,6 +49,8 @@ use xhci::xhci_controller::{UsbPort, XhciDevice};
 const USB_MAX_ENDPOINTS: u32 = 15;
 /// USB max address.
 const USB_MAX_ADDRESS: u8 = 127;
+/// USB device default buffer length.
+pub const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
 
 /// USB packet return status.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -112,7 +114,7 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    pub fn new() -> Self {
+    pub fn new(data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
             port: None,
             speed: 0,
@@ -120,7 +122,7 @@ impl UsbDevice {
             ep_ctl: UsbEndpoint::new(0, false, USB_ENDPOINT_ATTR_CONTROL),
             ep_in: Vec::new(),
             ep_out: Vec::new(),
-            data_buf: vec![0_u8; 4096],
+            data_buf: vec![0_u8; data_buf_len],
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
             unplugged_id: None,
@@ -297,12 +299,6 @@ impl UsbDevice {
             }
         }
         Ok(true)
-    }
-}
-
-impl Default for UsbDevice {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

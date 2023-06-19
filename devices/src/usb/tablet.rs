@@ -17,13 +17,13 @@ use anyhow::Result;
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use super::config::*;
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
 use super::xhci::xhci_controller::XhciDevice;
+use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
     notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
@@ -124,7 +124,7 @@ impl UsbTablet {
     pub fn new(id: String) -> Self {
         Self {
             id,
-            usb_device: UsbDevice::new(),
+            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Tablet),
             cntlr: None,
         }

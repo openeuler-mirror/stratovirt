@@ -93,6 +93,7 @@ const VS_COMMIT_CONTROL: u8 = 2;
 
 const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
+const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 pub struct UsbCamera {
     id: String,                                                 // uniq device id
@@ -611,7 +612,7 @@ impl UsbCamera {
         let camera = camera_ops(config.clone())?;
         Ok(Self {
             id: config.id.unwrap(),
-            usb_device: UsbDevice::new(),
+            usb_device: UsbDevice::new(USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
             camera_dev: camera,

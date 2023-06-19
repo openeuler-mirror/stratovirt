@@ -51,6 +51,7 @@ mod host_usblib;
 const NON_ISO_PACKETS_NUMS: c_int = 0;
 const COMPLETE_LIMIT: u32 = 200;
 const HANDLE_TIMEOUT_MS: u64 = 2;
+const USB_HOST_BUFFER_LEN: usize = 12 * 1024;
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
@@ -158,7 +159,7 @@ impl UsbHost {
             libevt: Vec::new(),
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
-            usb_device: UsbDevice::new(),
+            usb_device: UsbDevice::new(USB_HOST_BUFFER_LEN),
             exit: None,
             requests: Arc::new(Mutex::new(LinkedList::new())),
             completed: Arc::new(Mutex::new(0)),
