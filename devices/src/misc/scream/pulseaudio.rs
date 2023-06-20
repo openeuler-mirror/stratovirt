@@ -159,6 +159,10 @@ impl PulseStreamData {
         if self.stream_fmt == recv_data.fmt {
             return;
         }
+
+        // Flush left data when audio format changed.
+        self.destroy();
+
         // If audio format changed, reconfigure
         self.stream_fmt = recv_data.fmt;
         self.ss.channels = recv_data.fmt.channels;
