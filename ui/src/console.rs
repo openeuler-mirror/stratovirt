@@ -36,9 +36,9 @@ const FONT_WIDTH: i32 = 8;
 /// Height of font.
 const FONT_HEIGHT: i32 = 16;
 /// Width of image in surface.
-pub const DEFAULT_SURFACE_WIDTH: i32 = 640;
+pub const DEFAULT_SURFACE_WIDTH: i32 = 800;
 /// Height of image in surface.
-pub const DEFAULT_SURFACE_HEIGHT: i32 = 480;
+pub const DEFAULT_SURFACE_HEIGHT: i32 = 600;
 /// Maximum default window width.
 pub const MAX_WINDOW_WIDTH: u16 = 2560;
 /// Maximum default window height.
