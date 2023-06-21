@@ -1471,6 +1471,14 @@ impl XhciDevice {
                 return Ok(());
             }
         };
+
+        // If the device has been detached, but the guest has not been notified.
+        // In this case, the Transaction Error is reported when the TRB processed.
+        // Therefore, don't continue here.
+        if self.get_usb_dev(slot_id, ep_id).is_err() {
+            return Ok(());
+        }
+
         debug!(
             "kick_endpoint slotid {} epid {} dequeue {:x}",
             slot_id,
