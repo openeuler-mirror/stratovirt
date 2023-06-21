@@ -10,18 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod raw;
-
 mod file;
+mod qcow2;
+mod raw;
 
 use std::{
     fs::File,
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
 
 use machine_manager::config::DiskFormat;
+use qcow2::Qcow2Driver;
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -82,7 +83,9 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             Ok(Arc::new(Mutex::new(raw_file)))
         }
         DiskFormat::Qcow2 => {
-            bail!("Disk format qcow2 not supported");
+            let qcow2 = Qcow2Driver::new(file, aio, prop)
+                .with_context(|| "Failed to create qcow2 driver")?;
+            Ok(Arc::new(Mutex::new(qcow2)))
         }
     }
 }
