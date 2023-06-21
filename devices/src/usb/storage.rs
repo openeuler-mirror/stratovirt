@@ -23,12 +23,12 @@ use once_cell::sync::Lazy;
 use machine_manager::config::{DriveFile, UsbStorageConfig};
 use util::aio::{Aio, AioEngine};
 
-use super::config::*;
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::xhci::xhci_controller::XhciDevice;
+use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 use crate::{
     ScsiBus::{
@@ -317,7 +317,7 @@ impl UsbStorage {
 
         Self {
             id: config.id.clone().unwrap(),
-            usb_device: UsbDevice::new(),
+            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
             config: config.clone(),
