@@ -62,6 +62,33 @@ pub fn round_down(origin: u64, align: u64) -> Option<u64> {
     }
 }
 
+/// Division rounded up.
+///
+/// # Arguments
+///
+/// * `dividend` - dividend.
+/// * `divisor` - divisor.
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::div_round_up;
+///
+/// let value = div_round_up(10 as u64, 4 as u64);
+/// assert!(value == Some(3));
+/// ```
+pub fn div_round_up(dividend: u64, divisor: u64) -> Option<u64> {
+    if let Some(res) = dividend.checked_div(divisor) {
+        if dividend % divisor == 0 {
+            return Some(res);
+        } else {
+            return Some(res + 1);
+        }
+    }
+    None
+}
+
 /// Get the first half or second half of u64.
 ///
 /// # Arguments
@@ -429,6 +456,20 @@ mod test {
     fn round_down_test() {
         let result = round_down(10001 as u64, 100 as u64);
         assert_eq!(result, Some(10000));
+    }
+
+    #[test]
+    fn test_div_round_up() {
+        let res = div_round_up(10, 4);
+        assert_eq!(res, Some(3));
+        let res = div_round_up(10, 2);
+        assert_eq!(res, Some(5));
+        let res = div_round_up(2, 10);
+        assert_eq!(res, Some(1));
+        let res = div_round_up(10, 0);
+        assert_eq!(res, None);
+        let res = div_round_up(0xffff_ffff_ffff_ffff_u64, 1);
+        assert_eq!(res, Some(0xffff_ffff_ffff_ffff_u64));
     }
 
     #[test]

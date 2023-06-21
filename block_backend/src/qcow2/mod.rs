@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod header;
+
 use std::{
     cell::RefCell,
     fs::File,
@@ -21,6 +23,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, ByteOrder};
+
+use self::header::QcowHeader;
 
 use super::BlockDriverOps;
 use crate::{file::FileDriver, BlockIoErrorCallback, BlockProperty};
@@ -136,6 +140,7 @@ impl SyncAioInfo {
 pub struct Qcow2Driver<T: Clone + 'static> {
     driver: FileDriver<T>,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
+    header: QcowHeader,
 }
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
@@ -144,6 +149,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let qcow2 = Self {
             driver: FileDriver::new(file, aio, conf.clone()),
             sync_aio: Rc::new(RefCell::new(SyncAioInfo::new(fd, conf)?)),
+            header: QcowHeader::default(),
         };
         Ok(qcow2)
     }
