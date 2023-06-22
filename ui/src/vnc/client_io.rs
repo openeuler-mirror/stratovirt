@@ -501,9 +501,14 @@ impl ClientIoHandler {
     /// Exchange RFB protocol version with client.
     fn handle_version(&mut self) -> Result<()> {
         let client = self.client.clone();
-        let buf = self.read_incoming_msg();
+        let mut buf = self.read_incoming_msg();
+        // The last character should be '\n'
+        let lf_char = buf.pop().ok_or(VncError::UnsupportRFBProtocolVersion)?;
+        if !lf_char.eq(&10) {
+            return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
+        }
         let ver_str = String::from_utf8_lossy(&buf).to_string();
-        let ver = match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
+        let ver = match scanf!(ver_str, "RFB {usize:/\\d{3}/}.{usize:/\\d{3}/}") {
             Ok(v) => v,
             Err(_e) => {
                 return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
