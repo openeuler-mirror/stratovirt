@@ -233,14 +233,7 @@ impl DeviceTypeOperation for DemoGpu {
         self.surface = Some(surface);
 
         // Create image.
-        let mouse = DisplayMouse {
-            width: 64_u32,
-            height: 64_u32,
-            hot_x: 4_u32,
-            hot_y: 4_u32,
-            data: vec![0_u8; 64 * 64 * 4],
-        };
-        self.mouse = Some(mouse);
+        self.mouse = Some(DisplayMouse::new(64, 64, 4, 4));
         Ok(())
     }
 
