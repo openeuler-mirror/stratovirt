@@ -736,7 +736,7 @@ impl GpuIoHandler {
                         *item = 0_u8;
                     }
                 }
-                display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
+                display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
                 scanout.cursor_visible = false;
             }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
@@ -755,7 +755,7 @@ impl GpuIoHandler {
                 self.update_cursor_image(&info_cursor);
             }
             let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
-            display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
+            display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
         } else {
             bail!("Wrong header type for cursor queue");
         }

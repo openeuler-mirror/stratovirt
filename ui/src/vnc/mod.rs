@@ -205,7 +205,7 @@ impl DisplayChangeListenerOperations for VncInterface {
         Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) -> Result<()> {
+    fn dpy_cursor_update(&self, cursor: &DisplayMouse) -> Result<()> {
         if VNC_SERVERS.lock().unwrap().is_empty() {
             return Ok(());
         }
