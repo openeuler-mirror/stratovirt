@@ -10,21 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{
+    cmp,
+    mem::size_of,
+    ptr,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
+
+use anyhow::Result;
+use log::error;
+use once_cell::sync::Lazy;
+
+use machine_manager::event_loop::EventLoop;
+use util::pixman::{pixman_format_code_t, pixman_image_t};
+
 use crate::pixman::{
     create_pixman_image, get_image_data, get_image_height, get_image_stride, get_image_width,
     pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, ColorNames,
     COLOR_TABLE_RGB,
 };
-use anyhow::Result;
-use log::error;
-use machine_manager::event_loop::EventLoop;
-use once_cell::sync::Lazy;
-use std::{
-    cmp, ptr,
-    sync::{Arc, Mutex, Weak},
-    time::Duration,
-};
-use util::pixman::{pixman_format_code_t, pixman_image_t};
 
 static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
     Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));
@@ -119,6 +124,19 @@ pub struct DisplayMouse {
     pub hot_x: u32,
     pub hot_y: u32,
     pub data: Vec<u8>,
+}
+
+impl DisplayMouse {
+    pub fn new(width: u32, height: u32, hot_x: u32, hot_y: u32) -> Self {
+        let data_size = (width * height) as usize * size_of::<u32>();
+        DisplayMouse {
+            width,
+            height,
+            hot_x,
+            hot_y,
+            data: vec![0_u8; data_size],
+        }
+    }
 }
 
 /// UIs (such as VNC) can register interfaces related to image display.

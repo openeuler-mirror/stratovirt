@@ -407,8 +407,6 @@ struct GpuScanout {
     x: u32,
     y: u32,
     resource_id: u32,
-    // Unused with vnc backend, work in others.
-    cursor: VirtioGpuUpdateCursor,
     // Cursor visable
     cursor_visible: bool,
 }
@@ -670,8 +668,10 @@ impl GpuIoHandler {
     }
 
     fn update_cursor_image(&mut self, info_cursor: &VirtioGpuUpdateCursor) {
-        let res_idx = self.get_resource_idx(info_cursor.resource_id);
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_cursor.resource_id, "cmd_update_cursor");
         if res_idx.is_none() {
+            error!("Failed to update cursor image, errcode: {}", error);
             return;
         }
 
@@ -719,8 +719,6 @@ impl GpuIoHandler {
 
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
-            scanout.cursor.pos.x_coord = info_cursor.hot_x;
-            scanout.cursor.pos.y_coord = info_cursor.hot_y;
             if info_cursor.resource_id == 0 && scanout.cursor_visible && scanout.mouse.is_some() {
                 let data = &mut scanout.mouse.as_mut().unwrap().data;
                 // In order to improve performance, displaying cursor by virtio-gpu.
@@ -744,14 +742,8 @@ impl GpuIoHandler {
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
             match &mut scanout.mouse {
                 None => {
-                    let tmp_mouse = DisplayMouse {
-                        height: 64,
-                        width: 64,
-                        hot_x: info_cursor.hot_x,
-                        hot_y: info_cursor.hot_y,
-                        data: vec![0_u8; 64 * 64 * size_of::<u32>()],
-                    };
-                    scanout.mouse = Some(tmp_mouse);
+                    let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
+                    scanout.mouse = Some(mouse);
                 }
                 Some(mouse) => {
                     mouse.hot_x = info_cursor.hot_x;
@@ -764,7 +756,6 @@ impl GpuIoHandler {
             }
             let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
             display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
-            scanout.cursor = info_cursor;
         } else {
             bail!("Wrong header type for cursor queue");
         }
