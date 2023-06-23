@@ -20,7 +20,7 @@ use gtk::{
         ffi::{GDK_KEY_equal, GDK_KEY_minus, GDK_KEY_B, GDK_KEY_F, GDK_KEY_M, GDK_KEY_S},
         ModifierType,
     },
-    glib::{self, object::GObject, translate::ToGlibPtr},
+    glib::{self, gobject_ffi::GObject, translate::ToGlibPtr},
     prelude::{AccelGroupExtManual, NotebookExtManual, ObjectType, WidgetExtManual},
     traits::{
         BoxExt, CheckMenuItemExt, ContainerExt, DialogExt, GtkMenuExt, GtkMenuItemExt,
