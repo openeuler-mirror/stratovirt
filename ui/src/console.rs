@@ -150,7 +150,7 @@ pub trait DisplayChangeListenerOperations {
     /// Update image.
     fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<()>;
     /// Update the cursor data.
-    fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()>;
+    fn dpy_cursor_update(&self, _cursor: &DisplayMouse) -> Result<()>;
     /// Set the current display as major.
     fn dpy_set_major(&self) -> Result<()> {
         Ok(())
@@ -478,7 +478,7 @@ pub fn display_graphic_update(
 /// * `cursor` - data of curosr image.
 pub fn display_cursor_define(
     console: &Option<Weak<Mutex<DisplayConsole>>>,
-    cursor: &mut DisplayMouse,
+    cursor: &DisplayMouse,
 ) -> Result<()> {
     let con = match console.as_ref().and_then(|c| c.upgrade()) {
         Some(c) => c,
@@ -819,7 +819,7 @@ mod tests {
             Ok(())
         }
 
-        fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()> {
+        fn dpy_cursor_update(&self, _cursor: &DisplayMouse) -> Result<()> {
             Ok(())
         }
     }

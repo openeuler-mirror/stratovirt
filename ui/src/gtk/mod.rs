@@ -185,7 +185,7 @@ impl DisplayChangeListenerOperations for GtkInterface {
         Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor_data: &mut DisplayMouse) -> Result<()> {
+    fn dpy_cursor_update(&self, cursor_data: &DisplayMouse) -> Result<()> {
         let mut event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::CursorDefine);
         event.cursor = Some(cursor_data.clone());
