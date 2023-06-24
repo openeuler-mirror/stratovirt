@@ -12,6 +12,7 @@
 
 mod cache;
 mod header;
+mod refcount;
 mod table;
 
 use std::{
@@ -26,7 +27,7 @@ use std::{
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 
-use self::{header::QcowHeader, table::Qcow2Table};
+use self::{header::QcowHeader, refcount::RefCount, table::Qcow2Table};
 
 use super::BlockDriverOps;
 use crate::{file::FileDriver, BlockIoErrorCallback, BlockProperty};
@@ -146,6 +147,7 @@ pub struct Qcow2Driver<T: Clone + 'static> {
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     header: QcowHeader,
     table: Qcow2Table,
+    refcount: RefCount,
 }
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
@@ -156,7 +158,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             driver: FileDriver::new(file, aio, conf),
             sync_aio: sync_aio.clone(),
             header: QcowHeader::default(),
-            table: Qcow2Table::new(sync_aio),
+            table: Qcow2Table::new(sync_aio.clone()),
+            refcount: RefCount::new(sync_aio),
         };
         Ok(qcow2)
     }
