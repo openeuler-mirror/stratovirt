@@ -47,7 +47,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::aio::{
-    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, Iovec, OpCode,
+    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioReqResult, Iovec, OpCode,
     WriteZeroesState,
 };
 use util::byte_code::ByteCode;
@@ -683,7 +683,12 @@ impl BlockIoHandler {
         result
     }
 
-    fn complete_func(aiocb: &AioCb<AioCompleteCb>, ret: i64) -> Result<()> {
+    fn complete_func(aiocb: &AioCb<AioCompleteCb>, mut ret: i64) -> Result<()> {
+        match aiocb.req_is_completed(ret) {
+            AioReqResult::Inflight => return Ok(()),
+            AioReqResult::Error(v) => ret = v,
+            AioReqResult::Done => (),
+        }
         let mut status = if ret < 0 {
             VIRTIO_BLK_S_IOERR
         } else {

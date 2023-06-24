@@ -67,7 +67,6 @@ pub mod vnc;
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -294,17 +293,13 @@ impl VmConfig {
                 ));
             }
         }
-        let mut file = open_file(path, read_only, direct)?;
+        let file = open_file(path, read_only, direct)?;
         let (req_align, buf_align) = get_file_alignment(&file, direct);
         if req_align == 0 || buf_align == 0 {
             bail!(
                 "Failed to detect alignment requirement of drive file {}.",
                 path
             );
-        }
-        let file_size = file.seek(SeekFrom::End(0))?;
-        if file_size & (req_align as u64 - 1) != 0 {
-            bail!("The size of file {} is not aligned to {}.", path, req_align);
         }
         let drive_file = DriveFile {
             file,
