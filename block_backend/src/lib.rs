@@ -19,7 +19,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 use machine_manager::config::DiskFormat;
 use qcow2::Qcow2Driver;
@@ -79,12 +79,23 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
     match prop.format {
         DiskFormat::Raw => {
-            let raw_file = RawDriver::new(file, aio, prop);
+            let mut raw_file = RawDriver::new(file, aio, prop.clone());
+            let file_size = raw_file.disk_size()?;
+            if file_size & (prop.req_align as u64 - 1) != 0 {
+                bail!("The size of raw file is not aligned to {}.", prop.req_align);
+            }
             Ok(Arc::new(Mutex::new(raw_file)))
         }
         DiskFormat::Qcow2 => {
-            let qcow2 = Qcow2Driver::new(file, aio, prop)
+            let mut qcow2 = Qcow2Driver::new(file, aio, prop.clone())
                 .with_context(|| "Failed to create qcow2 driver")?;
+            let file_size = qcow2.disk_size()?;
+            if file_size & (prop.req_align as u64 - 1) != 0 {
+                bail!(
+                    "The size of qcow2 file is not aligned to {}.",
+                    prop.req_align
+                );
+            }
             Ok(Arc::new(Mutex::new(qcow2)))
         }
     }

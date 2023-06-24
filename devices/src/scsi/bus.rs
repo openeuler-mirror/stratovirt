@@ -24,7 +24,7 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use util::aio::{AioCb, Iovec};
+use util::aio::{AioCb, AioReqResult, Iovec};
 use util::AsAny;
 
 /// Scsi Operation code.
@@ -457,7 +457,13 @@ pub struct ScsiCompleteCb {
     pub req: Arc<Mutex<ScsiRequest>>,
 }
 
-pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
+pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, mut ret: i64) -> Result<()> {
+    match aiocb.req_is_completed(ret) {
+        AioReqResult::Inflight => return Ok(()),
+        AioReqResult::Error(v) => ret = v,
+        AioReqResult::Done => (),
+    }
+
     let (status, sense) = if ret < 0 {
         (CHECK_CONDITION, Some(SCSI_SENSE_IO_ERROR))
     } else {

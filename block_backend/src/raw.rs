@@ -17,7 +17,10 @@ use std::{
 
 use anyhow::Result;
 
-use crate::{file::FileDriver, BlockDriverOps, BlockIoErrorCallback, BlockProperty};
+use crate::{
+    file::{CombineRequest, FileDriver},
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty,
+};
 use util::aio::{Aio, Iovec};
 
 pub struct RawDriver<T: Clone + 'static> {
@@ -39,11 +42,17 @@ impl<T: Clone + 'static> RawDriver<T> {
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        self.driver.read_vectored(iovec, offset, completecb)
+        self.driver.read_vectored(
+            vec![CombineRequest::new(iovec.to_vec(), offset as u64)],
+            completecb,
+        )
     }
 
     fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        self.driver.write_vectored(iovec, offset, completecb)
+        self.driver.write_vectored(
+            vec![CombineRequest::new(iovec.to_vec(), offset as u64)],
+            completecb,
+        )
     }
 
     fn write_zeroes(
