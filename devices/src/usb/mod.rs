@@ -13,6 +13,7 @@
 pub mod error;
 pub use anyhow::Result;
 pub use error::UsbError;
+use util::byte_code::ByteCode;
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
@@ -73,6 +74,8 @@ pub struct UsbDeviceRequest {
     pub index: u16,
     pub length: u16,
 }
+
+impl ByteCode for UsbDeviceRequest {}
 
 /// The data transmission channel.
 #[derive(Default, Clone)]
