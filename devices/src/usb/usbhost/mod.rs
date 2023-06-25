@@ -24,7 +24,7 @@ use libusb1_sys::libusb_transfer;
 use log::{error, info, warn};
 use rusb::{
     constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
-    UsbContext,
+    TransferType, UsbContext,
 };
 
 use crate::usb::{
@@ -44,7 +44,10 @@ use machine_manager::{
     event_loop::{register_event_helper, unregister_event_helper},
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback};
+use util::{
+    byte_code::ByteCode,
+    loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback},
+};
 
 mod host_usblib;
 
@@ -65,6 +68,7 @@ pub struct UsbHostRequest {
     /// Async data buffer.
     pub buffer: Vec<u8>,
     pub completed: Arc<Mutex<u32>>,
+    pub is_control: bool,
 }
 
 impl UsbHostRequest {
@@ -72,21 +76,31 @@ impl UsbHostRequest {
         packet: Arc<Mutex<UsbPacket>>,
         host_transfer: *mut libusb_transfer,
         completed: Arc<Mutex<u32>>,
+        is_control: bool,
     ) -> Self {
         Self {
             packet,
             host_transfer,
             buffer: Vec::new(),
             completed,
+            is_control,
         }
     }
 
-    pub fn setup_buffer(&mut self) {
+    pub fn setup_data_buffer(&mut self) {
         let mut locked_packet = self.packet.lock().unwrap();
         let size = locked_packet.get_iovecs_size();
         self.buffer = vec![0; size as usize];
         if locked_packet.pid as u8 == USB_TOKEN_OUT {
             locked_packet.transfer_packet(self.buffer.as_mut(), size as usize);
+        }
+    }
+
+    pub fn setup_ctrl_buffer(&mut self, data_buf: Vec<u8>, device_req: &UsbDeviceRequest) {
+        self.buffer = vec![0; (device_req.length + 8) as usize];
+        self.buffer[..8].copy_from_slice(device_req.as_bytes());
+        if self.packet.lock().unwrap().pid as u8 == USB_TOKEN_OUT {
+            self.buffer[8..].clone_from_slice(&data_buf);
         }
     }
 
@@ -107,6 +121,9 @@ impl UsbHostRequest {
 
             if let Some(transfer) = locked_packet.xfer_ops.as_ref() {
                 if let Some(ops) = transfer.clone().upgrade() {
+                    if self.is_control {
+                        self.ctrl_transfer_packet(&mut locked_packet, 0);
+                    }
                     drop(locked_packet);
                     ops.lock().unwrap().submit_transfer();
                 }
@@ -114,6 +131,19 @@ impl UsbHostRequest {
         }
 
         Ok(())
+    }
+
+    pub fn ctrl_transfer_packet(&self, packet: &mut UsbPacket, actual_length: usize) {
+        let setup_buf = get_buffer_from_transfer(self.host_transfer, 8);
+        let mut len = (setup_buf[7] as usize) << 8 | setup_buf[6] as usize;
+        if len > actual_length {
+            len = actual_length;
+        }
+
+        if packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
+            let data = get_buffer_from_transfer(self.host_transfer, len + 8);
+            packet.transfer_packet(&mut data[8..], len);
+        }
     }
 }
 
@@ -485,43 +515,6 @@ impl UsbHost {
             .halted = false;
     }
 
-    fn control_transfer_pass_through(
-        &mut self,
-        packet: &mut UsbPacket,
-        device_req: &UsbDeviceRequest,
-    ) {
-        if packet.pid as u8 == USB_TOKEN_OUT {
-            if let Err(e) = self.handle.as_ref().unwrap().write_control(
-                device_req.request_type,
-                device_req.request,
-                device_req.value,
-                device_req.index,
-                &self.usb_device.data_buf[..device_req.length as usize],
-                Duration::from_millis(1000),
-            ) {
-                error!("Failed to write control by usb host: {:?}", e);
-                packet.status = UsbPacketStatus::Stall;
-                return;
-            }
-        } else {
-            packet.actual_length = match self.handle.as_ref().unwrap().read_control(
-                device_req.request_type,
-                device_req.request,
-                device_req.value,
-                device_req.index,
-                &mut self.usb_device.data_buf[..device_req.length as usize],
-                Duration::from_millis(1000),
-            ) {
-                Ok(n) => n as u32,
-                Err(e) => {
-                    error!("Failed to read control by usb host: {:?}", e);
-                    0
-                }
-            };
-        };
-        packet.status = UsbPacketStatus::Success;
-    }
-
     fn release_dev_to_host(&mut self) {
         if self.handle.is_none() {
             return;
@@ -594,6 +587,27 @@ impl UsbHost {
             }
             limit -= 1;
         }
+    }
+
+    fn submit_host_transfer(
+        &mut self,
+        host_transfer: *mut libusb_transfer,
+        packet: &Arc<Mutex<UsbPacket>>,
+    ) {
+        match submit_host_transfer(host_transfer) {
+            Ok(()) => {}
+            Err(Error::NoDevice) => {
+                packet.lock().unwrap().status = UsbPacketStatus::NoDev;
+                return;
+            }
+            _ => {
+                packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                return;
+            }
+        };
+
+        packet.lock().unwrap().is_async = true;
+        self.clear_succ_requests();
     }
 }
 
@@ -701,7 +715,28 @@ impl UsbDeviceOps for UsbHost {
             }
             _ => {}
         }
-        self.control_transfer_pass_through(&mut locked_packet, device_req);
+        drop(locked_packet);
+
+        let host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
+        let request = Arc::new(Mutex::new(UsbHostRequest::new(
+            packet.clone(),
+            host_transfer,
+            self.completed.clone(),
+            true,
+        )));
+        request
+            .lock()
+            .unwrap()
+            .setup_ctrl_buffer(self.usb_device.data_buf.clone(), device_req);
+        fill_transfer_by_type(
+            host_transfer,
+            self.handle.as_mut(),
+            0,
+            request,
+            TransferType::Control,
+        );
+
+        self.submit_host_transfer(host_transfer, packet);
     }
 
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
@@ -737,13 +772,20 @@ impl UsbDeviceOps for UsbHost {
                     cloned_packet,
                     host_transfer,
                     self.completed.clone(),
+                    false,
                 )));
-                request.lock().unwrap().setup_buffer();
+                request.lock().unwrap().setup_data_buffer();
                 self.requests.lock().unwrap().push_back(request.clone());
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
                 }
-                fill_bulk_transfer(host_transfer, self.handle.as_mut(), ep_number, request);
+                fill_transfer_by_type(
+                    host_transfer,
+                    self.handle.as_mut(),
+                    ep_number,
+                    request,
+                    TransferType::Bulk,
+                );
             }
             USB_ENDPOINT_ATTR_INT => {
                 host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
@@ -751,13 +793,20 @@ impl UsbDeviceOps for UsbHost {
                     cloned_packet,
                     host_transfer,
                     self.completed.clone(),
+                    false,
                 )));
-                request.lock().unwrap().setup_buffer();
+                request.lock().unwrap().setup_data_buffer();
                 self.requests.lock().unwrap().push_back(request.clone());
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
                 }
-                fill_interrupt_transfer(host_transfer, self.handle.as_mut(), ep_number, request);
+                fill_transfer_by_type(
+                    host_transfer,
+                    self.handle.as_mut(),
+                    ep_number,
+                    request,
+                    TransferType::Interrupt,
+                );
             }
             _ => {
                 error!("Isochronous transmission is not supported by host USB passthrough.");
@@ -765,21 +814,7 @@ impl UsbDeviceOps for UsbHost {
                 return;
             }
         };
-
-        match submit_host_transfer(host_transfer) {
-            Ok(()) => {}
-            Err(Error::NoDevice) => {
-                packet.lock().unwrap().status = UsbPacketStatus::NoDev;
-                return;
-            }
-            _ => {
-                packet.lock().unwrap().status = UsbPacketStatus::Stall;
-                return;
-            }
-        };
-
-        packet.lock().unwrap().is_async = true;
-        self.clear_succ_requests();
+        self.submit_host_transfer(host_transfer, packet);
     }
 
     fn device_id(&self) -> String {

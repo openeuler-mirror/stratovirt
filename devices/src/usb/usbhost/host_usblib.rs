@@ -28,13 +28,14 @@ use libusb1_sys::{
     libusb_get_pollfds, libusb_pollfd, libusb_transfer,
 };
 use log::error;
-use rusb::{Context, DeviceHandle, Error, Result, UsbContext};
+use rusb::{Context, DeviceHandle, Error, Result, TransferType, UsbContext};
 use vmm_sys_util::epoll::EventSet;
 
 use super::{UsbHost, UsbHostRequest};
 use crate::usb::{UsbPacketStatus, USB_TOKEN_IN};
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 
+const CONTROL_TIMEOUT: u32 = 10000; // 10s
 const BULK_TIMEOUT: u32 = 0;
 const INTERRUPT_TIMEOUT: u32 = 0;
 
@@ -72,12 +73,10 @@ pub fn get_request_from_transfer(transfer: *mut libusb_transfer) -> Arc<Mutex<Us
     unsafe { Arc::from_raw((*transfer).user_data.cast::<Mutex<UsbHostRequest>>()) }
 }
 
-pub fn get_buffer_from_transfer(transfer: *mut libusb_transfer) -> &'static mut [u8] {
+pub fn get_buffer_from_transfer(transfer: *mut libusb_transfer, len: usize) -> &'static mut [u8] {
     // SAFETY: cast the raw pointer of transfer's buffer which is transformed
     // from a slice with actual_length to a mutable slice.
-    unsafe {
-        std::slice::from_raw_parts_mut((*transfer).buffer, (*transfer).actual_length as usize)
-    }
+    unsafe { std::slice::from_raw_parts_mut((*transfer).buffer, len) }
 }
 
 pub fn get_length_from_transfer(transfer: *mut libusb_transfer) -> i32 {
@@ -155,7 +154,7 @@ pub fn alloc_host_transfer(iso_packets: c_int) -> *mut libusb_transfer {
     unsafe { libusb1_sys::libusb_alloc_transfer(iso_packets) }
 }
 
-extern "system" fn req_complete_data(host_transfer: *mut libusb_transfer) {
+extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     // SAFETY: transfer is still valid because libusb just completed it
     // but we haven't told anyone yet. user_data remains valid because
     // it is dropped only when the request is completed and removed from
@@ -174,8 +173,10 @@ extern "system" fn req_complete_data(host_transfer: *mut libusb_transfer) {
     let transfer_status = get_status_from_transfer(host_transfer);
     locked_packet.status = map_packet_status(transfer_status);
 
-    if locked_packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
-        let data = get_buffer_from_transfer(host_transfer);
+    if locked_request.is_control {
+        locked_request.ctrl_transfer_packet(&mut locked_packet, actual_length as usize);
+    } else if locked_packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
+        let data = get_buffer_from_transfer(host_transfer, actual_length as usize);
         locked_packet.transfer_packet(data, actual_length as usize);
     }
 
@@ -189,11 +190,12 @@ extern "system" fn req_complete_data(host_transfer: *mut libusb_transfer) {
     locked_request.complete();
 }
 
-pub fn fill_bulk_transfer(
+pub fn fill_transfer_by_type(
     transfer: *mut libusb_transfer,
     handle: Option<&mut DeviceHandle<Context>>,
     ep_number: u8,
     request: Arc<Mutex<UsbHostRequest>>,
+    transfer_type: TransferType,
 ) {
     let packet = request.lock().unwrap().packet.clone();
     let size = packet.lock().unwrap().get_iovecs_size();
@@ -209,55 +211,44 @@ pub fn fill_bulk_transfer(
         return;
     }
 
-    // SAFETY: have checked the validity of parameters of libusb_fill_bulk_transfer
-    // before call libusb_fill_bulk_transfer.
-    unsafe {
-        libusb1_sys::libusb_fill_bulk_transfer(
-            transfer,
-            handle.unwrap().as_raw(),
-            ep_number,
-            buffer_ptr,
-            size as i32,
-            req_complete_data,
-            (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
-            BULK_TIMEOUT,
-        );
-    }
-}
-
-pub fn fill_interrupt_transfer(
-    transfer: *mut libusb_transfer,
-    handle: Option<&mut DeviceHandle<Context>>,
-    ep_number: u8,
-    request: Arc<Mutex<UsbHostRequest>>,
-) {
-    let packet = request.lock().unwrap().packet.clone();
-    let size = packet.lock().unwrap().get_iovecs_size();
-    let buffer_ptr = request.lock().unwrap().buffer.as_mut_ptr();
-
-    if handle.is_none() {
-        error!("Failed to fill interrupt transfer, handle is none");
-        return;
-    }
-
-    if transfer.is_null() {
-        error!("Failed to fill interrupt transfer, transfer is a null pointer");
-        return;
-    }
-
-    // SAFETY: have checked the validity of parameters of libusb_fill_interrupt_transfer
-    // before call libusb_fill_interrupt_transfer.
-    unsafe {
-        libusb1_sys::libusb_fill_interrupt_transfer(
-            transfer,
-            handle.unwrap().as_raw(),
-            ep_number,
-            buffer_ptr,
-            size as i32,
-            req_complete_data,
-            (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
-            INTERRUPT_TIMEOUT,
-        );
+    // SAFETY: have checked the validity of parameters of libusb_fill_*_transfer
+    // before call libusb_fill_*_transfer.
+    match transfer_type {
+        TransferType::Control => unsafe {
+            libusb1_sys::libusb_fill_control_transfer(
+                transfer,
+                handle.unwrap().as_raw(),
+                buffer_ptr,
+                req_complete,
+                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                CONTROL_TIMEOUT,
+            );
+        },
+        TransferType::Bulk => unsafe {
+            libusb1_sys::libusb_fill_bulk_transfer(
+                transfer,
+                handle.unwrap().as_raw(),
+                ep_number,
+                buffer_ptr,
+                size as i32,
+                req_complete,
+                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                BULK_TIMEOUT,
+            );
+        },
+        TransferType::Interrupt => unsafe {
+            libusb1_sys::libusb_fill_interrupt_transfer(
+                transfer,
+                handle.unwrap().as_raw(),
+                ep_number,
+                buffer_ptr,
+                size as i32,
+                req_complete,
+                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                INTERRUPT_TIMEOUT,
+            );
+        },
+        _ => error!("Unsupport transfer type: {:?}", transfer_type),
     }
 }
 
