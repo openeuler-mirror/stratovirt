@@ -13,30 +13,24 @@
 use std::io::prelude::*;
 use std::sync::Mutex;
 
-use crate::unix::gettid;
 use log::{Level, LevelFilter, Log, Metadata, Record, SetLoggerError};
 
-fn format_now() -> String {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
+use crate::time::{get_format_time, gettime};
+use crate::unix::gettid;
 
-    let mut ti: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts);
-        libc::localtime_r(&ts.tv_sec, &mut ti);
-    }
+fn format_now() -> String {
+    let (sec, nsec) = gettime();
+    let format_time = get_format_time(sec as i64);
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}",
-        ti.tm_year + 1900,
-        ti.tm_mon + 1,
-        ti.tm_mday,
-        ti.tm_hour,
-        ti.tm_min,
-        ti.tm_sec,
-        ts.tv_nsec
+        format_time[0],
+        format_time[1],
+        format_time[2],
+        format_time[3],
+        format_time[4],
+        format_time[5],
+        nsec
     )
 }
 

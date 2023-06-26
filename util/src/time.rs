@@ -28,3 +28,34 @@ pub fn mktime64(year: u64, mon: u64, day: u64, hour: u64, min: u64, sec: u64) ->
         * 60
         + sec
 }
+
+/// Get wall time.
+pub fn gettime() -> (u32, u32) {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts);
+    }
+
+    (ts.tv_sec as u32, ts.tv_nsec as u32)
+}
+
+/// Convert wall time to year/month/day/hour/minute/second format.
+pub fn get_format_time(sec: i64) -> [i32; 6] {
+    let mut ti: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&sec, &mut ti);
+    }
+
+    [
+        ti.tm_year + 1900,
+        ti.tm_mon + 1,
+        ti.tm_mday,
+        ti.tm_hour,
+        ti.tm_min,
+        ti.tm_sec,
+    ]
+}
