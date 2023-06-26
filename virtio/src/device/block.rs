@@ -1409,6 +1409,7 @@ mod tests {
         block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
+            "",
             &block.blk_cfg.path_on_host,
             block.blk_cfg.read_only,
             block.blk_cfg.direct,
@@ -1547,6 +1548,7 @@ mod tests {
 
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
+            "",
             &block.blk_cfg.path_on_host,
             block.blk_cfg.read_only,
             block.blk_cfg.direct,

@@ -276,6 +276,7 @@ impl VmConfig {
     /// Add a file to drive file store.
     pub fn add_drive_file(
         drive_files: &mut HashMap<String, DriveFile>,
+        id: &str,
         path: &str,
         read_only: bool,
         direct: bool,
@@ -302,6 +303,7 @@ impl VmConfig {
             );
         }
         let drive_file = DriveFile {
+            id: id.to_string(),
             file,
             count: 1,
             read_only,
@@ -344,6 +346,14 @@ impl VmConfig {
         }
     }
 
+    /// Get drive id from drive file store.
+    pub fn get_drive_id(drive_files: &HashMap<String, DriveFile>, path: &str) -> Result<String> {
+        match drive_files.get(path) {
+            Some(drive_file) => Ok(drive_file.id.clone()),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
     /// Get alignment requirement from drive file store.
     pub fn fetch_drive_align(
         drive_files: &HashMap<String, DriveFile>,
@@ -361,6 +371,7 @@ impl VmConfig {
         for drive in self.drives.values() {
             Self::add_drive_file(
                 &mut drive_files,
+                &drive.id,
                 &drive.path_on_host,
                 drive.read_only,
                 drive.direct,
@@ -370,6 +381,7 @@ impl VmConfig {
             for pflash in pflashs {
                 Self::add_drive_file(
                     &mut drive_files,
+                    "",
                     &pflash.path_on_host,
                     pflash.read_only,
                     false,
