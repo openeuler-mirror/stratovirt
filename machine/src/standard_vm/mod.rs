@@ -1446,9 +1446,12 @@ impl DeviceInterface for StdMachine {
             );
         }
         // Register drive backend file for hotplug drive.
-        if let Err(e) =
-            self.register_drive_file(&args.file.filename, config.read_only, config.direct)
-        {
+        if let Err(e) = self.register_drive_file(
+            &config.id,
+            &args.file.filename,
+            config.read_only,
+            config.direct,
+        ) {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1822,6 +1825,7 @@ impl DeviceInterface for StdMachine {
                     }
                 };
                 if let Err(e) = self.register_drive_file(
+                    &drive_cfg.id,
                     &drive_cfg.path_on_host,
                     drive_cfg.read_only,
                     drive_cfg.direct,

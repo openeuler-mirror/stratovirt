@@ -37,6 +37,8 @@ const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
 /// Represent a single drive backend file.
 pub struct DriveFile {
+    /// Drive id.
+    pub id: String,
     /// The opened file.
     pub file: File,
     /// The num of drives share same file.
