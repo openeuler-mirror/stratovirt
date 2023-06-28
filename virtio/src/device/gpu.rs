@@ -49,10 +49,10 @@ use util::pixman::{
 };
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
-    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, ElemIovec, Element, Queue, VirtioDevice,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
@@ -1232,23 +1232,23 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
         }
 
-        for entry in ents.iter() {
-            match self.mem_space.get_host_address(GuestAddress(entry.addr)) {
-                Some(iov_base) => {
-                    let iov_item = Iovec {
-                        iov_base,
-                        iov_len: entry.length as u64,
-                    };
-                    res.iov.push(iov_item);
-                }
-                None => {
-                    error!("Virtio-GPU: Map entry base {:?} failed", entry.addr);
-                    res.iov.clear();
-                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                }
+        let mut elemiovec = Vec::with_capacity(ents.len());
+        for ent in ents.iter() {
+            elemiovec.push(ElemIovec {
+                addr: GuestAddress(ent.addr),
+                len: ent.length,
+            });
+        }
+        match gpa_hva_iovec_map(&elemiovec, &self.mem_space) {
+            Ok((_, iov)) => {
+                res.iov = iov;
+                self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
+            }
+            Err(e) => {
+                error!("Virtio-GPU: Map entry base failed, {:?}", e);
+                self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)
             }
         }
-        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_detach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {
