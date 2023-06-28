@@ -412,10 +412,8 @@ impl Request {
             return iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
         }
 
-        let block_backend = iohandler
-            .block_backend
-            .as_ref()
-            .with_context(|| "No disk image when handle write zeroes")?;
+        // The block_backend is not None here.
+        let block_backend = iohandler.block_backend.as_ref().unwrap();
         let mut locked_backend = block_backend.lock().unwrap();
         let offset = (sector as usize) << SECTOR_SHIFT;
         let nbytes = (num_sectors as u64) << SECTOR_SHIFT;
