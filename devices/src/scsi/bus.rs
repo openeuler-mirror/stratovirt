@@ -558,6 +558,8 @@ impl ScsiRequest {
             direct: locked_dev.config.direct,
             req_align: locked_dev.req_align,
             buf_align: locked_dev.buf_align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
             file_fd: locked_dev.disk_image.as_ref().unwrap().as_raw_fd(),
             opcode: OpCode::Noop,
             iovec: locked_req.iovec.clone(),
@@ -565,9 +567,6 @@ impl ScsiRequest {
             nbytes: locked_req.cmd.xfer as u64,
             user_data: 0,
             iocompletecb: ScsiCompleteCb { req: s_req.clone() },
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            write_zeroes_unmap: false,
         };
         drop(locked_req);
 

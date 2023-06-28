@@ -126,12 +126,15 @@ pub enum OpCode {
     Fdsync = 3,
     Discard = 4,
     WriteZeroes = 5,
+    WriteZeroesUnmap = 6,
 }
 
 pub struct AioCb<T: Clone> {
     pub direct: bool,
     pub req_align: u32,
     pub buf_align: u32,
+    pub discard: bool,
+    pub write_zeroes: WriteZeroesState,
     pub file_fd: RawFd,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
@@ -139,9 +142,6 @@ pub struct AioCb<T: Clone> {
     pub nbytes: u64,
     pub user_data: u64,
     pub iocompletecb: T,
-    pub discard: bool,
-    pub write_zeroes: WriteZeroesState,
-    pub write_zeroes_unmap: bool,
 }
 
 pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
@@ -230,7 +230,7 @@ impl<T: Clone + 'static> Aio<T> {
         {
             cb.opcode = OpCode::WriteZeroes;
             if cb.write_zeroes == WriteZeroesState::Unmap && cb.discard {
-                cb.write_zeroes_unmap = true;
+                cb.opcode = OpCode::WriteZeroesUnmap;
             }
         }
 
@@ -250,7 +250,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
             OpCode::Discard => self.discard_sync(cb),
-            OpCode::WriteZeroes => self.write_zeroes_sync(cb),
+            OpCode::WriteZeroes | OpCode::WriteZeroesUnmap => self.write_zeroes_sync(cb),
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
         }
     }
@@ -551,7 +551,7 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn write_zeroes_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let mut ret;
-        if cb.write_zeroes_unmap {
+        if cb.opcode == OpCode::WriteZeroesUnmap {
             ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
             if ret == 0 {
                 return (self.complete_func)(&cb, ret);
@@ -713,6 +713,8 @@ mod tests {
             direct,
             req_align: align,
             buf_align: align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
             file_fd,
             opcode,
             iovec,
@@ -720,9 +722,6 @@ mod tests {
             nbytes,
             user_data: 0,
             iocompletecb: 0,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            write_zeroes_unmap: false,
         };
         let mut aio = Aio::new(
             Arc::new(|_: &AioCb<i32>, _: i64| -> Result<()> { Ok(()) }),

@@ -416,7 +416,7 @@ impl Request {
             && flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP
             && iohandler.discard
         {
-            aiocb.write_zeroes_unmap = true;
+            aiocb.opcode = OpCode::WriteZeroesUnmap;
         }
 
         aiocb.offset = (sector as usize) << SECTOR_SHIFT;
@@ -611,6 +611,8 @@ impl BlockIoHandler {
                     direct: self.direct,
                     req_align: self.req_align,
                     buf_align: self.buf_align,
+                    discard: self.discard,
+                    write_zeroes: self.write_zeroes,
                     file_fd: disk_img.as_raw_fd(),
                     opcode: OpCode::Noop,
                     iovec: Vec::new(),
@@ -618,9 +620,6 @@ impl BlockIoHandler {
                     nbytes: 0,
                     user_data: 0,
                     iocompletecb: aiocompletecb,
-                    discard: self.discard,
-                    write_zeroes: self.write_zeroes,
-                    write_zeroes_unmap: false,
                 };
                 req_rc.execute(self, aiocb)?;
             } else {
