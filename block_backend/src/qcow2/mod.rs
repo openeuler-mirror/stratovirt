@@ -12,6 +12,7 @@
 
 mod cache;
 mod header;
+mod table;
 
 use std::{
     cell::RefCell,
@@ -25,7 +26,7 @@ use std::{
 use anyhow::{Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 
-use self::header::QcowHeader;
+use self::{header::QcowHeader, table::Qcow2Table};
 
 use super::BlockDriverOps;
 use crate::{file::FileDriver, BlockIoErrorCallback, BlockProperty};
@@ -39,6 +40,8 @@ const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
 const ENTRY_BITS: u64 = 3;
 const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
 const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
+const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
 const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
 const DEFAULT_SECTOR_SIZE: u64 = 512;
 
@@ -142,15 +145,18 @@ pub struct Qcow2Driver<T: Clone + 'static> {
     driver: FileDriver<T>,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     header: QcowHeader,
+    table: Qcow2Table,
 }
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
     pub fn new(file: File, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
         let fd = file.as_raw_fd();
+        let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(fd, conf.clone())?));
         let qcow2 = Self {
-            driver: FileDriver::new(file, aio, conf.clone()),
-            sync_aio: Rc::new(RefCell::new(SyncAioInfo::new(fd, conf)?)),
+            driver: FileDriver::new(file, aio, conf),
+            sync_aio: sync_aio.clone(),
             header: QcowHeader::default(),
+            table: Qcow2Table::new(sync_aio),
         };
         Ok(qcow2)
     }
