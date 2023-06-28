@@ -221,6 +221,38 @@ impl Request {
         Ok(request)
     }
 
+    fn balloon_deflate_page(&self, hvaset: &mut Vec<(u64, bool)>) {
+        let mut free_len: u64 = 0;
+        let mut start_addr: u64 = 0;
+        let mut last_addr: u64 = 0;
+
+        while let Some((hva, _)) = hvaset.pop() {
+            if last_addr == 0 {
+                free_len += 1;
+                start_addr = hva;
+            } else if hva == last_addr + BALLOON_PAGE_SIZE {
+                free_len += 1;
+            } else {
+                memory_advise(
+                    start_addr as *const libc::c_void as *mut _,
+                    (free_len * BALLOON_PAGE_SIZE) as usize,
+                    libc::MADV_WILLNEED,
+                );
+                free_len = 1;
+                start_addr = hva;
+            }
+
+            last_addr = hva;
+        }
+
+        if free_len != 0 {
+            memory_advise(
+                start_addr as *const libc::c_void as *mut _,
+                (free_len * BALLOON_PAGE_SIZE) as usize,
+                libc::MADV_WILLNEED,
+            );
+        }
+    }
     /// Mark balloon page with `MADV_DONTNEED` or `MADV_WILLNEED`.
     ///
     /// # Arguments
@@ -233,104 +265,117 @@ impl Request {
         address_space: &Arc<AddressSpace>,
         mem: &Arc<Mutex<BlnMemInfo>>,
     ) {
-        let mem_share = mem.lock().unwrap().mem_share();
-        let advice = if req_type && !mem_share {
-            libc::MADV_DONTNEED
-        } else if req_type {
-            libc::MADV_REMOVE
-        } else {
-            libc::MADV_WILLNEED
-        };
         let mut last_addr: u64 = 0;
-        let mut count_iov: u64 = 4;
+        let mut last_share = false;
         let mut free_len: u64 = 0;
         let mut start_addr: u64 = 0;
+        let mut hvaset = Vec::new();
 
         for iov in self.iovec.iter() {
             let mut offset = 0;
-            let mut hvaset = Vec::new();
+
             while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
                 offset += std::mem::size_of::<u32>() as u64;
                 let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
-                let hva = match mem.lock().unwrap().get_host_address(gpa) {
-                    Some(addr) => addr,
+                let (hva, shared) = match mem.lock().unwrap().get_host_address(gpa) {
+                    Some((addr, mem_share)) => (addr, mem_share),
                     None => {
                         // Windows OS will populate the address with PA of 0
                         continue;
                     }
                 };
-                hvaset.push(hva);
+                hvaset.push((hva, shared));
             }
-            hvaset.sort_by_key(|&b| Reverse(b));
-            let host_page_size = host_page_size();
-            // If host_page_size equals BALLOON_PAGE_SIZE, we can directly call the
-            // madvise function without any problem. And if the advice is MADV_WILLNEED,
-            // we just hint the whole host page it lives on, since we can't do anything
-            // smaller.
-            if host_page_size == BALLOON_PAGE_SIZE || advice == libc::MADV_WILLNEED {
-                while let Some(hva) = hvaset.pop() {
-                    if last_addr == 0 {
-                        free_len += 1;
-                        start_addr = hva;
-                    } else if hva == last_addr + BALLOON_PAGE_SIZE {
-                        free_len += 1;
+        }
+        hvaset.sort_by_key(|&b| Reverse(b.0));
+
+        if req_type == BALLOON_DEFLATE_EVENT {
+            self.balloon_deflate_page(&mut hvaset);
+            return;
+        }
+
+        let host_page_size = host_page_size();
+        let mut advice = 0;
+        // If host_page_size equals BALLOON_PAGE_SIZE and have the same share properties,
+        // we can directly call the madvise function without any problem. And if the advice is MADV_WILLNEED,
+        // we just hint the whole host page it lives on, since we can't do anything
+        // smaller.
+        if host_page_size == BALLOON_PAGE_SIZE {
+            while let Some((hva, share)) = hvaset.pop() {
+                if last_addr == 0 {
+                    free_len += 1;
+                    start_addr = hva;
+                    last_share = share;
+                    if share {
+                        advice = libc::MADV_REMOVE;
                     } else {
-                        memory_advise(
-                            start_addr as *const libc::c_void as *mut _,
-                            (free_len * BALLOON_PAGE_SIZE) as usize,
-                            advice,
-                        );
-                        free_len = 1;
-                        start_addr = hva;
+                        advice = libc::MADV_DONTNEED;
                     }
-
-                    if count_iov == iov.iov_len {
-                        memory_advise(
-                            start_addr as *const libc::c_void as *mut _,
-                            (free_len * BALLOON_PAGE_SIZE) as usize,
-                            advice,
-                        );
+                } else if hva == last_addr + BALLOON_PAGE_SIZE && last_share == share {
+                    free_len += 1;
+                } else {
+                    memory_advise(
+                        start_addr as *const libc::c_void as *mut _,
+                        (free_len * BALLOON_PAGE_SIZE) as usize,
+                        advice,
+                    );
+                    free_len = 1;
+                    start_addr = hva;
+                    last_share = share;
+                    if share {
+                        advice = libc::MADV_REMOVE;
+                    } else {
+                        advice = libc::MADV_DONTNEED;
                     }
-                    count_iov += std::mem::size_of::<u32>() as u64;
-                    last_addr = hva;
                 }
-            } else {
-                let mut host_page_bitmap =
-                    BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
-                while let Some(hva) = hvaset.pop() {
-                    if host_page_bitmap.base_address == 0 {
-                        if let Some(base_addr) = round_down(hva, host_page_size) {
-                            host_page_bitmap.base_address = base_addr;
-                        } else {
-                            error!(
-                                "Failed to round_down, hva: {}, align: {}",
-                                hva, host_page_size
-                            );
-                        }
-                    } else if host_page_bitmap.base_address + host_page_size < hva {
-                        host_page_bitmap =
-                            BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
-                        continue;
-                    }
 
-                    if let Err(ref e) =
-                        host_page_bitmap.set_bit((hva % host_page_size) / BALLOON_PAGE_SIZE)
-                    {
+                last_addr = hva;
+            }
+            if free_len != 0 {
+                memory_advise(
+                    start_addr as *const libc::c_void as *mut _,
+                    (free_len * BALLOON_PAGE_SIZE) as usize,
+                    advice,
+                );
+            }
+        } else {
+            let mut host_page_bitmap = BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+            while let Some((hva, share)) = hvaset.pop() {
+                if host_page_bitmap.base_address == 0 {
+                    if let Some(base_addr) = round_down(hva, host_page_size) {
+                        host_page_bitmap.base_address = base_addr;
+                    } else {
                         error!(
-                            "Failed to set bit with index: {} :{:?}",
-                            (hva % host_page_size) / BALLOON_PAGE_SIZE,
-                            e
+                            "Failed to round_down, hva: {}, align: {}",
+                            hva, host_page_size
                         );
                     }
-                    if host_page_bitmap.is_full(host_page_size / BALLOON_PAGE_SIZE) {
-                        memory_advise(
-                            host_page_bitmap.base_address as *const libc::c_void as *mut _,
-                            host_page_size as usize,
-                            advice,
-                        );
-                        host_page_bitmap =
-                            BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+                } else if host_page_bitmap.base_address + host_page_size < hva {
+                    host_page_bitmap = BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+                    continue;
+                }
+
+                if let Err(ref e) =
+                    host_page_bitmap.set_bit((hva % host_page_size) / BALLOON_PAGE_SIZE)
+                {
+                    error!(
+                        "Failed to set bit with index: {} :{:?}",
+                        (hva % host_page_size) / BALLOON_PAGE_SIZE,
+                        e
+                    );
+                }
+                if host_page_bitmap.is_full(host_page_size / BALLOON_PAGE_SIZE) {
+                    if share {
+                        advice = libc::MADV_REMOVE;
+                    } else {
+                        advice = libc::MADV_DONTNEED;
                     }
+                    memory_advise(
+                        host_page_bitmap.base_address as *const libc::c_void as *mut _,
+                        host_page_size as usize,
+                        advice,
+                    );
+                    host_page_bitmap = BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
                 }
             }
         }
@@ -338,18 +383,18 @@ impl Request {
 
     fn release_pages(&self, mem: &Arc<Mutex<BlnMemInfo>>) {
         for iov in self.iovec.iter() {
-            let advice = if mem.lock().unwrap().mem_share() {
-                libc::MADV_REMOVE
-            } else {
-                libc::MADV_DONTNEED
-            };
             let gpa: GuestAddress = iov.iov_base;
-            let hva = match mem.lock().unwrap().get_host_address(gpa) {
-                Some(addr) => addr,
+            let (hva, shared) = match mem.lock().unwrap().get_host_address(gpa) {
+                Some((hva, shared)) => (hva, shared),
                 None => {
                     error!("Can not get host address, gpa: {}", gpa.raw_value());
                     continue;
                 }
+            };
+            let advice = if shared {
+                libc::MADV_REMOVE
+            } else {
+                libc::MADV_DONTNEED
             };
             memory_advise(
                 hva as *const libc::c_void as *mut _,
@@ -372,33 +417,34 @@ struct BlnMemoryRegion {
     flags_padding: u64,
     /// Region Page size
     reg_page_size: Option<u64>,
+    /// Region shared or not
+    mem_share: bool,
 }
 
 struct BlnMemInfo {
     regions: Mutex<Vec<BlnMemoryRegion>>,
     enabled: bool,
-    mem_share: bool,
 }
 
 impl BlnMemInfo {
-    fn new(mem_share: bool) -> BlnMemInfo {
+    fn new() -> BlnMemInfo {
         BlnMemInfo {
             regions: Mutex::new(Vec::new()),
             enabled: false,
-            mem_share,
         }
     }
 
-    fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
+    fn get_host_address(&self, addr: GuestAddress) -> Option<(u64, bool)> {
         let all_regions = self.regions.lock().unwrap();
         for i in 0..all_regions.len() {
             if addr.raw_value() < all_regions[i].guest_phys_addr + all_regions[i].memory_size
                 && addr.raw_value() >= all_regions[i].guest_phys_addr
             {
-                return Some(
+                return Some((
                     all_regions[i].userspace_addr + addr.raw_value()
                         - all_regions[i].guest_phys_addr,
-                );
+                    all_regions[i].mem_share,
+                ));
             }
         }
         None
@@ -428,6 +474,7 @@ impl BlnMemInfo {
                 userspace_addr,
                 flags_padding: 0_u64,
                 reg_page_size,
+                mem_share: fr.owner.get_host_share().unwrap_or(false),
             });
         } else {
             error!("Failed to get host address!");
@@ -444,6 +491,7 @@ impl BlnMemInfo {
                 userspace_addr: host_addr + fr.offset_in_region,
                 flags_padding: 0_u64,
                 reg_page_size,
+                mem_share: false,
             };
             for (index, mr) in mem_regions.iter().enumerate() {
                 if mr.guest_phys_addr == target.guest_phys_addr
@@ -469,11 +517,6 @@ impl BlnMemInfo {
             size += rg.memory_size;
         }
         size
-    }
-
-    /// Get Balloon memory type, shared or private.
-    fn mem_share(&self) -> bool {
-        self.mem_share
     }
 }
 
@@ -862,7 +905,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>, mem_share: bool) -> Balloon {
+    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
@@ -880,7 +923,7 @@ impl Balloon {
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
-            mem_info: Arc::new(Mutex::new(BlnMemInfo::new(mem_share))),
+            mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
             deactivate_evts: Vec::new(),
@@ -1261,7 +1304,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
+        let mut bln = Balloon::new(&bln_cfg, mem_space);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -1310,7 +1353,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let balloon = Balloon::new(&bln_cfg, mem_space);
         let ret_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -1332,7 +1375,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let balloon = Balloon::new(&bln_cfg, mem_space);
         let ret_data = [1, 0, 0, 0, 0, 0, 0, 0];
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr = 0x4;
@@ -1354,7 +1397,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let balloon = Balloon::new(&bln_cfg, mem_space);
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr: u64 = 0xffff_ffff_ffff_ffff;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1375,7 +1418,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let mut balloon = Balloon::new(&bln_cfg, mem_space);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1394,10 +1437,10 @@ mod tests {
             membuf_percent: 0,
             monitor_interval: 0,
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         bln.realize().unwrap();
         let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
-        let blninfo = BlnMemInfo::new(false);
+        let blninfo = BlnMemInfo::new();
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1578,7 +1621,7 @@ mod tests {
             membuf_percent: 0,
             monitor_interval: 0,
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         assert!(bln
             .activate(mem_space, interrupt_cb, &queues, queue_evts)
             .is_err());
@@ -1592,16 +1635,19 @@ mod tests {
         blndef.memory_size = 0x8000;
         blndef.userspace_addr = 0;
 
-        let blninfo = BlnMemInfo::new(false);
+        let blninfo = BlnMemInfo::new();
         assert_eq!(blninfo.priority(), 0);
 
         blninfo.regions.lock().unwrap().push(blndef);
         assert_eq!(blninfo.get_host_address(GuestAddress(0x200)), None);
-        assert_eq!(blninfo.get_host_address(GuestAddress(0x420)), Some(0x20));
+        assert_eq!(
+            blninfo.get_host_address(GuestAddress(0x420)),
+            Some((0x20, false))
+        );
 
         let ram_size = 0x800;
         let ram_fr1 = create_flat_range(0, ram_size, 0);
-        let blninfo = BlnMemInfo::new(false);
+        let blninfo = BlnMemInfo::new();
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1646,7 +1692,7 @@ mod tests {
             monitor_interval: 0,
         };
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
+        let mut bln = Balloon::new(&bln_cfg, mem_space);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
