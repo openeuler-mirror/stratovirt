@@ -370,11 +370,7 @@ pub trait MachineOps {
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_balloon(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
-        let balloon = Arc::new(Mutex::new(Balloon::new(
-            &device_cfg,
-            sys_mem.clone(),
-            vm_config.machine_config.mem_config.mem_share,
-        )));
+        let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         if cfg_args.contains("virtio-balloon-device") {
             let device = VirtioMmioDevice::new(sys_mem, balloon);

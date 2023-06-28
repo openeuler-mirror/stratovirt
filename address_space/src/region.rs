@@ -478,6 +478,16 @@ impl Region {
         self.mem_mapping.as_ref().map(|r| r.host_address())
     }
 
+    pub fn get_host_share(&self) -> Option<bool> {
+        if self.region_type != RegionType::Ram
+            && self.region_type != RegionType::RamDevice
+            && self.region_type != RegionType::RomDevice
+        {
+            return None;
+        }
+        self.mem_mapping.as_ref().map(|r| r.mem_shared())
+    }
+
     /// Get the file information if this region is backed by host-memory.
     /// Return `None` if it is not a Ram-type region.
     pub fn get_file_backend(&self) -> Option<FileBackend> {
