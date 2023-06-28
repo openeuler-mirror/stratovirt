@@ -19,6 +19,11 @@ use std::time::{Duration, Instant};
 
 use libc::{c_void, read, EFD_NONBLOCK};
 use log::warn;
+use nix::errno::Errno;
+use nix::{
+    poll::{ppoll, PollFd, PollFlags},
+    sys::time::TimeSpec,
+};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -468,7 +473,7 @@ impl EventLoopContext {
             }
         }
 
-        self.epoll_wait_manager(self.timers_min_timeout_ms())
+        self.epoll_wait_manager(self.timers_min_duration())
     }
 
     pub fn iothread_run(&mut self) -> Result<bool> {
@@ -479,8 +484,8 @@ impl EventLoopContext {
             }
         }
 
-        let timeout = self.timers_min_timeout_ms();
-        if timeout == -1 {
+        let min_timeout_ns = self.timers_min_duration();
+        if min_timeout_ns.is_none() {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
                 for notifier in self.events.read().unwrap().values() {
                     let status_locked = notifier.status.lock().unwrap();
@@ -494,8 +499,7 @@ impl EventLoopContext {
                 }
             }
         }
-
-        self.epoll_wait_manager(timeout)
+        self.epoll_wait_manager(min_timeout_ns)
     }
 
     /// Call the function given by `func` after `delay` time.
@@ -535,7 +539,7 @@ impl EventLoopContext {
     }
 
     /// Get the expire_time of the soonest Timer, and then translate it to duration.
-    fn timers_min_duration(&self) -> Option<Duration> {
+    pub fn timers_min_duration(&self) -> Option<Duration> {
         // The kick event happens before re-evaluate can be ignored.
         self.kicked.store(false, Ordering::SeqCst);
         let timers = self.timers.lock().unwrap();
@@ -548,34 +552,6 @@ impl EventLoopContext {
                 .expire_time
                 .saturating_duration_since(get_current_time()),
         )
-    }
-
-    fn timers_min_timeout_ms(&self) -> i32 {
-        match self.timers_min_duration() {
-            Some(d) => {
-                let timeout = d.as_millis();
-                if timeout >= i32::MAX as u128 {
-                    i32::MAX - 1
-                } else {
-                    timeout as i32
-                }
-            }
-            None => -1,
-        }
-    }
-
-    pub fn timers_min_timeout_ns(&self) -> i64 {
-        match self.timers_min_duration() {
-            Some(d) => {
-                let timeout = d.as_nanos();
-                if timeout >= i64::MAX as u128 {
-                    i64::MAX
-                } else {
-                    timeout as i64
-                }
-            }
-            None => -1,
-        }
     }
 
     /// Call function of the timers which have already expired.
@@ -598,15 +574,33 @@ impl EventLoopContext {
         }
     }
 
-    fn epoll_wait_manager(&mut self, mut time_out: i32) -> Result<bool> {
-        let need_kick = time_out != 0;
+    fn epoll_wait_manager(&mut self, mut time_out: Option<Duration>) -> Result<bool> {
+        let need_kick = !(time_out.is_some() && *time_out.as_ref().unwrap() == Duration::ZERO);
         if need_kick {
             self.kick_me.store(true, Ordering::SeqCst);
             if self.kicked.load(Ordering::SeqCst) {
-                time_out = 0;
+                time_out = Some(Duration::ZERO);
             }
         }
-        let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
+
+        // When time_out greater then zero, use ppoll as a more precise timer.
+        if time_out.is_some() && *time_out.as_ref().unwrap() != Duration::ZERO {
+            let time_out_spec = Some(TimeSpec::from_duration(*time_out.as_ref().unwrap()));
+            let pollflags = PollFlags::POLLIN | PollFlags::POLLOUT | PollFlags::POLLHUP;
+            let mut pollfds: [PollFd; 1] = [PollFd::new(self.epoll.as_raw_fd(), pollflags)];
+
+            match ppoll(&mut pollfds, time_out_spec, None) {
+                Ok(_) => time_out = Some(Duration::ZERO),
+                Err(e) if e == Errno::EINTR => time_out = Some(Duration::ZERO),
+                Err(e) => return Err(anyhow!(UtilError::EpollWait(e.into()))),
+            };
+        }
+
+        let time_out_ms = match time_out {
+            Some(t) => t.as_millis() as i32,
+            None => -1,
+        };
+        let ev_count = match self.epoll.wait(time_out_ms, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),
