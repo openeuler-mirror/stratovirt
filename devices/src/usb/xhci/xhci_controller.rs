@@ -1003,7 +1003,7 @@ impl XhciDevice {
 
     pub fn detach_slot(&mut self, slot_id: u32) -> Result<()> {
         if slot_id < 1 || slot_id > self.slots.len() as u32 {
-            bail!("Invalid slot id {} while detaching slot", slot_id);
+            return Ok(());
         }
         for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(i - 1) as usize];
