@@ -32,6 +32,7 @@ sysbus = { path = "../sysbus" }
 pci = { path = "../pci" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
+block_backend = { path = "../block_backend"}
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }
