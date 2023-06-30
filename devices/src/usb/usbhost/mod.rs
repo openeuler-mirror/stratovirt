@@ -96,11 +96,11 @@ impl UsbHostRequest {
         }
     }
 
-    pub fn setup_ctrl_buffer(&mut self, data_buf: Vec<u8>, device_req: &UsbDeviceRequest) {
+    pub fn setup_ctrl_buffer(&mut self, data_buf: &[u8], device_req: &UsbDeviceRequest) {
         self.buffer = vec![0; (device_req.length + 8) as usize];
         self.buffer[..8].copy_from_slice(device_req.as_bytes());
         if self.packet.lock().unwrap().pid as u8 == USB_TOKEN_OUT {
-            self.buffer[8..].clone_from_slice(&data_buf);
+            self.buffer[8..].copy_from_slice(data_buf);
         }
     }
 
@@ -724,10 +724,10 @@ impl UsbDeviceOps for UsbHost {
             self.completed.clone(),
             true,
         )));
-        request
-            .lock()
-            .unwrap()
-            .setup_ctrl_buffer(self.usb_device.data_buf.clone(), device_req);
+        request.lock().unwrap().setup_ctrl_buffer(
+            &self.usb_device.data_buf[..device_req.length as usize],
+            device_req,
+        );
         fill_transfer_by_type(
             host_transfer,
             self.handle.as_mut(),
