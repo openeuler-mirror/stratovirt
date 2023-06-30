@@ -58,6 +58,8 @@ pub trait BlockDriverOps<T: Clone>: Send {
 
     fn flush_request(&mut self) -> Result<()>;
 
+    fn drain_request(&self);
+
     fn register_io_event(
         &mut self,
         device_broken: Arc<AtomicBool>,

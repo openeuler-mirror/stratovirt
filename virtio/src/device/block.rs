@@ -412,10 +412,8 @@ impl Request {
             return iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
         }
 
-        let block_backend = iohandler
-            .block_backend
-            .as_ref()
-            .with_context(|| "No disk image when handle write zeroes")?;
+        // The block_backend is not None here.
+        let block_backend = iohandler.block_backend.as_ref().unwrap();
         let mut locked_backend = block_backend.lock().unwrap();
         let offset = (sector as usize) << SECTOR_SHIFT;
         let nbytes = (num_sectors as u64) << SECTOR_SHIFT;
@@ -1208,9 +1206,13 @@ impl VirtioDevice for Block {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        // Stop receiving virtqueue requests and drain incomplete IO.
         unregister_event_helper(self.blk_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
         if let Some(block_backend) = self.block_backend.as_ref() {
-            block_backend.lock().unwrap().unregister_io_event()?;
+            let mut block_backend = block_backend.lock().unwrap();
+            // Must drain requests before unregister.
+            block_backend.drain_request();
+            block_backend.unregister_io_event()?;
         }
         self.update_evts.clear();
         self.senders.clear();

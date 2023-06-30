@@ -17,7 +17,7 @@ use std::{
     os::unix::prelude::{AsRawFd, RawFd},
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -38,6 +38,7 @@ use util::{
 pub struct FileDriver<T: Clone + 'static> {
     file: File,
     aio: Rc<RefCell<Aio<T>>>,
+    incomplete: Arc<AtomicU64>,
     delete_evts: Vec<RawFd>,
     block_prop: BlockProperty,
 }
@@ -46,6 +47,7 @@ impl<T: Clone + 'static> FileDriver<T> {
     pub fn new(file: File, aio: Aio<T>, block_prop: BlockProperty) -> Self {
         Self {
             file,
+            incomplete: aio.incomplete_cnt.clone(),
             aio: Rc::new(RefCell::new(aio)),
             delete_evts: Vec::new(),
             block_prop,
@@ -126,6 +128,12 @@ impl<T: Clone + 'static> FileDriver<T> {
 
     pub fn flush_request(&mut self) -> Result<()> {
         self.aio.borrow_mut().flush_request()
+    }
+
+    pub fn drain_request(&self) {
+        while self.incomplete.load(Ordering::Acquire) != 0 {
+            continue;
+        }
     }
 
     pub fn register_io_event(
