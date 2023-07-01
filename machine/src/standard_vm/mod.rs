@@ -1037,12 +1037,19 @@ impl StdMachine {
                 let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
                 let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
                 let productid = args.productid.as_ref().unwrap_or(&default_value);
+
                 cfg_args = format!(
                     "{},hostbus={},hostaddr={},vendorid={},productid={}",
                     cfg_args, hostbus, hostaddr, vendorid, productid
                 );
                 if args.hostport.is_some() {
                     cfg_args = format!("{},hostport={}", cfg_args, args.hostport.as_ref().unwrap());
+                }
+                if args.isobufs.is_some() {
+                    cfg_args = format!("{},isobufs={}", cfg_args, args.isobufs.as_ref().unwrap());
+                }
+                if args.isobsize.is_some() {
+                    cfg_args = format!("{},isobsize={}", cfg_args, args.isobsize.as_ref().unwrap());
                 }
 
                 self.add_usb_host(&mut locked_vmconfig, &cfg_args)?;

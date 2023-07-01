@@ -851,23 +851,28 @@ Six properties can be set for USB Host.
 * hostport: the physical number of the usb host device.
 * vendorid: the vendor ID of the usb host device.
 * productid: the product ID of the usb host device.
+* isobufs: the number of Isochronous Transfers buffer. If not set, default is 4.
+* isobsize: the size of Isochronous Transfers buffer. If not set, default is 32.
 
 Pass through the host device identified by bus and addr:
 
 ```shell
--device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>
+-device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Pass through the host device identified by bus and physical port:
 
 ```shell
--device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>
+-device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Pass through the host device identified by the vendor and product ID:
 
 ```shell
--device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>
+-device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Note:
