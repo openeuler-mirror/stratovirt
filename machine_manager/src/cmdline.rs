@@ -454,14 +454,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true),
         )
         .arg(
-            Arg::with_name("display")
-            .multiple(false)
-            .long("display")
-            .value_name("gtk")
-            .help("set display for virtual machine: currently only supports gtk")
-            .takes_value(true),
-        )
-        .arg(
             Arg::with_name("windows_emu_pid")
             .multiple(false)
             .long("windows_emu_pid")
@@ -491,6 +483,16 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .value_name("<parameters>")
             .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
             .takes_values(true),
+    );
+
+    #[cfg(feature = "gtk")]
+    let parser = parser.arg(
+        Arg::with_name("display")
+            .multiple(false)
+            .long("display")
+            .value_name("gtk")
+            .help("set display for virtual machine: currently only supports gtk")
+            .takes_value(true),
     );
 
     parser
@@ -528,6 +530,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
+    #[cfg(feature = "gtk")]
     add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
     add_args_to_config!(
         (args.value_of("windows_emu_pid")),

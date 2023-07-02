@@ -16,6 +16,8 @@ vmm-sys-util = "0.11.1"
 once_cell = "1.18.0"
 sscanf = "0.4.1"
 bitintr = "0.3.0"
+gtk = { version = "0.17.1", optional = true }
+gettext-rs = { version = "0.7.0", features = ["gettext-system"], optional = true }
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
 
@@ -23,5 +25,6 @@ util = { path = "../util" }
 rustls = "0.21.1"
 rustls-pemfile = "1.0.2"
 sasl2-sys = "0.1.20"
-gtk = "0.17.1"
-gettext-rs = { version = "0.7.0", features = ["gettext-system"] }
+
+[features]
+gtk = ["dep:gtk", "dep:gettext-rs", "machine_manager/gtk"]

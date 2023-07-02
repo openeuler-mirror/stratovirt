@@ -12,6 +12,7 @@
 
 #[cfg(feature = "usb_camera")]
 pub mod camera;
+#[cfg(feature = "gtk")]
 pub mod display;
 pub mod error;
 pub mod vnc;
@@ -50,6 +51,7 @@ pub use chardev::*;
 #[cfg(feature = "demo_device")]
 pub use demo_dev::*;
 pub use devices::*;
+#[cfg(feature = "gtk")]
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
@@ -130,6 +132,7 @@ pub struct VmConfig {
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
+    #[cfg(feature = "gtk")]
     pub display: Option<DisplayConfig>,
     #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
