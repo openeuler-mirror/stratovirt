@@ -15,7 +15,7 @@ use devices::legacy::FwCfgEntryType;
 use mod_test::libdriver::fwcfg::{bios_args, FW_CFG_BASE};
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libtest::test_init;
-use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 use mod_test::utils::{swap_u16, swap_u32};
 
 use std::cell::RefCell;
@@ -187,7 +187,7 @@ fn test_boot_index() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
 
     let dev_path = "/pci@ffffffffffffffff/scsi@1/disk@0,0\n\0".to_string();
 

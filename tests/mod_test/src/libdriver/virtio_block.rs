@@ -25,6 +25,7 @@ use crate::libdriver::virtio::{
     TestVringDescEntry, VIRTIO_F_BAD_FEATURE, VIRTIO_RING_F_EVENT_IDX, VIRTIO_RING_F_INDIRECT_DESC,
 };
 use crate::libtest::{test_init, TestState};
+use crate::utils::ImageType;
 use crate::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
 
 pub const VIRTIO_BLK_F_BARRIER: u64 = 0;
@@ -110,6 +111,7 @@ impl TestVirtBlkReq {
 }
 
 pub fn create_blk(
+    image_type: &ImageType,
     image_path: Rc<String>,
     device_args: Rc<String>,
     drive_args: Rc<String>,
@@ -122,6 +124,10 @@ pub fn create_blk(
     let pci_slot: u8 = 0x4;
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
+    let img_type = match image_type {
+        &ImageType::Raw => "raw",
+        &ImageType::Qcow2 => "qcow2",
+    };
 
     let mut args: Vec<&str> = "-machine virt".split(' ').collect();
     extra_args.append(&mut args);
@@ -133,8 +139,8 @@ pub fn create_blk(
     args = blk_pci_args[..].split(' ').collect();
     extra_args.append(&mut args);
     let blk_args = format!(
-        "-drive if=none,id=drive0,file={},format=raw{}",
-        image_path, drive_args,
+        "-drive if=none,id=drive0,file={},format={}{}",
+        image_path, img_type, drive_args,
     );
     args = blk_args.split(' ').collect();
     extra_args.append(&mut args);
@@ -425,18 +431,25 @@ pub fn virtio_blk_default_feature(blk: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
     features
 }
 
-pub fn set_up() -> (
+pub fn set_up(
+    image_type: &ImageType,
+) -> (
     Rc<RefCell<TestVirtioPciDev>>,
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
     Rc<String>,
 ) {
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, image_type));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false"));
     let other_args = Rc::new(String::from(""));
-    let (blk, test_state, alloc) =
-        create_blk(image_path.clone(), device_args, drive_args, other_args);
+    let (blk, test_state, alloc) = create_blk(
+        image_type,
+        image_path.clone(),
+        device_args,
+        drive_args,
+        other_args,
+    );
 
     (blk, test_state, alloc, image_path)
 }
