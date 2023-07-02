@@ -1146,6 +1146,7 @@ dependencies = [
  "byteorder",
  "devices",
  "hex",
+ "libc",
  "machine",
  "rand",
  "serde",

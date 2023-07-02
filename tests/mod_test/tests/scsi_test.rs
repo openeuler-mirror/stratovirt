@@ -29,7 +29,7 @@ use mod_test::libdriver::virtio::{
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
-use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 
 const TEST_VIRTIO_SCSI_CDB_SIZE: usize = 32;
 const TEST_VIRTIO_SCSI_SENSE_SIZE: usize = 96;
@@ -126,7 +126,7 @@ impl VirtioScsiTest {
         image_size: u64,
         iothread: bool,
     ) -> VirtioScsiTest {
-        let image_path = Rc::new(create_img(image_size, 1));
+        let image_path = Rc::new(create_img(image_size, 1, &ImageType::Raw));
 
         let cntlrcfg = CntlrConfig {
             id: 0,
@@ -1864,7 +1864,7 @@ fn aio_model_test() {
 
     if aio_probe(AioEngine::IoUring).is_ok() {
         // Scsi Disk 1. AIO io_uring. Direct false.
-        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw));
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
@@ -1879,7 +1879,7 @@ fn aio_model_test() {
 
         // Scsi Disk 2. AIO io_uring. Direct true.
         lun += 1;
-        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw));
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
@@ -1898,7 +1898,7 @@ fn aio_model_test() {
 
     //Scsi Disk 4. AIO OFF. Direct false.
     lun += 1;
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw));
     device_vec.push(ScsiDeviceConfig {
         cntlr_id: 0,
         device_type: ScsiDeviceType::ScsiHd,
@@ -1916,7 +1916,7 @@ fn aio_model_test() {
     if aio_probe(AioEngine::Native).is_ok() {
         // Scsi Disk 6. AIO native. Direct true.
         lun += 1;
-        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw));
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,

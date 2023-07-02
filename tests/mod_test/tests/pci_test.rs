@@ -21,7 +21,7 @@ use mod_test::libdriver::virtio_block::{
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
-use mod_test::utils::{cleanup_img, create_img, read_le_u16, TEST_IMAGE_SIZE};
+use mod_test::utils::{cleanup_img, create_img, read_le_u16, ImageType, TEST_IMAGE_SIZE};
 
 use serde_json::json;
 use std::cell::RefCell;
@@ -226,7 +226,7 @@ fn build_blk_driver_args(blk_nums: u8) -> (Vec<String>, Vec<String>) {
     let mut image_paths: Vec<String> = Vec::new();
 
     for i in 0..blk_nums {
-        let image_path = create_img(TEST_IMAGE_SIZE, 1);
+        let image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
         image_paths.push(image_path.clone());
         let driver_arg_str = format!(
             "-drive if=none,id=drive-{},file={},format=raw,direct=false",
@@ -764,7 +764,7 @@ fn hotplug_blk(
     slot: u8,
     func: u8,
 ) {
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 2:0:0.
@@ -1030,7 +1030,7 @@ fn test_pci_device_discovery_003() {
     );
 
     let blk_id = 1;
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 1:0:0.
@@ -1071,7 +1071,7 @@ fn test_pci_device_discovery_004() {
     )));
 
     let blk_id = 0;
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose id is 0 and bdf is 1:0:0.
@@ -1871,7 +1871,7 @@ fn test_pci_hotplug_003() {
     let (test_state, _machine, alloc, mut image_paths) =
         set_up(root_port_nums, blk_nums, true, false);
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose id is 0, bdf is 1:1:0.
@@ -1894,7 +1894,7 @@ fn test_pci_hotplug_004() {
     let (test_state, _machine, alloc, mut image_paths) =
         set_up(root_port_nums, blk_nums, true, false);
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     let hotplug_blk_id = 1;
@@ -1916,7 +1916,7 @@ fn test_pci_hotplug_005() {
     let (test_state, _machine, alloc, mut image_paths) =
         set_up(root_port_nums, blk_nums, true, false);
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     let hotplug_blk_id = 0;
@@ -1939,7 +1939,7 @@ fn test_pci_hotplug_006() {
     let (test_state, _machine, alloc, mut image_paths) =
         set_up(root_port_nums, blk_nums, true, false);
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     let hotplug_blk_id = 0;
@@ -1979,7 +1979,7 @@ fn test_pci_hotplug_007() {
     let slot = 0;
     let func = 0;
     let hotplug_blk_id = 0;
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 1:0:0.
@@ -2399,7 +2399,7 @@ fn test_pci_hotplug_combine_001() {
     )));
 
     let hotplug_blk_id = 0;
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 1:0:0.
@@ -2455,7 +2455,7 @@ fn test_pci_hotplug_combine_001() {
     );
 
     let hotplug_blk_id = 1;
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 1:0:0.
@@ -2640,7 +2640,7 @@ fn test_pci_hotplug_combine_003() {
     let ret = test_state.borrow().qmp(&delete_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
 
     // Hotplug a block device whose bdf is 1:0:0.
@@ -2654,7 +2654,7 @@ fn test_pci_hotplug_combine_003() {
     power_off_device(root_port.clone());
     test_state.borrow().wait_qmp_event();
 
-    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1);
+    let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =

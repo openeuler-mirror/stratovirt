@@ -24,12 +24,12 @@ use devices::usb::{
     UsbDeviceRequest,
 };
 
-use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::usb::{
     TestIovec, TestUsbBuilder, TestXhciPciDevice, CONTROL_ENDPOINT_ID, PRIMARY_INTERRUPTER_ID,
     STORAGE_DEVICE_IN_ENDPOINT_ID, STORAGE_DEVICE_OUT_ENDPOINT_ID,
 };
 use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use mod_test::{libdriver::malloc::GuestAllocator, utils::ImageType};
 
 const READ_10: u8 = 0x28;
 const WRITE_10: u8 = 0x2a;
@@ -174,7 +174,7 @@ fn csw_phase(
 ///   0/1/2/3/4/5/6/7: success.
 #[test]
 fn usb_storage_basic() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "disk")
@@ -272,7 +272,7 @@ fn usb_storage_basic() {
 ///   0/1/2: success.
 #[test]
 fn usb_storage_functional_reset() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, _) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -312,7 +312,7 @@ fn usb_storage_functional_reset() {
 ///   2: Stallerror.
 #[test]
 fn usb_storage_functional_get_max_lun() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -371,7 +371,7 @@ fn usb_storage_functional_get_max_lun() {
 ///   1: StallError.
 #[test]
 fn usb_storage_illegal_request() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, _) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -410,7 +410,7 @@ fn usb_storage_illegal_request() {
 ///   1: CBW StallError.
 #[test]
 fn usb_storage_cbw_signature() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -448,7 +448,7 @@ fn usb_storage_cbw_signature() {
 ///   1: CBW StallError.
 #[test]
 fn usb_storage_cbw_illegal_size() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -485,7 +485,7 @@ fn usb_storage_cbw_illegal_size() {
 ///   2: CSW StallError.
 #[test]
 fn usb_storage_csw_illegal_size() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -532,7 +532,7 @@ fn usb_storage_csw_illegal_size() {
 ///   2: CSW StallError.
 #[test]
 fn usb_storage_abnormal_phase_01() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -588,7 +588,7 @@ fn usb_storage_abnormal_phase_01() {
 ///   3: CSW StallError.
 #[test]
 fn usb_storage_abnormal_phase_02() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -645,7 +645,7 @@ fn usb_storage_abnormal_phase_02() {
 ///   2: CBW StallError.
 #[test]
 fn usb_storage_abnormal_phase_03() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -703,7 +703,7 @@ fn usb_storage_abnormal_phase_03() {
 ///   2: CSW StallError.
 #[test]
 fn usb_storage_illegal_scsi_cdb() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -755,7 +755,7 @@ fn usb_storage_illegal_scsi_cdb() {
 ///   2: StallError.
 #[test]
 fn insufficient_data_buffer_test() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -808,7 +808,7 @@ fn insufficient_data_buffer_test() {
 ///   2: CSW status = UsbMsdCswStatus::Failed.
 #[test]
 fn usb_storage_not_supported_scsi_cdb() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -860,7 +860,7 @@ fn usb_storage_not_supported_scsi_cdb() {
 ///   1: CBW StallError.
 #[test]
 fn usb_storage_cbw_invalid_endpoint() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
@@ -904,7 +904,7 @@ fn usb_storage_cbw_invalid_endpoint() {
 ///   2: CSW StallError.
 #[test]
 fn usb_storage_csw_invalid_endpoint() {
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
     let (xhci, test_state, guest_allocator) = TestUsbBuilder::new()
         .with_xhci("xhci")
         .with_usb_storage(&image_path, "cdrom")
