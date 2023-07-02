@@ -13,7 +13,7 @@
 #[cfg(not(target_env = "musl"))]
 pub mod console;
 pub mod error;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "gtk")]
 pub mod gtk;
 pub mod input;
 #[cfg(not(target_env = "musl"))]

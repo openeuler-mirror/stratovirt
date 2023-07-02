@@ -46,7 +46,7 @@ use devices::legacy::{
 use devices::pci::{PciDevOps, PciHost};
 use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
@@ -62,8 +62,10 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
+#[cfg(feature = "gtk")]
+use ui::gtk::gtk_display_init;
 #[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
+use ui::vnc::vnc_init;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
@@ -634,6 +636,7 @@ impl MachineOps for StdMachine {
     #[cfg(not(target_env = "musl"))]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
+        #[cfg(feature = "gtk")]
         match vm_config.display {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
