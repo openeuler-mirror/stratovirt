@@ -409,6 +409,61 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(l2_table_entry)
     }
 
+    /// Write back to disk synchronously, with a range no greater than cluster size.
+    fn sync_write_bytes(&mut self, guest_offset: u64, buf: &[u8]) -> Result<()> {
+        if buf.len() > self.header.cluster_size() as usize
+            || guest_offset as usize + buf.len() > self.virtual_disk_size() as usize
+        {
+            bail!("Buffer size: is out of range",);
+        }
+        // Return if the address is not allocated.
+        if let HostOffset::DataAddress(host_offset) = self.host_offset_for_write(guest_offset)? {
+            self.sync_aio.borrow_mut().write_buffer(host_offset, buf)?;
+        }
+        Ok(())
+    }
+
+    /// Write zero data to cluster data as many as possible, and return the total number of
+    /// cluster.
+    /// Note: the guest offset should align to cluster size.
+    fn zero_in_l2_slice(&mut self, guest_offset: u64, nb_cluster: u64) -> Result<u64> {
+        // Zero flag is only support by version 3.
+        // If this flag is not supported, then  transfer write_zero to discard.
+        if self.header.version < 3 {
+            return self.discard_in_l2_slice(guest_offset, nb_cluster, &Qcow2DiscardType::Request);
+        }
+
+        let l2_index = self.table.get_l2_table_index(guest_offset);
+        let l2_slice_size = self.header.cluster_size() >> ENTRY_BITS;
+        let nb_cluster = std::cmp::min(nb_cluster, l2_slice_size - l2_index);
+        let table_entry = self.get_table_cluster(guest_offset)?;
+        for i in 0..nb_cluster {
+            let new_l2_index = l2_index + i;
+            let old_l2_entry = table_entry
+                .borrow_mut()
+                .get_entry_map(new_l2_index as usize)?;
+            let entry_type = Qcow2ClusterType::get_cluster_type(old_l2_entry);
+            let mut new_l2_entry = old_l2_entry;
+            let unmap: bool = entry_type.is_allocated();
+            if unmap {
+                new_l2_entry = 0;
+            }
+            new_l2_entry |= QCOW2_OFLAG_ZERO;
+
+            if new_l2_entry == old_l2_entry {
+                continue;
+            }
+
+            table_entry
+                .borrow_mut()
+                .set_entry_map(new_l2_index as usize, new_l2_entry)?;
+            if unmap {
+                self.qcow2_free_cluster(old_l2_entry, &Qcow2DiscardType::Request)?;
+            }
+        }
+        Ok(nb_cluster)
+    }
+
     /// Discard the data as many as possibale, and return the total number of cluster.
     /// Note: the guest_offset should align to cluster size.
     fn discard_in_l2_slice(
@@ -1204,7 +1259,35 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
         self.process_discards(args, OpCode::Discard, false)
     }
 
-    fn process_discards(&mut self, completecb: T, opcode: OpCode, _unmap: bool) -> Result<()> {
+    /// Align to cluster size and write zeroes.
+    fn qcow2_cluster_write_zeroes(&mut self, offset: u64, nbytes: u64) -> Result<()> {
+        // Offset and offset + nbytes should align to cluster size.
+        if !is_aligned(self.header.cluster_size(), offset | nbytes) {
+            return Ok(());
+        }
+
+        let mut nb_cluster = bytes_to_clusters(nbytes, self.header.cluster_size())?;
+        let mut guest_offset = offset;
+        while nb_cluster > 0 {
+            match self.zero_in_l2_slice(guest_offset, nb_cluster) {
+                Ok(cleared) => {
+                    nb_cluster -= cleared;
+                    guest_offset += cleared * self.header.cluster_size();
+                }
+                Err(e) => {
+                    error!("Write zero: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        self.table
+            .flush_l2_table_cache()
+            .unwrap_or_else(|e| error!("Flush l2 table cache failed: {:?}", e));
+        Ok(())
+    }
+
+    fn process_discards(&mut self, completecb: T, opcode: OpCode, unmap: bool) -> Result<()> {
         let mut req_list = Vec::new();
         for task in self.refcount.discard_list.iter() {
             req_list.push(CombineRequest {
@@ -1213,9 +1296,17 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
                 nbytes: task.nbytes,
             })
         }
+
         match opcode {
             OpCode::Discard => {
-                self.driver.discard(req_list, completecb)?;
+                self.driver
+                    .discard(req_list, completecb)
+                    .unwrap_or_else(|e| error!("Discard failed: {}", e));
+            }
+            OpCode::WriteZeroes => {
+                self.driver
+                    .write_zeroes(req_list, completecb, unmap)
+                    .unwrap_or_else(|e| error!("Write zero failed: {}", e));
             }
             _ => {
                 bail!("Unsuppoerted opcode: {:?}", opcode);
@@ -1320,12 +1411,51 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
     fn write_zeroes(
         &mut self,
-        _offset: usize,
-        _nbytes: u64,
-        _completecb: T,
-        _unmap: bool,
+        offset: usize,
+        nbytes: u64,
+        completecb: T,
+        unmap: bool,
     ) -> Result<()> {
-        bail!("write zero not supported now");
+        let file_size = self.header.size;
+        let align_size = self.header.cluster_size();
+        let mut offset_start = std::cmp::min(offset as u64, file_size);
+        let offset_end = std::cmp::min(offset_start + nbytes, file_size);
+        let mut total_bytes = offset_end.checked_sub(offset_start).with_context(|| {
+            format!(
+                "Write zeroes: ofset: {} nbytes: {} out of range",
+                offset, nbytes
+            )
+        })?;
+        let mut head = offset_start % align_size;
+        let tail = offset_end % align_size;
+
+        while total_bytes > 0 {
+            let mut num = total_bytes;
+            if head != 0 {
+                num = std::cmp::min(num, align_size - head);
+                head = (head + num) % align_size;
+            } else if tail != 0 && num > align_size {
+                num -= tail;
+            }
+
+            // Writing buffer with zero to disk for the addr that
+            // is not aligned with cluster size.
+            // The write order is: head -> offset align to cluster size -> tail.
+            if !is_aligned(self.header.cluster_size(), offset_start | num) {
+                let buf: Vec<u8> = vec![0; num as usize];
+                if let Err(e) = self.sync_write_bytes(offset_start, &buf) {
+                    error!("Write zero failed: {:?}", e);
+                    break;
+                }
+            } else if let Err(e) = self.qcow2_cluster_write_zeroes(offset_start, num) {
+                error!("Write zero failed: {:?}", e);
+                break;
+            }
+
+            total_bytes -= num;
+            offset_start += num;
+        }
+        self.process_discards(completecb, OpCode::WriteZeroes, unmap)
     }
 
     fn flush_request(&mut self) -> Result<()> {
@@ -1494,6 +1624,15 @@ mod test {
             .split('\t')
             .collect::<Vec<&str>>();
         serde_json::from_str::<u64>(str_out[0]).unwrap()
+    }
+
+    fn vec_is_zero(vec: &[u8]) -> bool {
+        for elem in vec {
+            if elem != &0 {
+                return false;
+            }
+        }
+        true
     }
 
     struct TestData {
@@ -1823,5 +1962,70 @@ mod test {
         assert!(qcow2_driver.discard(0, 1 << image_bits, ()).is_ok());
         let image_size_2 = get_disk_size(Rc::new(path.to_string()));
         assert_eq!(image_size_1, image_size_2 + (1 << image_bits) / 1024);
+    }
+
+    #[test]
+    fn test_write_zero_basic() {
+        // Create a new image, with size = 16M, cluster_size = 64K.
+        let path = "/tmp/discard_write_zero.qcow2";
+        let image_bits = 24;
+        let cluster_bits = 16;
+        let conf = BlockProperty {
+            format: DiskFormat::Qcow2,
+            iothread: None,
+            direct: true,
+            req_align: 512,
+            buf_align: 512,
+            discard: true,
+            write_zeroes: WriteZeroesState::On,
+        };
+        let image = TestImage::new(path, image_bits, cluster_bits);
+        let mut qcow2_driver = image.create_qcow2_driver(conf);
+
+        // Test 1.
+        let mut test_buf: Vec<u8> = vec![1_u8; 65536 * 6];
+        let test_data = vec![
+            TestData::new(0, 65536),
+            TestData::new(0, 65536 + 32768),
+            TestData::new(0, 65536 * 2),
+            TestData::new(0, 65536 + 32768),
+        ];
+        let offset_start = 0;
+        let mut guest_offset = offset_start;
+        assert!(qcow2_write(&mut qcow2_driver, &test_buf, offset_start).is_ok());
+        for data in test_data.iter() {
+            assert!(qcow2_driver
+                .write_zeroes(guest_offset, data.sz as u64, (), true)
+                .is_ok());
+            let mut tmp_buf = vec![1_u8; data.sz];
+            assert!(qcow2_read(&mut qcow2_driver, &mut tmp_buf, guest_offset).is_ok());
+            assert!(vec_is_zero(&tmp_buf));
+            guest_offset += data.sz;
+        }
+        assert!(qcow2_read(&mut qcow2_driver, &mut test_buf, offset_start).is_ok());
+        assert!(vec_is_zero(&test_buf));
+
+        // Test 2.
+        let mut test_buf: Vec<u8> = vec![1_u8; 65536 * 6];
+        let test_data = vec![
+            TestData::new(0, 65536),
+            TestData::new(0, 65536 + 32768),
+            TestData::new(0, 65536 * 2),
+            TestData::new(0, 65536 + 32768),
+        ];
+        let offset_start = 459752;
+        let mut guest_offset = offset_start;
+        assert!(qcow2_write(&mut qcow2_driver, &test_buf, offset_start).is_ok());
+        for data in test_data.iter() {
+            assert!(qcow2_driver
+                .write_zeroes(guest_offset, data.sz as u64, (), true)
+                .is_ok());
+            let mut tmp_buf = vec![1_u8; data.sz];
+            assert!(qcow2_read(&mut qcow2_driver, &mut tmp_buf, guest_offset).is_ok());
+            assert!(vec_is_zero(&tmp_buf));
+            guest_offset += data.sz;
+        }
+        assert!(qcow2_read(&mut qcow2_driver, &mut test_buf, offset_start).is_ok());
+        assert!(vec_is_zero(&test_buf));
     }
 }
