@@ -500,3 +500,391 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 pub fn is_aligned(cluster_sz: u64, offset: u64) -> bool {
     offset & (cluster_sz - 1) == 0
 }
+
+#[cfg(test)]
+mod test {
+    use std::{
+        fs::remove_file,
+        io::{Seek, SeekFrom, Write},
+        os::unix::fs::OpenOptionsExt,
+    };
+
+    use machine_manager::config::DiskFormat;
+    use util::{
+        aio::{iov_to_buf_direct, WriteZeroesState},
+        file::get_file_alignment,
+    };
+
+    use super::*;
+
+    const CLUSTER_SIZE: u64 = 64 * 1024;
+
+    struct TestImage {
+        pub path: String,
+        pub file: File,
+    }
+
+    impl TestImage {
+        fn new(path: &str, img_bits: u32, cluster_bits: u32) -> TestImage {
+            let cluster_sz = 1 << cluster_bits;
+            let header = QcowHeader {
+                magic: crate::qcow2::header::QCOW_MAGIC,
+                version: 3,
+                backing_file_offset: 0,
+                backing_file_size: 0,
+                cluster_bits,
+                size: 1 << img_bits,
+                crypt_method: 0,
+                l1_size: 1 << (img_bits - (cluster_bits * 2 - 3)),
+                l1_table_offset: 3 * cluster_sz,
+                refcount_table_offset: cluster_sz,
+                refcount_table_clusters: 1,
+                nb_snapshots: 0,
+                snapshots_offset: 0,
+                incompatible_features: 0,
+                compatible_features: 0,
+                autoclear_features: 0,
+                refcount_order: 4,
+                header_length: std::mem::size_of::<QcowHeader>() as u32,
+            };
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+                .open(path)
+                .unwrap();
+            file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
+                .unwrap();
+            file.write_all(&header.to_vec()).unwrap();
+
+            // Cluster 1 is the refcount table.
+            assert_eq!(header.refcount_table_offset, cluster_sz * 1);
+            let mut refcount_table = [0_u8; ENTRY_SIZE as usize];
+            BigEndian::write_u64(&mut refcount_table, cluster_sz * 2);
+            file.seek(SeekFrom::Start(cluster_sz * 1)).unwrap();
+            file.write_all(&refcount_table).unwrap();
+
+            // Clusters which has been allocated.
+            assert_eq!(header.refcount_order, 4);
+            let clusters =
+                3 + ((header.l1_size * ENTRY_SIZE as u32 + cluster_sz as u32 - 1) >> cluster_bits);
+            let mut refcount_block = Vec::new();
+            for _ in 0..clusters {
+                refcount_block.push(0x00);
+                refcount_block.push(0x01);
+            }
+            file.seek(SeekFrom::Start(cluster_sz * 2)).unwrap();
+            file.write_all(&refcount_block).unwrap();
+            TestImage {
+                path: path.to_string(),
+                file,
+            }
+        }
+    }
+
+    impl Drop for TestImage {
+        fn drop(&mut self) {
+            remove_file(&self.path).unwrap()
+        }
+    }
+
+    struct TestData {
+        data: u8,
+        sz: usize,
+    }
+
+    impl TestData {
+        fn new(data: u8, sz: usize) -> Self {
+            Self { data, sz }
+        }
+    }
+
+    struct TestRwCase {
+        riovec: Vec<Iovec>,
+        wiovec: Vec<Iovec>,
+        data: Vec<TestData>,
+        offset: usize,
+        sz: u64,
+    }
+
+    fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
+        let mut image = TestImage::new(path, 30, 16);
+        fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
+            Ok(())
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(path)
+            .unwrap();
+        let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
+        let (req_align, buf_align) = get_file_alignment(&image.file, true);
+        let conf = BlockProperty {
+            format: DiskFormat::Qcow2,
+            iothread: None,
+            direct: true,
+            req_align,
+            buf_align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+        };
+        image.file = file.try_clone().unwrap();
+        (image, Qcow2Driver::new(file, aio, conf).unwrap())
+    }
+
+    fn qcow2_read(qcow2: &mut Qcow2Driver<()>, buf: &mut [u8], offset: usize) -> Result<()> {
+        qcow2.read_vectored(
+            &[Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: buf.len() as u64,
+            }],
+            offset,
+            (),
+        )
+    }
+
+    fn qcow2_write(qcow2: &mut Qcow2Driver<()>, buf: &[u8], offset: usize) -> Result<()> {
+        qcow2.write_vectored(
+            &[Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: buf.len() as u64,
+            }],
+            offset,
+            (),
+        )
+    }
+
+    #[test]
+    fn test_read_zero() {
+        let path = "/tmp/block_backend_test_read_zero.qcow2";
+        let (mut image, mut qcow2) = create_qcow2(path);
+        let org_len = image.file.seek(SeekFrom::End(0)).unwrap();
+
+        let mut buf = vec![1_u8; 128];
+        qcow2_read(&mut qcow2, &mut buf, 40).unwrap();
+        assert_eq!(buf, vec![0; 128]);
+        let mut buf = vec![2_u8; 512];
+        qcow2_read(&mut qcow2, &mut buf, 65536).unwrap();
+        assert_eq!(buf, vec![0; 512]);
+        let mut buf = vec![3_u8; 600];
+        qcow2_read(&mut qcow2, &mut buf, 655350).unwrap();
+        assert_eq!(buf, vec![0; 600]);
+
+        let len = image.file.seek(SeekFrom::End(0)).unwrap();
+        assert_eq!(org_len, len);
+    }
+
+    #[test]
+    fn test_write_single_cluster() {
+        let path = "/tmp/block_backend_test_write_single_cluster.qcow2";
+        let (_, mut qcow2) = create_qcow2(path);
+
+        let wbuf = vec![7_u8; CLUSTER_SIZE as usize];
+        qcow2_write(&mut qcow2, &wbuf, 0).unwrap();
+        let mut rbuf = vec![0_u8; CLUSTER_SIZE as usize];
+        qcow2_read(&mut qcow2, &mut rbuf, 0).unwrap();
+        assert_eq!(rbuf, wbuf);
+
+        let wbuf = vec![5_u8; 1000];
+        qcow2_write(&mut qcow2, &wbuf, 2000).unwrap();
+        let mut rbuf = vec![0_u8; 1000];
+        qcow2_read(&mut qcow2, &mut rbuf, 2000).unwrap();
+        assert_eq!(rbuf, wbuf);
+    }
+
+    #[test]
+    fn test_write_multi_cluster() {
+        let path = "/tmp/block_backend_test_write_multi_cluster.qcow2";
+        let (_, mut qcow2) = create_qcow2(path);
+
+        let mut offset = 0;
+        let cnt: u8 = 2;
+        let sz = 100 * 1000;
+        for i in 0..cnt {
+            let buf = vec![i + 1; sz];
+            qcow2_write(&mut qcow2, &buf, offset).unwrap();
+            offset += buf.len();
+        }
+        let mut offset = 0;
+        for i in 0..cnt {
+            let mut buf = vec![i + 1; sz];
+            qcow2_read(&mut qcow2, &mut buf, offset).unwrap();
+            for (_, item) in buf.iter().enumerate() {
+                assert_eq!(item, &(i + 1));
+            }
+            offset += buf.len();
+        }
+    }
+
+    #[test]
+    fn test_invalid_read_write() {
+        let path = "/tmp/block_backend_test_invalid_read_write.qcow2";
+        let (_, mut qcow2) = create_qcow2(path);
+
+        let mut buf = vec![0_u8; 100];
+        let disk_size = qcow2.disk_size().unwrap();
+        let res = qcow2_write(&mut qcow2, &buf, disk_size as usize + 1);
+        assert!(res.is_err());
+
+        let res = qcow2_read(&mut qcow2, &mut buf, disk_size as usize + 100);
+        assert!(res.is_err());
+    }
+
+    fn generate_iovecs(
+        buf_list: &mut Vec<Vec<u8>>,
+        list: &Vec<TestData>,
+    ) -> (Vec<Iovec>, Vec<Iovec>) {
+        let mut riovec = Vec::new();
+        let mut wiovec = Vec::new();
+        for item in list {
+            let buf = vec![0_u8; item.sz];
+            riovec.push(Iovec::new(buf.as_ptr() as u64, buf.len() as u64));
+            buf_list.push(buf);
+            let buf = vec![item.data; item.sz];
+            wiovec.push(Iovec::new(buf.as_ptr() as u64, buf.len() as u64));
+            buf_list.push(buf);
+        }
+        (riovec, wiovec)
+    }
+
+    fn generate_rw_case_list() -> (Vec<TestRwCase>, Vec<Vec<u8>>) {
+        let mut list = Vec::new();
+        let mut buf_list = Vec::new();
+        let test_data = vec![
+            TestData::new(1, 100_000),
+            TestData::new(2, 100_000),
+            TestData::new(3, 100_000),
+        ];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 12590,
+            sz: 100_000 * 3,
+        });
+
+        let test_data = vec![
+            TestData::new(1, 1_000),
+            TestData::new(2, 100_000),
+            TestData::new(3, 10_000),
+            TestData::new(4, 20_000),
+            TestData::new(5, 80_000),
+        ];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 8935201,
+            sz: 211_000,
+        });
+
+        (list, buf_list)
+    }
+
+    #[test]
+    fn test_read_write_vectored() {
+        let path = "/tmp/block_backend_test_read_write_vectored.qcow2";
+        let (_, mut qcow2) = create_qcow2(path);
+        let (case_list, _buf_list) = generate_rw_case_list();
+        for case in &case_list {
+            qcow2.write_vectored(&case.wiovec, case.offset, ()).unwrap();
+            qcow2.read_vectored(&case.riovec, case.offset, ()).unwrap();
+
+            let mut wbuf = vec![0; case.sz as usize];
+            let mut rbuf = vec![0; case.sz as usize];
+            let wsz = iov_to_buf_direct(&case.wiovec, 0, &mut wbuf).unwrap();
+            let rsz = iov_to_buf_direct(&case.riovec, 0, &mut rbuf).unwrap();
+            assert_eq!(wsz, case.sz as usize);
+            assert_eq!(rsz, case.sz as usize);
+            assert_eq!(wbuf, rbuf);
+        }
+    }
+
+    fn generate_rw_random_list() -> (Vec<TestRwCase>, Vec<Vec<u8>>) {
+        let mut list = Vec::new();
+        let mut buf_list = Vec::new();
+        let test_data = vec![TestData::new(1, CLUSTER_SIZE as usize)];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 0,
+            sz: CLUSTER_SIZE,
+        });
+        let test_data = vec![TestData::new(2, CLUSTER_SIZE as usize)];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 2 * CLUSTER_SIZE as usize,
+            sz: CLUSTER_SIZE,
+        });
+        let test_data = vec![TestData::new(3, CLUSTER_SIZE as usize)];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 4 * CLUSTER_SIZE as usize,
+            sz: CLUSTER_SIZE,
+        });
+        let test_data = vec![TestData::new(4, CLUSTER_SIZE as usize)];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 1 * CLUSTER_SIZE as usize,
+            sz: CLUSTER_SIZE,
+        });
+        let test_data = vec![TestData::new(5, CLUSTER_SIZE as usize)];
+        let (riovec, wiovec) = generate_iovecs(&mut buf_list, &test_data);
+        list.push(TestRwCase {
+            riovec,
+            wiovec,
+            data: test_data,
+            offset: 3 * CLUSTER_SIZE as usize,
+            sz: CLUSTER_SIZE,
+        });
+
+        (list, buf_list)
+    }
+
+    #[test]
+    fn test_read_write_random() {
+        let path = "/tmp/block_backend_test_read_write_random.qcow2";
+        let (_, mut qcow2) = create_qcow2(path);
+        let (mut case_list, _buf_list) = generate_rw_random_list();
+        for case in &case_list {
+            qcow2.write_vectored(&case.wiovec, case.offset, ()).unwrap();
+            qcow2.read_vectored(&case.riovec, case.offset, ()).unwrap();
+
+            let mut wbuf = vec![0; case.sz as usize];
+            let mut rbuf = vec![0; case.sz as usize];
+            let wsz = iov_to_buf_direct(&case.wiovec, 0, &mut wbuf).unwrap();
+            let rsz = iov_to_buf_direct(&case.riovec, 0, &mut rbuf).unwrap();
+            assert_eq!(wsz, case.sz as usize);
+            assert_eq!(rsz, case.sz as usize);
+            assert_eq!(wbuf, rbuf);
+        }
+
+        // read all write data once.
+        let buf = vec![0_u8; 5 * CLUSTER_SIZE as usize];
+        let riovecs = vec![Iovec::new(buf.as_ptr() as u64, 5 * CLUSTER_SIZE)];
+        qcow2.read_vectored(&riovecs, 0, ()).unwrap();
+
+        case_list.sort_by(|a, b| a.offset.cmp(&b.offset));
+        let mut idx = 0;
+        for case in case_list.iter() {
+            for item in case.data.iter() {
+                assert_eq!(buf[idx..(idx + item.sz)].to_vec(), vec![item.data; item.sz]);
+                idx += item.sz;
+            }
+        }
+    }
+}
