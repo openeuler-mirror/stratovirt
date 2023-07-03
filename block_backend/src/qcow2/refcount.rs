@@ -14,22 +14,58 @@ use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use util::aio::OpCode;
 
-use crate::qcow2::{
-    bytes_to_clusters,
-    cache::{CacheTable, Qcow2Cache, ENTRY_SIZE_U16},
-    header::QcowHeader,
-    is_aligned, SyncAioInfo, ENTRY_SIZE,
+use crate::{
+    qcow2::{
+        bytes_to_clusters,
+        cache::{CacheTable, Qcow2Cache, ENTRY_SIZE_U16},
+        header::QcowHeader,
+        is_aligned, SyncAioInfo, ENTRY_SIZE,
+    },
+    BlockProperty,
 };
 
 // The max refcount table size default is 4 clusters;
 const MAX_REFTABLE_NUM: u32 = 4;
+
+#[derive(Eq, PartialEq, Clone)]
+pub enum Qcow2DiscardType {
+    Never,
+    Always,
+    Request,
+    Snapshot,
+    Other,
+}
+
+#[derive(Clone, Default)]
+pub struct DiscardTask {
+    pub offset: u64,
+    pub nbytes: u64,
+}
+
+impl DiscardTask {
+    pub fn is_overlap(&self, task: &DiscardTask) -> bool {
+        !(self.offset > task.offset + task.nbytes || task.offset > self.offset + self.nbytes)
+    }
+
+    pub fn merge_task(&mut self, task: &DiscardTask) {
+        let offset = std::cmp::min(self.offset, task.offset);
+        let end_offset = std::cmp::max(self.offset + self.nbytes, task.offset + task.nbytes);
+        let nbytes = end_offset - offset;
+        self.offset = offset;
+        self.nbytes = nbytes;
+    }
+}
 
 #[derive(Clone)]
 pub struct RefCount {
     pub refcount_table: Vec<u64>,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     refcount_blk_cache: Qcow2Cache,
+    pub discard_list: Vec<DiscardTask>,
+    /// Pass the discard operation if refcount of cluster decrease to 0.
+    pub discard_passthrough: Vec<Qcow2DiscardType>,
     free_cluster_index: u64,
     refcount_table_offset: u64,
     refcount_table_clusters: u32,
@@ -50,6 +86,8 @@ impl RefCount {
             refcount_table: Vec::new(),
             sync_aio,
             refcount_blk_cache: Qcow2Cache::new(MAX_REFTABLE_NUM as usize),
+            discard_list: Vec::new(),
+            discard_passthrough: Vec::new(),
             free_cluster_index: 0,
             refcount_table_offset: 0,
             refcount_table_clusters: 0,
@@ -62,7 +100,14 @@ impl RefCount {
         }
     }
 
-    pub fn init_refcount_info(&mut self, header: &QcowHeader) {
+    pub fn init_refcount_info(&mut self, header: &QcowHeader, conf: BlockProperty) {
+        // Update discard_pass_through depend on config.
+        self.discard_passthrough.push(Qcow2DiscardType::Always);
+        if conf.discard {
+            self.discard_passthrough.push(Qcow2DiscardType::Request);
+            self.discard_passthrough.push(Qcow2DiscardType::Snapshot);
+        }
+
         self.refcount_table_offset = header.refcount_table_offset;
         self.refcount_table_clusters = header.refcount_table_clusters;
         self.refcount_table_size =
@@ -139,7 +184,13 @@ impl RefCount {
 
         // Free the old cluster of refcount table.
         let clusters = bytes_to_clusters(old_rct_size, self.cluster_size).unwrap();
-        self.update_refcount(old_rct_offset, clusters, false, 1, true)?;
+        self.update_refcount(
+            old_rct_offset,
+            clusters,
+            -1,
+            true,
+            &Qcow2DiscardType::Snapshot,
+        )?;
         info!(
             "Qcow2 extends refcount table success, offset 0x{:x} -> 0x{:x}",
             old_rct_offset, self.refcount_table_offset
@@ -152,9 +203,9 @@ impl RefCount {
         &mut self,
         offset: u64,
         clusters: u64,
-        is_add: bool,
-        addend: u16,
+        added: i32,
         flush: bool,
+        discard_type: &Qcow2DiscardType,
     ) -> Result<()> {
         if self.offset_into_cluster(offset) != 0 {
             bail!("Failed to update refcount, offset is not aligned to cluster");
@@ -184,10 +235,10 @@ impl RefCount {
             i += num as u64;
         }
 
-        let idx = self.set_refcount_blocks(&rc_vec, is_add, addend);
+        let idx = self.set_refcount_blocks(&rc_vec, added, discard_type);
         if idx != rc_vec.len() {
             // Revert the updating operation for refount block.
-            let rev_idx = self.set_refcount_blocks(&rc_vec[..idx], !is_add, addend);
+            let rev_idx = self.set_refcount_blocks(&rc_vec[..idx], -added, discard_type);
             let status = if rev_idx == idx { "success" } else { "failed" };
             bail!("Failed to set refcounts, recover {}", status);
         }
@@ -200,14 +251,20 @@ impl RefCount {
     fn set_refcount_blocks(
         &mut self,
         rc_vec: &[(u64, u64, usize)],
-        is_add: bool,
-        addend: u16,
+        added: i32,
+        discard_type: &Qcow2DiscardType,
     ) -> usize {
         for (i, (rt_idx, rb_idx, num)) in rc_vec.iter().enumerate() {
-            let ret = self.set_refcount(*rt_idx, *rb_idx, *num, is_add, addend);
+            let ret = self.set_refcount(*rt_idx, *rb_idx, *num, added, discard_type);
             if let Err(err) = ret {
-                error!("Set refcount failed, rt_idx {}, rb_idx {}, clusters {}, is_add {}, addend {}, {}",
-                       rt_idx, rb_idx, num, is_add, addend, err.to_string());
+                error!(
+                    "Set refcount failed, rt_idx {}, rb_idx {}, clusters {}, added {}, {}",
+                    rt_idx,
+                    rb_idx,
+                    num,
+                    added,
+                    err.to_string()
+                );
                 return i;
             }
         }
@@ -240,9 +297,11 @@ impl RefCount {
         rt_idx: u64,
         rb_idx: u64,
         clusters: usize,
-        is_add: bool,
-        addend: u16,
+        added: i32,
+        discard_type: &Qcow2DiscardType,
     ) -> Result<()> {
+        let is_add = added > 0;
+        let added_value = added.unsigned_abs() as u16;
         if !self.refcount_blk_cache.contains_keys(rt_idx) {
             self.load_refcount_block(rt_idx).with_context(|| {
                 format!("Failed to get refcount block cache, index is {}", rt_idx)
@@ -260,25 +319,34 @@ impl RefCount {
             let mut rc_value = borrowed_entry.get_entry_map(rb_idx as usize + i)? as u16;
             rc_value = if is_add {
                 rc_value
-                    .checked_add(addend)
+                    .checked_add(added_value)
                     .filter(|&v| v <= self.refcount_max as u16)
                     .with_context(|| {
                         format!(
                             "Refcount {} add {} cause overflows, index is {}",
-                            rc_value, addend, i
+                            rc_value, added_value, i
                         )
                     })?
             } else {
-                rc_value.checked_sub(addend).with_context(|| {
+                rc_value.checked_sub(added_value).with_context(|| {
                     format!(
                         "Refcount {} sub {} cause overflows, index is {}",
-                        rc_value, addend, i
+                        rc_value, added_value, i
                     )
                 })?
             };
             let cluster_idx = rt_idx * self.refcount_blk_size as u64 + rb_idx + i as u64;
-            if rc_value == 0 && cluster_idx < self.free_cluster_index {
-                self.free_cluster_index = cluster_idx;
+            if rc_value == 0 {
+                if self.discard_passthrough.contains(discard_type) {
+                    // update refcount discard.
+                    let offset = cluster_idx * self.cluster_size;
+                    let nbytes = self.cluster_size;
+                    self.update_discard_list(offset, nbytes)?;
+                }
+
+                if cluster_idx < self.free_cluster_index {
+                    self.free_cluster_index = cluster_idx;
+                }
             }
             rb_vec.push(rc_value);
         }
@@ -325,6 +393,36 @@ impl RefCount {
         let rc_value = cache_entry.borrow_mut().get_entry_map(rb_idx).unwrap();
 
         Ok(rc_value as u16)
+    }
+
+    /// Add discard task to the list.
+    fn update_discard_list(&mut self, offset: u64, nbytes: u64) -> Result<()> {
+        let mut discard_task = DiscardTask { offset, nbytes };
+        let mut discard_list: Vec<DiscardTask> = Vec::new();
+        for task in self.discard_list.iter() {
+            if discard_task.is_overlap(task) {
+                discard_task.merge_task(task);
+            } else {
+                discard_list.push(task.clone());
+            }
+        }
+        discard_list.push(discard_task);
+        self.discard_list = discard_list;
+        Ok(())
+    }
+
+    /// Process discards task by sync aio.
+    pub fn sync_process_discards(&mut self, opcode: OpCode) -> Result<()> {
+        for task in self.discard_list.iter() {
+            let offset = task.offset;
+            let nbytes = task.nbytes;
+            let mut borrowed_sync_aio = self.sync_aio.borrow_mut();
+            let discard_aio =
+                borrowed_sync_aio.package_sync_aiocb(opcode, Vec::new(), offset as usize, nbytes);
+            borrowed_sync_aio.aio.submit_request(discard_aio)?;
+        }
+        self.discard_list.clear();
+        Ok(())
     }
 
     pub fn offset_into_cluster(&self, offset: u64) -> u64 {
@@ -430,7 +528,7 @@ impl RefCount {
     pub fn alloc_cluster(&mut self, header: &mut QcowHeader, size: u64) -> Result<u64> {
         let addr = self.find_free_cluster(header, size)?;
         let clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
-        self.update_refcount(addr, clusters, true, 1, true)?;
+        self.update_refcount(addr, clusters, 1, true, &Qcow2DiscardType::Other)?;
         Ok(addr)
     }
 
@@ -497,8 +595,8 @@ mod test {
     use anyhow::Result;
     use byteorder::{BigEndian, ByteOrder};
 
-    use crate::qcow2::header::*;
     use crate::qcow2::*;
+    use crate::qcow2::{header::*, refcount::Qcow2DiscardType};
     use machine_manager::config::DiskFormat;
     use util::aio::{Aio, AioCb, WriteZeroesState};
 
@@ -671,11 +769,11 @@ mod test {
         let mut refcount = qcow2.refcount.clone();
 
         // Add refcount for the first cluster.
-        let ret = refcount.update_refcount(0, 1, true, 1, true);
+        let ret = refcount.update_refcount(0, 1, 1, true, &Qcow2DiscardType::Never);
         assert!(ret.is_ok());
 
         // Test invalid cluster offset.
-        let ret = refcount.update_refcount(1 << 63, 1, true, 1, true);
+        let ret = refcount.update_refcount(1 << 63, 1, 1, true, &Qcow2DiscardType::Never);
         if let Err(err) = ret {
             // 16 bit is cluster bits, 15 is refcount block bits.
             let err_msg = format!("Invalid refcount table index {}", 1_u64 << (63 - 15 - 16));
@@ -685,7 +783,13 @@ mod test {
         }
 
         // Test refcount block not in cache.
-        let ret = refcount.update_refcount(1 << (cluster_bits * 2), 1, true, 1, true);
+        let ret = refcount.update_refcount(
+            1 << (cluster_bits * 2),
+            1,
+            1,
+            true,
+            &Qcow2DiscardType::Never,
+        );
         if let Err(err) = ret {
             let err_msg = format!("Invalid refcount block address 0x0, index is 2");
             assert_eq!(err.to_string(), err_msg);
@@ -705,11 +809,11 @@ mod test {
         let mut refcount = qcow2.refcount.clone();
 
         // Add refcount for the first cluster.
-        let ret = refcount.set_refcount(0, 0, 1, true, 1);
+        let ret = refcount.set_refcount(0, 0, 1, 1, &Qcow2DiscardType::Never);
         assert!(ret.is_ok());
 
         // Test refcount overflow.
-        let ret = refcount.set_refcount(0, 0, 1, true, 65535);
+        let ret = refcount.set_refcount(0, 0, 1, 65535, &Qcow2DiscardType::Never);
         if let Err(err) = ret {
             let err_msg = format!("Refcount 2 add 65535 cause overflows, index is 0");
             assert_eq!(err.to_string(), err_msg);
@@ -718,7 +822,7 @@ mod test {
         }
 
         // Test refcount underflow.
-        let ret = refcount.set_refcount(0, 0, 1, false, 65535);
+        let ret = refcount.set_refcount(0, 0, 1, -65535, &Qcow2DiscardType::Never);
         if let Err(err) = ret {
             let err_msg = format!("Refcount 2 sub 65535 cause overflows, index is 0");
             assert_eq!(err.to_string(), err_msg);

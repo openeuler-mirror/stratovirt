@@ -127,7 +127,7 @@ pub struct AioEvent {
     pub res: i64,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OpCode {
     Noop = 0,
     Preadv = 1,

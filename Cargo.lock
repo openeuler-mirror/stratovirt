@@ -195,6 +195,7 @@ dependencies = [
  "log",
  "machine_manager",
  "once_cell",
+ "serde_json",
  "thiserror",
  "util",
  "vmm-sys-util",
