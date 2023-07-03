@@ -41,6 +41,12 @@ pub enum Qcow2ClusterType {
 }
 
 impl Qcow2ClusterType {
+    pub fn is_allocated(&self) -> bool {
+        self.eq(&Qcow2ClusterType::Compressed)
+            || self.eq(&Qcow2ClusterType::Normal)
+            || self.eq(&Qcow2ClusterType::ZeroAlloc)
+    }
+
     pub fn is_read_zero(&self) -> bool {
         if self.eq(&Qcow2ClusterType::Unallocated)
             || self.eq(&Qcow2ClusterType::ZeroAlloc)
@@ -188,7 +194,7 @@ impl Qcow2Table {
         Ok(())
     }
 
-    fn flush_l2_table_cache(&self) -> Result<()> {
+    pub fn flush_l2_table_cache(&self) -> Result<()> {
         for (_idx, entry) in self.l2_table_cache.iter() {
             let mut borrowed_entry = entry.borrow_mut();
             if !borrowed_entry.dirty_info.is_dirty {
