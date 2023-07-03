@@ -439,3 +439,280 @@ impl RefCount {
         )
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::{
+        fs::{remove_file, File},
+        io::{Seek, SeekFrom, Write},
+        os::unix::fs::{FileExt, OpenOptionsExt},
+        sync::Arc,
+    };
+
+    use anyhow::Result;
+    use byteorder::{BigEndian, ByteOrder};
+
+    use crate::qcow2::header::*;
+    use crate::qcow2::*;
+    use machine_manager::config::DiskFormat;
+    use util::aio::{Aio, AioCb, WriteZeroesState};
+
+    fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
+        Ok(())
+    }
+
+    fn image_create(path: &str, img_bits: u32, cluster_bits: u32) -> File {
+        let cluster_sz = 1 << cluster_bits;
+        let header = QcowHeader {
+            magic: QCOW_MAGIC,
+            version: 3,
+            backing_file_offset: 0,
+            backing_file_size: 0,
+            cluster_bits: cluster_bits,
+            size: 1 << img_bits,
+            crypt_method: 0,
+            l1_size: 1 << (img_bits - (cluster_bits * 2 - 3)),
+            l1_table_offset: 3 * cluster_sz,
+            refcount_table_offset: cluster_sz,
+            refcount_table_clusters: 1,
+            nb_snapshots: 0,
+            snapshots_offset: 0,
+            incompatible_features: 0,
+            compatible_features: 0,
+            autoclear_features: 0,
+            refcount_order: 4,
+            header_length: std::mem::size_of::<QcowHeader>() as u32,
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+            .open(path)
+            .unwrap();
+        file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
+            .unwrap();
+        file.write_all(&header.to_vec()).unwrap();
+
+        // Cluster 1 is the refcount table.
+        assert_eq!(header.refcount_table_offset, cluster_sz * 1);
+        let mut refcount_table = [0_u8; ENTRY_SIZE as usize];
+        BigEndian::write_u64(&mut refcount_table, cluster_sz * 2);
+        file.seek(SeekFrom::Start(cluster_sz * 1)).unwrap();
+        file.write_all(&refcount_table).unwrap();
+
+        // Clusters which has been allocated.
+        assert_eq!(header.refcount_order, 4);
+        let clusters =
+            3 + ((header.l1_size * ENTRY_SIZE as u32 + cluster_sz as u32 - 1) >> cluster_bits);
+        let mut refcount_block = Vec::new();
+        for _ in 0..clusters {
+            refcount_block.push(0x00);
+            refcount_block.push(0x01);
+        }
+        file.seek(SeekFrom::Start(cluster_sz * 2)).unwrap();
+        file.write_all(&refcount_block).unwrap();
+
+        file
+    }
+
+    fn create_qcow2_driver(
+        path: &str,
+        img_bits: u32,
+        cluster_bits: u32,
+    ) -> (Qcow2Driver<()>, File) {
+        let file = image_create(path, img_bits, cluster_bits);
+        let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
+        let conf = BlockProperty {
+            format: DiskFormat::Qcow2,
+            iothread: None,
+            direct: true,
+            req_align: 512,
+            buf_align: 512,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+        };
+        let cloned_file = file.try_clone().unwrap();
+        (Qcow2Driver::new(file, aio, conf).unwrap(), cloned_file)
+    }
+
+    #[test]
+    fn test_alloc_cluster() {
+        let path = "/tmp/refcount_case1.qcow2";
+        let image_bits = 30;
+        let cluster_bits = 16;
+        let (mut qcow2, cloned_file) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let header = qcow2.header.clone();
+
+        // Alloc one free clusters
+        let cluster_sz = 1 << cluster_bits;
+        let free_cluster_index =
+            3 + ((header.l1_size * ENTRY_SIZE as u32 + cluster_sz as u32 - 1) >> cluster_bits);
+        let addr = qcow2.alloc_cluster(1, true).unwrap();
+        assert_eq!(addr, cluster_sz * free_cluster_index as u64);
+        // Check if the refcount of the cluster is updated to the disk.
+        let mut rc_value = [0_u8; 2];
+        cloned_file
+            .read_at(
+                &mut rc_value,
+                cluster_sz * 2 + 2 * free_cluster_index as u64,
+            )
+            .unwrap();
+        assert_eq!(1, BigEndian::read_u16(&rc_value));
+        remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_extend_refcount_table() {
+        let path = "/tmp/refcount_case2.qcow2";
+        // Image size is 128MB.
+        let image_bits = 27;
+        // Cluster size is 1KB.
+        let cluster_bits = 10;
+        let (mut qcow2, cloned_file) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let header = &qcow2.header;
+        let rct_offset = header.refcount_table_offset;
+        let rct_clusters = header.refcount_table_clusters;
+
+        // Extend refcount table which can not mark all clusters.
+        let cluster_sz = 1 << cluster_bits;
+        // 3 bit means refcount table entry size(8 Byte)
+        // 1 bit means refcount block entry size(2 Byte).
+        let mut clusters = 1 << (cluster_bits - 3 + cluster_bits - 1);
+        clusters /= 2;
+        // Alloc 2 cluster once for all clusters which will cause extending refcount table.
+        for _ in 0..clusters + 1 {
+            qcow2.alloc_cluster(2, true).unwrap();
+        }
+        let new_rct_offset = qcow2.header.refcount_table_offset;
+        let new_rct_clusters = qcow2.header.refcount_table_clusters;
+        assert_ne!(new_rct_offset, rct_offset);
+        assert_eq!(qcow2.header.refcount_table_clusters, rct_clusters + 1);
+
+        // Check if the new refcount table contains the old refcount table.
+        let old_rct_size = cluster_sz as usize * rct_clusters as usize;
+        let mut old_rc_table = vec![0_u8; old_rct_size];
+        cloned_file.read_at(&mut old_rc_table, rct_offset).unwrap();
+        let mut new_rc_table = vec![0_u8; old_rct_size];
+        cloned_file.read_at(&mut new_rc_table, rct_offset).unwrap();
+        for i in 0..old_rct_size {
+            assert_eq!(old_rc_table[i], new_rc_table[i]);
+        }
+
+        // Read the first refcount table entry in the extended cluster of the refcount table.
+        let mut rct_entry = vec![0_u8; ENTRY_SIZE as usize];
+        cloned_file
+            .read_at(&mut rct_entry, new_rct_offset + old_rct_size as u64)
+            .unwrap();
+        let rcb_offset = BigEndian::read_u64(&rct_entry);
+
+        // Check the refcount block in the extended cluster of the refcount table.
+        // It will include the cluster of refcount table and itself.
+        let mut rc_table = vec![0_u8; cluster_sz as usize];
+        cloned_file.read_at(&mut rc_table, rcb_offset).unwrap();
+        for i in 0..new_rct_clusters as usize + 1 {
+            let offset = 2 * i;
+            assert_eq!(1, BigEndian::read_u16(&rc_table[offset..offset + 2]));
+        }
+
+        remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_update_refcount() {
+        let path = "/tmp/refcount_case3.qcow2";
+        let image_bits = 30;
+        let cluster_bits = 16;
+        let (qcow2, _) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let mut refcount = qcow2.refcount.clone();
+
+        // Add refcount for the first cluster.
+        let ret = refcount.update_refcount(0, 1, true, 1);
+        assert!(ret.is_ok());
+
+        // Test invalid cluster offset.
+        let ret = refcount.update_refcount(1 << 63, 1, true, 1);
+        if let Err(err) = ret {
+            // 16 bit is cluster bits, 15 is refcount block bits.
+            let err_msg = format!("Invalid refcount table index {}", 1_u64 << (63 - 15 - 16));
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        // Test refcount block not in cache.
+        let ret = refcount.update_refcount(1 << (cluster_bits * 2), 1, true, 1);
+        if let Err(err) = ret {
+            let err_msg = format!("Invalid refcount block address 0x0, index is 2");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_set_refcount() {
+        let path = "/tmp/refcount_case4.qcow2";
+        let image_bits = 30;
+        let cluster_bits = 16;
+        let (qcow2, _) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let mut refcount = qcow2.refcount.clone();
+
+        // Add refcount for the first cluster.
+        let ret = refcount.set_refcount(0, 0, 1, true, 1);
+        assert!(ret.is_ok());
+
+        // Test refcount overflow.
+        let ret = refcount.set_refcount(0, 0, 1, true, 65535);
+        if let Err(err) = ret {
+            let err_msg = format!("Refcount 2 add 65535 cause overflows, index is 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        // Test refcount underflow.
+        let ret = refcount.set_refcount(0, 0, 1, false, 65535);
+        if let Err(err) = ret {
+            let err_msg = format!("Refcount 2 sub 65535 cause overflows, index is 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+
+        remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_find_free_cluster() {
+        let path = "/tmp/refcount_case5.qcow2";
+        let image_bits = 30;
+        let cluster_bits = 16;
+        let cluster_sz = 1 << 16;
+        let (qcow2, _) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let mut refcount = qcow2.refcount.clone();
+        let mut header = qcow2.header.clone();
+
+        // Test find 1 free cluster.
+        let ret = refcount.find_free_cluster(&mut header, cluster_sz);
+        assert!(ret.is_ok());
+
+        // Test find 10 continuous free cluster.
+        let ret = refcount.find_free_cluster(&mut header, 10 * cluster_sz);
+        assert!(ret.is_ok());
+
+        // Test invalid refcount table entry.
+        refcount.refcount_table[0] |= 0x1;
+        let ret = refcount.find_free_cluster(&mut header, 1 << cluster_bits);
+        if let Err(err) = ret {
+            let err_msg = format!("Invalid refcount block address 0x20001, index is 0");
+            assert_eq!(err.to_string(), err_msg);
+        } else {
+            assert!(false);
+        }
+        refcount.refcount_table[0] &= !0x1;
+
+        remove_file(path).unwrap();
+    }
+}
