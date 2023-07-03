@@ -145,8 +145,7 @@ impl<T: Clone + 'static> FileDriver<T> {
 
     pub fn write_zeroes(
         &mut self,
-        offset: usize,
-        nbytes: u64,
+        req_list: Vec<CombineRequest>,
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
@@ -155,8 +154,7 @@ impl<T: Clone + 'static> FileDriver<T> {
         } else {
             OpCode::WriteZeroes
         };
-        let aiocb = self.package_aiocb(opcode, Vec::new(), offset, nbytes, completecb);
-        self.aio.borrow_mut().submit_request(aiocb)
+        self.process_request(opcode, req_list, completecb)
     }
 
     pub fn discard(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {

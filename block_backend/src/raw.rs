@@ -66,7 +66,11 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
-        self.driver.write_zeroes(offset, nbytes, completecb, unmap)
+        self.driver.write_zeroes(
+            vec![CombineRequest::new(Vec::new(), offset as u64, nbytes)],
+            completecb,
+            unmap,
+        )
     }
 
     fn discard(&mut self, offset: usize, nbytes: u64, completecb: T) -> Result<()> {
