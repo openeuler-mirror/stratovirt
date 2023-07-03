@@ -2741,6 +2741,9 @@ fn test_max_number_of_device() {
     i = 1;
     while i <= max_num_of_port2 {
         qmp_unplug_usb_event(test_state.borrow_mut(), i);
+        let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+        assert_eq!(evt.ccode, TRBCCode::Success as u32);
+        qmp_event_read(test_state.borrow_mut());
         i += 1;
     }
     test_state.borrow_mut().stop();
