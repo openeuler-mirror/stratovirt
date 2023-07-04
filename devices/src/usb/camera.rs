@@ -36,8 +36,8 @@ use util::loop_context::{
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    camera_ops, get_video_frame_size, CamBasicFmt, CameraBrokenCallback, CameraFormatList,
-    CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
+    camera_ops, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraBrokenCallback,
+    CameraFormatList, CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
@@ -394,7 +394,6 @@ struct VsDescInputHeader {
     bTriggerSupport: u8,
     bTriggerUsage: u8,
     bControlSize: u8,
-    bmaControls: u16,
 }
 
 impl ByteCode for VsDescInputHeader {}
@@ -560,7 +559,7 @@ fn gen_desc_device_camera(fmt_list: Vec<CameraFormatList>) -> Result<Arc<UsbDesc
                 bNumInterfaces: 2,
                 bConfigurationValue: 1,
                 iConfiguration: UsbCameraStringIDs::Configuration as u8,
-                bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
+                bmAttributes: USB_CONFIGURATION_ATTR_ONE,
                 bMaxPower: 50,
             },
             iad_desc: vec![gen_desc_iad_camera(fmt_list)?],
@@ -1152,9 +1151,9 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
     header_struct.wTotalLength = header_struct.bLength as u16
         + body.clone().iter().fold(0, |len, x| len + x.data.len()) as u16;
 
-    buf.push(Arc::new(UsbDescOther {
-        data: header_struct.as_bytes().to_vec(),
-    }));
+    let mut vec = header_struct.as_bytes().to_vec();
+    vec.resize(header_struct.bLength as usize, 0);
+    buf.push(Arc::new(UsbDescOther { data: vec }));
     buf.append(&mut body);
 
     Ok(buf)
@@ -1162,7 +1161,7 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
 
 fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
     VsDescInputHeader {
-        bLength: 0xf,
+        bLength: 0xd + fmt_num,
         bDescriptorType: CS_INTERFACE,
         bDescriptorSubtype: VS_INPUT_HEADER,
         bNumFormats: fmt_num,
@@ -1174,7 +1173,6 @@ fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
         bTriggerSupport: 0x00,
         bTriggerUsage: 0x00,
         bControlSize: 0x01,
-        bmaControls: 0x00,
     }
 }
 
@@ -1219,6 +1217,7 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
 }
 
 fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
+    let bitrate = get_bit_rate(frm.width, frm.height, frm.interval)?;
     let desc = VsDescFrm {
         bLength: 0x1e, // TODO: vary with interval number.
         bDescriptorType: CS_INTERFACE,
@@ -1227,11 +1226,11 @@ fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
             FmtType::Mjpg => VS_FRAME_MJPEG,
         },
         bFrameIndex: frm.index,
-        bmCapabilities: 0x00,
+        bmCapabilities: 0x1,
         wWidth: frm.width as u16,
         wHeight: frm.height as u16,
-        dwMinBitRate: 442368000,
-        dwMaxBitRate: 442368000,
+        dwMinBitRate: bitrate,
+        dwMaxBitRate: bitrate,
         dwMaxVideoFrameBufSize: get_video_frame_size(frm.width, frm.height)?,
         dwDefaultFrameInterval: frm.interval,
         bFrameIntervalType: 1,

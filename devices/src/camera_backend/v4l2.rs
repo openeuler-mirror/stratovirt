@@ -22,7 +22,7 @@ use v4l2_sys_mit::{
     v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE, v4l2_buffer, v4l2_fmtdesc, v4l2_format,
     v4l2_frmivalenum, v4l2_frmsizeenum, v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE,
     v4l2_memory_V4L2_MEMORY_MMAP, v4l2_requestbuffers, v4l2_streamparm, V4L2_CAP_STREAMING,
-    V4L2_CAP_VIDEO_CAPTURE,
+    V4L2_CAP_VIDEO_CAPTURE, V4L2_FMT_FLAG_EMULATED,
 };
 use vmm_sys_util::epoll::EventSet;
 
@@ -174,7 +174,7 @@ impl V4l2CameraBackend {
                 break;
             }
             // NOTE: Only support discrete now.
-            if (frmsize.type_) != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
+            if frmsize.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
             let width = unsafe { frmsize.__bindgen_anon_1.discrete.width };
@@ -187,8 +187,8 @@ impl V4l2CameraBackend {
                     interval,
                     index: frm_idx,
                 });
+                frm_idx += 1;
             }
-            frm_idx += 1;
         }
         Ok(list)
     }
@@ -206,6 +206,10 @@ impl V4l2CameraBackend {
             let interval_end = backend.enum_frame_interval(&mut frame_val)?;
             if interval_end {
                 break;
+            }
+            // NOTE: Only support discrete now.
+            if frame_val.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
+                continue;
             }
             let numerator = unsafe { frame_val.__bindgen_anon_1.discrete.numerator };
             let denominator = unsafe { frame_val.__bindgen_anon_1.discrete.denominator };
@@ -323,7 +327,9 @@ impl CameraHostdevOps for V4l2CameraBackend {
             if format_end {
                 break;
             }
-            if !self.is_pixfmt_supported(desc.pixelformat) {
+            if desc.flags & V4L2_FMT_FLAG_EMULATED != 0
+                || !self.is_pixfmt_supported(desc.pixelformat)
+            {
                 continue;
             }
             list.push(CameraFormatList {
