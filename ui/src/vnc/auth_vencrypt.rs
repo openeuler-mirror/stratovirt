@@ -99,7 +99,7 @@ impl ClientIoHandler {
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             vnc_write(&client, buf);
             vnc_flush(&client);
-            return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
+            return Err(anyhow!(VncError::UnsupportedRFBProtocolVersion));
         } else {
             let mut buf = Vec::new();
             // Accept version.

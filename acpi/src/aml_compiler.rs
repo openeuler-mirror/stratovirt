@@ -262,8 +262,8 @@ impl AmlToUuid {
         }
 
         // Char located at 8, 13, 18, 23 should be `-`
-        let indexs = &[8, 13, 18, 23];
-        for i in indexs {
+        let indexes = &[8, 13, 18, 23];
+        for i in indexes {
             if uuid.chars().nth(*i).unwrap() != '-' {
                 return false;
             }

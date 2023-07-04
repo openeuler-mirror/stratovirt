@@ -125,7 +125,7 @@ pub const PLS_INACTIVE: u32 = 6;
 pub const PLS_POLLING: u32 = 7;
 pub const PLS_RECOVERY: u32 = 8;
 pub const PLS_HOT_RESET: u32 = 9;
-pub const PLS_COMPILANCE_MODE: u32 = 10;
+pub const PLS_COMPLIANCE_MODE: u32 = 10;
 pub const PLS_TEST_MODE: u32 = 11;
 pub const PLS_RESUME: u32 = 15;
 

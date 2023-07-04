@@ -168,7 +168,7 @@ pub struct UsbHost {
     ifs_num: u8,
     ifs: [InterfaceStatus; USB_MAX_INTERFACES as usize],
     usb_device: UsbDevice,
-    /// Callback for release dev to Host afer the vm exited.
+    /// Callback for release dev to Host after the vm exited.
     exit: Option<Arc<ExitNotifier>>,
     /// All pending asynchronous usb request.
     requests: Arc<Mutex<LinkedList<Arc<Mutex<UsbHostRequest>>>>>,
@@ -333,7 +333,7 @@ impl UsbHost {
         };
 
         for (i, intf) in conf.interfaces().enumerate() {
-            // The usb_deviec.altsetting indexs alternate settings by the interface number.
+            // The usb_deviec.altsetting indexes alternate settings by the interface number.
             // Get the 0th alternate setting first so that we can grap the interface number,
             // and then correct the alternate setting value if necessary.
             let mut intf_desc = intf.descriptors().next();

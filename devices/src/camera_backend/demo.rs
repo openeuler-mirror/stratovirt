@@ -446,20 +446,20 @@ impl CameraHostdevOps for DemoCamera {
         if frame_offset + len > locked_frame.used_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);
         }
-        let mut copyed = 0;
+        let mut copied = 0;
         for iov in iovecs {
-            if len == copyed {
+            if len == copied {
                 break;
             }
-            let cnt = std::cmp::min(iov.iov_len as usize, len - copyed);
-            let start = frame_offset + copyed;
+            let cnt = std::cmp::min(iov.iov_len as usize, len - copied);
+            let start = frame_offset + copied;
             let end = start + cnt;
             let tmp = &locked_frame.image[start..end];
             mem_from_buf(tmp, iov.iov_base)
                 .with_context(|| format!("Failed to write data to {:x}", iov.iov_base))?;
-            copyed += cnt;
+            copied += cnt;
         }
-        Ok(copyed)
+        Ok(copied)
     }
 
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {

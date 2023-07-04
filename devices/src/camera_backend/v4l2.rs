@@ -133,7 +133,7 @@ impl V4l2CameraBackend {
         let backend = self.backend.as_ref().with_context(|| "Backend is none")?;
         debug!("Camera {} register fd {}", self.id, backend.as_raw_fd());
         // Register event notifier for /dev/videoX.
-        let handler = Arc::new(Mutex::new(V4l2IoHander::new(
+        let handler = Arc::new(Mutex::new(V4l2IoHandler::new(
             &self.sample,
             backend,
             self.notify_cb.clone(),
@@ -415,20 +415,20 @@ impl CameraHostdevOps for V4l2CameraBackend {
         if frame_offset + len > locked_sample.used_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);
         }
-        let mut copyed = 0;
+        let mut copied = 0;
         for iov in iovecs {
-            if len == copyed {
+            if len == copied {
                 break;
             }
-            let cnt = std::cmp::min(iov.iov_len as usize, len - copyed);
-            let src_ptr = locked_sample.addr + frame_offset as u64 + copyed as u64;
+            let cnt = std::cmp::min(iov.iov_len as usize, len - copied);
+            let src_ptr = locked_sample.addr + frame_offset as u64 + copied as u64;
             // SAFETY: the address is not out of range.
             unsafe {
                 std::ptr::copy(src_ptr as *const u8, iov.iov_base as *mut u8, cnt);
             }
-            copyed += cnt;
+            copied += cnt;
         }
-        Ok(copyed)
+        Ok(copied)
     }
 
     fn register_notify_cb(&mut self, cb: CameraNotifyCallback) {
@@ -458,21 +458,21 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
     Ok(fmt)
 }
 
-pub struct V4l2IoHander {
+pub struct V4l2IoHandler {
     sample: Arc<Mutex<Sample>>,
     backend: Arc<V4l2Backend>,
     notify_cb: Option<CameraNotifyCallback>,
     broken_cb: Option<CameraNotifyCallback>,
 }
 
-impl V4l2IoHander {
+impl V4l2IoHandler {
     pub fn new(
         sample: &Arc<Mutex<Sample>>,
         backend: &Arc<V4l2Backend>,
         cb: Option<CameraNotifyCallback>,
         broken_cb: Option<CameraNotifyCallback>,
     ) -> Self {
-        V4l2IoHander {
+        V4l2IoHandler {
             sample: sample.clone(),
             backend: backend.clone(),
             notify_cb: cb,
@@ -521,7 +521,7 @@ impl V4l2IoHander {
     }
 }
 
-impl EventNotifierHelper for V4l2IoHander {
+impl EventNotifierHelper for V4l2IoHandler {
     fn internal_notifiers(v4l2_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let cloend_v4l2_handler = v4l2_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _fd: RawFd| {

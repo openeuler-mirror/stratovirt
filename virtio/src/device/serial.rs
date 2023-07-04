@@ -719,7 +719,7 @@ impl SerialControlHandler {
     fn handle_control_message(&mut self, ctrl: &mut VirtioConsoleControl) {
         if ctrl.event == VIRTIO_CONSOLE_DEVICE_READY {
             if ctrl.value == 0 {
-                error!("Guest is not ready to receive contorl message.");
+                error!("Guest is not ready to receive control message.");
                 return;
             }
 

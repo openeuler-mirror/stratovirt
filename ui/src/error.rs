@@ -20,7 +20,7 @@ pub enum VncError {
         source: util::error::UtilError,
     },
     #[error("Unsupported RFB Protocol Version!")]
-    UnsupportRFBProtocolVersion,
+    UnsupportedRFBProtocolVersion,
     #[error("Invalid Image Size: width: {0}, height: {0}")]
     InvalidImageSize(i32, i32),
     #[error("Tcp bind failed: {0}")]
