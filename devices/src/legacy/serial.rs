@@ -152,7 +152,7 @@ impl Serial {
             .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "Serial")?;
 
         MigrationManager::register_device_instance(
             SerialState::descriptor(),

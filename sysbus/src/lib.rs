@@ -114,9 +114,10 @@ impl SysBus {
         dev: &Arc<Mutex<T>>,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
         let region_ops = self.build_region_ops(dev);
-        let region = Region::init_io_region(region_size, region_ops);
+        let region = Region::init_io_region(region_size, region_ops, region_name);
         let locked_dev = dev.lock().unwrap();
 
         region.set_ioeventfds(&locked_dev.ioeventfds());

@@ -866,8 +866,11 @@ impl VirtioPciDevice {
     fn modern_mem_region_init(&mut self, modern_mem_region: &Region) -> PciResult<()> {
         // 1. PCI common cap sub-region.
         let common_region_ops = self.build_common_cfg_ops();
-        let common_region =
-            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_COMMON_LENGTH), common_region_ops);
+        let common_region = Region::init_io_region(
+            u64::from(VIRTIO_PCI_CAP_COMMON_LENGTH),
+            common_region_ops,
+            "VirtioPciCommon",
+        );
         modern_mem_region
             .add_subregion(common_region, u64::from(VIRTIO_PCI_CAP_COMMON_OFFSET))
             .with_context(|| "Failed to register pci-common-cap region.")?;
@@ -888,8 +891,11 @@ impl VirtioPciDevice {
             read: Arc::new(isr_read),
             write: Arc::new(isr_write),
         };
-        let isr_region =
-            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_ISR_LENGTH), isr_region_ops);
+        let isr_region = Region::init_io_region(
+            u64::from(VIRTIO_PCI_CAP_ISR_LENGTH),
+            isr_region_ops,
+            "VirtioIsr",
+        );
         modern_mem_region
             .add_subregion(isr_region, u64::from(VIRTIO_PCI_CAP_ISR_OFFSET))
             .with_context(|| "Failed to register pci-isr-cap region.")?;
@@ -916,8 +922,11 @@ impl VirtioPciDevice {
             read: Arc::new(device_read),
             write: Arc::new(device_write),
         };
-        let device_region =
-            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_DEVICE_LENGTH), device_region_ops);
+        let device_region = Region::init_io_region(
+            u64::from(VIRTIO_PCI_CAP_DEVICE_LENGTH),
+            device_region_ops,
+            "VirtioDevice",
+        );
         modern_mem_region
             .add_subregion(device_region, u64::from(VIRTIO_PCI_CAP_DEVICE_OFFSET))
             .with_context(|| "Failed to register pci-dev-cap region.")?;
@@ -929,8 +938,11 @@ impl VirtioPciDevice {
             read: Arc::new(notify_read),
             write: Arc::new(notify_write),
         };
-        let notify_region =
-            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_NOTIFY_LENGTH), notify_region_ops);
+        let notify_region = Region::init_io_region(
+            u64::from(VIRTIO_PCI_CAP_NOTIFY_LENGTH),
+            notify_region_ops,
+            "VirtioNotify",
+        );
         notify_region.set_ioeventfds(&self.ioeventfds());
         modern_mem_region
             .add_subregion(notify_region, u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET))
@@ -1169,7 +1181,8 @@ impl PciDevOps for VirtioPciDevice {
             as u64)
             .next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
-        let modern_mem_region = Region::init_container_region(mem_region_size);
+        let modern_mem_region =
+            Region::init_container_region(mem_region_size, "VirtioPciModernMem");
         self.modern_mem_region_init(&modern_mem_region)?;
 
         self.config.register_bar(
@@ -1540,11 +1553,15 @@ mod tests {
     fn test_common_config_dev_feature() {
         let dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let virtio_dev = dev.clone() as Arc<Mutex<dyn VirtioDevice>>;
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let cloned_virtio_dev = virtio_dev.clone();
@@ -1627,11 +1644,15 @@ mod tests {
         let queue_size = virtio_dev.lock().unwrap().queue_size();
         let queue_num = virtio_dev.lock().unwrap().queue_num();
         let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let cloned_virtio_dev = virtio_dev.clone();
@@ -1688,11 +1709,15 @@ mod tests {
     fn test_virtio_pci_config_access() {
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let mut virtio_pci = VirtioPciDevice::new(
@@ -1723,11 +1748,15 @@ mod tests {
     fn test_virtio_pci_realize() {
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let virtio_pci = VirtioPciDevice::new(
@@ -1743,7 +1772,11 @@ mod tests {
 
     #[test]
     fn test_device_activate() {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let mem_size: u64 = 1024 * 1024;
         let host_mmap = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, mem_size, None, false, false, false)
@@ -1752,7 +1785,7 @@ mod tests {
         sys_mem
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();
@@ -1762,7 +1795,7 @@ mod tests {
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let mut virtio_pci = VirtioPciDevice::new(
@@ -1844,11 +1877,15 @@ mod tests {
     fn test_multifunction() {
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16),
+            Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
         let mut virtio_pci = VirtioPciDevice::new(

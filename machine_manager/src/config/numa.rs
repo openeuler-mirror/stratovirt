@@ -40,6 +40,7 @@ pub struct NumaNode {
     pub cpus: Vec<u8>,
     pub distances: BTreeMap<u32, u8>,
     pub size: u64,
+    pub mem_dev: String,
 }
 
 pub type NumaNodes = BTreeMap<u32, NumaNode>;
@@ -321,11 +322,13 @@ mod tests {
             cpus: vec![0, 1],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node1"),
         };
         let numa_node2 = NumaNode {
             cpus: vec![2, 3],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node2"),
         };
 
         let mut numa_nodes = BTreeMap::new();
@@ -337,6 +340,7 @@ mod tests {
             cpus: vec![2],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node3"),
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(2, numa_node3);
@@ -346,6 +350,7 @@ mod tests {
             cpus: vec![2, 3, 4],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node4"),
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node4);
@@ -355,6 +360,7 @@ mod tests {
             cpus: vec![3, 4],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node5"),
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node5);
@@ -364,6 +370,7 @@ mod tests {
             cpus: vec![0, 1],
             distances: Default::default(),
             size: 1073741824,
+            mem_dev: String::from("numa_node6"),
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node6);
@@ -373,6 +380,7 @@ mod tests {
             cpus: vec![2, 3],
             distances: Default::default(),
             size: 2147483648,
+            mem_dev: String::from("numa_node7"),
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node7);

@@ -34,7 +34,7 @@
 //!
 //! fn main() {
 //!     // 1. create address_space
-//!     let space = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+//!     let space = AddressSpace::new(Region::init_container_region(u64::max_value(), "space"), "space").unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
 //!     let mem_mapping = Arc::new(HostMemMapping::new(
@@ -46,7 +46,7 @@
 //!         false,
 //!         false,
 //!     ).unwrap());
-//!     let ram_region = Region::init_ram_region(mem_mapping.clone());
+//!     let ram_region = Region::init_ram_region(mem_mapping.clone(), "ram");
 //!     ram_region.set_priority(10);
 //!
 //!     // 3. create a IO-type Region
@@ -66,7 +66,7 @@
 //!         write: Arc::new(write_ops),
 //!     };
 //!
-//!     let io_region = Region::init_io_region(0x1000, dev_ops);
+//!     let io_region = Region::init_io_region(0x1000, dev_ops, "io_region");
 //!
 //!     // 4. add sub_region to address_space's root region
 //!     space.root().add_subregion(ram_region, mem_mapping.start_address().raw_value());
@@ -89,7 +89,7 @@ pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
 pub use anyhow::Result;
 pub use error::AddressSpaceError;
-pub use host_mmap::{create_host_mmaps, set_host_memory_policy, FileBackend, HostMemMapping};
+pub use host_mmap::{create_backend_mem, create_default_mem, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
 pub use listener::KvmMemoryListener;

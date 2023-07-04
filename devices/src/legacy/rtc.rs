@@ -267,7 +267,7 @@ impl RTC {
         self.set_sys_resource(sysbus, region_base, region_size)?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "RTC")?;
         Ok(())
     }
 

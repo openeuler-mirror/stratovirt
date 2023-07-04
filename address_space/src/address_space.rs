@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
@@ -53,6 +53,8 @@ type ListenerObj = Arc<Mutex<dyn Listener>>;
 /// Address Space of memory.
 #[derive(Clone)]
 pub struct AddressSpace {
+    /// the name of AddressSpace.
+    name: String,
     /// Root Region of this AddressSpace.
     root: Region,
     /// `flat_view` is the output of rendering all regions in parent `address-space`,
@@ -80,8 +82,10 @@ impl AddressSpace {
     /// # Arguments
     ///
     /// * `root` - Root region of address space.
-    pub fn new(root: Region) -> Result<Arc<AddressSpace>> {
+    /// * `name` - the name of AddressSpace.
+    pub fn new(root: Region, name: &str) -> Result<Arc<AddressSpace>> {
         let space = Arc::new(AddressSpace {
+            name: String::from(name),
             root: root.clone(),
             flat_view: Arc::new(ArcSwap::new(Arc::new(FlatView::default()))),
             listeners: Arc::new(Mutex::new(Vec::new())),
@@ -757,8 +761,8 @@ mod test {
             }
         }
 
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root, "space").unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
@@ -808,8 +812,8 @@ mod test {
             }
         }
 
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root, "space").unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         space.register_listener(listener1.clone()).unwrap();
@@ -824,8 +828,8 @@ mod test {
 
     #[test]
     fn test_update_topology() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -842,8 +846,8 @@ mod test {
         //
         // the flat_view is as follows, region-b is container which will not appear in the flat-view
         //        [CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC]
-        let region_b = Region::init_container_region(4000);
-        let region_c = Region::init_io_region(6000, default_ops.clone());
+        let region_b = Region::init_container_region(4000, "region_b");
+        let region_c = Region::init_io_region(6000, default_ops.clone(), "region_c");
         region_b.set_priority(2);
         region_c.set_priority(1);
         root.add_subregion(region_b.clone(), 2000).unwrap();
@@ -873,7 +877,7 @@ mod test {
         //  D:                  [DDDDDD]
         // the flat_view is as follows,
         //        [CCCCCCCCCCCC][DDDDDD][CCCCCCCCCCCCCCCCCCC]
-        let region_d = Region::init_io_region(1000, default_ops);
+        let region_d = Region::init_io_region(1000, default_ops, "region_d");
         region_b.add_subregion(region_d.clone(), 0).unwrap();
 
         let locked_listener = listener.lock().unwrap();
@@ -922,15 +926,15 @@ mod test {
         //  c:                  [CCCCCCCCCCCCC]
         // the flat_view is as follows,
         //               [BBBBBBBBBBBBB][CCCCC]
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "region");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
-        let region_b = Region::init_io_region(2000, default_ops.clone());
+        let region_b = Region::init_io_region(2000, default_ops.clone(), "region_b");
         region_b.set_priority(1);
         region_b.set_ioeventfds(&ioeventfds);
-        let region_c = Region::init_io_region(2000, default_ops);
+        let region_c = Region::init_io_region(2000, default_ops, "region_c");
         region_c.set_ioeventfds(&ioeventfds);
         root.add_subregion(region_c, 2000).unwrap();
 
@@ -984,13 +988,13 @@ mod test {
         //  c:                  [CCCCCC]
         // the flat_view is as follows,
         //                      [CCCCCC]
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
-        let region_b = Region::init_container_region(5000);
-        let region_c = Region::init_io_region(1000, default_ops);
+        let region_b = Region::init_container_region(5000, "root");
+        let region_c = Region::init_io_region(1000, default_ops, "region_c");
         region_c.set_ioeventfds(&ioeventfds);
         region_b.add_subregion(region_c, 1000).unwrap();
 
@@ -1006,8 +1010,8 @@ mod test {
 
     #[test]
     fn test_get_ram_info() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
@@ -1019,8 +1023,8 @@ mod test {
         let ram2 = Arc::new(
             HostMemMapping::new(GuestAddress(2000), None, 1000, None, false, false, false).unwrap(),
         );
-        let region_a = Region::init_ram_region(ram1.clone());
-        let region_b = Region::init_ram_region(ram2.clone());
+        let region_a = Region::init_ram_region(ram1.clone(), "region_a");
+        let region_b = Region::init_ram_region(ram2.clone(), "region_b");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
         root.add_subregion(region_b, ram2.start_address().raw_value())
@@ -1052,7 +1056,7 @@ mod test {
         //  c:            [CCCCCCCCC]
         // the flat_view is as follows,
         //        [AAAAAA][CCCCCCCCC][BB]
-        let region_c = Region::init_io_region(1500, default_ops);
+        let region_c = Region::init_io_region(1500, default_ops, "region_c");
         region_c.set_priority(1);
         root.add_subregion(region_c, 1000).unwrap();
 
@@ -1079,12 +1083,12 @@ mod test {
 
     #[test]
     fn test_write_and_read_object() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );
-        let region_a = Region::init_ram_region(ram1.clone());
+        let region_a = Region::init_ram_region(ram1.clone(), "region_a");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
 

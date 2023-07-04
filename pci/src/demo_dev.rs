@@ -87,7 +87,7 @@ impl DemoDev {
             name: cfg.id.clone(),
             cmd_cfg: cfg.clone(),
             config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
-            mem_region: Region::init_container_region(u32::MAX as u64),
+            mem_region: Region::init_container_region(u32::MAX as u64, "DemoDev"),
             devfn,
             parent_bus,
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -147,7 +147,7 @@ impl DemoDev {
             write: Arc::new(write_ops),
         };
 
-        let region = Region::init_io_region(self.cmd_cfg.bar_size, region_ops);
+        let region = Region::init_io_region(self.cmd_cfg.bar_size, region_ops, "DemoRegion");
 
         self.mem_region.add_subregion(region, 0)?;
         self.config.register_bar(

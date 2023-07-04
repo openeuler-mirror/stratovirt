@@ -177,6 +177,8 @@ pub struct StdMachine {
     fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// machine all backend memory region tree
+    machine_ram: Arc<Region>,
 }
 
 impl StdMachine {
@@ -190,8 +192,11 @@ impl StdMachine {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| MachineError::CrtIoSpaceErr)?;
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "SysMem"),
+            "sys_mem",
+        )
+        .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_mem,
             (
@@ -247,6 +252,10 @@ impl StdMachine {
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            machine_ram: Arc::new(Region::init_container_region(
+                u64::max_value(),
+                "MachineRam",
+            )),
         })
     }
 
@@ -376,6 +385,7 @@ impl StdMachineOps for StdMachine {
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1,
             mmconfig_region_ops,
+            "PcieEcamIo",
         );
         self.sys_mem
             .root()
@@ -444,14 +454,26 @@ impl StdMachineOps for StdMachine {
         &self.cpus
     }
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+    fn get_guest_numa(&self) -> &Option<NumaNodes> {
         &self.numa_nodes
     }
 }
 
 impl MachineOps for StdMachine {
-    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        vec![(MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size)]
+    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+        let vm_ram = self.get_vm_ram();
+
+        let layout_size = MEM_LAYOUT[LayoutEntryType::Mem as usize].1;
+        let ram = Region::init_alias_region(
+            vm_ram.clone(),
+            0,
+            std::cmp::min(layout_size, mem_size),
+            "pc_ram",
+        );
+        sys_mem
+            .root()
+            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        Ok(())
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
@@ -793,6 +815,14 @@ impl MachineOps for StdMachine {
 
     fn get_sys_bus(&mut self) -> &SysBus {
         &self.sysbus
+    }
+
+    fn get_vm_ram(&self) -> &Arc<Region> {
+        &self.machine_ram
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {

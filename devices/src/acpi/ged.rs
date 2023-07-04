@@ -83,7 +83,7 @@ impl Ged {
         self.battery_present = battery_present;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "Ged")?;
 
         let ged = dev.lock().unwrap();
         ged.register_acpi_powerdown_event(power_button)

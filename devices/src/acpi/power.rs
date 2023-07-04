@@ -187,7 +187,7 @@ impl PowerDev {
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "PowerDev")?;
 
         let pdev_availiable: bool;
         {

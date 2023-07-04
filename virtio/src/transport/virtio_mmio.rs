@@ -384,7 +384,7 @@ impl VirtioMmioDevice {
         }
         self.set_sys_resource(sysbus, region_base, region_size)?;
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "VirtioMmio")?;
 
         #[cfg(target_arch = "x86_64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
@@ -740,8 +740,8 @@ mod tests {
     use crate::VIRTIO_TYPE_BLOCK;
 
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "sysmem");
+        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -757,7 +757,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();

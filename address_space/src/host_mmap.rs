@@ -24,7 +24,7 @@ use util::{
     unix::{do_mmap, host_page_size},
 };
 
-use crate::{AddressRange, GuestAddress};
+use crate::{AddressRange, GuestAddress, Region};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 /// Verify existing pages in the mapping.
@@ -204,7 +204,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
-fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+pub fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
@@ -232,27 +232,16 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     }
 }
 
-/// Create HostMemMappings according to address ranges.
+/// If the memory is not configured numa, use this
 ///
 /// # Arguments
 ///
-/// * `ranges` - The guest address range that will be mapped.
-/// * `mem_config` - Machine memory config.
-pub fn create_host_mmaps(
-    ranges: &[(u64, u64)],
-    mem_config: &MachineMemConfig,
-    nr_vcpus: u8,
-) -> Result<Vec<Arc<HostMemMapping>>> {
+/// * `mem_config` - The config of default memory.
+/// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
+pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
-    if let Some(path) = &mem_config.mem_path {
-        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
-        f_back = Some(
-            FileBackend::new_mem(path, file_len)
-                .with_context(|| "Failed to create file that backs memory")?,
-        );
-    } else if mem_config.mem_share {
-        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
+    if mem_config.mem_share {
         let anon_mem_name = String::from("stratovirt_anon_mem");
 
         let anon_fd =
@@ -263,7 +252,7 @@ pub fn create_host_mmaps(
 
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
-            .set_len(file_len)
+            .set_len(mem_config.mem_size)
             .with_context(|| "Failed to set the length of anonymous file that backs memory")?;
 
         f_back = Some(FileBackend {
@@ -271,39 +260,80 @@ pub fn create_host_mmaps(
             offset: 0,
             page_size: host_page_size(),
         });
+    } else if let Some(path) = &mem_config.mem_path {
+        f_back = Some(
+            FileBackend::new_mem(path, mem_config.mem_size)
+                .with_context(|| "Failed to create file that backs memory")?,
+        );
     }
-
-    let backend = f_back.as_ref();
-    let mut host_addr = do_mmap(
-        &backend.map(|fb| fb.file.as_ref()),
+    let block = Arc::new(HostMemMapping::new(
+        GuestAddress(0),
+        None,
         mem_config.mem_size,
-        backend.map_or(0, |fb| fb.offset),
-        false,
-        mem_config.mem_share,
+        f_back,
         mem_config.dump_guest_core,
-    )?;
+        mem_config.mem_share,
+        false,
+    )?);
+
     if mem_config.mem_prealloc {
-        mem_prealloc(host_addr, mem_config.mem_size, nr_vcpus);
+        mem_prealloc(block.host_address(), mem_config.mem_size, thread_num);
     }
-    let mut mappings = Vec::new();
-    for range in ranges.iter() {
-        mappings.push(Arc::new(HostMemMapping::new(
-            GuestAddress(range.0),
-            Some(host_addr),
-            range.1,
-            f_back.clone(),
-            mem_config.dump_guest_core,
-            mem_config.mem_share,
-            false,
-        )?));
-        host_addr += range.1;
+    let region = Region::init_ram_region(block, "DefaultRam");
 
-        if let Some(mut fb) = f_back.as_mut() {
-            fb.offset += range.1
+    Ok(region)
+}
+
+/// If the memory is configured numa, use this
+///
+/// # Arguments
+///
+/// * `mem_config` - The config of default memory.
+/// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
+pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<Region> {
+    let mut f_back: Option<FileBackend> = None;
+
+    if mem_config.memfd {
+        let anon_mem_name = String::from("stratovirt_anon_mem");
+
+        let anon_fd =
+            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        if anon_fd < 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
-    }
 
-    Ok(mappings)
+        let anon_file = unsafe { File::from_raw_fd(anon_fd) };
+        anon_file
+            .set_len(mem_config.size)
+            .with_context(|| "Failed to set the length of anonymous file that backs memory")?;
+
+        f_back = Some(FileBackend {
+            file: Arc::new(anon_file),
+            offset: 0,
+            page_size: host_page_size(),
+        });
+    } else if let Some(path) = &mem_config.mem_path {
+        f_back = Some(
+            FileBackend::new_mem(path, mem_config.size)
+                .with_context(|| "Failed to create file that backs memory")?,
+        );
+    }
+    let block = Arc::new(HostMemMapping::new(
+        GuestAddress(0),
+        None,
+        mem_config.size,
+        f_back,
+        mem_config.dump_guest_core,
+        mem_config.share,
+        false,
+    )?);
+    if mem_config.prealloc {
+        mem_prealloc(block.host_address(), mem_config.size, thread_num);
+    }
+    set_host_memory_policy(&block, mem_config)?;
+
+    let region = Region::init_ram_region(block, mem_config.id.as_str());
+    Ok(region)
 }
 
 /// Set host memory backend numa policy.
@@ -311,50 +341,42 @@ pub fn create_host_mmaps(
 /// # Arguments
 ///
 /// * `mem_mappings` - The host virtual address of mapped memory information.
-/// * `mem_zones` - Memory zone config.
+/// * `zone` - Memory zone config info.
 pub fn set_host_memory_policy(
-    mem_mappings: &[Arc<HostMemMapping>],
-    mem_zones: &Option<Vec<MemZoneConfig>>,
+    mem_mappings: &Arc<HostMemMapping>,
+    zone: &MemZoneConfig,
 ) -> Result<()> {
-    if mem_zones.is_none() || mem_mappings.is_empty() {
+    if zone.host_numa_nodes.is_none() {
         return Ok(());
     }
+    let host_addr_start = mem_mappings.host_address();
+    let nodes = zone.host_numa_nodes.as_ref().unwrap();
+    let mut max_node = nodes[nodes.len() - 1] as usize;
 
-    let mut host_addr_start = mem_mappings.get(0).map(|m| m.host_address()).unwrap();
-    for zone in mem_zones.as_ref().unwrap() {
-        if zone.host_numa_nodes.is_none() {
-            continue;
-        }
-
-        let nodes = zone.host_numa_nodes.as_ref().unwrap();
-        let mut max_node = nodes[nodes.len() - 1] as usize;
-
-        let mut nmask: Vec<u64> = Vec::new();
-        nmask.resize(max_node / 64 + 1, 0);
-        for node in nodes.iter() {
-            nmask[(*node / 64) as usize] |= 1_u64 << (*node % 64);
-        }
-        // We need to pass node_id + 1 as mbind() max_node argument.
-        // It is kind of linux bug or feature which will cut off the last node.
-        max_node += 1;
-
-        let policy = HostMemPolicy::from(zone.policy.clone());
-        if policy == HostMemPolicy::Default {
-            max_node = 0;
-            nmask = vec![0_u64; max_node];
-        }
-
-        mbind(
-            host_addr_start,
-            zone.size,
-            policy as u32,
-            nmask,
-            max_node as u64,
-            MPOL_MF_STRICT | MPOL_MF_MOVE,
-        )
-        .with_context(|| "Failed to call mbind")?;
-        host_addr_start += zone.size;
+    let mut nmask: Vec<u64> = Vec::new();
+    nmask.resize(max_node / 64 + 1, 0);
+    for node in nodes.iter() {
+        nmask[(*node / 64) as usize] |= 1_u64 << (*node % 64);
     }
+    // We need to pass node_id + 1 as mbind() max_node argument.
+    // It is kind of linux bug or feature which will cut off the last node.
+    max_node += 1;
+
+    let policy = HostMemPolicy::from(zone.policy.clone());
+    if policy == HostMemPolicy::Default {
+        max_node = 0;
+        nmask = vec![0_u64; max_node];
+    }
+
+    mbind(
+        host_addr_start,
+        zone.size,
+        policy as u32,
+        nmask,
+        max_node as u64,
+        MPOL_MF_STRICT | MPOL_MF_MOVE,
+    )
+    .with_context(|| "Failed to call mbind")?;
 
     Ok(())
 }
@@ -368,6 +390,8 @@ pub struct HostMemMapping {
     host_addr: *mut u8,
     /// Represents file and offset-in-file that backs this mapping.
     file_back: Option<FileBackend>,
+    /// share mem flag
+    is_share: bool,
 }
 
 // Send and Sync is not auto-implemented for raw pointer type
@@ -418,6 +442,7 @@ impl HostMemMapping {
             },
             host_addr: host_addr as *mut u8,
             file_back,
+            is_share,
         })
     }
 
@@ -441,6 +466,10 @@ impl HostMemMapping {
     /// return None if this mapping is an anonymous mapping.
     pub fn file_backend(&self) -> Option<FileBackend> {
         self.file_back.clone()
+    }
+
+    pub fn mem_shared(&self) -> bool {
+        self.is_share
     }
 }
 
@@ -555,48 +584,6 @@ mod test {
         );
 
         std::fs::remove_file(file_path).unwrap();
-    }
-
-    #[test]
-    fn test_create_host_mmaps() {
-        let addr_ranges = [(0x0, 0x10_0000), (0x100000, 0x10_0000)];
-        let mem_path = std::env::current_dir()
-            .unwrap()
-            .as_path()
-            .to_str()
-            .unwrap()
-            .to_string();
-        let mem_config = MachineMemConfig {
-            mem_size: 0x20_0000,
-            mem_path: Some(mem_path),
-            dump_guest_core: false,
-            mem_share: false,
-            mem_prealloc: false,
-            mem_zones: None,
-        };
-
-        let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config, 1).unwrap();
-        assert_eq!(host_mmaps.len(), 2);
-
-        // check the start address and size of HostMemMapping
-        for (index, mmap) in host_mmaps.iter().enumerate() {
-            assert_eq!(mmap.start_address().raw_value(), addr_ranges[index].0);
-            assert_eq!(mmap.size(), addr_ranges[index].1);
-            assert!(mmap.file_backend().is_some());
-        }
-
-        // check the file backends' total size, should equal to mem_size in config.
-        let total_file_size = host_mmaps[0]
-            .file_backend()
-            .unwrap()
-            .file
-            .metadata()
-            .unwrap()
-            .len();
-        let total_mem_size = addr_ranges.iter().fold(0_u64, |acc, x| acc + x.1);
-        let total_mmaps_size = host_mmaps.iter().fold(0_u64, |acc, x| acc + x.size());
-        assert_eq!(total_mem_size, total_file_size);
-        assert_eq!(total_mem_size, total_mmaps_size);
     }
 
     #[test]
