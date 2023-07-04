@@ -1505,13 +1505,13 @@ mod test {
     use std::{
         fs::remove_file,
         io::{Seek, SeekFrom, Write},
-        os::unix::fs::OpenOptionsExt,
+        os::unix::{fs::OpenOptionsExt, prelude::FileExt},
         process::Command,
     };
 
     use machine_manager::config::DiskFormat;
     use util::{
-        aio::{iov_to_buf_direct, WriteZeroesState},
+        aio::{iov_to_buf_direct, Iovec, WriteZeroesState},
         file::get_file_alignment,
     };
 
@@ -1561,6 +1561,10 @@ mod test {
                 .unwrap();
             file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
                 .unwrap();
+            let zero_buf =
+                vec![0_u8; (cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE) as usize];
+            file.write_all(&zero_buf).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
             file.write_all(&header.to_vec()).unwrap();
 
             // Cluster 1 is the refcount table.
@@ -1602,6 +1606,22 @@ mod test {
             let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
             Qcow2Driver::new(file, aio, conf).unwrap()
         }
+
+        /// Write full the disk with value disorderly.
+        fn write_full_disk(&self, qcow2_driver: &mut Qcow2Driver<()>, value: u8) -> Result<()> {
+            let buf = vec![value; 1 << self.cluster_bits];
+            // Simulate discontinuity of host offset.
+            let mod_range = 2;
+            for mod_value in 0..mod_range {
+                for i in 0..1 << (self.img_bits - self.cluster_bits) {
+                    if i % mod_range == mod_value {
+                        let offset: u64 = i * (1 << self.cluster_bits);
+                        qcow2_write(qcow2_driver, &buf, offset as usize)?;
+                    }
+                }
+            }
+            Ok(())
+        }
     }
 
     impl Drop for TestImage {
@@ -1629,7 +1649,7 @@ mod test {
         output.stdout
     }
 
-    fn get_disk_size(img_path: Rc<String>) -> u64 {
+    fn get_disk_size(img_path: String) -> u64 {
         let out = execute_cmd(format!("du -shk {}", img_path));
         let str_out = std::str::from_utf8(&out)
             .unwrap()
@@ -1949,13 +1969,70 @@ mod test {
         }
     }
 
+    /// Test the basic functions of alloc cluster.
+    /// TestStep:
+    ///   1. Init qcow2 file driver with property of discard and write zero.
+    ///   2. Write full of disk and then send discard command to recycle space.
+    ///   3. Call the function for alloc_cluster with args of write zero
+    ///   and read data from the corresponding address of the file.
+    /// Expect:
+    ///   Newly allocated data is full of zero.
     #[test]
-    fn test_discard_basic() {
-        let path = "/tmp/discard.qcow2";
+    fn test_alloc_cluster_with_zero() {
+        let path = "/tmp/alloc_cluster_with_zero.qcow2";
         // Create a new image, with size = 16M, cluster_size = 64K.
         let image_bits = 24;
         let cluster_bits = 16;
-        let conf = BlockProperty {
+        let alloc_clusters: Vec<u64> = vec![1, 2, 4, 8, 16, 32];
+
+        for n_clusters in alloc_clusters {
+            let image = TestImage::new(path, image_bits, cluster_bits);
+            let (req_align, buf_align) = get_file_alignment(&image.file, true);
+            let conf = BlockProperty {
+                id: path.to_string(),
+                format: DiskFormat::Qcow2,
+                iothread: None,
+                direct: true,
+                req_align,
+                buf_align,
+                discard: true,
+                write_zeroes: WriteZeroesState::On,
+                l2_cache_size: None,
+                refcount_cache_size: None,
+            };
+            let mut qcow2_driver = image.create_qcow2_driver(conf.clone());
+
+            assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
+            assert!(qcow2_driver.discard(0, 1 << image_bits, ()).is_ok());
+
+            let times: u64 = (1 << (image_bits - cluster_bits)) / n_clusters;
+            for _time in 0..times {
+                let addr = qcow2_driver.alloc_cluster(n_clusters, true).unwrap();
+                for i in 0..n_clusters {
+                    let mut buf = vec![1_u8; qcow2_driver.header.cluster_size() as usize];
+                    let offset = addr + i * qcow2_driver.header.cluster_size();
+                    assert!(image.file.read_at(&mut buf, offset).is_ok());
+                    assert!(vec_is_zero(&buf));
+                }
+            }
+        }
+    }
+
+    /// Test the basic functions of discard.
+    /// TestStep:
+    ///   1. Init qcow2 file driver with property of discard.
+    ///   2. Create a new qcow2 image, and then write full disk.
+    ///   3. Send discard command.
+    /// Expect:
+    ///   The size of disk space has been reduced.
+    #[test]
+    fn test_discard_basic() {
+        let path = "/tmp/discard_basic.qcow2";
+        // Create a new image, with size = 16M, cluster_size = 64K.
+        let image_bits = 24;
+        let cluster_bits = 16;
+        let cluster_size = 1 << cluster_bits;
+        let mut conf = BlockProperty {
             id: path.to_string(),
             format: DiskFormat::Qcow2,
             iothread: None,
@@ -1967,27 +2044,132 @@ mod test {
             l2_cache_size: None,
             refcount_cache_size: None,
         };
-        let image = TestImage::new(path, image_bits, cluster_bits);
-        let mut qcow2_driver = image.create_qcow2_driver(conf);
-        // Full the disk.
-        let offset_start = 0;
-        for i in 0..1 << (image.img_bits - image.cluster_bits) {
-            let offset = offset_start + i * (1 << image.cluster_bits);
-            let buf = vec![0_u8; 1 << image.cluster_bits];
-            assert!(qcow2_write(&mut qcow2_driver, &buf, offset as usize).is_ok());
+
+        // (offset_begin, offset_end)
+        let test_data: Vec<(u64, u64)> = vec![
+            (0, cluster_size * 5),
+            (cluster_size * 5, cluster_size * 10),
+            (cluster_size * 5 + 32768, cluster_size * 10),
+            (cluster_size * 5, cluster_size * 10 + 32768),
+            (cluster_size * 5, cluster_size * 5 + 32768),
+            (cluster_size * 5 + 32768, cluster_size * 5 + 32768),
+            (cluster_size * 5 + 32768, cluster_size * 5 + 49152),
+            (cluster_size * 5 + 32768, cluster_size * 6),
+            (cluster_size * 5 + 32768, cluster_size * 10 + 32768),
+            (0, 1 << image_bits),
+        ];
+
+        // Qcow2 driver will align the offset of requests according to the cluster size,
+        // and then use the aligned interval for recying disk.
+        for (offset_begin, offset_end) in test_data {
+            let image = TestImage::new(path, image_bits, cluster_bits);
+            let (req_align, buf_align) = get_file_alignment(&image.file, true);
+            conf.req_align = req_align;
+            conf.buf_align = buf_align;
+            let mut qcow2_driver = image.create_qcow2_driver(conf.clone());
+
+            assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
+            let offset_begin_algn = round_up(offset_begin, cluster_size).unwrap();
+            let offset_end_align = round_down(offset_end, cluster_size).unwrap();
+            let expect_discard_space = if offset_end_align <= offset_begin_algn {
+                0
+            } else {
+                (offset_end_align - offset_begin_algn) / 1024
+            };
+            let full_image_size = get_disk_size(path.to_string());
+            assert!(qcow2_driver
+                .discard(offset_begin as usize, offset_end - offset_begin, ())
+                .is_ok());
+            assert!(qcow2_driver.flush().is_ok());
+
+            let discard_image_size = get_disk_size(path.to_string());
+            assert_eq!(full_image_size, discard_image_size + expect_discard_space);
+            // TODO: Check the metadata for qcow2 image.
         }
-        let image_size_1 = get_disk_size(Rc::new(path.to_string()));
-        assert!(qcow2_driver.discard(0, 1 << image_bits, ()).is_ok());
-        let image_size_2 = get_disk_size(Rc::new(path.to_string()));
-        assert_eq!(image_size_1, image_size_2 + (1 << image_bits) / 1024);
     }
 
+    /// Test the discard during the delete snapshot.
+    /// TestStep:
+    ///   1. Init qcow2 file driver with property of discard.
+    ///   2. Create a new qcow2 image, and then write full disk.
+    ///   3. Create a new snapshot, and then rewrite the disk, which will result in copy on write.
+    ///   4. Delete snapshot, which will result in discard.
+    /// Expect:
+    ///   The size of disk space has been reduced.
+    #[test]
+    fn test_snapshot_with_discard() {
+        let path = "/tmp/snapshot_with_discard.qcow2";
+        // Create a new image, with size = 1G, cluster_size = 64K.
+        let image_bits = 24;
+        let cluster_bits = 16;
+        let image = TestImage::new(path, image_bits, cluster_bits);
+        let (req_align, buf_align) = get_file_alignment(&image.file, true);
+        let conf = BlockProperty {
+            id: path.to_string(),
+            format: DiskFormat::Qcow2,
+            iothread: None,
+            direct: true,
+            req_align,
+            buf_align,
+            discard: true,
+            write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: None,
+            refcount_cache_size: None,
+        };
+
+        let mut qcow2_driver = image.create_qcow2_driver(conf);
+        assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
+
+        let disk_size_1 = get_disk_size(path.to_string());
+        // Create a snapshot and write full disk again, which will result in copy on write.
+        // Delete the snapshot, which will result in discard, and recycle disk size.
+        assert!(qcow2_driver
+            .create_snapshot("test_snapshot_1".to_string(), 1000)
+            .is_ok());
+        assert!(image.write_full_disk(&mut qcow2_driver, 2).is_ok());
+        assert!(qcow2_driver.flush().is_ok());
+        let disk_size_2 = get_disk_size(path.to_string());
+        // Data cluster + 1 snapshot table + l1 table(cow) + l2 table(cow)
+        // But, the cluster of snapshots may not be fully allocated
+        assert!(disk_size_1 < disk_size_2);
+
+        assert!(qcow2_driver
+            .create_snapshot("test_snapshot_2".to_string(), 1000)
+            .is_ok());
+        assert!(image.write_full_disk(&mut qcow2_driver, 2).is_ok());
+        assert!(qcow2_driver.flush().is_ok());
+        let disk_size_3 = get_disk_size(path.to_string());
+        // Data cluster + l1 table(cow) + l2 table(cow)
+        assert!(disk_size_2 < disk_size_3);
+
+        // Snapshot delete will result in discard, which will recycle the disk space.
+        assert!(qcow2_driver
+            .delete_snapshot("test_snapshot_2".to_string())
+            .is_ok());
+        let disk_size_4 = get_disk_size(path.to_string());
+        assert_eq!(disk_size_4, disk_size_2);
+
+        assert!(qcow2_driver
+            .delete_snapshot("test_snapshot_1".to_string())
+            .is_ok());
+        let disk_size_5 = get_disk_size(path.to_string());
+        assert_eq!(disk_size_5, disk_size_1);
+    }
+
+    /// Test the basic functions of write zero.
+    /// TestStep:
+    ///   1. Init qcow2 file driver with property of write zero.
+    ///   2. Create a new qcow2 image, and then write full disk with value of 1.
+    ///   3. Send write zero command with (offset, nbytes).
+    /// Expect:
+    ///   1. The data read from disk of the specified interval is zero.
     #[test]
     fn test_write_zero_basic() {
         // Create a new image, with size = 16M, cluster_size = 64K.
         let path = "/tmp/discard_write_zero.qcow2";
         let image_bits = 24;
         let cluster_bits = 16;
+        let image = TestImage::new(path, image_bits, cluster_bits);
         let conf = BlockProperty {
             id: path.to_string(),
             format: DiskFormat::Qcow2,
@@ -2000,7 +2182,6 @@ mod test {
             l2_cache_size: None,
             refcount_cache_size: None,
         };
-        let image = TestImage::new(path, image_bits, cluster_bits);
         let mut qcow2_driver = image.create_qcow2_driver(conf);
 
         // Test 1.
