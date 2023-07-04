@@ -43,7 +43,7 @@ const AIO_OFF: &str = "off";
 const AIO_NATIVE: &str = "native";
 /// Io-uring aio type.
 const AIO_IOURING: &str = "io_uring";
-/// Max bytes of bounce buffer for misaligned IO.
+/// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
@@ -595,13 +595,13 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn discard_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
-        if ret < 0 {
+        if ret < 0 && ret != -libc::ENOTSUP as i64 {
             error!("Failed to do sync discard.");
         }
         (self.complete_func)(&cb, ret)
     }
 
-    fn write_zeroes_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn write_zeroes_sync(&mut self, mut cb: AioCb<T>) -> Result<()> {
         let mut ret;
         if cb.opcode == OpCode::WriteZeroesUnmap {
             ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
@@ -610,6 +610,12 @@ impl<T: Clone + 'static> Aio<T> {
             }
         }
         ret = raw_write_zeroes(cb.file_fd, cb.offset, cb.nbytes);
+        if ret == -libc::ENOTSUP as i64 && !cb.iovec.is_empty() {
+            cb.opcode = OpCode::Pwritev;
+            cb.write_zeroes = WriteZeroesState::Off;
+            return self.submit_request(cb);
+        }
+
         if ret < 0 {
             error!("Failed to do sync write zeroes.");
         }

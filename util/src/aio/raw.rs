@@ -140,22 +140,8 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
 }
 
 pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let mut ret;
-    loop {
-        // SAFETY: fd is valid.
-        ret = unsafe {
-            fallocate(
-                fd as c_int,
-                FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                offset as i64,
-                size as i64,
-            ) as i64
-        };
-        if ret == 0 || nix::errno::errno() != libc::EINTR {
-            break;
-        }
-    }
-    if ret < 0 {
+    let ret = do_fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, size);
+    if ret < 0 && ret != -libc::ENOTSUP as i64 {
         error!(
             "Failed to fallocate for {}, errno {}.",
             fd,
@@ -166,22 +152,8 @@ pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
 }
 
 pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let mut ret;
-    loop {
-        // SAFETY: fd is valid.
-        ret = unsafe {
-            fallocate(
-                fd as c_int,
-                FALLOC_FL_ZERO_RANGE,
-                offset as i64,
-                size as i64,
-            ) as i64
-        };
-        if ret == 0 || nix::errno::errno() != libc::EINTR {
-            break;
-        }
-    }
-    if ret < 0 {
+    let ret = do_fallocate(fd, FALLOC_FL_ZERO_RANGE, offset, size);
+    if ret < 0 && ret != -libc::ENOTSUP as i64 {
         error!(
             "Failed to fallocate zero range for fd {}, errno {}.",
             fd,
@@ -189,4 +161,22 @@ pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
         );
     }
     ret
+}
+
+fn do_fallocate(fd: RawFd, mode: i32, offset: usize, size: u64) -> i64 {
+    loop {
+        // SAFETY: fd is valid.
+        let ret = unsafe { fallocate(fd as c_int, mode, offset as i64, size as i64) as i64 };
+        if ret == 0 {
+            return 0;
+        }
+        if nix::errno::errno() != libc::EINTR {
+            break;
+        }
+    }
+
+    if [libc::ENODEV, libc::ENOSYS, libc::EOPNOTSUPP, libc::ENOTTY].contains(&nix::errno::errno()) {
+        return -libc::ENOTSUP as i64;
+    }
+    -nix::errno::errno() as i64
 }
