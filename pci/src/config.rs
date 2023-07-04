@@ -1214,7 +1214,7 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(8192, region_ops.clone());
+        let region = Region::init_io_region(8192, region_ops.clone(), "io");
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
@@ -1232,7 +1232,7 @@ mod tests {
             .register_bar(7, region, RegionType::Mem64Bit, true, 8192)
             .is_err());
         // test when bar size is incorrect(not power of 2)
-        let region_size_not_pow_2 = Region::init_io_region(4238, region_ops);
+        let region_size_not_pow_2 = Region::init_io_region(4238, region_ops, "io2");
         assert!(pci_config
             .register_bar(4, region_size_not_pow_2, RegionType::Mem64Bit, true, 4238)
             .is_err());
@@ -1291,7 +1291,7 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(8192, region_ops);
+        let region = Region::init_io_region(8192, region_ops, "io");
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
 
         #[cfg(target_arch = "x86_64")]
@@ -1327,8 +1327,13 @@ mod tests {
         .unwrap();
 
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_io =
+            AddressSpace::new(Region::init_container_region(1 << 16, "sysio"), "sysio").unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         assert_eq!(pci_config.bars[1].address, BAR_SPACE_UNMAPPED);
         assert_eq!(pci_config.bars[2].address, BAR_SPACE_UNMAPPED);
         pci_config
@@ -1454,7 +1459,7 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(4096, region_ops);
+        let region = Region::init_io_region(4096, region_ops, "io");
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         // bar is unmapped
@@ -1470,8 +1475,8 @@ mod tests {
             .is_ok());
 
         #[cfg(target_arch = "x86_64")]
-        let io_region = Region::init_container_region(1 << 16);
-        let mem_region = Region::init_container_region(u64::max_value());
+        let io_region = Region::init_container_region(1 << 16, "iocon");
+        let mem_region = Region::init_container_region(u64::max_value(), "mem");
         let bus = Arc::new(Mutex::new(PciBus::new(
             String::from("bus"),
             #[cfg(target_arch = "x86_64")]

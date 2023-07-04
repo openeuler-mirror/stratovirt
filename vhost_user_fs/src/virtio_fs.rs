@@ -213,8 +213,11 @@ impl VirtioFs {
     ///
     /// * `source_dir` - The path of source directory shared in host.
     pub fn new(fs_config: FsConfig) -> Result<Self> {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| "Failed to create address space")?;
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "VirtioFsMem"),
+            "VirtioFsMem",
+        )
+        .with_context(|| "Failed to create address space")?;
 
         let mut fs_handlers = Vec::new();
         for _i in 0..(VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM) {
@@ -296,7 +299,7 @@ impl VhostUserReqHandler for VirtioFs {
                     )?
             );
 
-            let region = Region::init_ram_region(mmap.clone());
+            let region = Region::init_ram_region(mmap.clone(), "VirtioFsRam");
             self.sys_mem
                 .root()
                 .add_subregion(region.clone(), mmap.start_address().raw_value())

@@ -853,7 +853,7 @@ impl FwCfgMem {
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size)
+            .attach_device(&dev, region_base, region_size, "FwCfgMem")
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
@@ -1019,7 +1019,7 @@ impl FwCfgIO {
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size)
+            .attach_device(&dev, region_base, region_size, "FwCfgIO")
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
@@ -1274,9 +1274,14 @@ mod test {
     use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sys_mem"),
+            "sys_mem",
+        )
+        .unwrap();
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        let sys_io =
+            AddressSpace::new(Region::init_container_region(1 << 16, "sys_io"), "sys_io").unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
         SysBus::new(
@@ -1289,8 +1294,8 @@ mod test {
     }
 
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "root");
+        let sys_space = AddressSpace::new(root, "sys_space").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -1306,7 +1311,7 @@ mod test {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "region_1"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();

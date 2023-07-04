@@ -108,7 +108,7 @@ impl PL031 {
             .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "PL031")?;
 
         MigrationManager::register_device_instance(
             PL031State::descriptor(),

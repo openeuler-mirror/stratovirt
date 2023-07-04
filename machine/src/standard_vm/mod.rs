@@ -144,7 +144,7 @@ trait StdMachineOps: AcpiBuilder {
             .with_context(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
-        if let Some(numa_nodes) = self.get_numa_nodes() {
+        if let Some(numa_nodes) = self.get_guest_numa() {
             let srat_addr = self
                 .build_srat_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI SRAT table")?;
@@ -191,7 +191,7 @@ trait StdMachineOps: AcpiBuilder {
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
+    fn get_guest_numa(&self) -> &Option<NumaNodes>;
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -1688,7 +1688,7 @@ impl DeviceInterface for StdMachine {
         let region;
         match args.region_type.as_str() {
             "io_region" => {
-                region = Region::init_io_region(args.size, dummy_dev_ops);
+                region = Region::init_io_region(args.size, dummy_dev_ops, "UpdateRegionTest");
                 if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
                     let ioeventfds = vec![RegionIoEventFd {
                         fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
@@ -1717,21 +1717,25 @@ impl DeviceInterface for StdMachine {
                         .unwrap(),
                     ),
                     dummy_dev_ops,
+                    "RomDeviceRegionTest",
                 );
             }
             "ram_device_region" => {
-                region = Region::init_ram_device_region(Arc::new(
-                    HostMemMapping::new(
-                        GuestAddress(args.offset),
-                        None,
-                        args.size,
-                        fd.map(FileBackend::new_common),
-                        false,
-                        true,
-                        false,
-                    )
-                    .unwrap(),
-                ));
+                region = Region::init_ram_device_region(
+                    Arc::new(
+                        HostMemMapping::new(
+                            GuestAddress(args.offset),
+                            None,
+                            args.size,
+                            fd.map(FileBackend::new_common),
+                            false,
+                            true,
+                            false,
+                        )
+                        .unwrap(),
+                    ),
+                    "RamdeviceregionTest",
+                );
             }
             _ => {
                 return Response::create_error_response(

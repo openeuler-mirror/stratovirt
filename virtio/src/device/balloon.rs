@@ -1206,8 +1206,8 @@ mod tests {
     const QUEUE_SIZE: u16 = 256;
 
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "space");
+        let sys_space = AddressSpace::new(root, "space").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -1223,7 +1223,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "space"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();
@@ -1239,7 +1239,7 @@ mod tests {
                 mem_mapping.start_address().unchecked_add(offset_in_region),
                 mem_mapping.size() - offset_in_region,
             ),
-            owner: Region::init_ram_region(mem_mapping.clone()),
+            owner: Region::init_ram_region(mem_mapping.clone(), "mem"),
             offset_in_region,
             rom_dev_romd: None,
         }

@@ -233,8 +233,8 @@ mod test {
 
     #[test]
     fn test_boot_param() {
-        let root = Region::init_container_region(0x2000_0000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(0x2000_0000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -247,7 +247,7 @@ mod test {
             )
             .unwrap(),
         );
-        let region_a = Region::init_ram_region(ram1.clone());
+        let region_a = Region::init_ram_region(ram1.clone(), "region_a");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
 

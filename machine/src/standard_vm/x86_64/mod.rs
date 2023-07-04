@@ -143,6 +143,8 @@ pub struct StdMachine {
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// All backend memory region tree
+    machine_ram: Arc<Region>,
 }
 
 impl StdMachine {
@@ -156,10 +158,13 @@ impl StdMachine {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .with_context(|| MachineError::CrtMemSpaceErr)?;
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16, "SysIo"), "SysIo")
             .with_context(|| MachineError::CrtIoSpaceErr)?;
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "SysMem"),
+            "SysMem",
+        )
+        .with_context(|| MachineError::CrtMemSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
@@ -204,6 +209,10 @@ impl StdMachine {
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            machine_ram: Arc::new(Region::init_container_region(
+                u64::max_value(),
+                "MachineRam",
+            )),
         })
     }
 
@@ -288,6 +297,7 @@ impl StdMachineOps for StdMachine {
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1,
             mmconfig_region_ops.clone(),
+            "PcieEcamSpace",
         );
         self.sys_mem
             .root()
@@ -298,13 +308,13 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register ECAM in memory space.")?;
 
         let pio_addr_ops = PciHost::build_pio_addr_ops(self.pci_host.clone());
-        let pio_addr_region = Region::init_io_region(4, pio_addr_ops);
+        let pio_addr_region = Region::init_io_region(4, pio_addr_ops, "PioAddr");
         self.sys_io
             .root()
             .add_subregion(pio_addr_region, 0xcf8)
             .with_context(|| "Failed to register CONFIG_ADDR port in I/O space.")?;
         let pio_data_ops = PciHost::build_pio_data_ops(self.pci_host.clone());
-        let pio_data_region = Region::init_io_region(4, pio_data_ops);
+        let pio_data_region = Region::init_io_region(4, pio_data_ops, "PioData");
         self.sys_io
             .root()
             .add_subregion(pio_data_region, 0xcfc)
@@ -341,22 +351,38 @@ impl StdMachineOps for StdMachine {
         &self.cpus
     }
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+    fn get_guest_numa(&self) -> &Option<NumaNodes> {
         &self.numa_nodes
     }
 }
 
 impl MachineOps for StdMachine {
-    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+        let ram = self.get_vm_ram();
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
 
-        let mut ranges = vec![(0, std::cmp::min(gap_start, mem_size))];
-        if mem_size > gap_start {
-            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-            ranges.push((gap_end, mem_size - gap_start));
+        let below4g_ram = Region::init_alias_region(
+            ram.clone(),
+            0,
+            std::cmp::min(below4g_size, mem_size),
+            "below4g_ram",
+        );
+        sys_mem.root().add_subregion(
+            below4g_ram,
+            MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+        )?;
+
+        if mem_size > below4g_size {
+            let above4g_ram = Region::init_alias_region(
+                ram.clone(),
+                below4g_size,
+                mem_size - below4g_size,
+                "above4g_ram",
+            );
+            let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+            sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
-        ranges
+        Ok(())
     }
 
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
@@ -548,7 +574,7 @@ impl MachineOps for StdMachine {
                     false,
                     false,
                 )?);
-                let rom_region = Region::init_ram_region(ram1);
+                let rom_region = Region::init_ram_region(ram1, "PflashRam");
                 rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
                 rom_region.set_priority(10);
                 self.sys_mem.root().add_subregion(rom_region, rom_base)?;
@@ -636,6 +662,14 @@ impl MachineOps for StdMachine {
 
     fn get_sys_bus(&mut self) -> &SysBus {
         &self.sysbus
+    }
+
+    fn get_vm_ram(&self) -> &Arc<Region> {
+        &self.machine_ram
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {

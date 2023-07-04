@@ -385,18 +385,21 @@ impl VfioPciDevice {
                 .with_context(|| "Failed to get vfio bar info")?;
             let size = vfio_bar.size;
 
-            let region = Region::init_container_region(size);
+            let region = Region::init_container_region(size, "VfioPci");
             let bar_region = if i == table_bar {
                 region
                     .add_subregion(
-                        Region::init_io_region(table_size, table_ops.clone()),
+                        Region::init_io_region(table_size, table_ops.clone(), "VfioBar"),
                         table_offset,
                     )
                     .with_context(|| VfioError::AddRegBar(i as usize))?;
 
                 if table_offset > 0 {
                     region
-                        .add_subregion(Region::init_io_region(table_offset, bar_ops.clone()), 0)
+                        .add_subregion(
+                            Region::init_io_region(table_offset, bar_ops.clone(), "VfioRegion"),
+                            0,
+                        )
                         .with_context(|| VfioError::AddRegBar(i as usize))?;
                 }
 
@@ -406,6 +409,7 @@ impl VfioPciDevice {
                             Region::init_io_region(
                                 size - table_offset - table_size,
                                 bar_ops.clone(),
+                                "vfio_io_region2",
                             ),
                             table_offset + table_size,
                         )
@@ -414,7 +418,10 @@ impl VfioPciDevice {
                 region
             } else {
                 region
-                    .add_subregion(Region::init_io_region(size, bar_ops.clone()), 0)
+                    .add_subregion(
+                        Region::init_io_region(size, bar_ops.clone(), "vfio_io_region"),
+                        0,
+                    )
                     .with_context(|| VfioError::AddRegBar(i as usize))?;
                 region
             };
@@ -695,7 +702,7 @@ impl VfioPciDevice {
                     read_only,
                 )?;
 
-                let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
+                let ram_device = Region::init_ram_device_region(Arc::new(host_mmap), "VfioRam");
                 let bar = self
                     .pci_config
                     .bars

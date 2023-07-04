@@ -214,7 +214,8 @@ impl PFlash {
 
         let dev = Arc::new(Mutex::new(self));
         let region_ops = sysbus.build_region_ops(&dev);
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops);
+
+        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
         dev.lock().unwrap().rom = Some(rom_region.clone());
         sysbus
             .sys_mem
@@ -868,9 +869,14 @@ mod test {
     use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sys_mem"),
+            "sys_mem",
+        )
+        .unwrap();
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        let sys_io =
+            AddressSpace::new(Region::init_container_region(1 << 16, "sys_io"), "sys_io").unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
         SysBus::new(
@@ -916,7 +922,7 @@ mod test {
             .unwrap(),
         );
 
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops);
+        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "pflash-dev");
         dev.lock().unwrap().rom = Some(rom_region);
         dev
     }

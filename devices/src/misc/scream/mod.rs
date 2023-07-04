@@ -388,7 +388,7 @@ impl Scream {
         )?);
         self.hva = host_mmap.host_address();
 
-        let mem_region = Region::init_ram_region(host_mmap);
+        let mem_region = Region::init_ram_region(host_mmap, "ivshmem_ram");
 
         let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
         ivshmem.realize()?;
