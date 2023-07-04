@@ -412,17 +412,19 @@ impl RefCount {
     }
 
     /// Process discards task by sync aio.
-    pub fn sync_process_discards(&mut self, opcode: OpCode) -> Result<()> {
+    pub fn sync_process_discards(&mut self, opcode: OpCode) {
         for task in self.discard_list.iter() {
             let offset = task.offset;
             let nbytes = task.nbytes;
             let mut borrowed_sync_aio = self.sync_aio.borrow_mut();
             let discard_aio =
                 borrowed_sync_aio.package_sync_aiocb(opcode, Vec::new(), offset as usize, nbytes);
-            borrowed_sync_aio.aio.submit_request(discard_aio)?;
+            borrowed_sync_aio
+                .aio
+                .submit_request(discard_aio)
+                .unwrap_or_else(|e| error!("Discard failed: {:?}", e));
         }
         self.discard_list.clear();
-        Ok(())
     }
 
     pub fn offset_into_cluster(&self, offset: u64) -> u64 {

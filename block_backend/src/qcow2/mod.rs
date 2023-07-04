@@ -353,11 +353,14 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             // Alloc a new l2_table.
             let old_l2_offset = l1_entry & L1_TABLE_OFFSET_MASK;
             let new_l2_offset = self.alloc_cluster(1, true)?;
-            let l2_cluster = if old_l2_offset != 0 {
-                self.load_cluster(l2_address)?
-            } else {
-                vec![0_u8; self.header.cluster_size() as usize]
-            };
+            let l2_cluster: Vec<u8> =
+                if let Some(entry) = self.table.get_l2_table_cache_entry(guest_offset) {
+                    entry.borrow().get_value().to_vec()
+                } else if old_l2_offset != 0 {
+                    self.load_cluster(l2_address)?
+                } else {
+                    vec![0_u8; self.header.cluster_size() as usize]
+                };
             self.sync_aio
                 .borrow_mut()
                 .write_buffer(new_l2_offset, &l2_cluster)?;
@@ -551,6 +554,10 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     fn alloc_cluster(&mut self, clusters: u64, write_zero: bool) -> Result<u64> {
+        if !self.refcount.discard_list.is_empty() {
+            self.refcount.sync_process_discards(OpCode::Discard);
+        }
+
         let size = clusters * self.header.cluster_size();
         let addr = self.refcount.alloc_cluster(&mut self.header, size)?;
         if write_zero && addr < self.driver.disk_size()? {
@@ -686,6 +693,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             }
             self.header.snapshots_offset = new_header.snapshots_offset;
             self.header.nb_snapshots = new_header.nb_snapshots;
+            self.refcount.sync_process_discards(OpCode::Discard);
 
             return Ok(SnapshotInfo {
                 id: snap.id.to_string(),
@@ -863,6 +871,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             }
             self.header.snapshots_offset = new_header.snapshots_offset;
             self.header.nb_snapshots = new_header.nb_snapshots;
+            self.refcount.sync_process_discards(OpCode::Discard);
 
             return Ok(());
         }
@@ -1027,9 +1036,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 }
             }
         }
-        self.refcount
-            .sync_process_discards(OpCode::Discard)
-            .unwrap_or_else(|e| error!("Snapshot discard failed: {:?}", e));
         self.refcount.flush_refcount_block_cache()?;
         if l1_changed {
             self.sync_aio
