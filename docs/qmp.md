@@ -64,6 +64,7 @@ Add a block backend.
 * `file` : the backend file information.
 * `cache` : if use direct io.
 * `read-only` : if readonly.
+* `driver` : the block image format. Possible values are `raw` or `qcow2`. If not set, default is `raw`.
 
 #### Notes
 
@@ -73,6 +74,8 @@ Add a block backend.
 
 * For `addr`, it start at `0x0` mapping in guest with `vda` on x86_64 platform, and start at `0x1`
  mapping in guest with `vdb` on aarch64 platform.
+
+ * For `driver`, only `raw` is supported.
 
 #### Example
 
