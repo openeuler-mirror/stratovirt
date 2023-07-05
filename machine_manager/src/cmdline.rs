@@ -386,6 +386,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true),
         )
         .arg(
+            Arg::with_name("battery")
+            .long("battery")
+            .value_name("")
+            .help("enable battery and power adapter devices")
+            .takes_value(false)
+            .required(false),
+        )
+        .arg(
             Arg::with_name("boot")
             .long("boot")
             .value_name("[strict=on]")
@@ -519,6 +527,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
         add_no_shutdown,
         bool
     );
+    add_args_to_config!((args.is_present("battery")), vm_cfg, add_battery, bool);
     add_args_to_config!(
         (args.is_present("mem-prealloc")),
         vm_cfg,

@@ -159,6 +159,7 @@ pub struct MachineConfig {
     pub mem_config: MachineMemConfig,
     pub cpu_config: CpuConfig,
     pub shutdown_action: ShutdownAction,
+    pub battery: bool,
 }
 
 impl Default for MachineConfig {
@@ -176,6 +177,7 @@ impl Default for MachineConfig {
             mem_config: MachineMemConfig::default(),
             cpu_config: CpuConfig::default(),
             shutdown_action: ShutdownAction::default(),
+            battery: false,
         }
     }
 }
@@ -411,6 +413,11 @@ impl VmConfig {
 
     pub fn add_no_shutdown(&mut self) -> bool {
         self.machine_config.shutdown_action = ShutdownAction::ShutdownActionPause;
+        true
+    }
+
+    pub fn add_battery(&mut self) -> bool {
+        self.machine_config.battery = true;
         true
     }
 }
@@ -664,6 +671,7 @@ mod tests {
             mem_config: memory_config,
             cpu_config: CpuConfig::default(),
             shutdown_action: ShutdownAction::default(),
+            battery: false,
         };
         assert!(machine_config.check().is_ok());
 
