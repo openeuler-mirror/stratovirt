@@ -296,7 +296,7 @@ fourteen properties are supported for virtio block device.
 * discard: free up unused disk space. (optional) `unmap/ignore` means `on/off`. If not set, default is `ignore`.
 * detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If discard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
 * if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
-* format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
+* format: the format of block image. (optional) Possible values are `raw` or `qcow2`. If not set, default is `raw`. NB: currently only `raw` is supported for microvm.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
 The number ranges from 0 to 255, the smaller the number, the higher the priority.
@@ -881,8 +881,6 @@ Six properties can be set for Virtio-Scsi controller.
 ```
 ### 2.15 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
-
-Note: Only support using raw image file as backend now.
 
 Ten properties can be set for virtio-scsi hd.
 
