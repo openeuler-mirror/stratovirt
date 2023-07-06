@@ -12,7 +12,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::{error::ConfigError, pci_args_check};
+use super::{error::ConfigError, pci_args_check, DiskFormat};
 use crate::config::{
     check_arg_too_long, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
@@ -162,6 +162,7 @@ pub struct ScsiDevConfig {
     pub channel: u8,
     pub target: u8,
     pub lun: u16,
+    pub format: DiskFormat,
 }
 
 impl Default for ScsiDevConfig {
@@ -178,6 +179,7 @@ impl Default for ScsiDevConfig {
             channel: 0,
             target: 0,
             lun: 0,
+            format: DiskFormat::Raw,
         }
     }
 }
@@ -257,12 +259,15 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         scsi_dev_cfg.lun = lun;
     }
 
-    if let Some(drive_arg) = &vm_config.drives.remove(&scsi_drive) {
-        scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
-        scsi_dev_cfg.read_only = drive_arg.read_only;
-        scsi_dev_cfg.direct = drive_arg.direct;
-        scsi_dev_cfg.aio_type = drive_arg.aio;
-    }
+    let drive_arg = &vm_config
+        .drives
+        .remove(&scsi_drive)
+        .with_context(|| "No drive configured matched for scsi device")?;
+    scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
+    scsi_dev_cfg.read_only = drive_arg.read_only;
+    scsi_dev_cfg.direct = drive_arg.direct;
+    scsi_dev_cfg.aio_type = drive_arg.aio;
+    scsi_dev_cfg.format = drive_arg.format;
 
     Ok(scsi_dev_cfg)
 }

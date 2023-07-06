@@ -10,17 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod raw;
-
 mod file;
+mod qcow2;
+mod raw;
 
 use std::{
     fs::File,
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
+use machine_manager::config::DiskFormat;
+use qcow2::Qcow2Driver;
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -29,6 +31,7 @@ pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct BlockProperty {
+    pub format: DiskFormat,
     pub iothread: Option<String>,
     pub direct: bool,
     pub req_align: u32,
@@ -74,7 +77,26 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     aio: Aio<T>,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
-    // NOTE: we only support file backend for raw format now.
-    let raw_file = RawDriver::new(file, aio, prop);
-    Ok(Arc::new(Mutex::new(raw_file)))
+    match prop.format {
+        DiskFormat::Raw => {
+            let mut raw_file = RawDriver::new(file, aio, prop.clone());
+            let file_size = raw_file.disk_size()?;
+            if file_size & (prop.req_align as u64 - 1) != 0 {
+                bail!("The size of raw file is not aligned to {}.", prop.req_align);
+            }
+            Ok(Arc::new(Mutex::new(raw_file)))
+        }
+        DiskFormat::Qcow2 => {
+            let mut qcow2 = Qcow2Driver::new(file, aio, prop.clone())
+                .with_context(|| "Failed to create qcow2 driver")?;
+            let file_size = qcow2.disk_size()?;
+            if file_size & (prop.req_align as u64 - 1) != 0 {
+                bail!(
+                    "The size of qcow2 file is not aligned to {}.",
+                    prop.req_align
+                );
+            }
+            Ok(Arc::new(Mutex::new(qcow2)))
+        }
+    }
 }

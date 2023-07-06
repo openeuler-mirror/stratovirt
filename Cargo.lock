@@ -191,6 +191,7 @@ version = "2.2.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "libc",
  "log",
  "machine_manager",
  "thiserror",

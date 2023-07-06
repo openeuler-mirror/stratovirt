@@ -61,8 +61,8 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig,
-    VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf,
+    ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -823,6 +823,7 @@ impl StdMachine {
                 queue_size,
                 discard: conf.discard,
                 write_zeroes: conf.write_zeroes,
+                format: conf.format,
             };
             dev.check()?;
             dev
@@ -1383,6 +1384,7 @@ impl DeviceInterface for StdMachine {
             media: "disk".to_string(),
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
         };
         if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
             config.direct = false;
@@ -1415,6 +1417,18 @@ impl DeviceInterface for StdMachine {
                 );
             }
             config.write_zeroes = state.unwrap();
+        }
+        if let Some(format) = args.driver {
+            match format.as_str().parse::<DiskFormat>() {
+                Ok(fmt) => config.format = fmt,
+                Err(e) => {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+            }
         }
         if let Err(e) = config.check() {
             error!("{:?}", e);
