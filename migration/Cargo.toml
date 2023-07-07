@@ -18,4 +18,4 @@ hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 
 [dev-dependencies]
-migration_derive = { path = "../migration_derive" }
+migration_derive = { path = "migration_derive" }
