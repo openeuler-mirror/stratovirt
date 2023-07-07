@@ -16,6 +16,7 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 
 use crate::qcow2::{
+    bytes_to_clusters,
     cache::{CacheTable, Qcow2Cache, ENTRY_SIZE_U16},
     header::QcowHeader,
     is_aligned, SyncAioInfo, ENTRY_SIZE,
@@ -75,8 +76,8 @@ impl RefCount {
         self.refcount_max += self.refcount_max - 1;
     }
 
-    fn bytes_to_clusters(&self, size: u64) -> u64 {
-        (size + self.cluster_size - 1) >> self.cluster_bits
+    pub fn start_of_cluster(&self, offset: u64) -> u64 {
+        offset & !(self.cluster_size - 1)
     }
 
     fn cluster_in_rc_block(&self, cluster_index: u64) -> u64 {
@@ -137,8 +138,8 @@ impl RefCount {
             (self.refcount_table_clusters << self.cluster_bits) as u64 / ENTRY_SIZE;
 
         // Free the old cluster of refcount table.
-        let clusters = self.bytes_to_clusters(old_rct_size as u64);
-        self.update_refcount(old_rct_offset, clusters, false, 1)?;
+        let clusters = bytes_to_clusters(old_rct_size, self.cluster_size).unwrap();
+        self.update_refcount(old_rct_offset, clusters, false, 1, true)?;
         info!(
             "Qcow2 extends refcount table success, offset 0x{:x} -> 0x{:x}",
             old_rct_offset, self.refcount_table_offset
@@ -153,8 +154,12 @@ impl RefCount {
         clusters: u64,
         is_add: bool,
         addend: u16,
+        flush: bool,
     ) -> Result<()> {
-        let first_cluster = self.bytes_to_clusters(offset);
+        if self.offset_into_cluster(offset) != 0 {
+            bail!("Failed to update refcount, offset is not aligned to cluster");
+        }
+        let first_cluster = bytes_to_clusters(offset, self.cluster_size).unwrap();
         let mut rc_vec = Vec::new();
         let mut i = 0;
         while i < clusters {
@@ -186,7 +191,10 @@ impl RefCount {
             let status = if rev_idx == idx { "success" } else { "failed" };
             bail!("Failed to set refcounts, recover {}", status);
         }
-        self.flush_reftount_block_cache()
+        if flush {
+            self.flush_refcount_block_cache()?;
+        }
+        Ok(())
     }
 
     fn set_refcount_blocks(
@@ -207,7 +215,7 @@ impl RefCount {
         rc_vec.len()
     }
 
-    fn flush_reftount_block_cache(&self) -> Result<()> {
+    pub fn flush_refcount_block_cache(&self) -> Result<()> {
         for (_, entry) in self.refcount_blk_cache.iter() {
             let mut borrowed_entry = entry.borrow_mut();
             if !borrowed_entry.dirty_info.is_dirty {
@@ -282,7 +290,44 @@ impl RefCount {
         Ok(())
     }
 
-    fn offset_into_cluster(&self, offset: u64) -> u64 {
+    pub fn get_refcount(&mut self, offset: u64) -> Result<u16> {
+        let cluster = offset >> self.cluster_bits;
+        let rt_idx = cluster >> self.refcount_blk_bits;
+        if rt_idx >= self.refcount_table_size as u64 {
+            bail!(
+                "Invalid refcount table index {}, refcount table size {}",
+                rt_idx,
+                self.refcount_table_size
+            );
+        }
+
+        let rb_addr = self.refcount_table[rt_idx as usize];
+        if rb_addr == 0 || self.offset_into_cluster(rb_addr) != 0 {
+            bail!(
+                "Invalid refcount block address 0x{:x}, index is {}",
+                rb_addr,
+                rt_idx
+            );
+        }
+
+        if !self.refcount_blk_cache.contains_keys(rt_idx) {
+            self.load_refcount_block(rt_idx).with_context(|| {
+                format!("Failed to get refcount block cache, index is {}", rt_idx)
+            })?;
+        }
+        let cache_entry = self
+            .refcount_blk_cache
+            .get(rt_idx)
+            .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
+            .clone();
+
+        let rb_idx = self.cluster_in_rc_block(cluster) as usize;
+        let rc_value = cache_entry.borrow_mut().get_entry_map(rb_idx).unwrap();
+
+        Ok(rc_value as u16)
+    }
+
+    pub fn offset_into_cluster(&self, offset: u64) -> u64 {
         offset & (self.cluster_size - 1)
     }
 
@@ -323,7 +368,7 @@ impl RefCount {
     }
 
     fn find_free_cluster(&mut self, header: &mut QcowHeader, size: u64) -> Result<u64> {
-        let clusters = self.bytes_to_clusters(size);
+        let clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
         let mut current_index = self.free_cluster_index;
         let mut i = 0;
         while i < clusters {
@@ -384,8 +429,8 @@ impl RefCount {
 
     pub fn alloc_cluster(&mut self, header: &mut QcowHeader, size: u64) -> Result<u64> {
         let addr = self.find_free_cluster(header, size)?;
-        let clusters = self.bytes_to_clusters(size as u64);
-        self.update_refcount(addr, clusters, true, 1)?;
+        let clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
+        self.update_refcount(addr, clusters, true, 1, true)?;
         Ok(addr)
     }
 
@@ -626,11 +671,11 @@ mod test {
         let mut refcount = qcow2.refcount.clone();
 
         // Add refcount for the first cluster.
-        let ret = refcount.update_refcount(0, 1, true, 1);
+        let ret = refcount.update_refcount(0, 1, true, 1, true);
         assert!(ret.is_ok());
 
         // Test invalid cluster offset.
-        let ret = refcount.update_refcount(1 << 63, 1, true, 1);
+        let ret = refcount.update_refcount(1 << 63, 1, true, 1, true);
         if let Err(err) = ret {
             // 16 bit is cluster bits, 15 is refcount block bits.
             let err_msg = format!("Invalid refcount table index {}", 1_u64 << (63 - 15 - 16));
@@ -640,7 +685,7 @@ mod test {
         }
 
         // Test refcount block not in cache.
-        let ret = refcount.update_refcount(1 << (cluster_bits * 2), 1, true, 1);
+        let ret = refcount.update_refcount(1 << (cluster_bits * 2), 1, true, 1, true);
         if let Err(err) = ret {
             let err_msg = format!("Invalid refcount block address 0x0, index is 2");
             assert_eq!(err.to_string(), err_msg);

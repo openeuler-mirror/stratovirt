@@ -194,6 +194,7 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "once_cell",
  "thiserror",
  "util",
  "vmm-sys-util",

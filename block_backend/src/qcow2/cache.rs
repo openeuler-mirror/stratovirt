@@ -94,6 +94,10 @@ impl CacheTable {
         Ok(v)
     }
 
+    pub fn get_entry_num(&self) -> usize {
+        self.table_data.len() / self.entry_size
+    }
+
     #[inline(always)]
     pub fn get_entry_map(&mut self, idx: usize) -> Result<u64> {
         self.be_read(idx)

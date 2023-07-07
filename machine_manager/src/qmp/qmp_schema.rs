@@ -2256,6 +2256,24 @@ pub struct human_monitor_command {
 }
 pub type HumanMonitorCmdArgument = human_monitor_command;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "vm-state-size")]
+    pub vm_state_size: u64,
+    #[serde(rename = "date-sec")]
+    pub date_sec: u32,
+    #[serde(rename = "date-nsec")]
+    pub date_nsec: u32,
+    #[serde(rename = "vm-clock-nsec")]
+    pub vm_clock_nsec: u64,
+    #[serde(rename = "icount")]
+    pub icount: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
