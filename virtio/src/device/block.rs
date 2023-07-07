@@ -38,7 +38,9 @@ use crate::{
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use address_space::{AddressSpace, GuestAddress};
-use block_backend::{create_block_backend, BlockDriverOps, BlockIoErrorCallback, BlockProperty};
+use block_backend::{
+    create_block_backend, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+};
 use machine_manager::config::{BlkDevConfig, ConfigCheck, DriveFile, VmConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
@@ -625,6 +627,26 @@ impl BlockIoHandler {
     }
 
     fn process_queue_suppress_notify(&mut self) -> Result<bool> {
+        // Note: locked_status has two function:
+        // 1) set the status of the block device.
+        // 2) as a mutex lock which is mutual exclusive with snapshot operations.
+        // Do not unlock or drop the locked_status in this function.
+        let status;
+        let mut locked_status;
+        let len = self
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .avail_ring_len(&self.mem_space)?;
+        if len > 0 {
+            if let Some(block_backend) = self.block_backend.as_ref() {
+                status = block_backend.lock().unwrap().get_status();
+                locked_status = status.lock().unwrap();
+                *locked_status = BlockStatus::NormalIO;
+            }
+        }
+
         let mut done = false;
         let start_time = Instant::now();
 

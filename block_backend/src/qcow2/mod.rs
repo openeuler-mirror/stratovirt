@@ -41,7 +41,7 @@ use crate::{
         snapshot::{InternalSnapshot, QcowSnapshot, QcowSnapshotExtraData, QCOW2_MAX_SNAPSHOTS},
         table::{Qcow2ClusterType, Qcow2Table},
     },
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty,
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
 };
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
 use util::{
@@ -189,6 +189,7 @@ pub struct Qcow2Driver<T: Clone + 'static> {
     table: Qcow2Table,
     refcount: RefCount,
     snapshot: InternalSnapshot,
+    status: Arc<Mutex<BlockStatus>>,
 }
 
 impl<T: Clone + 'static> Drop for Qcow2Driver<T> {
@@ -209,6 +210,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             table: Qcow2Table::new(sync_aio.clone()),
             refcount: RefCount::new(sync_aio.clone()),
             snapshot: InternalSnapshot::new(sync_aio),
+            status: Arc::new(Mutex::new(BlockStatus::Init)),
         };
         qcow2
             .load_header()
@@ -1038,6 +1040,7 @@ pub trait InternalSnapshotOps: Send + Sync {
     fn create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()>;
     fn delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo>;
     fn list_snapshots(&self) -> String;
+    fn get_status(&self) -> Arc<Mutex<BlockStatus>>;
 }
 
 impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
@@ -1051,6 +1054,10 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
 
     fn list_snapshots(&self) -> String {
         self.qcow2_list_snapshots()
+    }
+
+    fn get_status(&self) -> Arc<Mutex<BlockStatus>> {
+        self.status.clone()
     }
 }
 
@@ -1163,6 +1170,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
     fn unregister_io_event(&mut self) -> Result<()> {
         self.driver.unregister_io_event()
+    }
+
+    fn get_status(&mut self) -> Arc<Mutex<BlockStatus>> {
+        self.status.clone()
     }
 }
 
