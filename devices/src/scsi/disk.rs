@@ -160,6 +160,7 @@ impl ScsiDevice {
         let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
         self.req_align = alignments.0;
         self.buf_align = alignments.1;
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.config.path_on_host)?;
 
         let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
         let conf = BlockProperty {
@@ -171,7 +172,7 @@ impl ScsiDevice {
             discard: false,
             write_zeroes: WriteZeroesState::Off,
         };
-        let backend = create_block_backend(file, aio, conf)?;
+        let backend = create_block_backend(file, aio, drive_id, conf)?;
         let disk_size = backend.lock().unwrap().disk_size()?;
         self.block_backend = Some(backend);
         self.disk_sectors = disk_size >> SECTOR_SHIFT;

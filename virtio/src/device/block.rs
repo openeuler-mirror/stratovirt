@@ -1053,6 +1053,7 @@ impl VirtioDevice for Block {
             let alignments = VmConfig::fetch_drive_align(&drive_files, &self.blk_cfg.path_on_host)?;
             self.req_align = alignments.0;
             self.buf_align = alignments.1;
+            let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
 
             let aio = Aio::new(Arc::new(BlockIoHandler::complete_func), self.blk_cfg.aio)?;
             let conf = BlockProperty {
@@ -1064,7 +1065,7 @@ impl VirtioDevice for Block {
                 discard: self.blk_cfg.discard,
                 write_zeroes: self.blk_cfg.write_zeroes,
             };
-            let backend = create_block_backend(file, aio, conf)?;
+            let backend = create_block_backend(file, aio, drive_id, conf)?;
             let disk_size = backend.lock().unwrap().disk_size()?;
             self.block_backend = Some(backend);
             self.disk_sectors = disk_size >> SECTOR_SHIFT;

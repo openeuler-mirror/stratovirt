@@ -22,7 +22,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use machine_manager::config::DiskFormat;
-use qcow2::Qcow2Driver;
+use qcow2::{Qcow2Driver, QCOW2_LIST};
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -75,6 +75,7 @@ pub trait BlockDriverOps<T: Clone>: Send {
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     file: File,
     aio: Aio<T>,
+    drive_id: String,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
     match prop.format {
@@ -96,7 +97,12 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     prop.req_align
                 );
             }
-            Ok(Arc::new(Mutex::new(qcow2)))
+            let new_qcow2 = Arc::new(Mutex::new(qcow2));
+            QCOW2_LIST
+                .lock()
+                .unwrap()
+                .insert(drive_id, new_qcow2.clone());
+            Ok(new_qcow2)
         }
     }
 }

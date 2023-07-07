@@ -13,20 +13,23 @@
 mod cache;
 mod header;
 mod refcount;
+mod snapshot;
 mod table;
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fs::File,
     mem::size_of,
     os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use anyhow::{bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
-use log::error;
+use log::{debug, error, info};
+use once_cell::sync::Lazy;
 
 use self::cache::ENTRY_SIZE_U64;
 use crate::{
@@ -35,24 +38,52 @@ use crate::{
         cache::CacheTable,
         header::QcowHeader,
         refcount::RefCount,
+        snapshot::{InternalSnapshot, QcowSnapshot, QcowSnapshotExtraData, QCOW2_MAX_SNAPSHOTS},
         table::{Qcow2ClusterType, Qcow2Table},
     },
     BlockDriverOps, BlockIoErrorCallback, BlockProperty,
 };
-use util::aio::{
-    get_iov_size, iov_from_buf_direct, iovecs_split, Aio, AioCb, AioEngine, Iovec, OpCode,
+use machine_manager::qmp::qmp_schema::SnapshotInfo;
+use util::{
+    aio::{get_iov_size, iov_from_buf_direct, iovecs_split, Aio, AioCb, AioEngine, Iovec, OpCode},
+    num_ops::{div_round_up, round_down, round_up},
+    time::{get_format_time, gettime},
 };
-use util::num_ops::{round_down, round_up};
 
 // The L1/L2/Refcount table entry size.
 const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
 const ENTRY_BITS: u64 = 3;
 const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
 const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+const REFCOUNT_TABLE_OFFSET_MASK: u64 = 0xffff_ffff_ffff_fe00;
 const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
 const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
 const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
 const DEFAULT_SECTOR_SIZE: u64 = 512;
+
+const METADATA_OVERLAP_CHECK_MAINHEADER: u64 = 1 << 0;
+const METADATA_OVERLAP_CHECK_ACTIVEL1: u64 = 1 << 1;
+const METADATA_OVERLAP_CHECK_ACTIVEL2: u64 = 1 << 2;
+const METADATA_OVERLAP_CHECK_REFCOUNTTABLE: u64 = 1 << 3;
+const METADATA_OVERLAP_CHECK_REFCOUNTBLOCK: u64 = 1 << 4;
+const METADATA_OVERLAP_CHECK_SNAPSHOTTABLE: u64 = 1 << 5;
+const METADATA_OVERLAP_CHECK_INACTIVEL1: u64 = 1 << 6;
+#[allow(unused)]
+const METADATA_OVERLAP_CHECK_INACTIVEL2: u64 = 1 << 7;
+#[allow(unused)]
+const METADATA_OVERLAP_CHECK_BITMAPDIRECTORY: u64 = 1 << 8;
+
+const DEFAULT_QCOW2_METADATA_OVERLAP_CHECK: u64 = METADATA_OVERLAP_CHECK_MAINHEADER
+    | METADATA_OVERLAP_CHECK_ACTIVEL1
+    | METADATA_OVERLAP_CHECK_ACTIVEL2
+    | METADATA_OVERLAP_CHECK_REFCOUNTTABLE
+    | METADATA_OVERLAP_CHECK_REFCOUNTBLOCK
+    | METADATA_OVERLAP_CHECK_SNAPSHOTTABLE
+    | METADATA_OVERLAP_CHECK_INACTIVEL1;
+
+type Qcow2ListType = Lazy<Arc<Mutex<HashMap<String, Arc<Mutex<dyn InternalSnapshotOps>>>>>>;
+/// Record the correspondence between disk drive ID and the qcow2 struct.
+pub static QCOW2_LIST: Qcow2ListType = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 pub enum HostOffset {
     DataNotInit,
@@ -157,6 +188,7 @@ pub struct Qcow2Driver<T: Clone + 'static> {
     header: QcowHeader,
     table: Qcow2Table,
     refcount: RefCount,
+    snapshot: InternalSnapshot,
 }
 
 impl<T: Clone + 'static> Drop for Qcow2Driver<T> {
@@ -175,7 +207,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             sync_aio: sync_aio.clone(),
             header: QcowHeader::default(),
             table: Qcow2Table::new(sync_aio.clone()),
-            refcount: RefCount::new(sync_aio),
+            refcount: RefCount::new(sync_aio.clone()),
+            snapshot: InternalSnapshot::new(sync_aio),
         };
         qcow2
             .load_header()
@@ -189,6 +222,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         qcow2
             .load_refcount_table()
             .with_context(|| "Failed to load refcount table")?;
+        qcow2.snapshot.set_cluster_size(qcow2.header.cluster_size());
+        qcow2
+            .snapshot
+            .load_snapshot_table(qcow2.header.snapshots_offset, qcow2.header.nb_snapshots)
+            .with_context(|| "Failed to load snapshot table")?;
+
         Ok(qcow2)
     }
 
@@ -236,7 +275,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
             cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
         } else {
-            let l2_cluster = self.load_l2_cluster(l2_address)?;
+            let l2_cluster = self.load_cluster(l2_address)?;
             let l2_table = Rc::new(RefCell::new(CacheTable::new(
                 l2_address,
                 l2_cluster,
@@ -267,6 +306,17 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             let new_addr = self.alloc_cluster(1, true)?;
             l2_entry = new_addr | QCOW2_OFFSET_COPIED;
             cluster_addr = new_addr & L2_TABLE_OFFSET_MASK;
+        } else if l2_entry & QCOW2_OFFSET_COPIED == 0 {
+            // Copy on write for data cluster.
+            let new_data_addr = self.alloc_cluster(1, false)?;
+            let data = self.load_cluster(cluster_addr)?;
+            self.sync_aio
+                .borrow_mut()
+                .write_buffer(new_data_addr, &data)?;
+            self.refcount
+                .update_refcount(cluster_addr, 1, false, 1, true)?;
+            l2_entry = new_data_addr | QCOW2_OFFSET_COPIED;
+            cluster_addr = new_data_addr & L2_TABLE_OFFSET_MASK;
         }
         l2_table
             .borrow_mut()
@@ -298,15 +348,28 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         if l1_entry & QCOW2_OFFSET_COPIED == 0 {
-            // Step 1: Alloc a new l2_table.
+            // Alloc a new l2_table.
             let old_l2_offset = l1_entry & L1_TABLE_OFFSET_MASK;
             let new_l2_offset = self.alloc_cluster(1, true)?;
-            // Step 2: Update l1_table and l2 table cache.
-            self.table.update_l1_table(
-                l1_index as usize,
-                new_l2_offset | QCOW2_OFFSET_COPIED,
-                &self.header,
-            )?;
+            let l2_cluster = if old_l2_offset != 0 {
+                self.load_cluster(l2_address)?
+            } else {
+                vec![0_u8; self.header.cluster_size() as usize]
+            };
+            self.sync_aio
+                .borrow_mut()
+                .write_buffer(new_l2_offset, &l2_cluster)?;
+            let l2_cache_entry = Rc::new(RefCell::new(CacheTable::new(
+                new_l2_offset,
+                l2_cluster,
+                ENTRY_SIZE_U64,
+            )?));
+            self.table.update_l2_table(l2_cache_entry)?;
+
+            // Update l1_table and l2 table cache.
+            self.table
+                .update_l1_table(l1_index as usize, new_l2_offset | QCOW2_OFFSET_COPIED);
+            self.table.save_l1_table(&self.header)?;
             let zero_cluster: Vec<u8> = vec![0_u8; self.header.cluster_size() as usize];
             let l2_table_entry = Rc::new(RefCell::new(CacheTable::new(
                 new_l2_offset,
@@ -314,11 +377,13 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 ENTRY_SIZE_U64,
             )?));
             self.table.update_l2_table(l2_table_entry)?;
-            // Step 3: Decrease the refcount of the old table.
+
+            // Decrease the refcount of the old table.
             if old_l2_offset != 0 {
-                self.refcount.update_refcount(old_l2_offset, 1, false, 1)?;
+                self.refcount
+                    .update_refcount(old_l2_offset, 1, false, 1, true)?;
             }
-            // Step 4. Get the offset of the newly-allocated l2 table.
+            // Get the offset of the newly-allocated l2 table.
             l2_address = new_l2_offset;
         }
 
@@ -327,7 +392,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             return Ok(entry.clone());
         }
         // Cache miss.
-        let l2_cluster = self.load_l2_cluster(l2_address)?;
+        let l2_cluster = self.load_cluster(l2_address)?;
         let l2_table_entry = Rc::new(RefCell::new(CacheTable::new(
             l2_address,
             l2_cluster,
@@ -341,9 +406,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         guest_offset & (self.header.cluster_size() - 1)
     }
 
-    fn load_l2_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
+    fn load_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
         if !is_aligned(self.header.cluster_size(), addr) {
-            bail!("L2 cluster address not aligned {}", addr);
+            bail!("Cluster address not aligned {}", addr);
         }
         let mut buf = vec![0_u8; self.header.cluster_size() as usize];
         self.sync_aio.borrow_mut().read_buffer(addr, &mut buf)?;
@@ -382,6 +447,610 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             bail!("Request over limit {}", end);
         }
         Ok(())
+    }
+
+    fn free_cluster(&mut self, addr: u64, clusters: u64) -> Result<()> {
+        self.refcount
+            .update_refcount(addr, clusters, false, 1, true)
+    }
+
+    fn get_snapshot_by_name(&mut self, name: &String) -> i32 {
+        self.snapshot.find_snapshot(name)
+    }
+
+    fn qcow2_delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo> {
+        let snapshot_idx = self.get_snapshot_by_name(&name);
+        if snapshot_idx < 0 {
+            bail!("Snapshot with name {} does not exist", name);
+        }
+
+        // Alloc new snapshot table. Delete the new snapshot from the snapshot table
+        // and write new snapshot table to file.
+        let cluster_size = self.header.cluster_size();
+        let snap = self.snapshot.del_snapshot(snapshot_idx as usize);
+        let new_snapshots_table_clusters =
+            bytes_to_clusters(self.snapshot.snapshot_size, cluster_size).unwrap();
+        let l1_table_clusters =
+            bytes_to_clusters(snap.l1_size as u64 * ENTRY_SIZE, cluster_size).unwrap();
+        let new_snapshot_table_offset: u64;
+        let mut err_msg: String = "".to_string();
+        let mut error_stage = 0;
+
+        // Using loop for error handling.
+        #[allow(clippy::never_loop)]
+        loop {
+            new_snapshot_table_offset = self
+                .alloc_cluster(new_snapshots_table_clusters, true)
+                .unwrap_or_else(|e| {
+                    err_msg = format!("{:?}", e);
+                    error_stage = 1;
+                    0
+                });
+            if new_snapshot_table_offset == 0 {
+                break;
+            }
+
+            if let Err(e) = self.snapshot.save_snapshot_table(new_snapshot_table_offset) {
+                err_msg = format!("{:?}", e);
+                error_stage = 2;
+                break;
+            }
+
+            // Decrease the refcounts of clusters referenced by the snapshot.
+            if let Err(e) = self.qcow2_update_snapshot_refcount(snap.l1_table_offset, -1) {
+                err_msg = format!("{:?}", e);
+                error_stage = 2;
+                break;
+            }
+
+            // Free the snaphshot L1 table.
+            if let Err(e) = self.refcount.update_refcount(
+                snap.l1_table_offset,
+                l1_table_clusters,
+                false,
+                1,
+                false,
+            ) {
+                err_msg = format!("{:?}", e);
+                error_stage = 3;
+                break;
+            }
+
+            // Update the copied flag on the current cluster offsets.
+            if let Err(e) = self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 0) {
+                err_msg = format!("{:?}", e);
+                error_stage = 4;
+                break;
+            }
+
+            if let Err(e) =
+                self.refcount
+                    .update_refcount(self.header.snapshots_offset, 1, false, 1, true)
+            {
+                err_msg = format!("{:?}", e);
+                error_stage = 5;
+                break;
+            }
+
+            if let Err(e) = self.refcount.flush_refcount_block_cache() {
+                err_msg = format!("{:?}", e);
+                error_stage = 5;
+                break;
+            }
+
+            let mut new_header = self.header.clone();
+            new_header.snapshots_offset = new_snapshot_table_offset;
+            new_header.nb_snapshots -= 1;
+            if let Err(e) = self
+                .sync_aio
+                .borrow_mut()
+                .write_buffer(0, &new_header.to_vec())
+            {
+                err_msg = format!("{:?}", e);
+                error_stage = 6;
+                break;
+            }
+            self.header.snapshots_offset = new_header.snapshots_offset;
+            self.header.nb_snapshots = new_header.nb_snapshots;
+
+            return Ok(SnapshotInfo {
+                id: snap.id.to_string(),
+                name: snap.name.clone(),
+                vm_state_size: snap.vm_state_size as u64,
+                date_sec: snap.date_sec,
+                date_nsec: snap.date_nsec,
+                vm_clock_nsec: snap.vm_clock_nsec,
+                icount: snap.icount,
+            });
+        }
+
+        // Error handling, to revert some operation.
+        if error_stage >= 6 {
+            self.refcount
+                .update_refcount(self.header.snapshots_offset, 1, true, 1, true)?;
+        }
+        if error_stage >= 4 {
+            self.refcount.update_refcount(
+                snap.l1_table_offset,
+                l1_table_clusters,
+                true,
+                1,
+                true,
+            )?;
+        }
+        if error_stage >= 3 {
+            self.qcow2_update_snapshot_refcount(snap.l1_table_offset, 1)?;
+            if error_stage >= 5 {
+                self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 0)?;
+            }
+        }
+        if error_stage >= 2 {
+            self.free_cluster(new_snapshot_table_offset, new_snapshots_table_clusters)?;
+        }
+        if error_stage >= 1 {
+            self.snapshot.insert_snapshot(snap, snapshot_idx as usize)
+        }
+
+        bail!("{}", err_msg);
+    }
+
+    fn qcow2_create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()> {
+        if self.get_snapshot_by_name(&name) >= 0 {
+            bail!("Snapshot {} exists!", name);
+        }
+        if self.snapshot.snapshots_number() > QCOW2_MAX_SNAPSHOTS {
+            bail!(
+                "The number of snapshots exceed the maximum limit {}",
+                QCOW2_MAX_SNAPSHOTS
+            );
+        }
+
+        // Alloc cluster and copy L1 table for snapshot.
+        let l1_table_len = self.header.l1_size as u64 * ENTRY_SIZE;
+        let cluster_size = self.header.cluster_size();
+        let l1_table_clusters = bytes_to_clusters(l1_table_len, cluster_size).unwrap();
+        let new_l1_table_offset = self.alloc_cluster(l1_table_clusters, true)?;
+
+        let old_snapshots_table_len = self.snapshot.snapshot_size;
+        let old_snapshots_table_clusters =
+            bytes_to_clusters(old_snapshots_table_len, cluster_size).unwrap();
+        let mut err_msg: String = "".to_string();
+        let mut new_snapshot_table_offset = 0_u64;
+        let mut error_stage = 0;
+
+        // Using loop for error handling.
+        #[allow(clippy::never_loop)]
+        loop {
+            // Check if l1 table offset is overlap.
+            if self.qcow2_pre_write_overlap_check(0, new_l1_table_offset, l1_table_len) != 0 {
+                err_msg = format!(
+                    "Allocated snapshot L1 table addr {:x} is illegal!",
+                    new_l1_table_offset
+                );
+                error_stage = 1;
+                break;
+            }
+
+            // Write L1 table to file.
+            if let Err(e) = self
+                .sync_aio
+                .borrow_mut()
+                .write_ctrl_cluster(new_l1_table_offset, &self.table.l1_table)
+            {
+                error_stage = 1;
+                err_msg = format!("{:?}", e);
+                break;
+            }
+
+            // Increase the refcounts of all clusters searched by L1 table.
+            if let Err(e) = self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 1) {
+                error_stage = 1;
+                err_msg = format!("{:?}", e);
+                break;
+            }
+
+            // Alloc new snapshot table.
+            let (date_sec, date_nsec) = gettime();
+            let snap = QcowSnapshot {
+                l1_table_offset: new_l1_table_offset,
+                l1_size: self.header.l1_size,
+                id: self.snapshot.find_new_snapshot_id(),
+                name,
+                disk_size: self.virtual_disk_size(),
+                vm_state_size: 0,
+                date_sec,
+                date_nsec,
+                vm_clock_nsec,
+                icount: u64::MAX,
+                extra_data_size: size_of::<QcowSnapshotExtraData>() as u32,
+            };
+            let new_snapshots_table_clusters =
+                bytes_to_clusters(old_snapshots_table_len + snap.get_size(), cluster_size).unwrap();
+            new_snapshot_table_offset = self
+                .alloc_cluster(new_snapshots_table_clusters, true)
+                .unwrap_or_else(|e| {
+                    error_stage = 2;
+                    err_msg = format!("{:?}", e);
+                    0
+                });
+            if new_snapshot_table_offset == 0 {
+                break;
+            }
+            info!(
+                "Snapshot table offset: old(0x{:x}) -> new(0x{:x})",
+                self.header.snapshots_offset, new_snapshot_table_offset,
+            );
+
+            // Append the new snapshot to the snapshot table and write new snapshot table to file.
+            self.snapshot.add_snapshot(snap);
+            if let Err(e) = self.snapshot.save_snapshot_table(new_snapshot_table_offset) {
+                error_stage = 3;
+                err_msg = format!("{:?}", e);
+                break;
+            }
+            self.snapshot.snapshot_table_offset = new_snapshot_table_offset;
+
+            // Free the old snapshot table cluster if snapshot exists.
+            if self.header.snapshots_offset != 0 {
+                if let Err(e) = self.refcount.update_refcount(
+                    self.header.snapshots_offset,
+                    old_snapshots_table_clusters,
+                    false,
+                    1,
+                    true,
+                ) {
+                    error_stage = 4;
+                    err_msg = format!("{:?}", e);
+                    break;
+                }
+            }
+
+            // Update snapshot offset and num in qcow2 header.
+            let mut new_header = self.header.clone();
+            new_header.snapshots_offset = new_snapshot_table_offset;
+            new_header.nb_snapshots += 1;
+            if let Err(e) = self
+                .sync_aio
+                .borrow_mut()
+                .write_buffer(0, &new_header.to_vec())
+            {
+                error_stage = 5;
+                err_msg = format!("{:?}", e);
+                break;
+            }
+            self.header.snapshots_offset = new_header.snapshots_offset;
+            self.header.nb_snapshots = new_header.nb_snapshots;
+
+            return Ok(());
+        }
+
+        // Error handling, to revert some operation.
+        if error_stage >= 5 && self.header.snapshots_offset != 0 {
+            self.refcount.update_refcount(
+                self.header.snapshots_offset,
+                old_snapshots_table_clusters,
+                true,
+                1,
+                true,
+            )?;
+        }
+
+        if error_stage >= 4 {
+            self.snapshot.snapshot_table_offset = self.header.snapshots_offset;
+        }
+        if error_stage >= 3 {
+            // Delete new added snapshot.
+            let num_clusters =
+                bytes_to_clusters(self.snapshot.snapshot_size, cluster_size).unwrap();
+            self.snapshot
+                .del_snapshot(self.snapshot.snapshots_number() - 1);
+            self.free_cluster(new_snapshot_table_offset, num_clusters)?;
+        }
+        if error_stage >= 2 {
+            self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, -1)?;
+        }
+        if error_stage >= 1 {
+            self.free_cluster(new_l1_table_offset, l1_table_clusters)?;
+        }
+
+        bail!("{}", err_msg);
+    }
+
+    /// Update the refcounts of all clusters searched by l1_table_offset.
+    fn qcow2_update_snapshot_refcount(&mut self, l1_table_offset: u64, added: i32) -> Result<()> {
+        let l1_table_size = self.header.l1_size as usize;
+        let mut l1_table = self.table.l1_table.clone();
+        let mut l1_changed = false;
+        debug!(
+            "Update snapshot refcount: l1 table offset {:x}, active header l1 table addr {:x}, add {}",
+            l1_table_offset,
+            self.header.l1_table_offset,
+            added
+        );
+
+        if l1_table_offset != self.header.l1_table_offset {
+            // Read snapshot l1 table from qcow2 file.
+            l1_table = self
+                .sync_aio
+                .borrow_mut()
+                .read_ctrl_cluster(l1_table_offset, l1_table_size as u64)?;
+        }
+
+        let is_add = added > 0;
+        let num = added.unsigned_abs() as u16;
+        let mut old_l2_table_offset: u64;
+        for (i, l1_entry) in l1_table.iter_mut().enumerate().take(l1_table_size) {
+            let mut l2_table_offset = *l1_entry;
+            log::info!("Develop: l1 table idx {}, addr {:x}", i, l2_table_offset);
+            if l2_table_offset == 0 {
+                // No l2 table.
+                continue;
+            }
+            old_l2_table_offset = l2_table_offset;
+            l2_table_offset &= L1_TABLE_OFFSET_MASK;
+
+            if self.refcount.offset_into_cluster(l2_table_offset) != 0 {
+                bail!(
+                    "L2 table offset {:x} unaligned (L1 index {})!",
+                    l2_table_offset,
+                    i
+                );
+            }
+
+            if !self
+                .table
+                .l2_table_cache
+                .contains_keys(l2_table_offset as u64)
+            {
+                let l2_cluster = self.load_cluster(l2_table_offset)?;
+                let l2_table_entry = Rc::new(RefCell::new(CacheTable::new(
+                    l2_table_offset,
+                    l2_cluster,
+                    ENTRY_SIZE_U64,
+                )?));
+                self.table.update_l2_table(l2_table_entry)?;
+            }
+
+            let cached_l2_table = self.table.l2_table_cache.get(l2_table_offset).unwrap();
+            let mut borrowed_table = cached_l2_table.borrow_mut();
+
+            for idx in 0..borrowed_table.get_entry_num() {
+                let l2_entry = borrowed_table.get_entry_map(idx)?;
+                let mut new_l2_entry = l2_entry & !QCOW2_OFFSET_COPIED;
+                let data_cluster_offset = new_l2_entry & L2_TABLE_OFFSET_MASK;
+                if data_cluster_offset == 0 {
+                    // Unallocated data cluster.
+                    continue;
+                }
+                if self.refcount.offset_into_cluster(data_cluster_offset) != 0 {
+                    bail!(
+                        "Cluster offset 0x{:x} unaligned, (L2 table offset 0x{:x}, L2 index {})!",
+                        data_cluster_offset,
+                        l2_table_offset,
+                        idx
+                    );
+                }
+
+                if num != 0 {
+                    // Update Data Cluster refcount.
+                    self.refcount
+                        .update_refcount(data_cluster_offset, 1, is_add, num, false)?;
+                }
+
+                let refcount = self.refcount.get_refcount(data_cluster_offset)?;
+                if refcount == 1 {
+                    new_l2_entry |= QCOW2_OFFSET_COPIED;
+                }
+                if l2_entry != new_l2_entry {
+                    borrowed_table.set_entry_map(idx, new_l2_entry)?;
+                }
+            }
+            self.sync_aio
+                .borrow_mut()
+                .write_buffer(l2_table_offset, borrowed_table.get_value())?;
+            drop(borrowed_table);
+
+            if num != 0 {
+                // Update L2 table cluster refcount.
+                self.refcount
+                    .update_refcount(l2_table_offset, 1, is_add, num, false)?;
+            }
+
+            let refcount = self.refcount.get_refcount(l2_table_offset)?;
+            if refcount == 1 {
+                l2_table_offset |= QCOW2_OFFSET_COPIED;
+            }
+            if l2_table_offset != old_l2_table_offset {
+                *l1_entry = l2_table_offset;
+                l1_changed = true;
+                if l1_table_offset == self.header.l1_table_offset {
+                    self.table.update_l1_table(i, l2_table_offset);
+                }
+            }
+        }
+        self.refcount.flush_refcount_block_cache()?;
+        if l1_changed {
+            self.sync_aio
+                .borrow_mut()
+                .write_ctrl_cluster(l1_table_offset, &l1_table)?;
+        }
+
+        Ok(())
+    }
+
+    fn qcow2_list_snapshots(&self) -> String {
+        let mut snap_strs = format!(
+            "{:<10}{:<17}{:>8}{:>20}{:>13}{:>11}\r\n",
+            "ID", "TAG", "VM SIZE", "DATE", "VM CLOCK", "ICOUNT"
+        );
+        for snap in &self.snapshot.snapshots {
+            let id_str = snap.id.to_string();
+            let name_str = snap.name.clone();
+            // Note: vm state size is not needed in disk snapshot, so it's "0 B".
+            let vm_size_str = snap.vm_state_size.to_string();
+            let icount_str = match snap.icount {
+                u64::MAX => "".to_string(),
+                _ => snap.icount.to_string(),
+            };
+
+            let date = get_format_time(snap.date_sec as i64);
+            let date_str = format!(
+                "{:04}-{:02}-{:02} {:02}-{:02}-{:02}",
+                date[0], date[1], date[2], date[3], date[4], date[5]
+            );
+
+            let vm_clock_secs = snap.vm_clock_nsec / 1_000_000_000;
+            let vm_clock_str = format!(
+                "{:02}:{:02}:{:02}.{:02}",
+                vm_clock_secs / 3600,
+                (vm_clock_secs / 3600) % 60,
+                vm_clock_secs % 60,
+                (vm_clock_secs / 1_000_000) % 1000
+            );
+
+            let snap_str = format!(
+                "{:<9} {:<16} {:>6} B{:>20}{:>13}{:>11}\r\n",
+                id_str, name_str, vm_size_str, date_str, vm_clock_str, icount_str
+            );
+            snap_strs += &snap_str;
+        }
+        snap_strs
+    }
+
+    // Check if there exist intersection between given address range and qcow2 mede data.
+    fn qcow2_pre_write_overlap_check(&self, ignore: u64, offset: u64, size: u64) -> i64 {
+        let check = DEFAULT_QCOW2_METADATA_OVERLAP_CHECK | !ignore;
+        if check == 0 {
+            return 0;
+        }
+
+        if check & METADATA_OVERLAP_CHECK_MAINHEADER != 0 && offset < self.header.cluster_size() {
+            return METADATA_OVERLAP_CHECK_MAINHEADER as i64;
+        }
+
+        let size = round_up(
+            self.refcount.offset_into_cluster(offset) + size,
+            self.header.cluster_size(),
+        )
+        .unwrap();
+        let offset = self.refcount.start_of_cluster(offset);
+        if u64::MAX - offset < size {
+            // Ensure there exist no overflow.
+            return -1;
+        }
+
+        if check & METADATA_OVERLAP_CHECK_ACTIVEL1 != 0
+            && self.header.l1_size != 0
+            && check_overlaps(
+                offset,
+                size,
+                self.header.l1_table_offset,
+                self.header.l1_size as u64 * ENTRY_SIZE,
+            )
+        {
+            return METADATA_OVERLAP_CHECK_ACTIVEL1 as i64;
+        }
+
+        if check & METADATA_OVERLAP_CHECK_ACTIVEL2 != 0 {
+            for l1_entry in &self.table.l1_table {
+                if check_overlaps(
+                    offset,
+                    size,
+                    l1_entry & L1_TABLE_OFFSET_MASK,
+                    self.header.cluster_size(),
+                ) {
+                    return METADATA_OVERLAP_CHECK_ACTIVEL2 as i64;
+                }
+            }
+        }
+
+        if check & METADATA_OVERLAP_CHECK_REFCOUNTTABLE != 0
+            && check_overlaps(
+                offset,
+                size,
+                self.header.refcount_table_offset,
+                self.header.refcount_table_clusters as u64 * self.header.cluster_size(),
+            )
+        {
+            return METADATA_OVERLAP_CHECK_REFCOUNTTABLE as i64;
+        }
+
+        if check & METADATA_OVERLAP_CHECK_REFCOUNTBLOCK != 0 {
+            for block_offset in &self.refcount.refcount_table {
+                if check_overlaps(
+                    offset,
+                    size,
+                    block_offset & REFCOUNT_TABLE_OFFSET_MASK,
+                    self.header.cluster_size(),
+                ) {
+                    return METADATA_OVERLAP_CHECK_REFCOUNTBLOCK as i64;
+                }
+            }
+        }
+
+        if check & METADATA_OVERLAP_CHECK_SNAPSHOTTABLE != 0
+            && check_overlaps(
+                offset,
+                size,
+                self.snapshot.snapshot_table_offset,
+                self.snapshot.snapshot_size,
+            )
+        {
+            return METADATA_OVERLAP_CHECK_SNAPSHOTTABLE as i64;
+        }
+
+        if check & METADATA_OVERLAP_CHECK_INACTIVEL1 != 0 {
+            for snap in &self.snapshot.snapshots {
+                if check_overlaps(
+                    offset,
+                    size,
+                    snap.l1_table_offset,
+                    snap.l1_size as u64 * ENTRY_SIZE,
+                ) {
+                    return METADATA_OVERLAP_CHECK_INACTIVEL1 as i64;
+                }
+            }
+        }
+
+        0
+    }
+}
+
+pub fn bytes_to_clusters(size: u64, cluster_sz: u64) -> Result<u64> {
+    div_round_up(size, cluster_sz)
+        .with_context(|| format!("Failed to div round up, size is {}", size))
+}
+
+// Check if there is an intersection between two addresses. Return true if there is a crossover.
+fn check_overlaps(addr1: u64, size1: u64, addr2: u64, size2: u64) -> bool {
+    // Note: ensure that there is no overflow at the calling function.
+    if addr1 + size1 == 0 || addr2 + size2 == 0 {
+        return false;
+    }
+
+    let last1 = addr1 + size1 - 1;
+    let last2 = addr2 + size2 - 1;
+
+    !(last1 < addr2 || last2 < addr1)
+}
+
+pub trait InternalSnapshotOps: Send + Sync {
+    fn create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()>;
+    fn delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo>;
+    fn list_snapshots(&self) -> String;
+}
+
+impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
+    fn create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()> {
+        self.qcow2_create_snapshot(name, vm_clock_nsec)
+    }
+
+    fn delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo> {
+        self.qcow2_delete_snapshot(name)
+    }
+
+    fn list_snapshots(&self) -> String {
+        self.qcow2_list_snapshots()
     }
 }
 
@@ -615,7 +1284,6 @@ mod test {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .custom_flags(libc::O_DIRECT)
             .open(path)
             .unwrap();
         let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
