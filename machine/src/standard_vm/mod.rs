@@ -57,7 +57,7 @@ use address_space::{
 };
 pub use anyhow::Result;
 use anyhow::{bail, Context};
-use block_backend::qcow2::QCOW2_LIST;
+use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
@@ -1925,6 +1925,11 @@ impl DeviceInterface for StdMachine {
             );
         }
 
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
+
         // TODO: Add a method for getting guest clock. It's useless now so we can use a fake time(0).
         let vm_clock_nsec = 0;
         if let Err(e) = qcow2driver
@@ -1960,6 +1965,11 @@ impl DeviceInterface for StdMachine {
                 None,
             );
         }
+
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
 
         let result = qcow2driver
             .unwrap()

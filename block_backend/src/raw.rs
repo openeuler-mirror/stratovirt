@@ -12,19 +12,20 @@
 
 use std::{
     fs::File,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use anyhow::Result;
 
 use crate::{
     file::{CombineRequest, FileDriver},
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty,
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
 };
 use util::aio::{Aio, Iovec};
 
 pub struct RawDriver<T: Clone + 'static> {
     driver: FileDriver<T>,
+    status: Arc<Mutex<BlockStatus>>,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type in Aio.
@@ -36,6 +37,7 @@ impl<T: Clone + 'static> RawDriver<T> {
     pub fn new(file: File, aio: Aio<T>, prop: BlockProperty) -> Self {
         Self {
             driver: FileDriver::new(file, aio, prop),
+            status: Arc::new(Mutex::new(BlockStatus::Init)),
         }
     }
 }
@@ -95,5 +97,9 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
 
     fn disk_size(&mut self) -> Result<u64> {
         self.driver.disk_size()
+    }
+
+    fn get_status(&mut self) -> Arc<Mutex<BlockStatus>> {
+        self.status.clone()
     }
 }

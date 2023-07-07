@@ -30,6 +30,12 @@ use util::aio::{Aio, Iovec, WriteZeroesState};
 /// Callback function which is called when aio handle failed.
 pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
 
+pub enum BlockStatus {
+    Init,
+    NormalIO,
+    Snapshot,
+}
+
 #[derive(Debug, Clone)]
 pub struct BlockProperty {
     pub format: DiskFormat,
@@ -71,6 +77,8 @@ pub trait BlockDriverOps<T: Clone>: Send {
     ) -> Result<()>;
 
     fn unregister_io_event(&mut self) -> Result<()>;
+
+    fn get_status(&mut self) -> Arc<Mutex<BlockStatus>>;
 }
 
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
