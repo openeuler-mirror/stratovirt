@@ -613,7 +613,7 @@ impl TestXhciPciDevice {
                 assert_eq!(buf, [3, 0]);
             }
             UsbDeviceType::Camera => {
-                assert_eq!(buf, [3, 0]);
+                assert_eq!(buf, [2, 0]);
             }
             _ => {}
         }
