@@ -1188,7 +1188,8 @@ impl DeviceInterface for LightMachine {
             );
         }
         // Register drive backend file for hotplugged drive.
-        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+        if let Err(e) = self.register_drive_file(&config.id, &args.file.filename, read_only, direct)
+        {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),

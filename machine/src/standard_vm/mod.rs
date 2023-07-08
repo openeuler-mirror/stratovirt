@@ -57,6 +57,7 @@ use address_space::{
 };
 pub use anyhow::Result;
 use anyhow::{bail, Context};
+use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
@@ -1446,9 +1447,12 @@ impl DeviceInterface for StdMachine {
             );
         }
         // Register drive backend file for hotplug drive.
-        if let Err(e) =
-            self.register_drive_file(&args.file.filename, config.read_only, config.direct)
-        {
+        if let Err(e) = self.register_drive_file(
+            &config.id,
+            &args.file.filename,
+            config.read_only,
+            config.direct,
+        ) {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1822,6 +1826,7 @@ impl DeviceInterface for StdMachine {
                     }
                 };
                 if let Err(e) = self.register_drive_file(
+                    &drive_cfg.id,
                     &drive_cfg.path_on_host,
                     drive_cfg.read_only,
                     drive_cfg.direct,
@@ -1846,6 +1851,51 @@ impl DeviceInterface for StdMachine {
                 }
                 return self.blockdev_del(cmd_args[1].to_string());
             }
+            "info" => {
+                // Only support to query snapshots information by:
+                // "info snapshots"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                if cmd_args[1] != "snapshots" {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Unsupported command: {} {}",
+                            cmd_args[0], cmd_args[1]
+                        )),
+                        None,
+                    );
+                }
+
+                let qcow2_list = QCOW2_LIST.lock().unwrap();
+                if qcow2_list.len() == 0 {
+                    return Response::create_response(
+                        serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
+                        None,
+                    );
+                }
+
+                let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we don't support.
+                let vmstate_str = "None\r\n".to_string();
+                info_str += &vmstate_str;
+
+                for (drive_name, qcow2driver) in qcow2_list.iter() {
+                    let dev_str = format!(
+                        "\r\nList of partial (non-loadable) snapshots on \'{}\':\r\n",
+                        drive_name
+                    );
+                    let snap_infos = qcow2driver.lock().unwrap().list_snapshots();
+                    info_str += &(dev_str + &snap_infos);
+                }
+
+                return Response::create_response(serde_json::to_value(info_str).unwrap(), None);
+            }
             _ => {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(format!(
@@ -1857,6 +1907,87 @@ impl DeviceInterface for StdMachine {
             }
         }
         Response::create_empty_response()
+    }
+
+    fn blockdev_snapshot_internal_sync(
+        &self,
+        args: qmp_schema::BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        let qcow2_list = QCOW2_LIST.lock().unwrap();
+        let qcow2driver = qcow2_list.get(&args.device);
+        if qcow2driver.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!(
+                    "No device drive named {} while creating snapshot {}",
+                    args.device, args.name
+                )),
+                None,
+            );
+        }
+
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
+
+        // TODO: Add a method for getting guest clock. It's useless now so we can use a fake time(0).
+        let vm_clock_nsec = 0;
+        if let Err(e) = qcow2driver
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create_snapshot(args.name.clone(), vm_clock_nsec)
+        {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Device {} Creates snapshot {} error: {}.",
+                    args.device, args.name, e
+                )),
+                None,
+            );
+        }
+
+        Response::create_empty_response()
+    }
+
+    fn blockdev_snapshot_delete_internal_sync(
+        &self,
+        args: qmp_schema::BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        let qcow2_list = QCOW2_LIST.lock().unwrap();
+        let qcow2driver = qcow2_list.get(&args.device);
+        if qcow2driver.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!(
+                    "No device drive named {} while deleting snapshot {}",
+                    args.device, args.name
+                )),
+                None,
+            );
+        }
+
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
+
+        let result = qcow2driver
+            .unwrap()
+            .lock()
+            .unwrap()
+            .delete_snapshot(args.name.clone());
+        match result {
+            Ok(snap_info) => {
+                Response::create_response(serde_json::to_value(&snap_info).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Device {} deletes snapshot {} error! {}",
+                    args.device, args.name, e
+                )),
+                None,
+            ),
+        }
     }
 }
 

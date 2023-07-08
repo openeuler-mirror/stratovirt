@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod qcow2;
+
 mod file;
-mod qcow2;
 mod raw;
 
 use std::{
@@ -22,12 +23,18 @@ use std::{
 use anyhow::{bail, Context, Result};
 
 use machine_manager::config::DiskFormat;
-use qcow2::Qcow2Driver;
+use qcow2::{Qcow2Driver, QCOW2_LIST};
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
 /// Callback function which is called when aio handle failed.
 pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
+
+pub enum BlockStatus {
+    Init,
+    NormalIO,
+    Snapshot,
+}
 
 #[derive(Debug, Clone)]
 pub struct BlockProperty {
@@ -70,11 +77,14 @@ pub trait BlockDriverOps<T: Clone>: Send {
     ) -> Result<()>;
 
     fn unregister_io_event(&mut self) -> Result<()>;
+
+    fn get_status(&mut self) -> Arc<Mutex<BlockStatus>>;
 }
 
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     file: File,
     aio: Aio<T>,
+    drive_id: String,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
     match prop.format {
@@ -96,7 +106,12 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     prop.req_align
                 );
             }
-            Ok(Arc::new(Mutex::new(qcow2)))
+            let new_qcow2 = Arc::new(Mutex::new(qcow2));
+            QCOW2_LIST
+                .lock()
+                .unwrap()
+                .insert(drive_id, new_qcow2.clone());
+            Ok(new_qcow2)
         }
     }
 }

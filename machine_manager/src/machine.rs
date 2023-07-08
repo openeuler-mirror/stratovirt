@@ -18,10 +18,11 @@ use strum::VariantNames;
 
 use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, CameraDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine,
-    CmdParameter, DeviceAddArgument, DeviceProps, Events, GicCap, HumanMonitorCmdArgument,
-    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
-    QmpCommand, QmpErrorClass, QmpEvent, Target, TypeLists, UpdateRegionArgument,
+    BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
+    CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
+    Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
+    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
+    TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -465,6 +466,17 @@ pub trait DeviceInterface {
             QmpErrorClass::GenericError("human-monitor-command is not supported yet".to_string()),
             None,
         )
+    }
+
+    fn blockdev_snapshot_internal_sync(&self, _args: BlockdevSnapshotInternalArgument) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn blockdev_snapshot_delete_internal_sync(
+        &self,
+        _args: BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        Response::create_empty_response()
     }
 }
 

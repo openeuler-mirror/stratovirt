@@ -1598,10 +1598,16 @@ pub trait MachineOps {
     }
 
     /// Register a new drive backend file.
-    fn register_drive_file(&self, path: &str, read_only: bool, direct: bool) -> Result<()> {
+    fn register_drive_file(
+        &self,
+        id: &str,
+        path: &str,
+        read_only: bool,
+        direct: bool,
+    ) -> Result<()> {
         let files = self.get_drive_files();
         let mut drive_files = files.lock().unwrap();
-        VmConfig::add_drive_file(&mut drive_files, path, read_only, direct)?;
+        VmConfig::add_drive_file(&mut drive_files, id, path, read_only, direct)?;
 
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();

@@ -129,7 +129,7 @@ impl Qcow2Table {
         Ok(())
     }
 
-    fn save_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn save_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(header.l1_table_offset, &self.l1_table)
@@ -161,14 +161,8 @@ impl Qcow2Table {
         }
     }
 
-    pub fn update_l1_table(
-        &mut self,
-        l1_index: usize,
-        l2_address: u64,
-        header: &QcowHeader,
-    ) -> Result<()> {
+    pub fn update_l1_table(&mut self, l1_index: usize, l2_address: u64) {
         self.l1_table[l1_index] = l2_address;
-        self.save_l1_table(header)
     }
 
     pub fn update_l2_table(&mut self, l2_table_entry: Rc<RefCell<CacheTable>>) -> Result<()> {
