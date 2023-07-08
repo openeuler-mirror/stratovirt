@@ -242,7 +242,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         self.table.flush()
     }
 

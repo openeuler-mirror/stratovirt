@@ -21,8 +21,12 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use log::{error, info};
 
-use machine_manager::config::DiskFormat;
+use machine_manager::{
+    config::DiskFormat,
+    temp_cleaner::{ExitNotifier, TempCleaner},
+};
 use qcow2::{Qcow2Driver, QCOW2_LIST};
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
@@ -110,7 +114,22 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             QCOW2_LIST
                 .lock()
                 .unwrap()
-                .insert(drive_id, new_qcow2.clone());
+                .insert(drive_id.clone(), new_qcow2.clone());
+            let cloned_qcow2 = new_qcow2.clone();
+            // NOTE: we can drain request when request in io thread.
+            let drain = prop.iothread.is_some();
+            let cloned_drive_id = drive_id.clone();
+            let exit_notifier = Arc::new(move || {
+                let mut locked_qcow2 = cloned_qcow2.lock().unwrap();
+                info!("clean up qcow2 {:?} resources.", cloned_drive_id);
+                if let Err(e) = locked_qcow2.flush() {
+                    error!("Failed to flush qcow2 {:?}", e);
+                }
+                if drain {
+                    locked_qcow2.drain_request();
+                }
+            }) as Arc<ExitNotifier>;
+            TempCleaner::add_exit_notifier(drive_id, exit_notifier);
             Ok(new_qcow2)
         }
     }
