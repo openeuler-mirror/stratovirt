@@ -29,7 +29,7 @@ use vmm_sys_util::epoll::EventSet;
 use crate::{BlockIoErrorCallback, BlockProperty};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::{
-    aio::{get_iov_size, Aio, AioCb, AioEngine, Iovec, OpCode},
+    aio::{Aio, AioCb, AioEngine, Iovec, OpCode},
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
@@ -38,11 +38,16 @@ use util::{
 pub struct CombineRequest {
     pub iov: Vec<Iovec>,
     pub offset: u64,
+    pub nbytes: u64,
 }
 
 impl CombineRequest {
-    pub fn new(iov: Vec<Iovec>, offset: u64) -> Self {
-        Self { iov, offset }
+    pub fn new(iov: Vec<Iovec>, offset: u64, nbytes: u64) -> Self {
+        Self {
+            iov,
+            offset,
+            nbytes,
+        }
     }
 }
 
@@ -90,22 +95,24 @@ impl<T: Clone + 'static> FileDriver<T> {
         }
     }
 
-    fn rw_vectored(
+    fn process_request(
         &mut self,
         opcode: OpCode,
         req_list: Vec<CombineRequest>,
         completecb: T,
     ) -> Result<()> {
+        if req_list.is_empty() {
+            return self.complete_request(opcode, &Vec::new(), 0, 0, completecb);
+        }
         let single_req = req_list.len() == 1;
         let cnt = Arc::new(AtomicU32::new(req_list.len() as u32));
         let res = Arc::new(AtomicI64::new(0));
         for req in req_list {
-            let nbytes = get_iov_size(&req.iov);
             let mut aiocb = self.package_aiocb(
                 opcode,
                 req.iov,
                 req.offset as usize,
-                nbytes,
+                req.nbytes,
                 completecb.clone(),
             );
             if !single_req {
@@ -117,28 +124,28 @@ impl<T: Clone + 'static> FileDriver<T> {
     }
 
     pub fn read_vectored(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {
-        self.rw_vectored(OpCode::Preadv, req_list, completecb)
+        self.process_request(OpCode::Preadv, req_list, completecb)
     }
 
-    pub fn complete_read_request(
+    pub fn complete_request(
         &mut self,
+        opcode: OpCode,
         iovec: &[Iovec],
         offset: usize,
         nbytes: u64,
         completecb: T,
     ) -> Result<()> {
-        let aiocb = self.package_aiocb(OpCode::Preadv, iovec.to_vec(), offset, nbytes, completecb);
+        let aiocb = self.package_aiocb(opcode, iovec.to_vec(), offset, nbytes, completecb);
         (self.aio.borrow_mut().complete_func)(&aiocb, nbytes as i64)
     }
 
     pub fn write_vectored(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {
-        self.rw_vectored(OpCode::Pwritev, req_list, completecb)
+        self.process_request(OpCode::Pwritev, req_list, completecb)
     }
 
     pub fn write_zeroes(
         &mut self,
-        offset: usize,
-        nbytes: u64,
+        req_list: Vec<CombineRequest>,
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
@@ -147,13 +154,11 @@ impl<T: Clone + 'static> FileDriver<T> {
         } else {
             OpCode::WriteZeroes
         };
-        let aiocb = self.package_aiocb(opcode, Vec::new(), offset, nbytes, completecb);
-        self.aio.borrow_mut().submit_request(aiocb)
+        self.process_request(opcode, req_list, completecb)
     }
 
-    pub fn discard(&mut self, offset: usize, nbytes: u64, completecb: T) -> Result<()> {
-        let aiocb = self.package_aiocb(OpCode::Discard, Vec::new(), offset, nbytes, completecb);
-        self.aio.borrow_mut().submit_request(aiocb)
+    pub fn discard(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {
+        self.process_request(OpCode::Discard, req_list, completecb)
     }
 
     pub fn datasync(&mut self, completecb: T) -> Result<()> {

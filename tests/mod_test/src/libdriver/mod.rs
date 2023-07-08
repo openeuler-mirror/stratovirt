@@ -16,6 +16,7 @@ pub mod machine;
 pub mod malloc;
 pub mod pci;
 pub mod pci_bus;
+pub mod qcow2;
 pub mod usb;
 pub mod virtio;
 pub mod virtio_block;

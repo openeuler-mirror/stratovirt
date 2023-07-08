@@ -21,7 +21,7 @@ use crate::{
     file::{CombineRequest, FileDriver},
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
 };
-use util::aio::{Aio, Iovec};
+use util::aio::{get_iov_size, Aio, Iovec};
 
 pub struct RawDriver<T: Clone + 'static> {
     driver: FileDriver<T>,
@@ -44,15 +44,17 @@ impl<T: Clone + 'static> RawDriver<T> {
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(iovec);
         self.driver.read_vectored(
-            vec![CombineRequest::new(iovec.to_vec(), offset as u64)],
+            vec![CombineRequest::new(iovec.to_vec(), offset as u64, nbytes)],
             completecb,
         )
     }
 
     fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(iovec);
         self.driver.write_vectored(
-            vec![CombineRequest::new(iovec.to_vec(), offset as u64)],
+            vec![CombineRequest::new(iovec.to_vec(), offset as u64, nbytes)],
             completecb,
         )
     }
@@ -64,11 +66,18 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
-        self.driver.write_zeroes(offset, nbytes, completecb, unmap)
+        self.driver.write_zeroes(
+            vec![CombineRequest::new(Vec::new(), offset as u64, nbytes)],
+            completecb,
+            unmap,
+        )
     }
 
     fn discard(&mut self, offset: usize, nbytes: u64, completecb: T) -> Result<()> {
-        self.driver.discard(offset, nbytes, completecb)
+        self.driver.discard(
+            vec![CombineRequest::new(Vec::new(), offset as u64, nbytes)],
+            completecb,
+        )
     }
 
     fn datasync(&mut self, completecb: T) -> Result<()> {
