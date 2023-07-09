@@ -59,7 +59,7 @@ use util::loop_context::gen_delete_notifiers;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, str_to_usize};
+use util::num_ops::str_to_usize;
 use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
@@ -1183,6 +1183,7 @@ pub struct Net {
 impl Net {
     pub fn new(net_cfg: NetworkInterfaceConfig) -> Self {
         Self {
+            base: VirtioBase::new(VIRTIO_TYPE_NET),
             net_cfg,
             ..Default::default()
         }
@@ -1348,6 +1349,14 @@ fn get_tap_offload_flags(features: u64) -> u32 {
 }
 
 impl VirtioDevice for Net {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err
         if self.net_cfg.iothread.is_some()
@@ -1442,10 +1451,6 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_NET
-    }
-
     fn queue_num(&self) -> usize {
         if self.net_cfg.mq {
             (self.net_cfg.queues + 1) as usize
@@ -1456,18 +1461,6 @@ impl VirtioDevice for Net {
 
     fn queue_size_max(&self) -> u16 {
         self.net_cfg.queue_size
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -1660,10 +1653,6 @@ impl VirtioDevice for Net {
         self.update_evts.clear();
         self.ctrl_info = None;
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

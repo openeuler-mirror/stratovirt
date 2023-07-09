@@ -13,13 +13,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp;
 use std::io::Write;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::config::BlkDevConfig;
 use util::byte_code::ByteCode;
-use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
@@ -51,7 +49,7 @@ pub struct Block {
 impl Block {
     pub fn new(cfg: &BlkDevConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Block {
-            base: Default::default(),
+            base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
             blk_cfg: cfg.clone(),
             config_space: Default::default(),
             mem_space: mem_space.clone(),
@@ -168,15 +166,19 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.init_client()?;
         self.negotiate_features()?;
 
         Ok(())
-    }
-
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BLOCK
     }
 
     fn queue_num(&self) -> usize {
@@ -185,18 +187,6 @@ impl VirtioDevice for Block {
 
     fn queue_size_max(&self) -> u16 {
         self.blk_cfg.queue_size
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -286,9 +276,5 @@ impl VirtioDevice for Block {
         };
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }

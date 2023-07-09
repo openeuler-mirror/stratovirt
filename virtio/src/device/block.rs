@@ -56,7 +56,6 @@ use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 use util::offset_of;
 
 /// Number of virtqueues.
@@ -976,6 +975,7 @@ impl Block {
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Block {
         Self {
+            base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
             blk_cfg,
             req_align: 1,
             buf_align: 1,
@@ -1029,6 +1029,14 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err
         if self.blk_cfg.iothread.is_some()
@@ -1095,28 +1103,12 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BLOCK
-    }
-
     fn queue_num(&self) -> usize {
         self.blk_cfg.queues as usize
     }
 
     fn queue_size_max(&self) -> u16 {
         self.blk_cfg.queue_size
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -1305,10 +1297,6 @@ impl VirtioDevice for Block {
         }
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

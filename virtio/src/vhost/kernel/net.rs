@@ -13,7 +13,7 @@
 use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -22,7 +22,6 @@ use machine_manager::config::NetworkInterfaceConfig;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::read_u32;
 use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
@@ -100,7 +99,7 @@ pub struct Net {
 impl Net {
     pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Net {
-            base: Default::default(),
+            base: VirtioBase::new(VIRTIO_TYPE_NET),
             net_cfg: cfg.clone(),
             config_space: Default::default(),
             taps: None,
@@ -114,6 +113,14 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         let queue_pairs = self.net_cfg.queues / 2;
         let mut backends = Vec::with_capacity(queue_pairs as usize);
@@ -180,10 +187,6 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_NET
-    }
-
     fn queue_num(&self) -> usize {
         if self.net_cfg.mq {
             (self.net_cfg.queues + 1) as usize
@@ -194,18 +197,6 @@ impl VirtioDevice for Net {
 
     fn queue_size_max(&self) -> u16 {
         self.net_cfg.queue_size
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -426,10 +417,6 @@ impl VirtioDevice for Net {
         }
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

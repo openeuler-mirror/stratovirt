@@ -43,7 +43,6 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
@@ -122,6 +121,7 @@ pub struct ScsiCntlr {
 impl ScsiCntlr {
     pub fn new(config: ScsiCntlrConfig) -> ScsiCntlr {
         Self {
+            base: VirtioBase::new(VIRTIO_TYPE_SCSI),
             config,
             ..Default::default()
         }
@@ -137,6 +137,14 @@ impl ScsiCntlr {
 }
 
 impl VirtioDevice for ScsiCntlr {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         // If iothread not found, return err.
         if self.config.iothread.is_some()
@@ -149,7 +157,6 @@ impl VirtioDevice for ScsiCntlr {
         }
 
         self.config_space.num_queues = self.config.queues;
-
         self.config_space.max_sectors = 0xFFFF_u32;
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.config_space.cmd_per_lun = 128;
@@ -171,10 +178,6 @@ impl VirtioDevice for ScsiCntlr {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_SCSI
-    }
-
     fn queue_num(&self) -> usize {
         // Note: self.config.queues <= MAX_VIRTIO_QUEUE(32).
         self.config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM
@@ -182,18 +185,6 @@ impl VirtioDevice for ScsiCntlr {
 
     fn queue_size_max(&self) -> u16 {
         self.config.queue_size
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -328,10 +319,6 @@ impl VirtioDevice for ScsiCntlr {
             locked_backend.unregister_io_event()?;
         }
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

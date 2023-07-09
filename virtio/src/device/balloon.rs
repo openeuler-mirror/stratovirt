@@ -38,7 +38,7 @@ use util::{
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    num_ops::{read_u32, round_down},
+    num_ops::round_down,
     offset_of,
     seccomp::BpfRule,
     unix::host_page_size,
@@ -911,11 +911,11 @@ impl Balloon {
             device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
         }
 
+        let mut base = VirtioBase::new(VIRTIO_TYPE_BALLOON);
+        base.device_features = device_features;
+
         Balloon {
-            base: VirtioBase {
-                device_features,
-                ..Default::default()
-            },
+            base,
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
@@ -992,15 +992,19 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.mem_space
             .register_listener(self.mem_info.clone())
             .with_context(|| "Failed to register memory listener defined by balloon device.")?;
         Ok(())
-    }
-
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BALLOON
     }
 
     fn queue_num(&self) -> usize {
@@ -1016,18 +1020,6 @@ impl VirtioDevice for Balloon {
 
     fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -1159,10 +1151,6 @@ impl VirtioDevice for Balloon {
             self.num_pages = 0;
         }
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

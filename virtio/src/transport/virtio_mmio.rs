@@ -733,11 +733,10 @@ impl MigrationHook for VirtioMmioDevice {
 mod tests {
     use std::io::Write;
 
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+
     use super::*;
     use crate::{VirtioBase, VIRTIO_TYPE_BLOCK};
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use std::sync::atomic::AtomicBool;
-    use util::num_ops::read_u32;
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
@@ -784,7 +783,7 @@ mod tests {
             }
 
             VirtioDeviceTest {
-                base: Default::default(),
+                base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
                 b_active: false,
                 b_realized: false,
                 config_space,
@@ -793,13 +792,17 @@ mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
+        fn virtio_base(&self) -> &VirtioBase {
+            &self.base
+        }
+
+        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+            &mut self.base
+        }
+
         fn realize(&mut self) -> Result<()> {
             self.b_realized = true;
             Ok(())
-        }
-
-        fn device_type(&self) -> u32 {
-            VIRTIO_TYPE_BLOCK
         }
 
         fn queue_num(&self) -> usize {
@@ -808,18 +811,6 @@ mod tests {
 
         fn queue_size_max(&self) -> u16 {
             QUEUE_SIZE
-        }
-
-        fn device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.base.device_features, features_select)
-        }
-
-        fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.base.driver_features = self.checked_driver_features(page, value);
-        }
-
-        fn driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.base.driver_features, features_select)
         }
 
         fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -867,10 +858,6 @@ mod tests {
         ) -> Result<()> {
             self.b_active = true;
             Ok(())
-        }
-
-        fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.base.broken
         }
     }
 

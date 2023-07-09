@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -26,7 +26,6 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::read_u32;
 
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
@@ -115,7 +114,7 @@ pub struct Vsock {
 impl Vsock {
     pub fn new(cfg: &VsockConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Vsock {
-            base: Default::default(),
+            base: VirtioBase::new(VIRTIO_TYPE_VSOCK),
             vsock_cfg: cfg.clone(),
             backend: None,
             config_space: Default::default(),
@@ -172,6 +171,14 @@ impl Vsock {
 }
 
 impl VirtioDevice for Vsock {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
@@ -187,28 +194,12 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_VSOCK
-    }
-
     fn queue_num(&self) -> usize {
         QUEUE_NUM_VSOCK
     }
 
     fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
@@ -354,10 +345,6 @@ impl VirtioDevice for Vsock {
 
     fn reset(&mut self) -> Result<()> {
         self.backend.as_ref().unwrap().set_running(false)
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 
