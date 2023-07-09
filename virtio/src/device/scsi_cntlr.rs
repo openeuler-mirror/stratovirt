@@ -152,7 +152,6 @@ impl ScsiCntlr {
 }
 
 impl VirtioDevice for ScsiCntlr {
-    /// Realize virtio scsi controller, which is a pci device.
     fn realize(&mut self) -> Result<()> {
         // If iothread not found, return err.
         if self.config.iothread.is_some()
@@ -187,38 +186,31 @@ impl VirtioDevice for ScsiCntlr {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_SCSI
     }
 
-    /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
         // Note: self.config.queues <= MAX_VIRTIO_QUEUE(32).
         self.config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM
     }
 
-    /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
         self.config.queue_size
     }
 
-    /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.device_features, features_select)
     }
 
-    /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.state.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.driver_features, features_select)
     }
 
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
@@ -232,7 +224,6 @@ impl VirtioDevice for ScsiCntlr {
         Ok(())
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_mut_bytes();
         let config_len = config_slice.len() as u64;
@@ -251,8 +242,6 @@ impl VirtioDevice for ScsiCntlr {
         Ok(())
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,

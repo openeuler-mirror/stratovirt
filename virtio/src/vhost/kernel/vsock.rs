@@ -171,7 +171,6 @@ impl Vsock {
 }
 
 impl VirtioDevice for Vsock {
-    /// Realize vhost virtio vsock device.
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
@@ -187,37 +186,30 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_VSOCK
     }
 
-    /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
         QUEUE_NUM_VSOCK
     }
 
-    /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.device_features, features_select)
     }
 
-    /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.state.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.driver_features, features_select)
     }
 
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         match offset {
             0 if data.len() == 8 => LittleEndian::write_u64(data, self.vsock_cfg.guest_cid),
@@ -233,7 +225,6 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         let config_len = self.state.config_space.len();
@@ -259,8 +250,6 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         _: Arc<AddressSpace>,

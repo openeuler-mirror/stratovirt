@@ -262,7 +262,6 @@ impl Rng {
 }
 
 impl VirtioDevice for Rng {
-    /// Realize virtio rng device.
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
             .with_context(|| "Failed to check random file")?;
@@ -274,37 +273,30 @@ impl VirtioDevice for Rng {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_RNG
     }
 
-    /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
         QUEUE_NUM_RNG
     }
 
-    /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.device_features, features_select)
     }
 
-    /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.state.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.driver_features, features_select)
     }
 
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, _data: &mut [u8]) -> Result<()> {
         bail!(
             "Reading device config space for rng is not supported, offset: {}",
@@ -312,7 +304,6 @@ impl VirtioDevice for Rng {
         );
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, _data: &[u8]) -> Result<()> {
         bail!(
             "Writing device config space for rng is not supported, offset: {}",
@@ -320,8 +311,6 @@ impl VirtioDevice for Rng {
         );
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,

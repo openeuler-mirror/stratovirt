@@ -188,7 +188,6 @@ impl VirtioDevice for Fs {
         self.acked_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.acked_features, features_select)
     }
@@ -248,7 +247,6 @@ impl VirtioDevice for Fs {
         Ok(())
     }
 
-    /// Set guest notifiers for notifying the guest.
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
             let cloned_evt_fd = fd.clone();

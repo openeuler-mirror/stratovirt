@@ -998,7 +998,6 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    /// Realize a balloon device.
     fn realize(&mut self) -> Result<()> {
         self.mem_space
             .register_listener(self.mem_info.clone())
@@ -1006,12 +1005,10 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    /// Get the type of balloon.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_BALLOON
     }
 
-    /// Get the number of balloon-device queues.
     fn queue_num(&self) -> usize {
         let mut queue_num = QUEUE_NUM_BALLOON;
         if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
@@ -1023,37 +1020,22 @@ impl VirtioDevice for Balloon {
         queue_num
     }
 
-    /// Get the zise of balloon queue.
     fn queue_size(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    /// Get the feature of `balloon` device.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.device_features, features_select)
     }
 
-    /// Set feature for device.
-    ///
-    /// # Arguments
-    ///
-    /// * `page` - Selector of feature.
-    /// * `value` - Value to be set.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.driver_features, features_select)
     }
 
-    /// Read configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Offset from base address.
-    /// * `data` - Read data to `data`.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
             num_pages: self.num_pages,
@@ -1084,11 +1066,6 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    /// Write configuration.
-    ///
-    /// # Argument
-    ///
-    /// * `_offset` - Offset from base address.
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
         // Guest update actual balloon size
         // Safe, because the results will be checked.
@@ -1114,15 +1091,6 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    /// Active balloon device.
-    ///
-    /// # Arguments
-    ///
-    /// * `mem_space` - Address space.
-    /// * `interrupt_evt` - Interrupt EventFd.
-    /// * `interrupt_stats` - Statistics interrupt.
-    /// * `queues` - Different virtio queues.
-    /// * `queue_evts` Different EventFd.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,

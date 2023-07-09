@@ -217,7 +217,6 @@ pub fn find_port_by_nr(
 }
 
 impl VirtioDevice for Serial {
-    /// Realize virtio serial device.
     fn realize(&mut self) -> Result<()> {
         self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
@@ -226,39 +225,32 @@ impl VirtioDevice for Serial {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_CONSOLE
     }
 
-    /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
         // Each port has 2 queues(receiveq/transmitq).
         // And there exist 2 control queues(control receiveq/control transmitq).
         self.max_nr_ports as usize * 2 + 2
     }
 
-    /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.device_features, features_select)
     }
 
-    /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.state.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.driver_features, features_select)
     }
 
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
@@ -273,13 +265,10 @@ impl VirtioDevice for Serial {
         Ok(())
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
         bail!("Writing device config space for virtio serial is not supported.")
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
