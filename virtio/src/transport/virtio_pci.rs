@@ -1467,26 +1467,24 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::Result as VirtioResult;
+    use crate::{Result as VirtioResult, VirtioBase};
 
     const VIRTIO_DEVICE_TEST_TYPE: u32 = 1;
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
     const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
 
     pub struct VirtioDeviceTest {
-        pub device_features: u64,
-        pub driver_features: u64,
+        base: VirtioBase,
         pub is_activated: bool,
-        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
         pub fn new() -> Self {
+            let mut base = VirtioBase::default();
+            base.device_features = 0xFFFF_FFF0;
             VirtioDeviceTest {
-                device_features: 0xFFFF_FFF0,
-                driver_features: 0,
+                base,
                 is_activated: false,
-                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -1509,15 +1507,15 @@ mod tests {
         }
 
         fn get_device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.device_features, features_select)
+            read_u32(self.base.device_features, features_select)
         }
 
         fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.driver_features = self.checked_driver_features(page, value);
+            self.base.driver_features = self.checked_driver_features(page, value);
         }
 
         fn get_driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.driver_features, features_select)
+            read_u32(self.base.driver_features, features_select)
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
@@ -1540,7 +1538,7 @@ mod tests {
         }
 
         fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.broken
+            &self.base.broken
         }
     }
 
@@ -1595,22 +1593,22 @@ mod tests {
         cmn_cfg.acked_features_select = 1_u32;
         com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, 0xFF);
         // The feature is not supported by this virtio device, and is masked
-        assert_eq!(dev.lock().unwrap().driver_features, 0_u64);
+        assert_eq!(dev.lock().unwrap().base.driver_features, 0_u64);
 
         cmn_cfg.acked_features_select = 0_u32;
         com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, 0xCF);
         // The feature is partially supported by this virtio device, and is partially masked
-        assert_eq!(dev.lock().unwrap().driver_features, 0xC0_u64);
+        assert_eq!(dev.lock().unwrap().base.driver_features, 0xC0_u64);
 
         // Set the feature of the Queue type
         cmn_cfg.acked_features_select = 1_u32;
-        dev.lock().unwrap().driver_features = 0_u64;
-        dev.lock().unwrap().device_features = 0xFFFF_FFFF_0000_0000_u64;
+        dev.lock().unwrap().base.driver_features = 0_u64;
+        dev.lock().unwrap().base.device_features = 0xFFFF_FFFF_0000_0000_u64;
         let driver_features = 1_u32 << (VIRTIO_F_RING_PACKED - 32);
         com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, driver_features);
         assert_eq!(cmn_cfg.queue_type, QUEUE_TYPE_PACKED_VRING);
         assert_eq!(
-            dev.lock().unwrap().driver_features,
+            dev.lock().unwrap().base.driver_features,
             1_u64 << VIRTIO_F_RING_PACKED
         );
     }

@@ -16,7 +16,6 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::error::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use machine_manager::config::NetworkInterfaceConfig;
@@ -31,12 +30,14 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
 use crate::{
-    device::net::{build_device_config_space, create_tap, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
-    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt,
-    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
+    device::net::{build_device_config_space, create_tap, CtrlInfo, MAC_ADDR_LEN},
+    error::VirtioError,
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase, VirtioDevice,
+    VirtioInterrupt, VirtioNetConfig, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM,
+    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -76,22 +77,20 @@ impl VhostNetBackend for VhostBackend {
 
 /// Network device structure.
 pub struct Net {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the network device.
     net_cfg: NetworkInterfaceConfig,
+    /// Virtio net configurations.
+    config_space: Arc<Mutex<VirtioNetConfig>>,
     /// Tap device opened.
     taps: Option<Vec<Tap>>,
-    /// The status of net device.
-    state: Arc<Mutex<VirtioNetState>>,
     /// Related vhost-net kernel device.
     backends: Option<Vec<VhostBackend>>,
     /// Bit mask of features supported by the vhost-net kernel.
     vhost_features: u64,
     /// System address space.
     mem_space: Arc<AddressSpace>,
-    /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
     /// Save irqfd used for vhost-net.
     call_events: Vec<Arc<EventFd>>,
     /// Whether irqfd can be used.
@@ -101,14 +100,13 @@ pub struct Net {
 impl Net {
     pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Net {
+            base: Default::default(),
             net_cfg: cfg.clone(),
+            config_space: Default::default(),
             taps: None,
-            state: Arc::new(Mutex::new(VirtioNetState::default())),
             backends: None,
             vhost_features: 0_u64,
             mem_space: mem_space.clone(),
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
             call_events: Vec::new(),
             disable_irqfd: false,
         }
@@ -149,18 +147,19 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_TSO4
             | 1 << VIRTIO_NET_F_HOST_UFO;
 
-        let mut locked_state = self.state.lock().unwrap();
+        let mut locked_config = self.config_space.lock().unwrap();
+
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)
         {
             device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
             device_features |= 1 << VIRTIO_NET_F_MQ;
-            locked_state.config_space.max_virtqueue_pairs = queue_pairs;
+            locked_config.max_virtqueue_pairs = queue_pairs;
         }
 
         if let Some(mac) = &self.net_cfg.mac {
-            device_features |= build_device_config_space(&mut locked_state.config_space, mac);
+            device_features |= build_device_config_space(&mut locked_config, mac);
         }
 
         let host_dev_name = match self.net_cfg.host_dev_name.as_str() {
@@ -171,7 +170,7 @@ impl VirtioDevice for Net {
         self.taps = create_tap(self.net_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
             .with_context(|| "Failed to create tap for vhost net")?;
         self.backends = Some(backends);
-        locked_state.device_features = device_features;
+        self.base.device_features = device_features;
         self.vhost_features = vhost_features;
 
         Ok(())
@@ -198,20 +197,20 @@ impl VirtioDevice for Net {
     }
 
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.lock().unwrap().device_features, features_select)
+        read_u32(self.base.device_features, features_select)
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.lock().unwrap().driver_features = self.checked_driver_features(page, value);
+        self.base.driver_features = self.checked_driver_features(page, value);
     }
 
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.lock().unwrap().driver_features, features_select)
+        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let locked_state = self.state.lock().unwrap();
-        let config_slice = locked_state.config_space.as_bytes();
+        let config_space = self.config_space.lock().unwrap();
+        let config_slice = config_space.as_bytes();
         let config_size = config_slice.len() as u64;
         if offset >= config_size {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
@@ -225,9 +224,9 @@ impl VirtioDevice for Net {
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let mut locked_state = self.state.lock().unwrap();
-        let driver_features = locked_state.driver_features;
-        let config_slice = locked_state.config_space.as_mut_bytes();
+        let driver_features = self.base.driver_features;
+        let mut config_space = self.config_space.lock().unwrap();
+        let config_slice = config_space.as_mut_bytes();
 
         if !virtio_has_feature(driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
             && !virtio_has_feature(driver_features, VIRTIO_F_VERSION_1)
@@ -261,18 +260,18 @@ impl VirtioDevice for Net {
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
-        let driver_features = self.state.lock().unwrap().driver_features;
+        let driver_features = self.base.driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
-            let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
+            let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));
 
             let ctrl_handler = NetCtrlHandler {
                 ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, ctrl_info),
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
-                device_broken: self.broken.clone(),
+                device_broken: self.base.broken.clone(),
                 taps: None,
             };
 
@@ -281,7 +280,7 @@ impl VirtioDevice for Net {
             register_event_helper(
                 notifiers,
                 self.net_cfg.iothread.as_ref(),
-                &mut self.deactivate_evts,
+                &mut self.base.deactivate_evts,
             )?;
         }
 
@@ -382,24 +381,27 @@ impl VirtioDevice for Net {
                 let handler = VhostIoHandler {
                     interrupt_cb: interrupt_cb.clone(),
                     host_notifies,
-                    device_broken: self.broken.clone(),
+                    device_broken: self.base.broken.clone(),
                 };
                 let notifiers =
                     EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
                 register_event_helper(
                     notifiers,
                     self.net_cfg.iothread.as_ref(),
-                    &mut self.deactivate_evts,
+                    &mut self.base.deactivate_evts,
                 )?;
             }
         }
-        self.broken.store(false, Ordering::SeqCst);
+        self.base.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        unregister_event_helper(
+            self.net_cfg.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        )?;
         if !self.disable_irqfd {
             self.call_events.clear();
         }
@@ -427,7 +429,7 @@ impl VirtioDevice for Net {
     }
 
     fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        &self.base.broken
     }
 }
 
@@ -517,7 +519,7 @@ mod tests {
         assert_eq!(vhost_net.realize().is_ok(), true);
 
         // test for get/set_driver_features
-        vhost_net.state.lock().unwrap().device_features = 0;
+        vhost_net.base.device_features = 0;
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
@@ -525,7 +527,7 @@ mod tests {
         let new_page = vhost_net.get_device_features(page);
         assert_eq!(new_page, page);
 
-        vhost_net.state.lock().unwrap().device_features = 0xffff_ffff_ffff_ffff;
+        vhost_net.base.device_features = 0xffff_ffff_ffff_ffff;
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
@@ -534,13 +536,7 @@ mod tests {
         assert_ne!(new_page, page);
 
         // test for read/write_config
-        let len = vhost_net
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .as_bytes()
-            .len() as u64;
+        let len = vhost_net.config_space.lock().unwrap().as_bytes().len() as u64;
         let offset: u64 = 0;
         let data: Vec<u8> = vec![1; len as usize];
         assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);

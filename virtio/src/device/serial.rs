@@ -26,7 +26,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
-    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
@@ -128,17 +128,16 @@ pub struct VirtioSerialState {
 }
 
 /// Virtio serial device structure.
+#[derive(Default)]
 pub struct Serial {
-    /// Status of virtio serial device.
-    state: VirtioSerialState,
-    /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
+    /// Virtio device base property.
+    base: VirtioBase,
+    /// Virtio serial config space.
+    config_space: VirtioConsoleConfig,
     /// Max serial ports number.
     pub max_nr_ports: u32,
     /// Serial port vector for serialport.
     pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
-    /// Device is broken or not.
-    device_broken: Arc<AtomicBool>,
 }
 
 impl Serial {
@@ -149,15 +148,9 @@ impl Serial {
     /// * `serial_cfg` - Device configuration set by user.
     pub fn new(serial_cfg: VirtioSerialInfo) -> Self {
         Serial {
-            state: VirtioSerialState {
-                device_features: 0_u64,
-                driver_features: 0_u64,
-                config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
-            },
-            deactivate_evts: Vec::new(),
+            config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
-            ports: Arc::new(Mutex::new(Vec::new())),
-            device_broken: Arc::new(AtomicBool::new(false)),
+            ..Default::default()
         }
     }
 
@@ -177,7 +170,7 @@ impl Serial {
             output_queue_evt: queue_evts[3].clone(),
             mem_space,
             interrupt_cb,
-            driver_features: self.state.driver_features,
+            driver_features: self.base.driver_features,
             device_broken,
             ports: self.ports.clone(),
         };
@@ -187,7 +180,7 @@ impl Serial {
             port.lock().unwrap().ctrl_handler = Some(Arc::downgrade(&handler_h.clone()));
         }
         let notifiers = EventNotifierHelper::internal_notifiers(handler_h);
-        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
     }
@@ -218,7 +211,7 @@ pub fn find_port_by_nr(
 
 impl VirtioDevice for Serial {
     fn realize(&mut self) -> Result<()> {
-        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
 
@@ -240,19 +233,19 @@ impl VirtioDevice for Serial {
     }
 
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
+        read_u32(self.base.device_features, features_select)
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
+        self.base.driver_features = self.checked_driver_features(page, value);
     }
 
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
+        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
+        let config_slice = self.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
@@ -298,13 +291,13 @@ impl VirtioDevice for Serial {
                 output_queue_evt: queue_evts[queue_id * 2 + 1].clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
-                device_broken: self.device_broken.clone(),
+                driver_features: self.base.driver_features,
+                device_broken: self.base.broken.clone(),
                 port: port.clone(),
             };
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
-            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+            register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
             if let Some(port_h) = port {
                 port_h.lock().unwrap().activate(&handler_h);
@@ -316,7 +309,7 @@ impl VirtioDevice for Serial {
             interrupt_cb,
             queues,
             queue_evts,
-            self.device_broken.clone(),
+            self.base.broken.clone(),
         )?;
 
         Ok(())
@@ -326,25 +319,32 @@ impl VirtioDevice for Serial {
         for port in self.ports.lock().unwrap().iter_mut() {
             port.lock().unwrap().deactivate();
         }
-        unregister_event_helper(None, &mut self.deactivate_evts)?;
+        unregister_event_helper(None, &mut self.base.deactivate_evts)?;
 
         Ok(())
     }
 
     fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.device_broken
+        &self.base.broken
     }
 }
 
 impl StateTransfer for Serial {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        let state = VirtioSerialState {
+            device_features: self.base.device_features,
+            driver_features: self.base.driver_features,
+            config_space: self.config_space,
+        };
+        Ok(state.as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = *VirtioSerialState::from_bytes(state)
+        let state = VirtioSerialState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
-
+        self.base.device_features = state.device_features;
+        self.base.driver_features = state.driver_features;
+        self.config_space = state.config_space;
         Ok(())
     }
 
@@ -939,57 +939,57 @@ mod tests {
         });
 
         // If the device feature is 0, all driver features are not supported.
-        serial.state.device_features = 0;
+        serial.base.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0_u64);
+        assert_eq!(serial.base.driver_features, 0_u64);
         assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0_u64);
+        assert_eq!(serial.base.driver_features, 0_u64);
         assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         assert_eq!(
             serial.get_driver_features(page) as u64,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
-        serial.state.driver_features = 0;
+        serial.base.driver_features = 0;
 
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0);
-        serial.state.driver_features = 0;
+        assert_eq!(serial.base.driver_features, 0);
+        serial.base.driver_features = 0;
 
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
         );
         let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
         );
     }
