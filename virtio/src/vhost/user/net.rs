@@ -12,7 +12,6 @@
 
 use std::cmp;
 use std::io::Write;
-use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -28,11 +27,11 @@ use super::super::VhostOps;
 use super::{VhostBackendType, VhostUserClient};
 use crate::error::VirtioError;
 use crate::{
-    device::net::{build_device_config_space, CtrlInfo, VirtioNetState, MAC_ADDR_LEN},
-    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    device::net::{build_device_config_space, CtrlInfo, MAC_ADDR_LEN},
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase, VirtioDevice,
+    VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
     VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
@@ -43,29 +42,26 @@ const QUEUE_NUM_NET: usize = 2;
 
 /// Network device structure.
 pub struct Net {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the vhost user network device.
     net_cfg: NetworkInterfaceConfig,
-    /// The status of net device.
-    state: Arc<Mutex<VirtioNetState>>,
+    /// Virtio net configurations.
+    config_space: Arc<Mutex<VirtioNetConfig>>,
     /// System address space.
     mem_space: Arc<AddressSpace>,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    /// EventFd for deactivate control Queue.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl Net {
     pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Net {
+            base: Default::default(),
             net_cfg: cfg.clone(),
-            state: Arc::new(Mutex::new(VirtioNetState::default())),
+            config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -80,10 +76,11 @@ impl Net {
             }
             None => return Err(anyhow!("Failed to get client when stopping event")),
         };
-        if ((self.state.lock().unwrap().driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0)
-            && self.net_cfg.mq
-        {
-            unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        if ((self.base.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && self.net_cfg.mq {
+            unregister_event_helper(
+                self.net_cfg.iothread.as_ref(),
+                &mut self.base.deactivate_evts,
+            )?;
         }
 
         Ok(())
@@ -91,10 +88,10 @@ impl Net {
 
     fn clean_up(&mut self) -> Result<()> {
         self.delete_event()?;
-        let mut locked_state = self.state.lock().unwrap();
-        locked_state
-            .as_mut_bytes()
-            .copy_from_slice(&[0_u8; std::mem::size_of::<VirtioNetState>()]);
+        self.base.device_features = 0;
+        self.base.driver_features = 0;
+        self.base.broken.store(false, Ordering::SeqCst);
+        self.config_space = Default::default();
         self.client = None;
 
         Ok(())
@@ -121,8 +118,7 @@ impl VirtioDevice for Net {
         let client = Arc::new(Mutex::new(client));
         VhostUserClient::add_event(&client)?;
 
-        let mut locked_state = self.state.lock().unwrap();
-        locked_state.device_features = client
+        self.base.device_features = client
             .lock()
             .unwrap()
             .get_features()
@@ -136,23 +132,24 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_NET_F_MRG_RXBUF
             | 1 << VIRTIO_F_RING_EVENT_IDX;
-        locked_state.device_features &= features;
+        self.base.device_features &= features;
+
+        let mut locked_config = self.config_space.lock().unwrap();
 
         let queue_pairs = self.net_cfg.queues / 2;
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)
         {
-            locked_state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
-            locked_state.device_features |= 1 << VIRTIO_NET_F_MQ;
-            locked_state.config_space.max_virtqueue_pairs = queue_pairs;
+            self.base.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
+            self.base.device_features |= 1 << VIRTIO_NET_F_MQ;
+            locked_config.max_virtqueue_pairs = queue_pairs;
         }
 
         self.client = Some(client);
 
         if let Some(mac) = &self.net_cfg.mac {
-            locked_state.device_features |=
-                build_device_config_space(&mut locked_state.config_space, mac);
+            self.base.device_features |= build_device_config_space(&mut locked_config, mac);
         }
 
         Ok(())
@@ -176,20 +173,20 @@ impl VirtioDevice for Net {
     }
 
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.lock().unwrap().device_features, features_select)
+        read_u32(self.base.device_features, features_select)
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.lock().unwrap().driver_features = self.checked_driver_features(page, value);
+        self.base.driver_features = self.checked_driver_features(page, value);
     }
 
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.lock().unwrap().driver_features, features_select)
+        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let locked_state = self.state.lock().unwrap();
-        let config_slice = locked_state.config_space.as_bytes();
+        let config_space = self.config_space.lock().unwrap();
+        let config_slice = config_space.as_bytes();
         let config_size = config_slice.len() as u64;
         if offset >= config_size {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
@@ -203,9 +200,9 @@ impl VirtioDevice for Net {
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let mut locked_state = self.state.lock().unwrap();
-        let driver_features = locked_state.driver_features;
-        let config_slice = locked_state.config_space.as_mut_bytes();
+        let mut config_space = self.config_space.lock().unwrap();
+        let driver_features = self.base.driver_features;
+        let config_slice = config_space.as_mut_bytes();
 
         if !virtio_has_feature(driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
             && !virtio_has_feature(driver_features, VIRTIO_F_VERSION_1)
@@ -227,20 +224,20 @@ impl VirtioDevice for Net {
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
-        let driver_features = self.state.lock().unwrap().driver_features;
+        let driver_features = self.base.driver_features;
         let has_control_queue =
             (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0);
         if has_control_queue {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
-            let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
+            let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));
 
             let ctrl_handler = NetCtrlHandler {
                 ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, ctrl_info),
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
-                device_broken: self.broken.clone(),
+                device_broken: self.base.broken.clone(),
                 taps: None,
             };
 
@@ -249,7 +246,7 @@ impl VirtioDevice for Net {
             register_event_helper(
                 notifiers,
                 self.net_cfg.iothread.as_ref(),
-                &mut self.deactivate_evts,
+                &mut self.base.deactivate_evts,
             )?;
         }
 
@@ -268,7 +265,7 @@ impl VirtioDevice for Net {
             client.set_queue_evts(&queue_evts);
         }
         client.activate_vhost_user()?;
-        self.broken.store(false, Ordering::SeqCst);
+        self.base.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
@@ -300,13 +297,10 @@ impl VirtioDevice for Net {
     }
 
     fn has_control_queue(&mut self) -> bool {
-        virtio_has_feature(
-            self.state.lock().unwrap().device_features,
-            VIRTIO_NET_F_CTRL_VQ,
-        )
+        virtio_has_feature(self.base.device_features, VIRTIO_NET_F_CTRL_VQ)
     }
 
     fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        &self.base.broken
     }
 }

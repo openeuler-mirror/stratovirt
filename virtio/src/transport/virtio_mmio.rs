@@ -737,7 +737,7 @@ mod tests {
     use std::io::Write;
 
     use super::*;
-    use crate::VIRTIO_TYPE_BLOCK;
+    use crate::{VirtioBase, VIRTIO_TYPE_BLOCK};
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use std::sync::atomic::AtomicBool;
     use util::num_ops::read_u32;
@@ -773,12 +773,10 @@ mod tests {
     const QUEUE_SIZE: u16 = 256;
 
     pub struct VirtioDeviceTest {
-        pub device_features: u64,
-        pub driver_features: u64,
+        base: VirtioBase,
         pub config_space: Vec<u8>,
         pub b_active: bool,
         pub b_realized: bool,
-        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
@@ -789,12 +787,10 @@ mod tests {
             }
 
             VirtioDeviceTest {
-                device_features: 0,
-                driver_features: 0,
+                base: Default::default(),
                 b_active: false,
                 b_realized: false,
                 config_space,
-                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -818,15 +814,15 @@ mod tests {
         }
 
         fn get_device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.device_features, features_select)
+            read_u32(self.base.device_features, features_select)
         }
 
         fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.driver_features = self.checked_driver_features(page, value);
+            self.base.driver_features = self.checked_driver_features(page, value);
         }
 
         fn get_driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.driver_features, features_select)
+            read_u32(self.base.driver_features, features_select)
         }
 
         fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -877,7 +873,7 @@ mod tests {
         }
 
         fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.broken
+            &self.base.broken
         }
     }
 
@@ -955,7 +951,7 @@ mod tests {
             .unwrap()
             .config_space
             .features_select = 0;
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00f8_0000_00fe;
+        virtio_device_clone.lock().unwrap().base.device_features = 0x0000_00f8_0000_00fe;
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG),
             true
@@ -1204,13 +1200,13 @@ mod tests {
         locked_state.config_space.acked_features_select = 0;
         drop(locked_state);
         LittleEndian::write_u32(&mut buf[..], 0x0000_00fe);
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00fe;
+        virtio_device_clone.lock().unwrap().base.device_features = 0x0000_00fe;
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             true
         );
         assert_eq!(
-            virtio_device_clone.lock().unwrap().driver_features as u32,
+            virtio_device_clone.lock().unwrap().base.driver_features as u32,
             0x0000_00fe
         );
         // it is ok to write the high 32bit of device features
@@ -1222,7 +1218,7 @@ mod tests {
             .config_space
             .acked_features_select = 1;
         LittleEndian::write_u32(&mut buf[..], 0x0000_00ff);
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00ff_0000_0000;
+        virtio_device_clone.lock().unwrap().base.device_features = 0x0000_00ff_0000_0000;
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             true
@@ -1237,7 +1233,7 @@ mod tests {
             QUEUE_TYPE_PACKED_VRING
         );
         assert_eq!(
-            virtio_device_clone.lock().unwrap().driver_features >> 32 as u32,
+            virtio_device_clone.lock().unwrap().base.driver_features >> 32 as u32,
             0x0000_00ff
         );
 

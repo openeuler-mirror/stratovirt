@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp;
 use std::io::Write;
@@ -30,33 +29,33 @@ use crate::VhostUser::client::{
 };
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
-    virtio_has_feature, BlockState, VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE,
-    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    virtio_has_feature, VirtioBase, VirtioBlkConfig, VirtioDevice, VirtioError, VirtioInterrupt,
+    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ,
+    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY,
+    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 pub struct Block {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
+    /// Config space of the block device.
+    config_space: VirtioBlkConfig,
     /// System address space.
     mem_space: Arc<AddressSpace>,
-    /// Status of block device.
-    state: BlockState,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl Block {
     pub fn new(cfg: &BlkDevConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Block {
+            base: Default::default(),
             blk_cfg: cfg.clone(),
-            state: BlockState::default(),
+            config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
-            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -115,7 +114,7 @@ impl Block {
                 let config = locked_client
                     .get_virtio_blk_config()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
-                self.state.config_space = config;
+                self.config_space = config;
             } else {
                 bail!(
                     "Failed to get config, spdk doesn't support, spdk protocol features: {:#b}",
@@ -135,7 +134,7 @@ impl Block {
                 }
 
                 if self.blk_cfg.queues > 1 {
-                    self.state.config_space.num_queues = self.blk_cfg.queues;
+                    self.config_space.num_queues = self.blk_cfg.queues;
                 }
             } else if self.blk_cfg.queues > 1 {
                 bail!(
@@ -148,7 +147,7 @@ impl Block {
         }
         drop(locked_client);
 
-        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_BLK_F_SIZE_MAX
             | 1_u64 << VIRTIO_BLK_F_TOPOLOGY
             | 1_u64 << VIRTIO_BLK_F_BLK_SIZE
@@ -157,12 +156,12 @@ impl Block {
             | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
             | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         if self.blk_cfg.read_only {
-            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         if self.blk_cfg.queues > 1 {
-            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
-        self.state.device_features &= features;
+        self.base.device_features &= features;
 
         Ok(())
     }
@@ -189,20 +188,20 @@ impl VirtioDevice for Block {
     }
 
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
+        read_u32(self.base.device_features, features_select)
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
+        self.base.driver_features = self.checked_driver_features(page, value);
     }
 
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
+        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let offset = offset as usize;
-        let config_slice = self.state.config_space.as_bytes();
+        let config_slice = self.config_space.as_bytes();
         let config_len = config_slice.len();
         if offset >= config_len {
             return Err(anyhow!(VirtioError::DevConfigOverflow(
@@ -221,7 +220,7 @@ impl VirtioDevice for Block {
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let offset = offset as usize;
-        let config_slice = self.state.config_space.as_mut_bytes();
+        let config_slice = self.config_space.as_mut_bytes();
         let config_len = config_slice.len();
         if let Some(end) = offset.checked_add(data.len()) {
             if end > config_len {
@@ -240,7 +239,7 @@ impl VirtioDevice for Block {
             .with_context(|| "Failed to get client when writing config")?
             .lock()
             .unwrap()
-            .set_virtio_blk_config(self.state.config_space)
+            .set_virtio_blk_config(self.config_space)
             .with_context(|| "Failed to set config for vhost-user blk")?;
 
         Ok(())
@@ -257,7 +256,7 @@ impl VirtioDevice for Block {
             Some(client) => client.lock().unwrap(),
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
-        client.features = self.state.driver_features;
+        client.features = self.base.driver_features;
         client.set_queues(queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
@@ -290,6 +289,6 @@ impl VirtioDevice for Block {
     }
 
     fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        &self.base.broken
     }
 }

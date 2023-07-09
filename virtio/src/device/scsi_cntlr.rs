@@ -24,8 +24,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
     gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
-    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
+    VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::BlockIoErrorCallback;
@@ -106,45 +106,30 @@ struct VirtioScsiConfig {
 
 impl ByteCode for VirtioScsiConfig {}
 
-/// State of virtio scsi controller.
-#[derive(Clone, Copy, Default)]
-pub struct ScsiCntlrState {
-    /// Bitmask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Config space of the virtio scsi controller.
-    config_space: VirtioScsiConfig,
-}
-
 /// Virtio Scsi Controller device structure.
+#[derive(Default)]
 pub struct ScsiCntlr {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the virtio scsi controller.
     pub config: ScsiCntlrConfig,
-    /// Status of virtio scsi controller.
-    state: ScsiCntlrState,
+    /// Config space of the virtio scsi controller.
+    config_space: VirtioScsiConfig,
     /// Scsi bus.
     pub bus: Option<Arc<Mutex<ScsiBus>>>,
-    /// Eventfd for Scsi Controller deactivates.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl ScsiCntlr {
     pub fn new(config: ScsiCntlrConfig) -> ScsiCntlr {
         Self {
             config,
-            state: ScsiCntlrState::default(),
-            bus: None,
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
+            ..Default::default()
         }
     }
 
     fn gen_error_cb(&self, interrupt_cb: Arc<VirtioInterrupt>) -> BlockIoErrorCallback {
-        let cloned_features = self.state.driver_features;
-        let clone_broken = self.broken.clone();
+        let cloned_features = self.base.driver_features;
+        let clone_broken = self.base.broken.clone();
         Arc::new(move || {
             report_virtio_error(interrupt_cb.clone(), cloned_features, &clone_broken);
         })
@@ -163,19 +148,19 @@ impl VirtioDevice for ScsiCntlr {
             );
         }
 
-        self.state.config_space.num_queues = self.config.queues;
+        self.config_space.num_queues = self.config.queues;
 
-        self.state.config_space.max_sectors = 0xFFFF_u32;
+        self.config_space.max_sectors = 0xFFFF_u32;
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
-        self.state.config_space.cmd_per_lun = 128;
+        self.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
-        self.state.config_space.seg_max = self.queue_size() as u32 - 2;
-        self.state.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
-        self.state.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        self.config_space.seg_max = self.queue_size() as u32 - 2;
+        self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
+        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
         // num_queues: request queues number.
-        self.state.config_space.num_queues = self.config.queues;
+        self.config_space.num_queues = self.config.queues;
 
-        self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
+        self.base.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
             | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC);
 
@@ -200,19 +185,19 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
+        read_u32(self.base.device_features, features_select)
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
+        self.base.driver_features = self.checked_driver_features(page, value);
     }
 
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
+        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
+        let config_slice = self.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
@@ -225,7 +210,7 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_mut_bytes();
+        let config_slice = self.config_space.as_mut_bytes();
         let config_len = config_slice.len() as u64;
 
         if offset
@@ -261,14 +246,14 @@ impl VirtioDevice for ScsiCntlr {
             queue_evt: ctrl_queue_evt,
             mem_space: mem_space.clone(),
             interrupt_cb: interrupt_cb.clone(),
-            driver_features: self.state.driver_features,
-            device_broken: self.broken.clone(),
+            driver_features: self.base.driver_features,
+            device_broken: self.base.broken.clone(),
         };
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
         register_event_helper(
             notifiers,
             self.config.iothread.as_ref(),
-            &mut self.deactivate_evts,
+            &mut self.base.deactivate_evts,
         )?;
 
         // Register event notifier for event queue.
@@ -279,15 +264,15 @@ impl VirtioDevice for ScsiCntlr {
             queue_evt: event_queue_evt,
             _mem_space: mem_space.clone(),
             _interrupt_cb: interrupt_cb.clone(),
-            _driver_features: self.state.driver_features,
-            device_broken: self.broken.clone(),
+            _driver_features: self.base.driver_features,
+            device_broken: self.base.broken.clone(),
         };
         let notifiers =
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
         register_event_helper(
             notifiers,
             self.config.iothread.as_ref(),
-            &mut self.deactivate_evts,
+            &mut self.base.deactivate_evts,
         )?;
 
         // Register event notifier for command queues.
@@ -299,8 +284,8 @@ impl VirtioDevice for ScsiCntlr {
                 queue_evt: queue_evts[index + 2].clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
-                device_broken: self.broken.clone(),
+                driver_features: self.base.driver_features,
+                device_broken: self.base.broken.clone(),
             };
 
             let notifiers =
@@ -309,10 +294,10 @@ impl VirtioDevice for ScsiCntlr {
             register_event_helper(
                 notifiers,
                 self.config.iothread.as_ref(),
-                &mut self.deactivate_evts,
+                &mut self.base.deactivate_evts,
             )?;
         }
-        self.broken.store(false, Ordering::SeqCst);
+        self.base.broken.store(false, Ordering::SeqCst);
 
         // Register event notifier for device aio.
         let bus = self.bus.as_ref().unwrap();
@@ -323,13 +308,16 @@ impl VirtioDevice for ScsiCntlr {
             // SAFETY: the disk_image is assigned after device realized.
             let disk_image = locked_device.block_backend.as_ref().unwrap();
             let mut locked_backend = disk_image.lock().unwrap();
-            locked_backend.register_io_event(self.broken.clone(), err_cb)?;
+            locked_backend.register_io_event(self.base.broken.clone(), err_cb)?;
         }
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(self.config.iothread.as_ref(), &mut self.deactivate_evts)?;
+        unregister_event_helper(
+            self.config.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        )?;
         let bus = self.bus.as_ref().unwrap();
         let locked_bus = bus.lock().unwrap();
         for device in locked_bus.devices.values() {
@@ -343,7 +331,7 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        &self.base.broken
     }
 }
 

@@ -32,6 +32,7 @@ mod transport;
 pub mod vhost;
 
 use std::cmp;
+use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -46,7 +47,7 @@ use util::num_ops::write_u32;
 use util::AsAny;
 
 pub use device::balloon::*;
-pub use device::block::{Block, BlockState};
+pub use device::block::{Block, BlockState, VirtioBlkConfig};
 #[cfg(not(target_env = "musl"))]
 pub use device::gpu::*;
 pub use device::net::*;
@@ -315,6 +316,18 @@ pub enum VirtioInterruptType {
 
 pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
+
+#[derive(Default)]
+struct VirtioBase {
+    /// Bit mask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+    /// Eventfd for device deactivate.
+    deactivate_evts: Vec<RawFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
+}
 
 /// The trait for virtio device operations.
 pub trait VirtioDevice: Send + AsAny {
