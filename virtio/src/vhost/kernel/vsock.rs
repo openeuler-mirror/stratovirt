@@ -30,8 +30,8 @@ use util::loop_context::EventNotifierHelper;
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use crate::{
-    Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VIRTIO_TYPE_VSOCK,
+    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_TYPE_VSOCK,
 };
 
 /// Number of virtqueues.
@@ -218,15 +218,8 @@ impl VirtioDevice for Vsock {
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+        check_config_space_rw(&self.config_space, offset, data)?;
         let data_len = data.len();
-        let config_len = self.config_space.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
-        }
-
         self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
         Ok(())
     }

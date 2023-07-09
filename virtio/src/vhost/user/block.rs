@@ -11,8 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{anyhow, bail, Context, Result};
-use std::cmp;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -27,10 +25,10 @@ use crate::VhostUser::client::{
 };
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
-    virtio_has_feature, VirtioBase, VirtioBlkConfig, VirtioDevice, VirtioError, VirtioInterrupt,
-    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ,
-    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY,
-    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    check_config_space_rw, read_config_default, virtio_has_feature, VirtioBase, VirtioBlkConfig,
+    VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX,
+    VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 pub struct Block {
@@ -189,40 +187,17 @@ impl VirtioDevice for Block {
         self.blk_cfg.queue_size
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let offset = offset as usize;
-        let config_slice = self.config_space.as_bytes();
-        let config_len = config_slice.len();
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset as u64,
-                config_len as u64
-            )));
-        }
-        if let Some(end) = offset.checked_add(data.len()) {
-            data.write_all(&config_slice[offset..cmp::min(end, config_len)])?;
-        } else {
-            bail!("Failed to read config from guest for vhost user blk pci, config space address overflow.")
-        }
-
-        Ok(())
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+        check_config_space_rw(self.config_space.as_bytes(), offset, data)?;
+
         let offset = offset as usize;
+        let end = offset + data.len();
         let config_slice = self.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if let Some(end) = offset.checked_add(data.len()) {
-            if end > config_len {
-                return Err(anyhow!(VirtioError::DevConfigOverflow(
-                    offset as u64,
-                    config_len as u64
-                )));
-            }
-            config_slice[offset..end].copy_from_slice(data);
-        } else {
-            bail!("Failed to write config to guest for vhost user blk pci, config space address overflow.")
-        }
+        config_slice[offset..end].copy_from_slice(data);
 
         self.client
             .as_ref()

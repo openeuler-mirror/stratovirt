@@ -32,11 +32,12 @@ mod transport;
 pub mod vhost;
 
 use std::cmp;
+use std::io::Write;
 use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -459,6 +460,25 @@ pub trait VirtioDevice: Send + AsAny {
     fn has_control_queue(&mut self) -> bool {
         false
     }
+}
+
+/// Check boundary for config space rw.
+fn check_config_space_rw(config: &[u8], offset: u64, data: &[u8]) -> Result<()> {
+    let config_len = config.len() as u64;
+    let data_len = data.len() as u64;
+    offset
+        .checked_add(data_len)
+        .filter(|&end| end <= config_len)
+        .with_context(|| VirtioError::DevConfigOverflow(offset, data_len, config_len))?;
+    Ok(())
+}
+
+/// Default implementation for config space read.
+fn read_config_default(config: &[u8], offset: u64, mut data: &mut [u8]) -> Result<()> {
+    check_config_space_rw(config, offset, data)?;
+    let read_end = offset as usize + data.len();
+    data.write_all(&config[offset as usize..read_end])?;
+    Ok(())
 }
 
 /// The trait for trace descriptions of virtio device interactions

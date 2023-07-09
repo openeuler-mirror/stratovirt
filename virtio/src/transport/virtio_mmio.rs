@@ -731,12 +731,10 @@ impl MigrationHook for VirtioMmioDevice {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
     use super::*;
-    use crate::{VirtioBase, VIRTIO_TYPE_BLOCK};
+    use crate::{check_config_space_rw, read_config_default, VirtioBase, VIRTIO_TYPE_BLOCK};
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
@@ -813,39 +811,15 @@ mod tests {
             QUEUE_SIZE
         }
 
-        fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-            let config_len = self.config_space.len() as u64;
-            if offset >= config_len {
-                bail!(
-                    "The offset{} for reading is more than the length{} of configuration",
-                    offset,
-                    config_len
-                );
-            }
-            if let Some(end) = offset.checked_add(data.len() as u64) {
-                data.write_all(
-                    &self.config_space[offset as usize..std::cmp::min(end, config_len) as usize],
-                )?;
-            }
-
-            Ok(())
+        fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+            read_config_default(&self.config_space, offset, data)
         }
 
         fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+            check_config_space_rw(&self.config_space, offset, data)?;
             let data_len = data.len();
-            let config_len = self.config_space.len();
-            if offset as usize + data_len > config_len {
-                bail!(
-                    "The offset{} {}for writing is more than the length{} of configuration",
-                    offset,
-                    data_len,
-                    config_len
-                );
-            }
-
             self.config_space[(offset as usize)..(offset as usize + data_len)]
                 .copy_from_slice(&data[..]);
-
             Ok(())
         }
 
