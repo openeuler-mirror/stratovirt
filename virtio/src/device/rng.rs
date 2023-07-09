@@ -16,7 +16,6 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -32,7 +31,6 @@ use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 use log::error;
 use migration_derive::{ByteCode, Desc};
@@ -227,6 +225,7 @@ pub struct Rng {
 impl Rng {
     pub fn new(rng_cfg: RngConfig) -> Self {
         Rng {
+            base: VirtioBase::new(VIRTIO_TYPE_RNG),
             rng_cfg,
             ..Default::default()
         }
@@ -253,6 +252,14 @@ impl Rng {
 }
 
 impl VirtioDevice for Rng {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
             .with_context(|| "Failed to check random file")?;
@@ -264,28 +271,12 @@ impl VirtioDevice for Rng {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_RNG
-    }
-
     fn queue_num(&self) -> usize {
         QUEUE_NUM_RNG
     }
 
     fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, _data: &mut [u8]) -> Result<()> {
@@ -335,10 +326,6 @@ impl VirtioDevice for Rng {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.base.deactivate_evts)
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 

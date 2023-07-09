@@ -43,7 +43,7 @@ use vmm_sys_util::eventfd::EventFd;
 use address_space::AddressSpace;
 use machine_manager::config::ConfigCheck;
 use util::aio::{mem_to_buf, Iovec};
-use util::num_ops::write_u32;
+use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
 
 pub use device::balloon::*;
@@ -318,7 +318,9 @@ pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
 
 #[derive(Default)]
-struct VirtioBase {
+pub struct VirtioBase {
+    /// Device type
+    device_type: u32,
     /// Bit mask of features supported by the backend.
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -329,8 +331,23 @@ struct VirtioBase {
     broken: Arc<AtomicBool>,
 }
 
+impl VirtioBase {
+    fn new(device_type: u32) -> Self {
+        Self {
+            device_type,
+            ..Default::default()
+        }
+    }
+}
+
 /// The trait for virtio device operations.
 pub trait VirtioDevice: Send + AsAny {
+    /// Get base property of virtio device.
+    fn virtio_base(&self) -> &VirtioBase;
+
+    /// Get mutable base property virtio device.
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase;
+
     /// Realize low level device.
     fn realize(&mut self) -> Result<()>;
 
@@ -340,7 +357,9 @@ pub trait VirtioDevice: Send + AsAny {
     }
 
     /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32;
+    fn device_type(&self) -> u32 {
+        self.virtio_base().device_type
+    }
 
     /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize;
@@ -349,10 +368,12 @@ pub trait VirtioDevice: Send + AsAny {
     fn queue_size_max(&self) -> u16;
 
     /// Get device features from host.
-    fn device_features(&self, features_select: u32) -> u32;
+    fn device_features(&self, features_select: u32) -> u32 {
+        read_u32(self.virtio_base().device_features, features_select)
+    }
 
-    /// Get checked driver features before set the value at the page.
-    fn checked_driver_features(&mut self, page: u32, value: u32) -> u64 {
+    /// Set driver features by guest.
+    fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = value;
         let unsupported_features = value & !self.device_features(page);
         if unsupported_features != 0 {
@@ -362,18 +383,19 @@ pub trait VirtioDevice: Send + AsAny {
             );
             v &= !unsupported_features;
         }
-        if page == 0 {
+
+        let features = if page == 0 {
             (self.driver_features(1) as u64) << 32 | (v as u64)
         } else {
             (v as u64) << 32 | (self.driver_features(0) as u64)
-        }
+        };
+        self.virtio_base_mut().driver_features = features;
     }
 
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32);
-
     /// Get driver features by guest.
-    fn driver_features(&self, features_select: u32) -> u32;
+    fn driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.virtio_base().driver_features, features_select)
+    }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()>;
@@ -438,7 +460,9 @@ pub trait VirtioDevice: Send + AsAny {
         false
     }
 
-    fn get_device_broken(&self) -> &Arc<AtomicBool>;
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.virtio_base().broken
+    }
 }
 
 /// The trait for trace descriptions of virtio device interactions

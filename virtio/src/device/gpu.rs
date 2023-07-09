@@ -15,7 +15,6 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
@@ -39,7 +38,6 @@ use util::edid::EdidInfo;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 use util::pixman::{
     pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
     pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
@@ -1447,6 +1445,7 @@ unsafe impl Send for Gpu {}
 impl Gpu {
     pub fn new(cfg: GpuDevConfig) -> Gpu {
         Self {
+            base: VirtioBase::new(VIRTIO_TYPE_GPU),
             cfg,
             ..Default::default()
         }
@@ -1459,6 +1458,14 @@ impl Gpu {
 }
 
 impl VirtioDevice for Gpu {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         if self.cfg.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 {
             bail!(
@@ -1507,28 +1514,12 @@ impl VirtioDevice for Gpu {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_GPU
-    }
-
     fn queue_num(&self) -> usize {
         QUEUE_NUM_GPU
     }
 
     fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -1632,9 +1623,5 @@ impl VirtioDevice for Gpu {
             set_run_stage(VmRunningStage::Bios);
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }

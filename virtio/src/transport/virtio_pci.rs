@@ -1460,7 +1460,6 @@ mod tests {
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
     };
-    use util::num_ops::read_u32;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
@@ -1477,7 +1476,7 @@ mod tests {
 
     impl VirtioDeviceTest {
         pub fn new() -> Self {
-            let mut base = VirtioBase::default();
+            let mut base = VirtioBase::new(VIRTIO_DEVICE_TEST_TYPE);
             base.device_features = 0xFFFF_FFF0;
             VirtioDeviceTest {
                 base,
@@ -1487,12 +1486,16 @@ mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
-        fn realize(&mut self) -> VirtioResult<()> {
-            Ok(())
+        fn virtio_base(&self) -> &VirtioBase {
+            &self.base
         }
 
-        fn device_type(&self) -> u32 {
-            VIRTIO_DEVICE_TEST_TYPE
+        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+            &mut self.base
+        }
+
+        fn realize(&mut self) -> VirtioResult<()> {
+            Ok(())
         }
 
         fn queue_num(&self) -> usize {
@@ -1501,18 +1504,6 @@ mod tests {
 
         fn queue_size_max(&self) -> u16 {
             VIRTIO_DEVICE_QUEUE_SIZE
-        }
-
-        fn device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.base.device_features, features_select)
-        }
-
-        fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.base.driver_features = self.checked_driver_features(page, value);
-        }
-
-        fn driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.base.driver_features, features_select)
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
@@ -1532,10 +1523,6 @@ mod tests {
         ) -> VirtioResult<()> {
             self.is_activated = true;
             Ok(())
-        }
-
-        fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.base.broken
         }
     }
 

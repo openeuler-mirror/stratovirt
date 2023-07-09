@@ -22,7 +22,6 @@ use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -35,7 +34,6 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
@@ -122,7 +120,7 @@ impl Fs {
     /// `enable_irqfd` - Whether irqfd is enabled on this Fs device.
     pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>, enable_irqfd: bool) -> Self {
         Fs {
-            base: Default::default(),
+            base: VirtioBase::new(VIRTIO_TYPE_FS),
             fs_cfg,
             config_space: VirtioFsConfig::default(),
             client: None,
@@ -134,6 +132,14 @@ impl Fs {
 }
 
 impl VirtioDevice for Fs {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         let tag_bytes_vec = self.fs_cfg.tag.clone().into_bytes();
         self.config_space.tag[..tag_bytes_vec.len()].copy_from_slice(tag_bytes_vec.as_slice());
@@ -161,28 +167,12 @@ impl VirtioDevice for Fs {
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_FS
-    }
-
     fn queue_num(&self) -> usize {
         VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM
     }
 
     fn queue_size_max(&self) -> u16 {
         VIRTIO_FS_QUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -275,9 +265,5 @@ impl VirtioDevice for Fs {
         self.client = None;
 
         self.realize()
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }

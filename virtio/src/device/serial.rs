@@ -43,7 +43,6 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 // Buffer size for chardev backend.
 const BUF_SIZE: usize = 4096;
@@ -148,6 +147,7 @@ impl Serial {
     /// * `serial_cfg` - Device configuration set by user.
     pub fn new(serial_cfg: VirtioSerialInfo) -> Self {
         Serial {
+            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
             ..Default::default()
@@ -210,16 +210,20 @@ pub fn find_port_by_nr(
 }
 
 impl VirtioDevice for Serial {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
 
         Ok(())
-    }
-
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_CONSOLE
     }
 
     fn queue_num(&self) -> usize {
@@ -230,18 +234,6 @@ impl VirtioDevice for Serial {
 
     fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    fn device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.device_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.base.driver_features = self.checked_driver_features(page, value);
-    }
-
-    fn driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.base.driver_features, features_select)
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
@@ -322,10 +314,6 @@ impl VirtioDevice for Serial {
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.base.broken
     }
 }
 
