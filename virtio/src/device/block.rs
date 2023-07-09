@@ -1038,7 +1038,6 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
-    /// Realize virtio block device.
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err
         if self.blk_cfg.iothread.is_some()
@@ -1105,37 +1104,30 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_BLOCK
     }
 
-    /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
         self.blk_cfg.queues as usize
     }
 
-    /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
         self.blk_cfg.queue_size
     }
 
-    /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.device_features, features_select)
     }
 
-    /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         self.state.driver_features = self.checked_driver_features(page, value);
     }
 
-    /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.state.driver_features, features_select)
     }
 
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
         let read_end = offset as usize + data.len();
@@ -1153,7 +1145,6 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
         if offset
@@ -1169,8 +1160,6 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
