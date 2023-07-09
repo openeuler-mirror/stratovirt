@@ -9,7 +9,7 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use std::io::Write;
+
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -46,8 +46,9 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
-    error::*, report_virtio_error, virtio_has_feature, Element, Queue, VirtioBase, VirtioDevice,
-    VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -1022,7 +1023,7 @@ impl VirtioDevice for Balloon {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
             num_pages: self.num_pages,
             actual: self.actual.load(Ordering::Acquire),
@@ -1034,23 +1035,13 @@ impl VirtioDevice for Balloon {
 
         let config_len =
             if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
-                size_of::<VirtioBalloonConfig>() as u64
+                size_of::<VirtioBalloonConfig>()
             } else {
-                offset_of!(VirtioBalloonConfig, _reserved) as u64
+                offset_of!(VirtioBalloonConfig, _reserved)
             };
 
-        let data_len = data.len() as u64;
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
-        if let Some(end) = offset.checked_add(data_len) {
-            data.write_all(
-                &new_config.as_bytes()[offset as usize..cmp::min(end, config_len) as usize],
-            )?;
-        }
-
-        Ok(())
+        let config = &new_config.as_bytes()[..config_len];
+        read_config_default(config, offset, data)
     }
 
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
@@ -1332,8 +1323,8 @@ mod tests {
         let addr = 0x4;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.actual.store(1, Ordering::Release);
-        balloon.read_config(addr, &mut read_data).unwrap();
-        assert_eq!(read_data, ret_data);
+        assert!(balloon.read_config(addr, &mut read_data).is_err());
+        assert_ne!(read_data, ret_data);
     }
 
     #[test]

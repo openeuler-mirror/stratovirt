@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
-use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -28,6 +26,7 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
+use crate::read_config_default;
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, MAC_ADDR_LEN},
     error::VirtioError,
@@ -199,18 +198,9 @@ impl VirtioDevice for Net {
         self.net_cfg.queue_size
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let config_space = self.config_space.lock().unwrap();
-        let config_slice = config_space.as_bytes();
-        let config_size = config_slice.len() as u64;
-        if offset >= config_size {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
-        }
-
-        Ok(())
+        read_config_default(config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
@@ -542,6 +532,6 @@ mod tests {
 
         let offset: u64 = len - 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
+        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
     }
 }

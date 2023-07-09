@@ -12,7 +12,6 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -27,14 +26,15 @@ use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error,
-    virtio_has_feature, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VirtioTrace, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ,
-    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES,
-    VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD,
-    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
-    VIRTIO_BLK_T_WRITE_ZEROES, VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_to_buf,
+    read_config_default, report_virtio_error, virtio_has_feature, Element, Queue, VirtioBase,
+    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
+    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
+    VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
+    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::{
@@ -1009,13 +1009,13 @@ impl Block {
         }
     }
 
-    fn get_blk_config_size(&self) -> u64 {
+    fn get_blk_config_size(&self) -> usize {
         if virtio_has_feature(self.base.device_features, VIRTIO_BLK_F_WRITE_ZEROES) {
-            offset_of!(VirtioBlkConfig, unused1) as u64
+            offset_of!(VirtioBlkConfig, unused1)
         } else if virtio_has_feature(self.base.device_features, VIRTIO_BLK_F_DISCARD) {
-            offset_of!(VirtioBlkConfig, max_write_zeroes_sectors) as u64
+            offset_of!(VirtioBlkConfig, max_write_zeroes_sectors)
         } else {
-            offset_of!(VirtioBlkConfig, max_discard_sectors) as u64
+            offset_of!(VirtioBlkConfig, max_discard_sectors)
         }
     }
 
@@ -1111,35 +1111,18 @@ impl VirtioDevice for Block {
         self.blk_cfg.queue_size
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
-        let read_end = offset as usize + data.len();
-        if offset
-            .checked_add(data.len() as u64)
-            .filter(|&end| end <= config_len)
-            .is_none()
-        {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
-        let config_slice = self.config_space.as_bytes();
-        data.write_all(&config_slice[(offset as usize)..read_end])?;
-
-        Ok(())
+        let config = &self.config_space.as_bytes()[..config_len];
+        read_config_default(config, offset, data)
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
-        if offset
-            .checked_add(data.len() as u64)
-            .filter(|&end| end <= config_len)
-            .is_none()
-        {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
+        let config = &self.config_space.as_bytes()[..config_len];
+        check_config_space_rw(config, offset, data)?;
         // The only writable field is "writeback", but it's not supported for now,
         // so do nothing here.
-
         Ok(())
     }
 

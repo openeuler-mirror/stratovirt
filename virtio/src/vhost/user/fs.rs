@@ -17,13 +17,11 @@ const VIRTIO_FS_REQ_QUEUES_NUM: usize = 1;
 // The size of queue for virtio fs
 const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 
-use crate::{VirtioBase, VirtioError};
-use std::cmp;
-use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, Context, Result};
 use log::error;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -38,8 +36,7 @@ use util::loop_context::{
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackendType, VhostUserClient};
-use crate::{VirtioInterrupt, VirtioInterruptType};
-use anyhow::{anyhow, Context, Result};
+use crate::{read_config_default, VirtioBase, VirtioInterrupt, VirtioInterruptType};
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
@@ -175,17 +172,8 @@ impl VirtioDevice for Fs {
         VIRTIO_FS_QUEUE_SIZE
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.config_space.as_bytes();
-        let config_size = config_slice.len() as u64;
-        if offset >= config_size {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
-        }
-
-        Ok(())
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {

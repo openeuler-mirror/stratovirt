@@ -10,22 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
-use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use log::{debug, error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
-    VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
+    report_virtio_error, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::BlockIoErrorCallback;
@@ -187,31 +186,12 @@ impl VirtioDevice for ScsiCntlr {
         self.config.queue_size
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
-
-        Ok(())
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let config_slice = self.config_space.as_mut_bytes();
-        let config_len = config_slice.len() as u64;
-
-        if offset
-            .checked_add(data.len() as u64)
-            .filter(|&end| end <= config_len)
-            .is_none()
-        {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
+        check_config_space_rw(self.config_space.as_bytes(), offset, data)?;
         // Guest can only set sense_size and cdb_size, which are fixed default values
         // (VIRTIO_SCSI_CDB_DEFAULT_SIZE; VIRTIO_SCSI_SENSE_DEFAULT_SIZE) and cannot be
         // changed in stratovirt now. So, do nothing when guest writes config.

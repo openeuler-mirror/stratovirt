@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
-use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -24,11 +22,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::super::VhostOps;
 use super::{VhostBackendType, VhostUserClient};
-use crate::error::VirtioError;
 use crate::{
     device::net::{build_device_config_space, CtrlInfo, MAC_ADDR_LEN},
-    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase, VirtioDevice,
-    VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
+    read_config_default, virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase,
+    VirtioDevice, VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR,
     VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
@@ -175,18 +172,9 @@ impl VirtioDevice for Net {
         self.net_cfg.queue_size
     }
 
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let config_space = self.config_space.lock().unwrap();
-        let config_slice = config_space.as_bytes();
-        let config_size = config_slice.len() as u64;
-        if offset >= config_size {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
-        }
-
-        Ok(())
+        read_config_default(config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
