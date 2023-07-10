@@ -57,9 +57,9 @@ pub struct BlockProperty {
 pub trait BlockDriverOps<T: Clone>: Send {
     fn disk_size(&mut self) -> Result<u64>;
 
-    fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()>;
+    fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()>;
 
-    fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()>;
+    fn write_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()>;
 
     fn datasync(&mut self, completecb: T) -> Result<()>;
 

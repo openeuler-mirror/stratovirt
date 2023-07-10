@@ -127,7 +127,7 @@ impl<T: Clone + 'static> FileDriver<T> {
         self.process_request(OpCode::Preadv, req_list, completecb)
     }
 
-    pub fn complete_request(
+    fn complete_request(
         &mut self,
         opcode: OpCode,
         iovec: &[Iovec],

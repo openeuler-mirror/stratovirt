@@ -577,12 +577,12 @@ impl ScsiRequest {
         match mode {
             ScsiXferMode::ScsiXferFromDev => {
                 locked_backend
-                    .read_vectored(&iovecs, offset, scsicompletecb)
+                    .read_vectored(iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for reading")?;
             }
             ScsiXferMode::ScsiXferToDev => {
                 locked_backend
-                    .write_vectored(&iovecs, offset, scsicompletecb)
+                    .write_vectored(iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for writing")?;
             }
             _ => {
