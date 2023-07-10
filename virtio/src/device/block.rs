@@ -319,12 +319,12 @@ impl Request {
         match request_type {
             VIRTIO_BLK_T_IN => {
                 locked_backend
-                    .read_vectored(&iovecs, offset, aiocompletecb)
+                    .read_vectored(iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for reading")?;
             }
             VIRTIO_BLK_T_OUT => {
                 locked_backend
-                    .write_vectored(&iovecs, offset, aiocompletecb)
+                    .write_vectored(iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for writing")?;
             }
             VIRTIO_BLK_T_FLUSH => {

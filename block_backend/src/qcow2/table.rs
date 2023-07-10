@@ -176,6 +176,12 @@ impl Qcow2Table {
         }
     }
 
+    /// Get max data remaining size after the offset which indexed by l2 table.
+    pub fn get_l2_table_max_remain_size(&self, guest_offset: u64, offset_in_cluster: u64) -> u64 {
+        (self.l2_size - self.get_l2_table_index(guest_offset)) * self.cluster_size
+            - offset_in_cluster
+    }
+
     pub fn update_l1_table(&mut self, l1_index: usize, l2_address: u64) {
         self.l1_table[l1_index] = l2_address;
     }

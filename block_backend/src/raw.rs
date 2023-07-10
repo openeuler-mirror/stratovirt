@@ -43,18 +43,18 @@ impl<T: Clone + 'static> RawDriver<T> {
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
-    fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        let nbytes = get_iov_size(iovec);
+    fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(&iovec);
         self.driver.read_vectored(
-            vec![CombineRequest::new(iovec.to_vec(), offset as u64, nbytes)],
+            vec![CombineRequest::new(iovec, offset as u64, nbytes)],
             completecb,
         )
     }
 
-    fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        let nbytes = get_iov_size(iovec);
+    fn write_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(&iovec);
         self.driver.write_vectored(
-            vec![CombineRequest::new(iovec.to_vec(), offset as u64, nbytes)],
+            vec![CombineRequest::new(iovec, offset as u64, nbytes)],
             completecb,
         )
     }
