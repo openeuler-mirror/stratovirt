@@ -368,17 +368,10 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             )?));
             self.table.update_l2_table(l2_cache_entry)?;
 
-            // Update l1_table and l2 table cache.
+            // Update l1_table.
             self.table
                 .update_l1_table(l1_index as usize, new_l2_offset | QCOW2_OFFSET_COPIED);
             self.table.save_l1_table(&self.header)?;
-            let zero_cluster: Vec<u8> = vec![0_u8; self.header.cluster_size() as usize];
-            let l2_table_entry = Rc::new(RefCell::new(CacheTable::new(
-                new_l2_offset,
-                zero_cluster,
-                ENTRY_SIZE_U64,
-            )?));
-            self.table.update_l2_table(l2_table_entry)?;
 
             // Decrease the refcount of the old table.
             if old_l2_offset != 0 {
