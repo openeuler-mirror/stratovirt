@@ -376,6 +376,12 @@ impl StdMachine {
         }
         Ok(())
     }
+
+    pub fn mem_show(&self) {
+        self.sys_mem.memspace_show();
+        let machine_ram = self.get_vm_ram();
+        machine_ram.mtree(0_u32);
+    }
 }
 
 impl StdMachineOps for StdMachine {

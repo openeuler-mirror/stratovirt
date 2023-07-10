@@ -272,6 +272,15 @@ impl LightMachine {
         Ok(())
     }
 
+    pub fn mem_show(&self) {
+        self.sys_mem.memspace_show();
+        #[cfg(target_arch = "x86_64")]
+        self.sys_io.memspace_show();
+
+        let machine_ram = self.get_vm_ram();
+        machine_ram.mtree(0_u32);
+    }
+
     fn create_replaceable_devices(&mut self) -> Result<()> {
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
@@ -1125,6 +1134,11 @@ impl DeviceInterface for LightMachine {
             ),
             None,
         )
+    }
+
+    fn query_mem(&self) -> Response {
+        self.mem_show();
+        Response::create_empty_response()
     }
 
     /// VNC is not supported by light machine currently.

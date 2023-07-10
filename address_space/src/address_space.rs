@@ -174,6 +174,27 @@ impl AddressSpace {
         &self.root
     }
 
+    pub fn memspace_show(&self) {
+        let view = self.flat_view.load();
+
+        println!("----- address-space flat: {} -----", self.name);
+        for fr in view.0.iter() {
+            println!(
+                "  0x{:X} - 0x{:X}, (pri {}, {:?}) Region {} @ offset 0x{:X}",
+                fr.addr_range.base.raw_value(),
+                fr.addr_range.base.raw_value() + fr.addr_range.size,
+                fr.owner.priority(),
+                fr.owner.region_type(),
+                fr.owner.name,
+                fr.offset_in_region
+            );
+        }
+
+        println!("------ regions show: {} --------------", self.root().name);
+        self.root().mtree(0_u32);
+        println!("--------------------------------------");
+    }
+
     /// Register the listener to the `AddressSpace`.
     ///
     /// # Arguments

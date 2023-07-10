@@ -288,6 +288,13 @@ impl StdMachine {
         ich.realize()?;
         Ok(())
     }
+
+    pub fn mem_show(&self) {
+        self.sys_mem.memspace_show();
+        self.sys_io.memspace_show();
+        let machine_ram = self.get_vm_ram();
+        machine_ram.mtree(0_u32);
+    }
 }
 
 impl StdMachineOps for StdMachine {

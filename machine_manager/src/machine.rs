@@ -194,6 +194,9 @@ pub trait DeviceInterface {
     /// Query balloon's size.
     fn query_balloon(&self) -> Response;
 
+    /// Query machine mem size.
+    fn query_mem(&self) -> Response;
+
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
 

@@ -1193,6 +1193,11 @@ impl DeviceInterface for StdMachine {
         )
     }
 
+    fn query_mem(&self) -> Response {
+        self.mem_show();
+        Response::create_empty_response()
+    }
+
     fn query_vnc(&self) -> Response {
         #[cfg(not(target_env = "musl"))]
         if let Some(vnc_info) = qmp_query_vnc() {
