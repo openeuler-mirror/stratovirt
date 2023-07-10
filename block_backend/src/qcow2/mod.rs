@@ -939,7 +939,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut old_l2_table_offset: u64;
         for (i, l1_entry) in l1_table.iter_mut().enumerate().take(l1_table_size) {
             let mut l2_table_offset = *l1_entry;
-            log::info!("Develop: l1 table idx {}, addr {:x}", i, l2_table_offset);
             if l2_table_offset == 0 {
                 // No l2 table.
                 continue;
