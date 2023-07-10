@@ -174,7 +174,7 @@ impl Qcow2Table {
     pub fn update_l2_table(&mut self, l2_table_entry: Rc<RefCell<CacheTable>>) -> Result<()> {
         let l2_entry_addr = l2_table_entry.borrow().addr;
         if self.l2_table_cache.contains_keys(l2_entry_addr as u64) {
-            return Ok(());
+            self.l2_table_cache.cache_map.remove(&l2_entry_addr);
         }
         if let Some(replaced_entry) = self
             .l2_table_cache
