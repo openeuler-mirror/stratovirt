@@ -1012,6 +1012,66 @@ impl Region {
         }
         Ok(flat_view)
     }
+
+    fn get_region_type_name(&self) -> String {
+        match self.region_type() {
+            RegionType::Ram => String::from("ram"),
+            RegionType::IO => String::from("i/o"),
+            RegionType::RomDevice => String::from("romd"),
+            RegionType::RamDevice => String::from("ramd"),
+            _ => String::from("err type"),
+        }
+    }
+
+    pub fn mtree(&self, level: u32) {
+        let mut tab = String::new();
+        let mut num = 0_u32;
+
+        loop {
+            if num == level {
+                break;
+            }
+            tab.push_str("    ");
+            num += 1;
+        }
+        match self.region_type() {
+            RegionType::Container => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, Container) : {}",
+                    tab,
+                    self.offset().raw_value(),
+                    self.offset().raw_value() + self.size(),
+                    self.priority(),
+                    self.name
+                );
+                for sub_r in self.subregions().iter() {
+                    sub_r.mtree(level + 1);
+                }
+            }
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, {}) : {}",
+                    tab,
+                    self.offset().raw_value(),
+                    self.offset().raw_value() + self.size(),
+                    self.priority(),
+                    self.get_region_type_name(),
+                    self.name
+                );
+            }
+            RegionType::Alias => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, alias) : {} @alias name: {}",
+                    tab,
+                    self.alias_offset(),
+                    self.alias_offset() + self.size(),
+                    self.priority(),
+                    self.name,
+                    self.alias_name().unwrap(),
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
