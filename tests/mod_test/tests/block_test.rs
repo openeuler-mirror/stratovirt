@@ -14,6 +14,7 @@ use mod_test::libdriver::qcow2::CLUSTER_SIZE;
 use virtio::device::block::VirtioBlkConfig;
 
 use mod_test::libdriver::malloc::GuestAllocator;
+use mod_test::libdriver::qcow2::{check_snapshot, create_snapshot, delete_snapshot};
 use mod_test::libdriver::virtio::TestVringDescEntry;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
 use mod_test::libdriver::virtio_block::{
@@ -1958,4 +1959,165 @@ fn blk_feature_write_zeroes() {
             );
         }
     }
+}
+
+/// Block device using snapshot sends I/O request.
+/// TestStep:
+///   1. Init block device. Create internal snapshot.
+///   2. Do the I/O request.
+///   3. Delete internal snapshot.
+///   4. Do the I/O request.
+///   5. Destroy device.
+/// Expect:
+///   1/2/3/4/5: success.
+#[test]
+fn blk_snapshot_basic() {
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Qcow2);
+    let features = virtio_blk_default_feature(blk.clone());
+    let virtqueues = blk
+        .borrow_mut()
+        .init_device(test_state.clone(), alloc.clone(), features, 1);
+
+    create_snapshot(test_state.clone(), "drive0", "snap0");
+    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
+
+    virtio_blk_write(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+    virtio_blk_read(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+
+    delete_snapshot(test_state.clone(), "drive0", "snap0");
+    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+
+    virtio_blk_write(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+    virtio_blk_read(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+
+    tear_down(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues,
+        image_path.clone(),
+    );
+}
+
+/// Block device whose backend file has snapshot sends I/O request.
+/// TestStep:
+///   1. Create snapshot snap0 in qcow2 backend file.
+///   2. Init device.
+///   3. Do the I/O request.
+///   4. Create internal snapshot snap1. Delete internal snapshot snap0.
+///   5. Do the I/O request.
+///   6. Destroy device.
+/// Expect:
+///   1/2/3/4/5/6: success.
+#[test]
+fn blk_snapshot_basic2() {
+    // Note: We can not use stratovirt-img to create snapshot now.
+    // So, we use qmp to create snapshot in existed qcow2 file.
+    // TODO: use stratovirt-img instead of qmp in the future.
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Qcow2);
+    let features = virtio_blk_default_feature(blk.clone());
+    let virtqueues = blk
+        .borrow_mut()
+        .init_device(test_state.clone(), alloc.clone(), features, 1);
+    create_snapshot(test_state.clone(), "drive0", "snap0");
+    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
+    tear_down(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues,
+        Rc::new("".to_string()),
+    );
+
+    let device_args = Rc::new(String::from(""));
+    let drive_args = Rc::new(String::from(",direct=false"));
+    let other_args = Rc::new(String::from(""));
+    let (blk, test_state, alloc) = create_blk(
+        &ImageType::Qcow2,
+        image_path.clone(),
+        device_args,
+        drive_args,
+        other_args,
+    );
+
+    let features = virtio_blk_default_feature(blk.clone());
+    let virtqueues = blk
+        .borrow_mut()
+        .init_device(test_state.clone(), alloc.clone(), features, 1);
+
+    virtio_blk_write(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+    virtio_blk_read(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+
+    create_snapshot(test_state.clone(), "drive0", "snap1");
+    assert_eq!(check_snapshot(test_state.clone(), "snap1"), true);
+
+    delete_snapshot(test_state.clone(), "drive0", "snap0");
+    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+
+    virtio_blk_write(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+    virtio_blk_read(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+        0,
+        true,
+    );
+
+    tear_down(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues,
+        image_path.clone(),
+    );
 }

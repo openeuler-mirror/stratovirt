@@ -10,15 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{bail, Result};
-use byteorder::{BigEndian, ByteOrder};
-use libc::iovec;
-use libc::{c_int, off_t, preadv};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
     os::unix::prelude::{AsRawFd, OpenOptionsExt},
 };
+
+use anyhow::{bail, Result};
+use byteorder::{BigEndian, ByteOrder};
+use libc::{c_int, iovec, off_t, preadv};
+use serde_json::Value;
+
+use crate::libtest::TestState;
 use util::aio::Iovec;
 
 const QCOW_MAGIC: u32 = 0x514649fb;
@@ -298,4 +303,37 @@ fn write_full_disk(image_path: String) {
     qcow2.raw_write(cluster_size * 2, &mut refcount_block);
     qcow2.raw_write(cluster_size * 3, &mut l1_table);
     qcow2.raw_write(cluster_size * 4, &mut l2_table);
+}
+
+pub fn create_snapshot(state: Rc<RefCell<TestState>>, device: &str, snap: &str) {
+    let qmp_str = format!("{{\"execute\":\"blockdev-snapshot-internal-sync\",\"arguments\":{{\"device\":\"{}\",\"name\":\"{}\"}}}}", device, snap);
+    state.borrow_mut().qmp(&qmp_str);
+}
+
+pub fn delete_snapshot(state: Rc<RefCell<TestState>>, device: &str, snap: &str) {
+    let qmp_str = format!("{{\"execute\":\"blockdev-snapshot-delete-internal-sync\",\"arguments\":{{\"device\":\"{}\",\"name\":\"{}\"}}}}", device, snap);
+    state.borrow_mut().qmp(&qmp_str);
+}
+
+pub fn query_snapshot(state: Rc<RefCell<TestState>>) -> Value {
+    let qmp_str =
+        format!("{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"info snapshots\"}}}}");
+    let value = state.borrow_mut().qmp(&qmp_str);
+
+    value
+}
+
+// Check if there exists snapshot with the specified name.
+pub fn check_snapshot(state: Rc<RefCell<TestState>>, snap: &str) -> bool {
+    let value = query_snapshot(state.clone());
+    let str = (*value.get("return").unwrap()).as_str().unwrap();
+    let lines: Vec<&str> = str.split("\r\n").collect();
+    for line in lines {
+        let buf: Vec<&str> = line.split_whitespace().collect();
+        if buf.len() > 2 && buf[1] == snap {
+            return true;
+        }
+    }
+
+    false
 }
