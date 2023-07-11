@@ -74,14 +74,14 @@ pub enum WriteZeroesState {
 }
 
 impl FromStr for WriteZeroesState {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "off" => Ok(WriteZeroesState::Off),
             "on" => Ok(WriteZeroesState::On),
             "unmap" => Ok(WriteZeroesState::Unmap),
-            _ => Err(()),
+            _ => Err(anyhow!("Unknown write zeroes state {}", s)),
         }
     }
 }

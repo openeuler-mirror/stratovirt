@@ -572,13 +572,13 @@ pub struct ExBool {
 }
 
 impl FromStr for ExBool {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "true" | "on" | "yes" | "unmap" => Ok(ExBool { inner: true }),
             "false" | "off" | "no" | "ignore" => Ok(ExBool { inner: false }),
-            _ => Err(()),
+            _ => Err(anyhow!("Unknown Exbool value {}", s)),
         }
     }
 }

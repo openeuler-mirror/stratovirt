@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    check_arg_too_long, get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, CmdParser, ConfigCheck,
+    ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
@@ -74,6 +74,8 @@ pub struct BlkDevConfig {
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
     pub format: DiskFormat,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +104,8 @@ impl Default for BlkDevConfig {
             discard: false,
             write_zeroes: WriteZeroesState::Off,
             format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         }
     }
 }
@@ -139,6 +143,8 @@ pub struct DriveConfig {
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
     pub format: DiskFormat,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 impl Default for DriveConfig {
@@ -154,6 +160,8 @@ impl Default for DriveConfig {
             discard: false,
             write_zeroes: WriteZeroesState::Off,
             format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         }
     }
 }
@@ -338,6 +346,17 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         .get_value::<WriteZeroesState>("detect-zeroes")?
         .unwrap_or(WriteZeroesState::Off);
 
+    if let Some(l2_cache) = cmd_parser.get_value::<String>("l2-cache-size")? {
+        let sz = memory_unit_conversion(&l2_cache)
+            .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
+        drive.l2_cache_size = Some(sz);
+    }
+    if let Some(rc_cache) = cmd_parser.get_value::<String>("refcount-cache-size")? {
+        let sz = memory_unit_conversion(&rc_cache)
+            .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
+        drive.refcount_cache_size = Some(sz);
+    }
+
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -410,6 +429,8 @@ pub fn parse_blk(
     blkdevcfg.discard = drive_arg.discard;
     blkdevcfg.write_zeroes = drive_arg.write_zeroes;
     blkdevcfg.format = drive_arg.format;
+    blkdevcfg.l2_cache_size = drive_arg.l2_cache_size;
+    blkdevcfg.refcount_cache_size = drive_arg.refcount_cache_size;
     blkdevcfg.check()?;
     Ok(blkdevcfg)
 }
@@ -538,7 +559,9 @@ impl VmConfig {
             .push("media")
             .push("discard")
             .push("detect-zeroes")
-            .push("format");
+            .push("format")
+            .push("l2-cache-size")
+            .push("refcount-cache-size");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;

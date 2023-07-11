@@ -218,9 +218,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         qcow2.check().with_context(|| "Invalid header")?;
         qcow2
             .table
-            .init_table(&qcow2.header)
+            .init_table(&qcow2.header, &conf)
             .with_context(|| "Failed to create qcow2 table")?;
-        qcow2.refcount.init_refcount_info(&qcow2.header, conf);
+        qcow2.refcount.init_refcount_info(&qcow2.header, &conf);
         qcow2
             .load_refcount_table()
             .with_context(|| "Failed to load refcount table")?;
@@ -1675,6 +1675,7 @@ mod test {
         let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
         let (req_align, buf_align) = get_file_alignment(&image.file, true);
         let conf = BlockProperty {
+            id: path.to_string(),
             format: DiskFormat::Qcow2,
             iothread: None,
             direct: true,
@@ -1682,6 +1683,8 @@ mod test {
             buf_align,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         image.file = file.try_clone().unwrap();
         (image, Qcow2Driver::new(file, aio, conf).unwrap())
@@ -1949,6 +1952,7 @@ mod test {
         let image_bits = 24;
         let cluster_bits = 16;
         let conf = BlockProperty {
+            id: path.to_string(),
             format: DiskFormat::Qcow2,
             iothread: None,
             direct: true,
@@ -1956,6 +1960,8 @@ mod test {
             buf_align: 512,
             discard: true,
             write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         let image = TestImage::new(path, image_bits, cluster_bits);
         let mut qcow2_driver = image.create_qcow2_driver(conf);
@@ -1979,6 +1985,7 @@ mod test {
         let image_bits = 24;
         let cluster_bits = 16;
         let conf = BlockProperty {
+            id: path.to_string(),
             format: DiskFormat::Qcow2,
             iothread: None,
             direct: true,
@@ -1986,6 +1993,8 @@ mod test {
             buf_align: 512,
             discard: true,
             write_zeroes: WriteZeroesState::On,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         let image = TestImage::new(path, image_bits, cluster_bits);
         let mut qcow2_driver = image.create_qcow2_driver(conf);

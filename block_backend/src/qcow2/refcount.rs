@@ -27,7 +27,7 @@ use crate::{
 };
 
 // The max refcount table size default is 4 clusters;
-const MAX_REFTABLE_NUM: u32 = 4;
+const MAX_REFTABLE_NUM: u64 = 4;
 
 #[derive(Eq, PartialEq, Clone)]
 pub enum Qcow2DiscardType {
@@ -85,7 +85,7 @@ impl RefCount {
         RefCount {
             refcount_table: Vec::new(),
             sync_aio,
-            refcount_blk_cache: Qcow2Cache::new(MAX_REFTABLE_NUM as usize),
+            refcount_blk_cache: Qcow2Cache::default(),
             discard_list: Vec::new(),
             discard_passthrough: Vec::new(),
             free_cluster_index: 0,
@@ -100,7 +100,7 @@ impl RefCount {
         }
     }
 
-    pub fn init_refcount_info(&mut self, header: &QcowHeader, conf: BlockProperty) {
+    pub fn init_refcount_info(&mut self, header: &QcowHeader, conf: &BlockProperty) {
         // Update discard_pass_through depend on config.
         self.discard_passthrough.push(Qcow2DiscardType::Always);
         if conf.discard {
@@ -119,6 +119,13 @@ impl RefCount {
         let refcount_bits = 1 << header.refcount_order;
         self.refcount_max = 1 << (refcount_bits - 1);
         self.refcount_max += self.refcount_max - 1;
+        let sz = if let Some(rc_size) = conf.refcount_cache_size {
+            rc_size / header.cluster_size()
+        } else {
+            MAX_REFTABLE_NUM
+        };
+        info!("Driver {} refcount cache size {}", conf.id, sz);
+        self.refcount_blk_cache = Qcow2Cache::new(sz as usize);
     }
 
     pub fn start_of_cluster(&self, offset: u64) -> u64 {
@@ -672,6 +679,7 @@ mod test {
         let file = image_create(path, img_bits, cluster_bits);
         let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
         let conf = BlockProperty {
+            id: path.to_string(),
             format: DiskFormat::Qcow2,
             iothread: None,
             direct: true,
@@ -679,6 +687,8 @@ mod test {
             buf_align: 512,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         let cloned_file = file.try_clone().unwrap();
         (Qcow2Driver::new(file, aio, conf).unwrap(), cloned_file)
