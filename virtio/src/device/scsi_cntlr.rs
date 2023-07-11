@@ -352,6 +352,10 @@ impl VirtioDevice for ScsiCntlr {
         }
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 fn build_event_notifier(fd: RawFd, handler: Rc<NotifierCallback>) -> EventNotifier {

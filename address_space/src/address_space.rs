@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
@@ -18,6 +18,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use migration::{migration::Migratable, MigrationManager};
+use util::aio::Iovec;
 use util::byte_code::ByteCode;
 use util::test_helper::is_test_enabled;
 
@@ -38,6 +39,73 @@ impl FlatView {
             _ => None,
         }
     }
+
+    fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
+        let mut len = count;
+        let mut l = count;
+        let mut start = addr;
+
+        loop {
+            if let Some(fr) = self.find_flatrange(start) {
+                let fr_offset = start.offset_from(fr.addr_range.base);
+                let region_offset = fr.offset_in_region + fr_offset;
+                let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+                let fr_remain = fr.addr_range.size - fr_offset;
+
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
+                    l = std::cmp::min(l, fr_remain);
+                }
+                fr.owner.read(dst, region_base, region_offset, l)?;
+            } else {
+                return Err(anyhow!(AddressSpaceError::RegionNotFound(
+                    start.raw_value()
+                )));
+            }
+
+            len -= l;
+            if len == 0 {
+                return Ok(());
+            }
+            start = start.unchecked_add(l);
+            l = len;
+        }
+    }
+
+    fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
+        let mut l = count;
+        let mut len = count;
+        let mut start = addr;
+
+        loop {
+            if let Some(fr) = self.find_flatrange(start) {
+                let fr_offset = start.offset_from(fr.addr_range.base);
+                let region_offset = fr.offset_in_region + fr_offset;
+                let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+                let fr_remain = fr.addr_range.size - fr_offset;
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
+                    l = std::cmp::min(l, fr_remain);
+                }
+                fr.owner.write(src, region_base, region_offset, l)?;
+            } else {
+                return Err(anyhow!(AddressSpaceError::RegionNotFound(
+                    start.raw_value()
+                )));
+            }
+
+            len -= l;
+            if len == 0 {
+                break;
+            }
+            start = start.unchecked_add(l);
+            l = len;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +121,8 @@ type ListenerObj = Arc<Mutex<dyn Listener>>;
 /// Address Space of memory.
 #[derive(Clone)]
 pub struct AddressSpace {
+    /// the name of AddressSpace.
+    name: String,
     /// Root Region of this AddressSpace.
     root: Region,
     /// `flat_view` is the output of rendering all regions in parent `address-space`,
@@ -80,8 +150,10 @@ impl AddressSpace {
     /// # Arguments
     ///
     /// * `root` - Root region of address space.
-    pub fn new(root: Region) -> Result<Arc<AddressSpace>> {
+    /// * `name` - the name of AddressSpace.
+    pub fn new(root: Region, name: &str) -> Result<Arc<AddressSpace>> {
         let space = Arc::new(AddressSpace {
+            name: String::from(name),
             root: root.clone(),
             flat_view: Arc::new(ArcSwap::new(Arc::new(FlatView::default()))),
             listeners: Arc::new(Mutex::new(Vec::new())),
@@ -101,6 +173,27 @@ impl AddressSpace {
     /// Get the reference of root region of AddressSpace.
     pub fn root(&self) -> &Region {
         &self.root
+    }
+
+    pub fn memspace_show(&self) {
+        let view = self.flat_view.load();
+
+        println!("----- address-space flat: {} -----", self.name);
+        for fr in view.0.iter() {
+            println!(
+                "  0x{:X} - 0x{:X}, (pri {}, {:?}) Region {} @ offset 0x{:X}",
+                fr.addr_range.base.raw_value(),
+                fr.addr_range.base.raw_value() + fr.addr_range.size,
+                fr.owner.priority(),
+                fr.owner.region_type(),
+                fr.owner.name,
+                fr.offset_in_region
+            );
+        }
+
+        println!("------ regions show: {} --------------", self.root().name);
+        self.root().mtree(0_u32);
+        println!("--------------------------------------");
     }
 
     /// Register the listener to the `AddressSpace`.
@@ -356,6 +449,65 @@ impl AddressSpace {
         })
     }
 
+    /// Return the available size and hva to the given `GuestAddress` from flat_view.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// Return Error if the `addr` is not mapped.
+    /// or return the HVA address and available mem length
+    pub fn addr_cache_init(&self, addr: GuestAddress) -> Option<(u64, u64)> {
+        let view = self.flat_view.load();
+
+        if let Some(flat_range) = view.find_flatrange(addr) {
+            let fr_offset = addr.offset_from(flat_range.addr_range.base);
+            let region_offset = flat_range.offset_in_region + fr_offset;
+
+            let region_remain = flat_range.owner.size() - region_offset;
+            let fr_remain = flat_range.addr_range.size - fr_offset;
+
+            return flat_range.owner.get_host_address().map(|host| {
+                (
+                    host + region_offset,
+                    std::cmp::min(fr_remain, region_remain),
+                )
+            });
+        }
+
+        None
+    }
+
+    /// Convert GPA buffer iovec to HVA buffer iovec.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// * `count` - Memory needed length
+    pub fn get_address_map(&self, addr: GuestAddress, count: u64) -> Result<Vec<Iovec>> {
+        let mut len = count;
+        let mut start = addr;
+        let mut hva_iovec = Vec::new();
+
+        loop {
+            let io_vec = self
+                .addr_cache_init(start)
+                .map(|(hva, fr_len)| Iovec {
+                    iov_base: hva,
+                    iov_len: std::cmp::min(len, fr_len),
+                })
+                .with_context(|| format!("Map iov base {:x?}, iov len {:?} failed", addr, count))?;
+            start = start.unchecked_add(io_vec.iov_len);
+            len -= io_vec.iov_len;
+            hva_iovec.push(io_vec);
+
+            if len == 0 {
+                break;
+            }
+        }
+
+        Ok(hva_iovec)
+    }
+
     /// Return the host address according to the given `GuestAddress` from cache.
     ///
     /// # Arguments
@@ -366,15 +518,18 @@ impl AddressSpace {
         &self,
         addr: GuestAddress,
         cache: &Option<RegionCache>,
-    ) -> Option<u64> {
+    ) -> Option<(u64, u64)> {
         if cache.is_none() {
-            return self.get_host_address(addr);
+            return self.addr_cache_init(addr);
         }
         let region_cache = cache.unwrap();
         if addr.0 >= region_cache.start && addr.0 < region_cache.end {
-            Some(region_cache.host_base + addr.0 - region_cache.start)
+            Some((
+                region_cache.host_base + addr.0 - region_cache.start,
+                region_cache.end - addr.0,
+            ))
         } else {
-            self.get_host_address(addr)
+            self.addr_cache_init(addr)
         }
     }
 
@@ -433,25 +588,10 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is not mapped.
     pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
-        let view = &self.flat_view.load();
+        let view = self.flat_view.load();
 
-        let (fr, offset) = view
-            .find_flatrange(addr)
-            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
-
-        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
-        let offset_in_region = fr.offset_in_region + offset;
-        fr.owner
-            .read(dst, region_base, offset_in_region, count)
-            .with_context(|| {
-                format!(
-                "Failed to read region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                region_base.raw_value(),
-                offset_in_region,
-                count
-            )
-            })
+        view.read(dst, addr, count)?;
+        Ok(())
     }
 
     /// Write data to specified guest address.
@@ -467,13 +607,6 @@ impl AddressSpace {
     /// Return Error if the `addr` is not mapped.
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
         let view = self.flat_view.load();
-        let (fr, offset) = view
-            .find_flatrange(addr)
-            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .with_context(|| AddressSpaceError::RegionNotFound(addr.raw_value()))?;
-
-        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
-        let offset_in_region = fr.offset_in_region + offset;
 
         if is_test_enabled() {
             for evtfd in self.ioeventfds.lock().unwrap().iter() {
@@ -495,28 +628,12 @@ impl AddressSpace {
                         return Ok(());
                     }
                 }
-
-                return fr.owner
-                    .write(&mut buf.as_slice(), region_base, offset_in_region, count)
-                    .with_context(||
-                        format!(
-                            "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                            region_base.raw_value(),
-                            offset_in_region,
-                            count
-                        ));
+                view.write(&mut buf.as_slice(), addr, count)?;
             }
         }
 
-        fr.owner
-            .write(src, region_base, offset_in_region, count)
-            .with_context(||
-                format!(
-                    "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
-                    region_base.raw_value(),
-                    offset_in_region,
-                    count
-                ))
+        view.write(src, addr, count)?;
+        Ok(())
     }
 
     /// Write an object to memory.
@@ -757,8 +874,8 @@ mod test {
             }
         }
 
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root, "space").unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
@@ -808,8 +925,8 @@ mod test {
             }
         }
 
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root, "space").unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         space.register_listener(listener1.clone()).unwrap();
@@ -824,8 +941,8 @@ mod test {
 
     #[test]
     fn test_update_topology() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -842,8 +959,8 @@ mod test {
         //
         // the flat_view is as follows, region-b is container which will not appear in the flat-view
         //        [CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC]
-        let region_b = Region::init_container_region(4000);
-        let region_c = Region::init_io_region(6000, default_ops.clone());
+        let region_b = Region::init_container_region(4000, "region_b");
+        let region_c = Region::init_io_region(6000, default_ops.clone(), "region_c");
         region_b.set_priority(2);
         region_c.set_priority(1);
         root.add_subregion(region_b.clone(), 2000).unwrap();
@@ -873,7 +990,7 @@ mod test {
         //  D:                  [DDDDDD]
         // the flat_view is as follows,
         //        [CCCCCCCCCCCC][DDDDDD][CCCCCCCCCCCCCCCCCCC]
-        let region_d = Region::init_io_region(1000, default_ops);
+        let region_d = Region::init_io_region(1000, default_ops, "region_d");
         region_b.add_subregion(region_d.clone(), 0).unwrap();
 
         let locked_listener = listener.lock().unwrap();
@@ -922,15 +1039,15 @@ mod test {
         //  c:                  [CCCCCCCCCCCCC]
         // the flat_view is as follows,
         //               [BBBBBBBBBBBBB][CCCCC]
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "region");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
-        let region_b = Region::init_io_region(2000, default_ops.clone());
+        let region_b = Region::init_io_region(2000, default_ops.clone(), "region_b");
         region_b.set_priority(1);
         region_b.set_ioeventfds(&ioeventfds);
-        let region_c = Region::init_io_region(2000, default_ops);
+        let region_c = Region::init_io_region(2000, default_ops, "region_c");
         region_c.set_ioeventfds(&ioeventfds);
         root.add_subregion(region_c, 2000).unwrap();
 
@@ -984,13 +1101,13 @@ mod test {
         //  c:                  [CCCCCC]
         // the flat_view is as follows,
         //                      [CCCCCC]
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
-        let region_b = Region::init_container_region(5000);
-        let region_c = Region::init_io_region(1000, default_ops);
+        let region_b = Region::init_container_region(5000, "root");
+        let region_c = Region::init_io_region(1000, default_ops, "region_c");
         region_c.set_ioeventfds(&ioeventfds);
         region_b.add_subregion(region_c, 1000).unwrap();
 
@@ -1006,8 +1123,8 @@ mod test {
 
     #[test]
     fn test_get_ram_info() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
@@ -1019,8 +1136,8 @@ mod test {
         let ram2 = Arc::new(
             HostMemMapping::new(GuestAddress(2000), None, 1000, None, false, false, false).unwrap(),
         );
-        let region_a = Region::init_ram_region(ram1.clone());
-        let region_b = Region::init_ram_region(ram2.clone());
+        let region_a = Region::init_ram_region(ram1.clone(), "region_a");
+        let region_b = Region::init_ram_region(ram2.clone(), "region_b");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
         root.add_subregion(region_b, ram2.start_address().raw_value())
@@ -1052,7 +1169,7 @@ mod test {
         //  c:            [CCCCCCCCC]
         // the flat_view is as follows,
         //        [AAAAAA][CCCCCCCCC][BB]
-        let region_c = Region::init_io_region(1500, default_ops);
+        let region_c = Region::init_io_region(1500, default_ops, "region_c");
         region_c.set_priority(1);
         root.add_subregion(region_c, 1000).unwrap();
 
@@ -1079,12 +1196,12 @@ mod test {
 
     #[test]
     fn test_write_and_read_object() {
-        let root = Region::init_container_region(8000);
-        let space = AddressSpace::new(root.clone()).unwrap();
+        let root = Region::init_container_region(8000, "root");
+        let space = AddressSpace::new(root.clone(), "space").unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );
-        let region_a = Region::init_ram_region(ram1.clone());
+        let region_a = Region::init_ram_region(ram1.clone(), "region_a");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
 

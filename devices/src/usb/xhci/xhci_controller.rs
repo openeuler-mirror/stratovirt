@@ -22,7 +22,6 @@ use log::{debug, error, info, warn};
 
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::XhciConfig;
-use util::aio::Iovec;
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
@@ -1721,21 +1720,11 @@ impl XhciDevice {
                 } else {
                     trb.parameter
                 };
-                if !self
+
+                let mut hvas = self
                     .mem_space
-                    .address_in_memory(GuestAddress(dma_addr), chunk as u64)
-                {
-                    bail!(
-                        "Invalid Address for transfer: base 0x{:X}, size {}",
-                        dma_addr,
-                        chunk
-                    );
-                }
-                if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
-                    vec.push(Iovec::new(hva, chunk as u64));
-                } else {
-                    bail!("HVA not existed {:x}", dma_addr);
-                }
+                    .get_address_map(GuestAddress(dma_addr), chunk as u64)?;
+                vec.append(&mut hvas);
             }
         }
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);

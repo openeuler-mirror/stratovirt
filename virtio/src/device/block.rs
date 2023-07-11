@@ -1320,6 +1320,10 @@ impl VirtioDevice for Block {
 
         Ok(())
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 // SAFETY: Send and Sync is not auto-implemented for `Sender` type.
@@ -1388,8 +1392,8 @@ mod tests {
 
     // build dummy address space of vm
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "sysmem");
+        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -1405,7 +1409,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();

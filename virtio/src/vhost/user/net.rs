@@ -316,4 +316,8 @@ impl VirtioDevice for Net {
             VIRTIO_NET_F_CTRL_VQ,
         )
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }

@@ -384,7 +384,7 @@ impl VirtioMmioDevice {
         }
         self.set_sys_resource(sysbus, region_base, region_size)?;
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size)?;
+        sysbus.attach_device(&dev, region_base, region_size, "VirtioMmio")?;
 
         #[cfg(target_arch = "x86_64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
@@ -406,23 +406,26 @@ impl VirtioMmioDevice {
         let queue_num = locked_state.config_space.queue_num;
         let queue_type = locked_state.config_space.queue_type;
         let queues_config = &mut locked_state.config_space.queues_config[0..queue_num];
-        let cloned_mem_space = self.mem_space.clone();
+        let dev_lock = self.device.lock().unwrap();
+        let features =
+            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+        let broken = dev_lock.get_device_broken();
+
         for q_config in queues_config.iter_mut() {
-            q_config.addr_cache.desc_table_host = cloned_mem_space
-                .get_host_address(q_config.desc_table)
-                .unwrap_or(0);
-            q_config.addr_cache.avail_ring_host = cloned_mem_space
-                .get_host_address(q_config.avail_ring)
-                .unwrap_or(0);
-            q_config.addr_cache.used_ring_host = cloned_mem_space
-                .get_host_address(q_config.used_ring)
-                .unwrap_or(0);
+            q_config.set_addr_cache(
+                self.mem_space.clone(),
+                self.interrupt_cb.clone().unwrap(),
+                features,
+                broken,
+            );
+
             let queue = Queue::new(*q_config, queue_type)?;
             if !queue.is_valid(&self.mem_space) {
                 bail!("Invalid queue");
             }
             self.queues.push(Arc::new(Mutex::new(queue)));
         }
+        drop(dev_lock);
         drop(locked_state);
 
         let mut queue_evts = Vec::<Arc<EventFd>>::new();
@@ -671,22 +674,22 @@ impl StateTransfer for VirtioMmioDevice {
         }
         let mut locked_state = self.state.lock().unwrap();
         locked_state.as_mut_bytes().copy_from_slice(state);
-        let cloned_mem_space = self.mem_space.clone();
         let mut queue_states = locked_state.config_space.queues_config
             [0..locked_state.config_space.queue_num]
             .to_vec();
+        let dev_lock = self.device.lock().unwrap();
+        let features =
+            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+        let broken = dev_lock.get_device_broken();
         self.queues = queue_states
             .iter_mut()
             .map(|queue_state| {
-                queue_state.addr_cache.desc_table_host = cloned_mem_space
-                    .get_host_address(queue_state.desc_table)
-                    .unwrap_or(0);
-                queue_state.addr_cache.avail_ring_host = cloned_mem_space
-                    .get_host_address(queue_state.avail_ring)
-                    .unwrap_or(0);
-                queue_state.addr_cache.used_ring_host = cloned_mem_space
-                    .get_host_address(queue_state.used_ring)
-                    .unwrap_or(0);
+                queue_state.set_addr_cache(
+                    self.mem_space.clone(),
+                    self.interrupt_cb.clone().unwrap(),
+                    features,
+                    broken,
+                );
                 Arc::new(Mutex::new(
                     Queue::new(*queue_state, locked_state.config_space.queue_type).unwrap(),
                 ))
@@ -733,15 +736,15 @@ impl MigrationHook for VirtioMmioDevice {
 mod tests {
     use std::io::Write;
 
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use util::num_ops::read_u32;
-
     use super::*;
     use crate::VIRTIO_TYPE_BLOCK;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use std::sync::atomic::AtomicBool;
+    use util::num_ops::read_u32;
 
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "sysmem");
+        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -757,7 +760,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();
@@ -775,6 +778,7 @@ mod tests {
         pub config_space: Vec<u8>,
         pub b_active: bool,
         pub b_realized: bool,
+        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
@@ -790,6 +794,7 @@ mod tests {
                 b_active: false,
                 b_realized: false,
                 config_space,
+                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -869,6 +874,10 @@ mod tests {
         ) -> Result<()> {
             self.b_active = true;
             Ok(())
+        }
+
+        fn get_device_broken(&self) -> &Arc<AtomicBool> {
+            &self.broken
         }
     }
 

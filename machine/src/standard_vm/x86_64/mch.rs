@@ -90,7 +90,7 @@ impl Mch {
             self.mmconfig_region = None;
         }
         if enable == 0x1 {
-            let region = Region::init_io_region(length, self.mmconfig_ops.clone());
+            let region = Region::init_io_region(length, self.mmconfig_ops.clone(), "PcieXBar");
             let base_addr: u64 = pciexbar & addr_mask;
             self.parent_bus
                 .upgrade()

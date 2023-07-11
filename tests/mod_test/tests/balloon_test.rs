@@ -32,6 +32,7 @@ const TIMEOUT_US: u64 = 15 * 1000 * 1000;
 const MBSIZE: u64 = 1024 * 1024;
 const MEM_BUFFER_PERCENT_DEFAULT: u32 = 50;
 const MONITOR_INTERVAL_SECOND_DEFAULT: u32 = 10;
+const ADDRESS_BASE: u64 = 0x4000_0000;
 
 fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
     let file = File::open(filename).unwrap();
@@ -160,6 +161,73 @@ impl VirtioBalloonTest {
             def_queue,
             fpr_queue,
             auto_queue,
+        }
+    }
+
+    pub fn numa_node_new() -> Self {
+        let mut args: Vec<&str> = Vec::new();
+        let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+        args.append(&mut extra_args);
+
+        let cpu = 8;
+        let cpu_args = format!(
+            "-smp {},sockets=1,cores=4,threads=2 -cpu host,pmu=on -m 2G",
+            cpu
+        );
+        let mut extra_args = cpu_args.split(' ').collect();
+        args.append(&mut extra_args);
+        extra_args = "-object memory-backend-file,size=1G,id=mem0,host-nodes=0-1,policy=bind,share=on,mem-path=test.fd"
+            .split(' ')
+            .collect();
+        args.append(&mut extra_args);
+        extra_args =
+            "-object memory-backend-memfd,size=1G,id=mem1,host-nodes=0-1,policy=bind,mem-prealloc=true"
+                .split(' ')
+                .collect();
+        args.append(&mut extra_args);
+        extra_args = "-numa node,nodeid=0,cpus=0-3,memdev=mem0"
+            .split(' ')
+            .collect();
+        args.append(&mut extra_args);
+        extra_args = "-numa node,nodeid=1,cpus=4-7,memdev=mem1"
+            .split(' ')
+            .collect();
+        args.append(&mut extra_args);
+        extra_args = "-numa dist,src=0,dst=1,val=30".split(' ').collect();
+        args.append(&mut extra_args);
+        extra_args = "-numa dist,src=1,dst=0,val=30".split(' ').collect();
+        args.append(&mut extra_args);
+
+        extra_args = "-device virtio-balloon-pci,id=drv0,bus=pcie.0,addr=0x4.0"
+            .split(' ')
+            .collect();
+        args.append(&mut extra_args);
+
+        let test_state = Rc::new(RefCell::new(test_init(args)));
+        let machine = TestStdMachine::new_bymem(test_state.clone(), 2 * MBSIZE, 4096);
+        let allocator = machine.allocator.clone();
+
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        dev.borrow_mut().init(4, 0);
+
+        let features = dev.borrow_mut().get_device_features();
+        let inf_queue;
+        let def_queue;
+
+        let ques = dev
+            .borrow_mut()
+            .init_device(test_state.clone(), allocator.clone(), features, 2);
+        inf_queue = ques[0].clone();
+        def_queue = ques[1].clone();
+
+        VirtioBalloonTest {
+            device: dev,
+            state: test_state,
+            allocator,
+            inf_queue,
+            def_queue,
+            fpr_queue: None,
+            auto_queue: None,
         }
     }
 }
@@ -976,4 +1044,93 @@ fn auto_balloon_test_001() {
         .borrow_mut()
         .config_readl(offset_of!(VirtioBalloonConfig, actual) as u64);
     assert_eq!(actual, 131070);
+}
+
+#[test]
+/// balloon device deactive config test
+/// TestStep:
+///     1.Init device
+///     2.geust send msg to host by auto balloon
+/// Expect:
+///     1/2.Success
+fn balloon_numa1() {
+    let page_num = 255_u32;
+    let mut idx = 0_u32;
+    let balloon = VirtioBalloonTest::numa_node_new();
+
+    let free_page = 0x4000_0000 + ADDRESS_BASE - 100 * PAGE_SIZE_UNIT;
+    let pfn = (free_page >> 12) as u32;
+    let pfn_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
+    while idx < page_num {
+        balloon
+            .state
+            .borrow_mut()
+            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+        balloon
+            .state
+            .borrow_mut()
+            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+        idx += 1;
+    }
+
+    // begin inflate addresses
+    let mut loop_num = 0_u32;
+    let mut msg = Vec::new();
+
+    while loop_num < page_num {
+        let entry = TestVringDescEntry {
+            data: pfn_addr + (loop_num as u64 * 4),
+            len: 4,
+            write: false,
+        };
+        msg.push(entry);
+        loop_num += 1;
+    }
+    let free_head = balloon
+        .inf_queue
+        .borrow_mut()
+        .add_chained(balloon.state.clone(), msg);
+    balloon
+        .device
+        .borrow_mut()
+        .kick_virtqueue(balloon.state.clone(), balloon.inf_queue.clone());
+    balloon.device.borrow_mut().poll_used_elem(
+        balloon.state.clone(),
+        balloon.inf_queue.clone(),
+        free_head,
+        TIMEOUT_US,
+        &mut None,
+        false,
+    );
+    // begin deflate addresses
+    let mut loop_num = 0_u32;
+    let mut msg = Vec::new();
+
+    while loop_num < page_num {
+        let entry = TestVringDescEntry {
+            data: pfn_addr + (loop_num as u64 * 4),
+            len: 4,
+            write: false,
+        };
+        msg.push(entry);
+        loop_num += 1;
+    }
+    let free_head = balloon
+        .def_queue
+        .borrow_mut()
+        .add_chained(balloon.state.clone(), msg);
+    balloon
+        .device
+        .borrow_mut()
+        .kick_virtqueue(balloon.state.clone(), balloon.def_queue.clone());
+    balloon.device.borrow_mut().poll_used_elem(
+        balloon.state.clone(),
+        balloon.def_queue.clone(),
+        free_head,
+        TIMEOUT_US,
+        &mut None,
+        false,
+    );
+
+    balloon.state.borrow_mut().stop();
 }

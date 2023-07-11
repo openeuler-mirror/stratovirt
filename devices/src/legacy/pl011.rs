@@ -170,7 +170,7 @@ impl PL011 {
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size)
+            .attach_device(&dev, region_base, region_size, "PL011")
             .with_context(|| "Failed to attach PL011 to system bus.")?;
 
         bs.lock().unwrap().kernel_cmdline.push(Param {

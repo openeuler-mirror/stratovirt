@@ -368,6 +368,10 @@ impl VirtioDevice for Vsock {
     fn reset(&mut self) -> Result<()> {
         self.backend.as_ref().unwrap().set_running(false)
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 impl StateTransfer for Vsock {
@@ -419,8 +423,8 @@ mod tests {
     pub use address_space::*;
 
     fn vsock_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(u64::max_value());
-        let sys_mem = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(u64::max_value(), "sysmem");
+        let sys_mem = AddressSpace::new(root, "sysmem").unwrap();
         sys_mem
     }
 

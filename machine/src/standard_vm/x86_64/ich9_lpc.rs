@@ -85,7 +85,7 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let pmtmr_region = Region::init_io_region(0x8, ops);
+        let pmtmr_region = Region::init_io_region(0x8, ops, "PmtmrRegion");
 
         let mut pm_base_addr = 0_u32;
         self.config
@@ -136,7 +136,7 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let rst_ctrl_region = Region::init_io_region(0x1, ops);
+        let rst_ctrl_region = Region::init_io_region(0x1, ops, "RstCtrlRegion");
         self.sys_io
             .root()
             .add_subregion(rst_ctrl_region, RST_CTRL_OFFSET as u64)?;
@@ -163,7 +163,7 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let sleep_reg_region = Region::init_io_region(0x1, ops);
+        let sleep_reg_region = Region::init_io_region(0x1, ops, "SleepReg");
         self.sys_io
             .root()
             .add_subregion(sleep_reg_region, SLEEP_CTRL_OFFSET as u64)?;
@@ -185,7 +185,7 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let pm_evt_region = Region::init_io_region(0x4, ops);
+        let pm_evt_region = Region::init_io_region(0x4, ops, "PmEvtRegion");
         self.sys_io
             .root()
             .add_subregion(pm_evt_region, PM_EVENT_OFFSET as u64)?;
@@ -215,7 +215,7 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let pm_ctrl_region = Region::init_io_region(0x4, ops);
+        let pm_ctrl_region = Region::init_io_region(0x4, ops, "PmCtrl");
         self.sys_io
             .root()
             .add_subregion(pm_ctrl_region, PM_CTRL_OFFSET as u64)?;

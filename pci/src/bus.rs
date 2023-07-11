@@ -324,8 +324,13 @@ mod tests {
 
     pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let sys_io =
+            AddressSpace::new(Region::init_container_region(1 << 16, "sysio"), "sysio").unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
         Arc::new(Mutex::new(PciHost::new(
             #[cfg(target_arch = "x86_64")]
             &sys_io,

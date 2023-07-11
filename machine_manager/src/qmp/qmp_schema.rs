@@ -181,6 +181,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-mem")]
+    query_mem {
+        #[serde(default)]
+        arguments: query_mem,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-balloon")]
     query_balloon {
         #[serde(default)]
@@ -2336,6 +2343,27 @@ pub struct SnapshotInfo {
     pub vm_clock_nsec: u64,
     #[serde(rename = "icount")]
     pub icount: u64,
+}
+
+/// query-mem
+///
+/// This command  
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-mem" }
+/// <- { "return": {}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem {}
+impl Command for query_mem {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
 }
 
 #[cfg(test)]

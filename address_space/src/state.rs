@@ -128,7 +128,7 @@ impl MigrationHook for AddressSpace {
             );
             self.root()
                 .add_subregion(
-                    Region::init_ram_region(host_mmap.clone()),
+                    Region::init_ram_region(host_mmap.clone(), "HostMem"),
                     host_mmap.start_address().raw_value(),
                 )
                 .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
