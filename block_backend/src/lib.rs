@@ -42,6 +42,7 @@ pub enum BlockStatus {
 
 #[derive(Debug, Clone)]
 pub struct BlockProperty {
+    pub id: String,
     pub format: DiskFormat,
     pub iothread: Option<String>,
     pub direct: bool,
@@ -49,6 +50,8 @@ pub struct BlockProperty {
     pub buf_align: u32,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 pub trait BlockDriverOps<T: Clone>: Send {
@@ -88,7 +91,6 @@ pub trait BlockDriverOps<T: Clone>: Send {
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     file: File,
     aio: Aio<T>,
-    drive_id: String,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
     match prop.format {
@@ -114,11 +116,11 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             QCOW2_LIST
                 .lock()
                 .unwrap()
-                .insert(drive_id.clone(), new_qcow2.clone());
+                .insert(prop.id.clone(), new_qcow2.clone());
             let cloned_qcow2 = new_qcow2.clone();
             // NOTE: we can drain request when request in io thread.
             let drain = prop.iothread.is_some();
-            let cloned_drive_id = drive_id.clone();
+            let cloned_drive_id = prop.id.clone();
             let exit_notifier = Arc::new(move || {
                 let mut locked_qcow2 = cloned_qcow2.lock().unwrap();
                 info!("clean up qcow2 {:?} resources.", cloned_drive_id);
@@ -129,7 +131,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     locked_qcow2.drain_request();
                 }
             }) as Arc<ExitNotifier>;
-            TempCleaner::add_exit_notifier(drive_id, exit_notifier);
+            TempCleaner::add_exit_notifier(prop.id, exit_notifier);
             Ok(new_qcow2)
         }
     }

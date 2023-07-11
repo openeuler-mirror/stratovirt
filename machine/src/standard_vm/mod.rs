@@ -22,7 +22,7 @@ pub use error::StandardVmError;
 pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 #[cfg(not(target_env = "musl"))]
 use ui::{
@@ -61,9 +61,9 @@ use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf,
-    ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
+    ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
+    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -825,6 +825,8 @@ impl StdMachine {
                 discard: conf.discard,
                 write_zeroes: conf.write_zeroes,
                 format: conf.format,
+                l2_cache_size: conf.l2_cache_size,
+                refcount_cache_size: conf.refcount_cache_size,
             };
             dev.check()?;
             dev
@@ -1379,78 +1381,17 @@ impl DeviceInterface for StdMachine {
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        let mut config = DriveConfig {
-            id: args.node_name,
-            path_on_host: args.file.filename.clone(),
-            read_only: args.read_only.unwrap_or(false),
-            direct: true,
-            iops: args.iops,
-            // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: AioEngine::Native,
-            media: "disk".to_string(),
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            format: DiskFormat::Raw,
+        let config = match parse_blockdev(&args) {
+            Ok(config) => config,
+            Err(e) => {
+                error!("{:?}", e);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
         };
-        if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
-            config.direct = false;
-            config.aio = AioEngine::Off;
-        }
-        if let Some(discard) = args.discard {
-            let ret = discard.as_str().parse::<ExBool>();
-            if ret.is_err() {
-                let err_msg = format!(
-                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
-                    discard
-                );
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(err_msg),
-                    None,
-                );
-            }
-            config.discard = ret.unwrap().into();
-        }
-        if let Some(detect_zeroes) = args.detect_zeroes {
-            let state = detect_zeroes.as_str().parse::<WriteZeroesState>();
-            if state.is_err() {
-                let err_msg = format!(
-                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
-                    detect_zeroes
-                );
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(err_msg),
-                    None,
-                );
-            }
-            config.write_zeroes = state.unwrap();
-        }
-        if let Some(format) = args.driver {
-            match format.as_str().parse::<DiskFormat>() {
-                Ok(fmt) => config.format = fmt,
-                Err(e) => {
-                    error!("{:?}", e);
-                    return Response::create_error_response(
-                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                        None,
-                    );
-                }
-            }
-        }
-        if let Err(e) = config.check() {
-            error!("{:?}", e);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            );
-        }
-        // Check whether path is valid after configuration check
-        if let Err(e) = config.check_path() {
-            error!("{:?}", e);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            );
-        }
+
         // Register drive backend file for hotplug drive.
         if let Err(e) = self.register_drive_file(
             &config.id,
@@ -1998,6 +1939,67 @@ impl DeviceInterface for StdMachine {
             ),
         }
     }
+}
+
+fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
+    let mut config = DriveConfig {
+        id: args.node_name.clone(),
+        path_on_host: args.file.filename.clone(),
+        read_only: args.read_only.unwrap_or(false),
+        direct: true,
+        iops: args.iops,
+        // TODO Add aio option by qmp, now we set it based on "direct".
+        aio: AioEngine::Native,
+        media: "disk".to_string(),
+        discard: false,
+        write_zeroes: WriteZeroesState::Off,
+        format: DiskFormat::Raw,
+        l2_cache_size: None,
+        refcount_cache_size: None,
+    };
+    if args.cache.is_some() && !args.cache.as_ref().unwrap().direct.unwrap_or(true) {
+        config.direct = false;
+        config.aio = AioEngine::Off;
+    }
+    if let Some(discard) = args.discard.as_ref() {
+        config.discard = discard
+            .as_str()
+            .parse::<ExBool>()
+            .with_context(|| {
+                format!(
+                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
+                    discard
+                )
+            })?
+            .into();
+    }
+    if let Some(detect_zeroes) = args.detect_zeroes.as_ref() {
+        config.write_zeroes = detect_zeroes
+            .as_str()
+            .parse::<WriteZeroesState>()
+            .with_context(|| {
+                format!(
+                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
+                    detect_zeroes
+                )
+            })?;
+    }
+    if let Some(format) = args.driver.as_ref() {
+        config.format = format.as_str().parse::<DiskFormat>()?;
+    }
+    if let Some(l2_cache) = args.l2_cache_size.as_ref() {
+        let sz = memory_unit_conversion(l2_cache)
+            .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
+        config.l2_cache_size = Some(sz);
+    }
+    if let Some(rc_cache) = args.refcount_cache_size.as_ref() {
+        let sz = memory_unit_conversion(rc_cache)
+            .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
+        config.refcount_cache_size = Some(sz);
+    }
+    config.check()?;
+    config.check_path()?;
+    Ok(config)
 }
 
 #[cfg(not(target_env = "musl"))]

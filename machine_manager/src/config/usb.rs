@@ -289,6 +289,9 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.scsi_cfg.read_only = drive_arg.read_only;
     dev.scsi_cfg.aio_type = drive_arg.aio;
     dev.scsi_cfg.direct = drive_arg.direct;
+    dev.scsi_cfg.format = drive_arg.format;
+    dev.scsi_cfg.l2_cache_size = drive_arg.l2_cache_size;
+    dev.scsi_cfg.refcount_cache_size = drive_arg.refcount_cache_size;
     dev.media = drive_arg.media.clone();
 
     dev.check()?;

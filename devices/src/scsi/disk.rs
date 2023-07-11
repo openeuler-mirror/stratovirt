@@ -164,6 +164,7 @@ impl ScsiDevice {
 
         let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
         let conf = BlockProperty {
+            id: drive_id,
             format: self.config.format,
             iothread,
             direct: self.config.direct,
@@ -171,8 +172,10 @@ impl ScsiDevice {
             buf_align: self.buf_align,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: self.config.l2_cache_size,
+            refcount_cache_size: self.config.refcount_cache_size,
         };
-        let backend = create_block_backend(file, aio, drive_id, conf)?;
+        let backend = create_block_backend(file, aio, conf)?;
         let disk_size = backend.lock().unwrap().disk_size()?;
         self.block_backend = Some(backend);
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
