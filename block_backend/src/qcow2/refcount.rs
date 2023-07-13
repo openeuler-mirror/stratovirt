@@ -528,6 +528,9 @@ impl RefCount {
     }
 
     pub fn alloc_cluster(&mut self, header: &mut QcowHeader, size: u64) -> Result<u64> {
+        if size == 0 {
+            bail!("Don't allow to alloc 0 size cluster!");
+        }
         let addr = self.find_free_cluster(header, size)?;
         let clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
         self.update_refcount(addr, clusters, 1, true, &Qcow2DiscardType::Other)?;
