@@ -1162,10 +1162,9 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            info!("vm destroy");
-            ctx.kick();
-        }
+        info!("vm destroy");
+        EventLoop::get_ctx(None).unwrap().kick();
+
         true
     }
 

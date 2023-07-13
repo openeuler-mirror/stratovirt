@@ -32,7 +32,6 @@ use devices::misc::scream::Scream;
 use log::warn;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::scream::parse_scream;
-#[cfg(not(target_env = "musl"))]
 use machine_manager::event_loop::EventLoop;
 #[cfg(not(target_env = "musl"))]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -1687,6 +1686,7 @@ pub trait MachineOps {
     /// * `vm_state` - Vm kvm vm state.
     fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         if !paused {
+            EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
         }
 
@@ -1722,6 +1722,8 @@ pub trait MachineOps {
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
     ) -> Result<()> {
+        EventLoop::get_ctx(None).unwrap().disable_clock();
+
         self.deactive_drive_files()?;
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -1747,6 +1749,8 @@ pub trait MachineOps {
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
     fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+        EventLoop::get_ctx(None).unwrap().enable_clock();
+
         self.active_drive_files()?;
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -1947,7 +1951,7 @@ fn check_windows_emu_pid(
             shutdown_req.clone(),
         );
     });
-    if let Some(ctx) = EventLoop::get_ctx(None) {
-        ctx.timer_add(check_emu_alive, check_delay);
-    }
+    EventLoop::get_ctx(None)
+        .unwrap()
+        .timer_add(check_emu_alive, check_delay);
 }

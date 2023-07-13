@@ -384,9 +384,9 @@ pub fn setup_refresh(update_interval: u64) {
     });
 
     if update_interval != 0 {
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.timer_add(func, Duration::from_millis(update_interval));
-        }
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(func, Duration::from_millis(update_interval));
     }
 }
 
@@ -541,12 +541,12 @@ pub fn graphic_hardware_ui_info(
         (*con_opts).hw_ui_info(clone_con.clone(), width, height);
     });
 
-    if let Some(ctx) = EventLoop::get_ctx(None) {
-        if let Some(timer_id) = locked_con.timer_id {
-            ctx.timer_del(timer_id);
-        }
-        locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+    let ctx = EventLoop::get_ctx(None).unwrap();
+    if let Some(timer_id) = locked_con.timer_id {
+        ctx.timer_del(timer_id);
     }
+    locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+
     Ok(())
 }
 

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::{error, info};
+use log::info;
 use util::byte_code::ByteCode;
 use util::num_ops::write_data_u32;
 
@@ -406,12 +406,9 @@ pub fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
             pdev.state.last_bat_lvl = pdev.regs[REG_IDX_BAT_RCAP];
         }
 
-        match EventLoop::get_ctx(None) {
-            Some(ctx) => {
-                ctx.timer_add(update_func, Duration::from_secs(5));
-            }
-            None => error!("Failed to get ctx to update power devices status"),
-        }
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(update_func, Duration::from_secs(5));
     } else {
         pdev.power_load_static_status();
     }
