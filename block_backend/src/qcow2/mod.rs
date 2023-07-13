@@ -610,28 +610,31 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             bytes_to_clusters(self.snapshot.snapshot_size, cluster_size).unwrap();
         let l1_table_clusters =
             bytes_to_clusters(snap.l1_size as u64 * ENTRY_SIZE, cluster_size).unwrap();
-        let new_snapshot_table_offset: u64;
+        let mut new_snapshot_table_offset = 0_u64;
         let mut err_msg: String = "".to_string();
         let mut error_stage = 0;
 
         // Using loop for error handling.
         #[allow(clippy::never_loop)]
         loop {
-            new_snapshot_table_offset = self
-                .alloc_cluster(new_snapshots_table_clusters, true)
-                .unwrap_or_else(|e| {
-                    err_msg = format!("{:?}", e);
-                    error_stage = 1;
-                    0
-                });
-            if new_snapshot_table_offset == 0 {
-                break;
-            }
+            if new_snapshots_table_clusters != 0 {
+                new_snapshot_table_offset = self
+                    .alloc_cluster(new_snapshots_table_clusters, true)
+                    .unwrap_or_else(|e| {
+                        err_msg = format!("{:?}", e);
+                        error_stage = 1;
+                        0
+                    });
 
-            if let Err(e) = self.snapshot.save_snapshot_table(new_snapshot_table_offset) {
-                err_msg = format!("{:?}", e);
-                error_stage = 2;
-                break;
+                if new_snapshot_table_offset == 0 {
+                    break;
+                }
+
+                if let Err(e) = self.snapshot.save_snapshot_table(new_snapshot_table_offset) {
+                    err_msg = format!("{:?}", e);
+                    error_stage = 2;
+                    break;
+                }
             }
 
             // Decrease the refcounts of clusters referenced by the snapshot.
@@ -731,7 +734,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 0)?;
             }
         }
-        if error_stage >= 2 {
+        if error_stage >= 2 && new_snapshots_table_clusters != 0 {
             self.free_cluster(
                 new_snapshot_table_offset,
                 new_snapshots_table_clusters,
