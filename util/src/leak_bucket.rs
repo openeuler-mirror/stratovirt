@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::loop_context::{get_current_time, EventLoopContext};
+use crate::clock::get_current_time;
+use crate::loop_context::EventLoopContext;
 use crate::time::NANOSECONDS_PER_SECOND;
 use anyhow::Result;
 

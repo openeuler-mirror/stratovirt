@@ -27,7 +27,7 @@ use nix::{
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::test_helper::{get_test_time, is_test_enabled};
+use crate::clock::{get_current_time, ClockState};
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -153,14 +153,6 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
-pub fn get_current_time() -> Instant {
-    if is_test_enabled() {
-        get_test_time()
-    } else {
-        Instant::now()
-    }
-}
-
 /// EventLoop manager, advise continue running or stop running
 pub trait EventLoopManager: Send + Sync {
     fn loop_should_exit(&self) -> bool;
@@ -210,6 +202,8 @@ pub struct EventLoopContext {
     ready_events: Vec<EpollEvent>,
     /// Timer list
     timers: Arc<Mutex<Vec<Box<Timer>>>>,
+    /// Record VM clock state.
+    pub clock_state: Arc<Mutex<ClockState>>,
 }
 
 // SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
@@ -229,6 +223,7 @@ impl EventLoopContext {
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
             timers: Arc::new(Mutex::new(Vec::new())),
+            clock_state: Arc::new(Mutex::new(ClockState::default())),
         };
         ctx.init_kick();
         ctx

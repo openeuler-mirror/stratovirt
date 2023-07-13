@@ -15,7 +15,7 @@ use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -683,7 +683,7 @@ pub struct XhciDevice {
     pub cmd_ring: XhciCommandRing,
     mem_space: Arc<AddressSpace>,
     /// Runtime Register.
-    mfindex_start: Instant,
+    mfindex_start: Duration,
     timer_id: Option<u64>,
 }
 
@@ -729,7 +729,7 @@ impl XhciDevice {
             intrs,
             cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
-            mfindex_start: Instant::now(),
+            mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             timer_id: None,
         };
         let xhci = Arc::new(Mutex::new(xhci));
@@ -763,12 +763,12 @@ impl XhciDevice {
 
     pub fn run(&mut self) {
         self.oper.unset_usb_status_flag(USB_STS_HCH);
-        self.mfindex_start = Instant::now();
+        self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
     }
 
     pub fn mfindex(&mut self) -> u64 {
-        let now = Instant::now();
-        now.duration_since(self.mfindex_start).as_nanos() as u64 / ISO_BASE_TIME_INTERVAL
+        let now = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
+        (now - self.mfindex_start).as_nanos() as u64 / ISO_BASE_TIME_INTERVAL
     }
 
     pub fn mfwrap_update(&mut self) {
@@ -789,12 +789,10 @@ impl XhciDevice {
 
                 locked_xhci.mfwrap_update();
             });
-            if let Some(ctx) = EventLoop::get_ctx(None) {
-                self.timer_id = Some(ctx.timer_add(
-                    xhci_mfwrap_timer,
-                    Duration::from_nanos(left * ISO_BASE_TIME_INTERVAL),
-                ));
-            }
+            self.timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
+                xhci_mfwrap_timer,
+                Duration::from_nanos(left * ISO_BASE_TIME_INTERVAL),
+            ));
         }
     }
 
@@ -831,7 +829,7 @@ impl XhciDevice {
         }
         self.cmd_ring.init(0);
 
-        self.mfindex_start = Instant::now();
+        self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
 
         self.mfwrap_update();
     }
@@ -1814,23 +1812,22 @@ impl XhciDevice {
                     error!("Failed to kick endpoint: {:?}", e);
                 }
             });
-            if let Some(ctx) = EventLoop::get_ctx(None) {
-                if self.timer_id.is_some() {
-                    ctx.timer_del(self.timer_id.unwrap());
-                }
-                self.timer_id = Some(ctx.timer_add(
-                    xhci_ep_kick_timer,
-                    Duration::from_nanos((xfer.mfindex_kick - mfindex) * ISO_BASE_TIME_INTERVAL),
-                ));
+            let ctx = EventLoop::get_ctx(None).unwrap();
+            if self.timer_id.is_some() {
+                ctx.timer_del(self.timer_id.unwrap());
             }
+            self.timer_id = Some(ctx.timer_add(
+                xhci_ep_kick_timer,
+                Duration::from_nanos((xfer.mfindex_kick - mfindex) * ISO_BASE_TIME_INTERVAL),
+            ));
             xfer.running_retry = true;
         } else {
             epctx.mfindex_last = xfer.mfindex_kick;
-            if let Some(ctx) = EventLoop::get_ctx(None) {
-                if self.timer_id.is_some() {
-                    ctx.timer_del(self.timer_id.unwrap());
-                    self.timer_id = None;
-                }
+            if self.timer_id.is_some() {
+                EventLoop::get_ctx(None)
+                    .unwrap()
+                    .timer_del(self.timer_id.unwrap());
+                self.timer_id = None;
             }
             xfer.running_retry = false;
         }

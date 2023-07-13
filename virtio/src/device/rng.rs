@@ -110,13 +110,9 @@ impl RngHandler {
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
-                if let Some(ctx) = EventLoop::get_ctx(None) {
-                    if leak_bucket.throttled(ctx, size as u64) {
-                        queue_lock.vring.push_back();
-                        break;
-                    }
-                } else {
-                    bail!("Failed to get ctx in event loop context for virtio rng");
+                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), size as u64) {
+                    queue_lock.vring.push_back();
+                    break;
                 }
             }
 
