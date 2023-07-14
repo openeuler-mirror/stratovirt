@@ -535,7 +535,7 @@ redirection will be required. See [section 2.12 Chardev](#212-chardev) for detai
 Three properties can be set for virtconsole(console port) and virtserialport(generic port).
 * id: unique device-id.
 * chardev: char device of this console/generic port.
-* nr: unique port number for this port.
+* nr: unique port number for this port. (optional) If set, all virtserialports and virtconsoles should set. nr = 0 is only allowed for virtconsole.
 
 For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
