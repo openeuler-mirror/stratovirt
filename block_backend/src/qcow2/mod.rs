@@ -1578,7 +1578,7 @@ mod test {
 
     const CLUSTER_SIZE: u64 = 64 * 1024;
 
-    struct TestImage {
+    pub struct TestImage {
         pub img_bits: u64,
         pub cluster_bits: u64,
         pub path: String,
@@ -1745,7 +1745,7 @@ mod test {
         sz: u64,
     }
 
-    fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
+    pub fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
         let mut image = TestImage::new(path, 30, 16);
         fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
             Ok(())
@@ -1807,9 +1807,12 @@ mod test {
         let mut buf = vec![2_u8; 512];
         qcow2_read(&mut qcow2, &mut buf, 65536).unwrap();
         assert_eq!(buf, vec![0; 512]);
-        let mut buf = vec![3_u8; 600];
-        qcow2_read(&mut qcow2, &mut buf, 655350).unwrap();
-        assert_eq!(buf, vec![0; 600]);
+        for i in 0..100 {
+            let sz = 100_000;
+            let mut buf = vec![3_u8; sz];
+            qcow2_read(&mut qcow2, &mut buf, 655350 + i * sz).unwrap();
+            assert_eq!(buf, vec![0; 100_000]);
+        }
 
         let len = image.file.seek(SeekFrom::End(0)).unwrap();
         assert_eq!(org_len, len);
@@ -1825,12 +1828,39 @@ mod test {
         let mut rbuf = vec![0_u8; CLUSTER_SIZE as usize];
         qcow2_read(&mut qcow2, &mut rbuf, 0).unwrap();
         assert_eq!(rbuf, wbuf);
+        let cnt = qcow2.refcount.get_refcount(0).unwrap();
+        assert_eq!(cnt, 1);
 
         let wbuf = vec![5_u8; 1000];
         qcow2_write(&mut qcow2, &wbuf, 2000).unwrap();
         let mut rbuf = vec![0_u8; 1000];
         qcow2_read(&mut qcow2, &mut rbuf, 2000).unwrap();
         assert_eq!(rbuf, wbuf);
+        let cnt = qcow2.refcount.get_refcount(2000).unwrap();
+        assert_eq!(cnt, 1);
+    }
+
+    fn test_write_multi_cluster_helper(
+        qcow2: &mut Qcow2Driver<()>,
+        off: usize,
+        sz: usize,
+        cnt: u8,
+    ) {
+        let mut offset = off;
+        for i in 0..cnt {
+            let buf = vec![i + 1; sz];
+            qcow2_write(qcow2, &buf, offset).unwrap();
+            offset += buf.len();
+        }
+        let mut offset = off;
+        for i in 0..cnt {
+            let mut buf = vec![i + 1; sz];
+            qcow2_read(qcow2, &mut buf, offset).unwrap();
+            for (_, item) in buf.iter().enumerate() {
+                assert_eq!(item, &(i + 1));
+            }
+            offset += buf.len();
+        }
     }
 
     #[test]
@@ -1838,23 +1868,10 @@ mod test {
         let path = "/tmp/block_backend_test_write_multi_cluster.qcow2";
         let (_, mut qcow2) = create_qcow2(path);
 
-        let mut offset = 0;
-        let cnt: u8 = 2;
-        let sz = 100 * 1000;
-        for i in 0..cnt {
-            let buf = vec![i + 1; sz];
-            qcow2_write(&mut qcow2, &buf, offset).unwrap();
-            offset += buf.len();
-        }
-        let mut offset = 0;
-        for i in 0..cnt {
-            let mut buf = vec![i + 1; sz];
-            qcow2_read(&mut qcow2, &mut buf, offset).unwrap();
-            for (_, item) in buf.iter().enumerate() {
-                assert_eq!(item, &(i + 1));
-            }
-            offset += buf.len();
-        }
+        test_write_multi_cluster_helper(&mut qcow2, 832574, 100_000, 200);
+        test_write_multi_cluster_helper(&mut qcow2, 0, 16, 250);
+        test_write_multi_cluster_helper(&mut qcow2, 7689, 512, 99);
+        test_write_multi_cluster_helper(&mut qcow2, 56285351, 4096, 123);
     }
 
     #[test]
@@ -2370,7 +2387,7 @@ mod test {
         let (case_list, _buf_list) = generate_rw_random_list();
         for case in &case_list {
             qcow2_driver
-                .write_vectored(&case.wiovec, case.offset, ())
+                .write_vectored(case.wiovec.clone(), case.offset, ())
                 .unwrap();
         }
 
@@ -2423,7 +2440,7 @@ mod test {
         let (case_list, _buf_list) = generate_rw_random_list();
         for case in &case_list {
             qcow2_driver
-                .write_vectored(&case.wiovec, case.offset, ())
+                .write_vectored(case.wiovec.clone(), case.offset, ())
                 .unwrap();
         }
 
