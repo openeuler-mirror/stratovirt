@@ -803,7 +803,6 @@ impl UsbHost {
     }
 
     pub fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
-        let mut disconnect: bool = false;
         let cloned_packet = packet.clone();
         let locked_packet = packet.lock().unwrap();
         let in_direction = locked_packet.pid == USB_TOKEN_IN as u32;
@@ -875,16 +874,14 @@ impl UsbHost {
                 }
                 Err(e) => {
                     locked_iso_queue.unused.push_back(iso_transfer.unwrap());
-                    if e == Error::NoDevice {
-                        disconnect = true;
+                    if e == Error::NoDevice || e == Error::Io {
+                        // When the USB device reports the preceding error, XHCI notifies the guest of the
+                        // error through packet status. The guest initiallizes the device again.
+                        packet.lock().unwrap().status = UsbPacketStatus::Stall;
                     };
                     break;
                 }
             };
-        }
-
-        if disconnect {
-            self.reset();
         }
     }
 
