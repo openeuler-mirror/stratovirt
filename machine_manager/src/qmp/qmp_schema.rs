@@ -639,6 +639,8 @@ pub struct device_add {
     pub hostport: Option<String>,
     pub vendorid: Option<String>,
     pub productid: Option<String>,
+    pub isobufs: Option<String>,
+    pub isobsize: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;

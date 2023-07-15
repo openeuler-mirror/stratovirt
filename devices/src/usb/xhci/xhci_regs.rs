@@ -261,11 +261,11 @@ impl XhciInterrupter {
         }
         let dp_idx = (self.erdp - self.er_start) / TRB_SIZE as u64;
         if ((self.er_ep_idx + 2) % self.er_size) as u64 == dp_idx {
-            error!("Event ring full error, idx {}", dp_idx);
+            debug!("Event ring full error, idx {}", dp_idx);
             let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
             self.write_event(&event)?;
         } else if ((self.er_ep_idx + 1) % self.er_size) as u64 == dp_idx {
-            bail!("Event Ring full, drop Event.");
+            debug!("Event Ring full, drop Event.");
         } else {
             self.write_event(evt)?;
         }
@@ -488,6 +488,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     locked_xhci.oper.set_usb_status_flag(USB_STS_SRE);
                 }
                 locked_xhci.oper.set_usb_cmd(value & 0xc0f);
+                locked_xhci.mfwrap_update();
                 if value & USB_CMD_HCRST == USB_CMD_HCRST {
                     locked_xhci.reset();
                 }
@@ -558,7 +559,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let mut value = 0;
         if offset < 0x20 {
             if offset == 0x0 {
-                value = (xhci.lock().unwrap().get_mf_index() & 0x3fff) as u32;
+                value = (xhci.lock().unwrap().mfindex() & 0x3fff) as u32;
             } else {
                 error!("Failed to read runtime registers, offset is {:x}", offset);
             }

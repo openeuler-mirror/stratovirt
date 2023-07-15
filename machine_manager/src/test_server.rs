@@ -67,17 +67,31 @@ impl EventNotifierHelper for TestSock {
 }
 
 fn get_min_timeout() -> i64 {
-    let mut min_timeout = EventLoop::get_ctx(None).unwrap().timers_min_timeout_ns();
+    let mut min_timeout = EventLoop::get_ctx(None).unwrap().timers_min_duration();
 
     for thread in IOTHREADS.lock().unwrap().iter() {
         let timeout = EventLoop::get_ctx(Some(&thread.id))
             .unwrap()
-            .timers_min_timeout_ns();
-        if timeout >= 0 && (timeout < min_timeout || min_timeout < 0) {
+            .timers_min_duration();
+        if timeout.is_some()
+            && (min_timeout.is_none()
+                || (min_timeout.is_some()
+                    && timeout.as_ref().unwrap() < min_timeout.as_ref().unwrap()))
+        {
             min_timeout = timeout;
         }
     }
-    min_timeout
+    match min_timeout {
+        Some(d) => {
+            let timeout = d.as_nanos();
+            if timeout >= i64::MAX as u128 {
+                i64::MAX
+            } else {
+                timeout as i64
+            }
+        }
+        None => -1,
+    }
 }
 
 fn update_clock(target: u64) {
