@@ -1069,7 +1069,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
             let date = get_format_time(snap.date_sec as i64);
             let date_str = format!(
-                "{:04}-{:02}-{:02} {:02}-{:02}-{:02}",
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
                 date[0], date[1], date[2], date[3], date[4], date[5]
             );
 
