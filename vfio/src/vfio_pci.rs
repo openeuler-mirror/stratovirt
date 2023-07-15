@@ -42,10 +42,11 @@ use devices::pci::msix::{
 };
 use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
-    pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevBase, PciDevOps,
+    pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{Device, DeviceBase};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
+use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
 
 const PCI_NUM_BARS: u8 = 6;
@@ -907,6 +908,7 @@ impl PciDevOps for VfioPciDevice {
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let size = data.len();
+        // SAFETY: offset is no more than 0xfff.
         let end = offset + size;
         if end > (self.config_size as usize) || size > 4 {
             error!(
@@ -919,9 +921,9 @@ impl PciDevOps for VfioPciDevice {
         // BAR, header_type and extended caps are always controlled by StratoVirt.
         let bars_size = (BAR_5 - BAR_0) as usize + REG_SIZE;
         let ext_cfg_size = PCIE_CONFIG_SPACE_SIZE - PCI_CONFIG_SPACE_SIZE;
-        if ranges_overlap(offset, size, BAR_0 as usize, bars_size)
-            || ranges_overlap(offset, size, HEADER_TYPE as usize, 2)
-            || ranges_overlap(offset, size, PCI_CONFIG_SPACE_SIZE, ext_cfg_size)
+        if ranges_overlap(offset, size, BAR_0 as usize, bars_size).unwrap()
+            || ranges_overlap(offset, size, HEADER_TYPE as usize, 2).unwrap()
+            || ranges_overlap(offset, size, PCI_CONFIG_SPACE_SIZE, ext_cfg_size).unwrap()
         {
             self.base.config.read(offset, data);
             return;
@@ -947,6 +949,7 @@ impl PciDevOps for VfioPciDevice {
     /// Write data to pci config and vfio device at the same time
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();
+        // SAFETY: offset is no more than 0xfff.
         let end = offset + size;
         if end > (self.config_size as usize) || size > 4 {
             error!(
@@ -985,7 +988,7 @@ impl PciDevOps for VfioPciDevice {
             Some(&locked_parent_bus.mem_region),
         );
 
-        if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE) {
+        if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE).unwrap() {
             if le_read_u32(&self.base.config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
                 != 0
             {
@@ -993,7 +996,7 @@ impl PciDevOps for VfioPciDevice {
                     error!("Failed to map bar regions, error is {:?}", e);
                 }
             }
-        } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize) {
+        } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize).unwrap() {
             let is_enable = is_msix_enabled(cap_offset, &self.base.config.config);
 
             if !was_enable && is_enable {

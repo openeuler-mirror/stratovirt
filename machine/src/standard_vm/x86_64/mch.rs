@@ -22,9 +22,10 @@ use devices::pci::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
-    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
+    le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 use devices::{Device, DeviceBase};
+use util::num_ops::ranges_overlap;
 
 const DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
 
@@ -172,8 +173,8 @@ impl PciDevOps for Mch {
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let old_pciexbar: u64 = le_read_u64(&self.base.config.config, PCIEXBAR as usize).unwrap();
         self.base.config.write(offset, data, 0, None, None);
-
-        if ranges_overlap(offset, data.len(), PCIEXBAR as usize, 8)
+        // SAFETY: offset is no more than 0xfff.
+        if ranges_overlap(offset, data.len(), PCIEXBAR as usize, 8).unwrap()
             && self.check_pciexbar_update(old_pciexbar)
         {
             if let Err(e) = self.update_pciexbar_mapping() {

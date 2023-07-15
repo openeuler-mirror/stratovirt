@@ -23,8 +23,7 @@ use crate::pci::config::{
     CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
 };
 use crate::pci::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
-    ranges_overlap, PciBus,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
 };
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
@@ -34,7 +33,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::{
     byte_code::ByteCode,
-    num_ops::round_up,
+    num_ops::{ranges_overlap, round_up},
     test_helper::{add_msix_msg, is_test_enabled},
 };
 
@@ -457,7 +456,9 @@ impl Msix {
         let len = data.len();
         let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
         // Only care about the bits Masked(14) & Enabled(15) in msix control register.
-        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1) {
+        // SAFETY: msix_cap_control_off is less than u16::MAX.
+        // Offset and len have been checked in call function PciConfig::write.
+        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1).unwrap() {
             return;
         }
 
@@ -654,7 +655,9 @@ pub fn init_msix(
         table_size as usize,
         pba_offset as usize,
         pba_size as usize,
-    ) {
+    )
+    .unwrap()
+    {
         bail!("msix table and pba table overlapped.");
     }
     le_write_u32(&mut config.config, offset, table_offset | bar_id as u32)?;

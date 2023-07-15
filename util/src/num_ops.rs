@@ -442,6 +442,35 @@ pub fn str_to_usize(string_in: String) -> Result<usize> {
     Ok(num)
 }
 
+/// Check whether two regions overlap with each other.
+///
+/// # Arguments
+///
+/// * `start1` - Start address of the first region.
+/// * `size1` - Size of the first region.
+/// * `start2` - Start address of the second region.
+/// * `size2` - Size of the second region.
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::ranges_overlap;
+///
+/// let value = ranges_overlap(100, 100, 150, 100).unwrap();
+/// assert!(value == true);
+/// ```
+pub fn ranges_overlap(start1: usize, size1: usize, start2: usize, size2: usize) -> Result<bool> {
+    let end1 = start1
+        .checked_add(size1)
+        .with_context(|| format!("range 1 overflows: start {}, size {}", start1, size1))?;
+    let end2 = start2
+        .checked_add(size2)
+        .with_context(|| format!("range 2 overflows: start {}, size {}", start1, size1))?;
+
+    Ok(!(start1 >= end2 || start2 >= end1))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -617,5 +646,16 @@ mod test {
         assert!(value == 0x17);
         let value = str_to_usize("17".to_string()).unwrap();
         assert!(value == 17);
+    }
+
+    #[test]
+    fn test_ranges_overlap() {
+        assert!(ranges_overlap(100, 100, 150, 100).unwrap());
+        assert!(ranges_overlap(100, 100, 150, 50).unwrap());
+        assert!(!ranges_overlap(100, 100, 200, 50).unwrap());
+        assert!(ranges_overlap(100, 100, 100, 50).unwrap());
+        assert!(!ranges_overlap(100, 100, 50, 50).unwrap());
+        assert!(ranges_overlap(100, 100, 50, 100).unwrap());
+        assert!(ranges_overlap(usize::MAX, 1, 100, 50).is_err())
     }
 }

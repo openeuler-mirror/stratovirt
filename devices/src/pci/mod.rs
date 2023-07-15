@@ -351,20 +351,6 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
     ((pci_slot + pin) % PCI_PIN_NUM) as u32
 }
 
-/// Check whether two regions overlap with each other.
-///
-/// # Arguments
-///
-/// * `start` - Start address of the first region.
-/// * `end` - End address of the first region.
-/// * `region_start` - Start address of the second region.
-/// * `region_end` - End address of the second region.
-pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size: usize) -> bool {
-    let end = start + size;
-    let range_end = range_start + range_size;
-    !(start >= range_end || range_start >= end)
-}
-
 #[cfg(test)]
 mod tests {
     use crate::DeviceBase;
@@ -409,16 +395,6 @@ mod tests {
     fn test_le_write_u64_02() {
         let mut buf: [u8; 8] = [0; 8];
         assert!(le_write_u64(&mut buf, 1, 0x1234_5678_9abc_deff).is_err());
-    }
-
-    #[test]
-    fn test_ranges_overlap() {
-        assert!(ranges_overlap(100, 100, 150, 100));
-        assert!(ranges_overlap(100, 100, 150, 50));
-        assert!(!ranges_overlap(100, 100, 200, 50));
-        assert!(ranges_overlap(100, 100, 100, 50));
-        assert!(!ranges_overlap(100, 100, 50, 50));
-        assert!(ranges_overlap(100, 100, 50, 100));
     }
 
     #[test]
