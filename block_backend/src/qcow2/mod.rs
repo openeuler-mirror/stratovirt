@@ -677,12 +677,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 break;
             }
 
-            if let Err(e) = self.refcount.flush_refcount_block_cache() {
-                err_msg = format!("{:?}", e);
-                error_stage = 5;
-                break;
-            }
-
             let mut new_header = self.header.clone();
             new_header.snapshots_offset = new_snapshot_table_offset;
             new_header.nb_snapshots -= 1;
@@ -711,6 +705,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         // Error handling, to revert some operation.
+        self.refcount.discard_list.clear();
         if error_stage >= 6 {
             self.refcount.update_refcount(
                 self.header.snapshots_offset,
@@ -882,6 +877,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         // Error handling, to revert some operation.
+        self.refcount.discard_list.clear();
         if error_stage >= 5 && self.header.snapshots_offset != 0 {
             self.refcount.update_refcount(
                 self.header.snapshots_offset,
