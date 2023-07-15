@@ -20,10 +20,10 @@ use crate::pci::intx::Intx;
 use crate::pci::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
 use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
-    pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
+    pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
 };
-use crate::pci::{ranges_overlap, PciError};
 use address_space::Region;
+use util::num_ops::ranges_overlap;
 
 /// Size in bytes of the configuration space of legacy PCI device.
 pub const PCI_CONFIG_SPACE_SIZE: usize = 256;
@@ -521,7 +521,8 @@ impl PciConfig {
         }
 
         let size = buf.len();
-        if ranges_overlap(offset, size, STATUS as usize, 1) {
+        // SAFETY: checked in "validate_config_boundary".
+        if ranges_overlap(offset, size, STATUS as usize, 1).unwrap() {
             if let Some(intx) = &self.intx {
                 if intx.lock().unwrap().level == 1 {
                     self.config[STATUS as usize] |= STATUS_INTERRUPT;
@@ -588,10 +589,11 @@ impl PciConfig {
         };
 
         let size = data.len();
-        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1);
+        // SAFETY: checked in "validate_config_boundary".
+        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1).unwrap();
         if cmd_overlap
-            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num)
-            || ranges_overlap(old_offset, size, rom_addr, 4)
+            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num).unwrap()
+            || ranges_overlap(old_offset, size, rom_addr, 4).unwrap()
         {
             if let Err(e) = self.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]

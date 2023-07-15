@@ -28,10 +28,11 @@ use devices::pci::config::{
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::{
-    le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
+    le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 use devices::{Device, DeviceBase};
 use util::byte_code::ByteCode;
+use util::num_ops::ranges_overlap;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 
@@ -303,7 +304,8 @@ impl PciDevOps for LPCBridge {
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None, None);
-        if ranges_overlap(offset, data.len(), PM_BASE_OFFSET as usize, 4) {
+        // SAFETY: offset is no more than 0xfff.
+        if ranges_overlap(offset, data.len(), PM_BASE_OFFSET as usize, 4).unwrap() {
             if let Err(e) = self.update_pm_base() {
                 error!("Failed to update PM base addr: {:?}", e);
             }
