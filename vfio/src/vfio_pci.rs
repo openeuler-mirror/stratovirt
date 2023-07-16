@@ -813,17 +813,17 @@ impl VfioPciDevice {
 }
 
 impl PciDevOps for VfioPciDevice {
-    fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     fn realize(mut self) -> pci::Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
         pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Failed to reset vfio device"
         })?;
@@ -877,7 +877,7 @@ impl PciDevOps for VfioPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().name()
+                pci_device.unwrap().lock().unwrap().pci_base().name
             );
         }
 
@@ -998,10 +998,6 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         }
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {

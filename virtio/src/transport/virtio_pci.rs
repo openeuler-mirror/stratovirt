@@ -921,17 +921,17 @@ impl VirtioPciDevice {
 }
 
 impl PciDevOps for VirtioPciDevice {
-    fn init_write_mask(&mut self) -> PciResult<()> {
-        self.base.config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> PciResult<()> {
-        self.base.config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     fn realize(mut self) -> PciResult<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
 
         let device_type = self.device.lock().unwrap().device_type();
         le_write_u16(
@@ -1083,7 +1083,7 @@ impl PciDevOps for VirtioPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().name()
+                pci_device.unwrap().lock().unwrap().pci_base().name
             );
         }
 
@@ -1138,10 +1138,6 @@ impl PciDevOps for VirtioPciDevice {
             Some(&locked_parent_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 
     fn devfn(&self) -> Option<u8> {
@@ -1571,8 +1567,8 @@ mod tests {
             Arc::downgrade(&parent_bus),
             false,
         );
-        virtio_pci.init_write_mask().unwrap();
-        virtio_pci.init_write_clear_mask().unwrap();
+        virtio_pci.init_write_mask(false).unwrap();
+        virtio_pci.init_write_clear_mask(false).unwrap();
 
         // Overflows, exceeds size of pcie config space
         let mut data = vec![0_u8; 4];

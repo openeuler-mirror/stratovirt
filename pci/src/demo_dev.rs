@@ -95,8 +95,8 @@ impl DemoDev {
     }
 
     fn init_pci_config(&mut self) -> Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
 
         let config = &mut self.base.config.config;
         le_write_u16(config, DEVICE_ID as usize, DEVICE_ID_DEMO)?;
@@ -169,12 +169,12 @@ const DEVICE_ID_DEMO: u16 = 0xBEEF;
 const CLASS_CODE_DEMO: u16 = 0xEE;
 
 impl PciDevOps for DemoDev {
-    fn init_write_mask(&mut self) -> Result<()> {
-        self.base.config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> Result<()> {
-        self.base.config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     /// Realize PCI/PCIe device.
@@ -223,10 +223,6 @@ impl PciDevOps for DemoDev {
             None,
             Some(&parent_bus_locked.mem_region),
         );
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 
     /// Reset device

@@ -91,9 +91,17 @@ impl Ivshmem {
 }
 
 impl PciDevOps for Ivshmem {
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
+    }
+
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
+    }
+
     fn realize(mut self) -> pci::Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
         le_write_u16(
             &mut self.base.config.config,
             VENDOR_ID as usize,
@@ -122,21 +130,13 @@ impl PciDevOps for Ivshmem {
             Some(device) => bail!(
                 "Devfn {:?} has been used by {:?}",
                 &self.base.devfn,
-                device.lock().unwrap().name()
+                device.lock().unwrap().pci_base().name
             ),
             None => locked_pci_bus
                 .devices
                 .insert(self.base.devfn, Arc::new(Mutex::new(self))),
         };
         Ok(())
-    }
-
-    fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_mask()
-    }
-
-    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_clear_mask()
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
@@ -155,9 +155,5 @@ impl PciDevOps for Ivshmem {
             Some(&locked_parent_bus.io_region),
             Some(&locked_parent_bus.mem_region),
         );
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 }
