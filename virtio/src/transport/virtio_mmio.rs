@@ -21,7 +21,7 @@ use log::{error, warn};
 use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -110,16 +110,13 @@ pub struct VirtioMmioState {
 
 /// virtio-mmio device structure.
 pub struct VirtioMmioDevice {
+    base: SysBusDevBase,
     // The entity of low level device.
     pub device: Arc<Mutex<dyn VirtioDevice>>,
-    // EventFd used to send interrupt to VM
-    interrupt_evt: Arc<EventFd>,
     // HostNotifyInfo used for guest notifier
     host_notify_info: HostNotifyInfo,
     // System address space.
     mem_space: Arc<AddressSpace>,
-    // System Resource of device.
-    res: SysRes,
     /// The function for interrupt triggering.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
 }
@@ -130,11 +127,14 @@ impl VirtioMmioDevice {
         let queue_num = device_clone.lock().unwrap().queue_num();
 
         VirtioMmioDevice {
+            base: SysBusDevBase {
+                dev_type: SysBusDevType::VirtioMmio,
+                res: SysRes::default(),
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+            },
             device,
-            interrupt_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             host_notify_info: HostNotifyInfo::new(queue_num),
             mem_space: mem_space.clone(),
-            res: SysRes::default(),
             interrupt_cb: None,
         }
     }
@@ -167,7 +167,7 @@ impl VirtioMmioDevice {
                 "{}@0x{:08x}:{}",
                 region_size,
                 region_base,
-                dev.lock().unwrap().res.irq
+                dev.lock().unwrap().base.res.irq
             ),
         });
         Ok(dev)
@@ -222,7 +222,7 @@ impl VirtioMmioDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let interrupt_evt = self.interrupt_evt.clone();
+        let interrupt_evt = self.base.interrupt_evt.clone();
 
         let locked_dev = self.device.lock().unwrap();
         let virtio_base = locked_dev.virtio_base();
@@ -248,7 +248,8 @@ impl VirtioMmioDevice {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt
+                let interrupt = interrupt_evt.as_ref().unwrap();
+                interrupt
                     .write(1)
                     .with_context(|| VirtioError::EventFdWrite)?;
 
@@ -497,12 +498,12 @@ impl SysBusDevOps for VirtioMmioDevice {
         ret
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(self.interrupt_evt.as_ref())
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn get_type(&self) -> SysBusDevType {

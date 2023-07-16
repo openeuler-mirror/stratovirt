@@ -201,7 +201,7 @@ impl Default for SysRes {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Clone)]
 pub enum SysBusDevType {
     Serial,
     Rtc,
@@ -212,6 +212,36 @@ pub enum SysBusDevType {
     Flash,
     Ramfb,
     Others,
+}
+
+#[derive(Clone)]
+pub struct SysBusDevBase {
+    /// System bus device type.
+    pub dev_type: SysBusDevType,
+    /// System resource.
+    pub res: SysRes,
+    /// Interrupt event file descriptor.
+    pub interrupt_evt: Option<Arc<EventFd>>,
+}
+
+impl Default for SysBusDevBase {
+    fn default() -> Self {
+        SysBusDevBase {
+            dev_type: SysBusDevType::Others,
+            res: SysRes::default(),
+            interrupt_evt: None,
+        }
+    }
+}
+
+impl SysBusDevBase {
+    pub fn new(dev_type: SysBusDevType) -> SysBusDevBase {
+        Self {
+            dev_type,
+            res: SysRes::default(),
+            interrupt_evt: None,
+        }
+    }
 }
 
 /// Operations for sysbus devices.
@@ -238,7 +268,7 @@ pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
         Vec::new()
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
         None
     }
 
@@ -251,7 +281,7 @@ pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
         match self.interrupt_evt() {
             None => Ok(-1_i32),
             Some(evt) => {
-                KVM_FDS.load().register_irqfd(evt, irq as u32)?;
+                KVM_FDS.load().register_irqfd(&evt, irq as u32)?;
                 sysbus.min_free_irq = irq + 1;
                 Ok(irq)
             }

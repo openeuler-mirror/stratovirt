@@ -30,7 +30,7 @@ use address_space::GuestAddress;
 use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
 
 const AML_ACAD_REG: &str = "ADPM";
 const AML_ACAD_ONLINE: &str = "ADPO";
@@ -73,16 +73,16 @@ struct PowerDevState {
 
 #[derive(Clone)]
 pub struct PowerDev {
+    base: SysBusDevBase,
     regs: Vec<u32>,
     state: PowerDevState,
     ged: Arc<Mutex<Ged>>,
-    /// System resource.
-    res: SysRes,
 }
 
 impl PowerDev {
     pub fn new(ged_dev: Arc<Mutex<Ged>>) -> Self {
         Self {
+            base: SysBusDevBase::default(),
             regs: vec![0; POWERDEV_REGS_SIZE],
             state: PowerDevState {
                 last_acad_st: 1,
@@ -90,7 +90,6 @@ impl PowerDev {
                 last_bat_lvl: 0xffffffff,
             },
             ged: ged_dev,
-            res: SysRes::default(),
         }
     }
 
@@ -245,7 +244,7 @@ impl SysBusDevOps for PowerDev {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 }
 
@@ -257,7 +256,7 @@ impl AmlBuilder for PowerDev {
         acpi_acad_dev.append_child(AmlOpRegion::new(
             AML_ACAD_REG,
             AmlAddressSpaceType::SystemMemory,
-            self.res.region_base,
+            self.base.res.region_base,
             AML_ACAD_REG_SZ,
         ));
 
@@ -290,8 +289,8 @@ impl AmlBuilder for PowerDev {
         acpi_bat_dev.append_child(AmlOpRegion::new(
             AML_BAT0_REG,
             AmlAddressSpaceType::SystemMemory,
-            self.res.region_base + AML_ACAD_REG_SZ,
-            self.res.region_size - AML_ACAD_REG_SZ,
+            self.base.res.region_base + AML_ACAD_REG_SZ,
+            self.base.res.region_size - AML_ACAD_REG_SZ,
         ));
 
         field = AmlField::new(

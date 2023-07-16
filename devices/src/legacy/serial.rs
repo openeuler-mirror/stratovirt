@@ -29,7 +29,7 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use vmm_sys_util::eventfd::EventFd;
@@ -113,14 +113,11 @@ impl SerialState {
 
 /// Contain registers status and operation methods of serial.
 pub struct Serial {
+    base: SysBusDevBase,
     /// Receiver buffer register.
     rbr: VecDeque<u8>,
     /// State of Device Serial.
     state: SerialState,
-    /// Interrupt event file descriptor.
-    interrupt_evt: Option<EventFd>,
-    /// System resource.
-    res: SysRes,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
 }
@@ -128,10 +125,9 @@ pub struct Serial {
 impl Serial {
     pub fn new(cfg: SerialConfig) -> Self {
         Serial {
+            base: SysBusDevBase::new(SysBusDevType::Serial),
             rbr: VecDeque::new(),
             state: SerialState::new(),
-            interrupt_evt: None,
-            res: SysRes::default(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         }
     }
@@ -147,7 +143,7 @@ impl Serial {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
+        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 
@@ -376,21 +372,21 @@ impl SysBusDevOps for Serial {
         self.write_internal(offset, data[0]).is_ok()
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
             irq = UART_IRQ;
-            KVM_FDS.load().register_irqfd(e, irq as u32)?;
+            KVM_FDS.load().register_irqfd(&e, irq as u32)?;
         }
         Ok(irq)
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn get_type(&self) -> SysBusDevType {
@@ -408,17 +404,17 @@ impl AmlBuilder for Serial {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlIoResource::new(
             AmlIoDecode::Decode16,
-            self.res.region_base as u16,
-            self.res.region_base as u16,
+            self.base.res.region_base as u16,
+            self.base.res.region_base as u16,
             0x00,
-            self.res.region_size as u8,
+            self.base.res.region_size as u8,
         ));
         res.append_child(AmlExtendedInterrupt::new(
             AmlResourceUsage::Consumer,
             AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![self.res.irq as u32],
+            vec![self.base.res.irq as u32],
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 

@@ -19,9 +19,10 @@ use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, warn};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 pub struct PFlash {
+    base: SysBusDevBase,
     /// Has backend file or not.
     has_backend: bool,
     /// Length of block.
@@ -52,8 +53,6 @@ pub struct PFlash {
     write_blk_size: u32,
     /// ROM region of PFlash.
     rom: Option<Region>,
-    /// System Resource of device.
-    res: SysRes,
 }
 
 impl PFlash {
@@ -173,6 +172,7 @@ impl PFlash {
         cfi_table[0x3f] = 0x01;
 
         Ok(PFlash {
+            base: SysBusDevBase::new(SysBusDevType::Flash),
             has_backend: backend.is_some(),
             block_len,
             bank_width,
@@ -188,7 +188,6 @@ impl PFlash {
             counter: 0,
             write_blk_size,
             rom: None,
-            res: SysRes::default(),
         })
     }
 
@@ -823,7 +822,7 @@ impl SysBusDevOps for PFlash {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn set_sys_resource(

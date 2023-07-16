@@ -24,7 +24,7 @@ use crate::legacy::Result;
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
-use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
+use sysbus::{Result as SysBusResult, SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, set_run_stage, ConsoleType,
     DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
@@ -225,12 +225,14 @@ impl HardWareOperations for RamfbInterface {
 }
 
 pub struct Ramfb {
+    base: SysBusDevBase,
     pub ramfb_state: RamfbState,
 }
 
 impl Ramfb {
     pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         Ramfb {
+            base: SysBusDevBase::new(SysBusDevType::Ramfb),
             ramfb_state: RamfbState::new(sys_mem, install),
         }
     }

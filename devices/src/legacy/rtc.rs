@@ -20,7 +20,7 @@ use acpi::{
 use address_space::GuestAddress;
 use anyhow::Result;
 use log::{debug, error, warn};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
@@ -99,14 +99,11 @@ fn bcd_to_bin(src: u8) -> u64 {
 #[allow(clippy::upper_case_acronyms)]
 /// RTC device.
 pub struct RTC {
+    base: SysBusDevBase,
     /// Static CMOS RAM.
     cmos_data: [u8; 128],
     /// Index of Selected register.
     cur_index: u8,
-    /// Interrupt eventfd.
-    interrupt_evt: Option<EventFd>,
-    /// Resource of RTC.
-    res: SysRes,
     /// Guest memory size.
     mem_size: u64,
     /// The start address of gap.
@@ -121,14 +118,17 @@ impl RTC {
     /// Construct function of RTC device.
     pub fn new() -> Result<RTC> {
         let mut rtc = RTC {
+            base: SysBusDevBase {
+                dev_type: SysBusDevType::Rtc,
+                res: SysRes {
+                    region_base: RTC_PORT_INDEX,
+                    region_size: 8,
+                    irq: -1,
+                },
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+            },
             cmos_data: [0_u8; 128],
             cur_index: 0_u8,
-            interrupt_evt: Some(EventFd::new(libc::EFD_NONBLOCK)?),
-            res: SysRes {
-                region_base: RTC_PORT_INDEX,
-                region_size: 8,
-                irq: -1,
-            },
             mem_size: 0,
             gap_start: 0,
             // Since 1970-01-01 00:00:00, it never cause overflow.
@@ -262,8 +262,8 @@ impl RTC {
     }
 
     pub fn realize(mut self, sysbus: &mut SysBus) -> Result<()> {
-        let region_base = self.res.region_base;
-        let region_size = self.res.region_size;
+        let region_base = self.base.res.region_base;
+        let region_size = self.base.res.region_size;
         self.set_sys_resource(sysbus, region_base, region_size)?;
 
         let dev = Arc::new(Mutex::new(self));
@@ -378,12 +378,12 @@ impl SysBusDevOps for RTC {
         }
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn get_type(&self) -> SysBusDevType {
@@ -406,12 +406,12 @@ impl AmlBuilder for RTC {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlIoResource::new(
             AmlIoDecode::Decode16,
-            self.res.region_base as u16,
-            self.res.region_base as u16,
+            self.base.res.region_base as u16,
+            self.base.res.region_base as u16,
             0x01,
-            self.res.region_size as u8,
+            self.base.res.region_size as u8,
         ));
-        res.append_child(AmlIrqNoFlags::new(self.res.irq as u8));
+        res.append_child(AmlIrqNoFlags::new(self.base.res.irq as u8));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
         acpi_dev.aml_bytes()

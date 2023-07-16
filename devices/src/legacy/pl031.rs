@@ -24,7 +24,7 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::write_data_u32;
 use vmm_sys_util::eventfd::EventFd;
@@ -68,21 +68,19 @@ struct PL031State {
 #[allow(clippy::upper_case_acronyms)]
 /// PL031 structure.
 pub struct PL031 {
+    base: SysBusDevBase,
     /// State of device PL031.
     state: PL031State,
     /// The duplicate of Load register value.
     tick_offset: u32,
     /// Record the real time.
     base_time: Instant,
-    /// Interrupt eventfd.
-    interrupt_evt: Option<EventFd>,
-    /// System resource.
-    res: SysRes,
 }
 
 impl Default for PL031 {
     fn default() -> Self {
         Self {
+            base: SysBusDevBase::new(SysBusDevType::Rtc),
             state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
@@ -90,8 +88,6 @@ impl Default for PL031 {
                 .expect("time wrong")
                 .as_secs() as u32,
             base_time: Instant::now(),
-            interrupt_evt: None,
-            res: SysRes::default(),
         }
     }
 }
@@ -103,7 +99,7 @@ impl PL031 {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
+        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 
@@ -190,12 +186,12 @@ impl SysBusDevOps for PL031 {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn get_type(&self) -> SysBusDevType {

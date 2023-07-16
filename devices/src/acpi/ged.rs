@@ -20,7 +20,7 @@ use machine_manager::qmp::QmpChannel;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use sysbus::{SysBus, SysBusDevOps, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
 use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
 use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
 use vmm_sys_util::epoll::EventSet;
@@ -50,20 +50,17 @@ const AML_GED_EVT_SEL: &str = "ESEL";
 
 #[derive(Clone)]
 pub struct Ged {
-    interrupt_evt: Arc<Option<EventFd>>,
+    base: SysBusDevBase,
     notification_type: Arc<AtomicU32>,
     battery_present: bool,
-    /// System resource.
-    res: SysRes,
 }
 
 impl Default for Ged {
     fn default() -> Self {
         Self {
-            interrupt_evt: Arc::new(None),
+            base: SysBusDevBase::default(),
             notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
             battery_present: false,
-            res: SysRes::default(),
         }
     }
 }
@@ -77,7 +74,7 @@ impl Ged {
         region_base: u64,
         region_size: u64,
     ) -> Result<Arc<Mutex<Ged>>> {
-        self.interrupt_evt = Arc::new(Some(EventFd::new(libc::EFD_NONBLOCK)?));
+        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
         self.battery_present = battery_present;
@@ -149,12 +146,12 @@ impl SysBusDevOps for Ged {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref().as_ref()
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 }
 
@@ -173,15 +170,15 @@ impl AmlBuilder for Ged {
             AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![self.res.irq as u32 + irq_base],
+            vec![self.base.res.irq as u32 + irq_base],
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
         acpi_dev.append_child(AmlOpRegion::new(
             "EREG",
             AmlAddressSpaceType::SystemMemory,
-            self.res.region_base,
-            self.res.region_size,
+            self.base.res.region_base,
+            self.base.res.region_size,
         ));
 
         let mut field = AmlField::new(
