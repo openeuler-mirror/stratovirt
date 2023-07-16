@@ -132,6 +132,14 @@ impl Ged {
 }
 
 impl SysBusDevOps for Ged {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset != 0 {
             return false;
@@ -144,10 +152,6 @@ impl SysBusDevOps for Ged {
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         true
-    }
-
-    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {

@@ -940,9 +940,9 @@ impl AcpiBuilder for StdMachine {
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            if locked_dev.get_type() == SysBusDevType::PL011 {
-                uart_irq = locked_dev.get_sys_resource().unwrap().irq as u32;
+            let locked_dev = dev.lock().unwrap();
+            if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
+                uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
                 break;
             }
         }
@@ -1626,23 +1626,23 @@ impl CompileFDTHelper for StdMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            match locked_dev.get_type() {
+            let locked_dev = dev.lock().unwrap();
+            match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::Rtc => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_rtc_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::VirtioMmio => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::FwCfg => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
+                    generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }

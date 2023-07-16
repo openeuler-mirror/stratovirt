@@ -230,6 +230,14 @@ impl MigrationHook for PowerDev {
 }
 
 impl SysBusDevOps for PowerDev {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let reg_idx: u64 = offset / 4;
         if reg_idx >= self.regs.len() as u64 {

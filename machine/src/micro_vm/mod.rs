@@ -1673,13 +1673,13 @@ impl CompileFDTHelper for LightMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            let dev_type = locked_dev.get_type();
-            let sys_res = locked_dev.get_sys_resource().unwrap();
+            let locked_dev = dev.lock().unwrap();
+            let dev_type = locked_dev.sysbusdev_base().dev_type;
+            let sys_res = locked_dev.sysbusdev_base().res;
             match dev_type {
-                SysBusDevType::Serial => generate_serial_device_node(fdt, sys_res)?,
-                SysBusDevType::Rtc => generate_rtc_device_node(fdt, sys_res)?,
-                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, sys_res)?,
+                SysBusDevType::Serial => generate_serial_device_node(fdt, &sys_res)?,
+                SysBusDevType::Rtc => generate_rtc_device_node(fdt, &sys_res)?,
+                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, &sys_res)?,
                 _ => (),
             }
         }

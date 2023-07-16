@@ -363,6 +363,14 @@ impl InputReceiver for Serial {
 }
 
 impl SysBusDevOps for Serial {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = self.read_internal(offset);
         true
@@ -370,10 +378,6 @@ impl SysBusDevOps for Serial {
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         self.write_internal(offset, data[0]).is_ok()
-    }
-
-    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        self.base.interrupt_evt.clone()
     }
 
     fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
@@ -387,10 +391,6 @@ impl SysBusDevOps for Serial {
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Serial
     }
 }
 

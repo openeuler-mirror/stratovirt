@@ -132,6 +132,14 @@ impl PL031 {
 }
 
 impl SysBusDevOps for PL031 {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if (0xFE0..0x1000).contains(&offset) {
@@ -186,16 +194,8 @@ impl SysBusDevOps for PL031 {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        self.base.interrupt_evt.clone()
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Rtc
     }
 }
 
