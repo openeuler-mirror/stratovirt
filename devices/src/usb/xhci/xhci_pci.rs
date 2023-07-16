@@ -24,7 +24,7 @@ use pci::config::{
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::update_dev_id;
-use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevOps};
+use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
@@ -62,12 +62,9 @@ const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
 
 /// XHCI pci device which can be attached to PCI bus.
 pub struct XhciPciDevice {
-    pci_config: PciConfig,
-    devfn: u8,
+    base: PciDevBase,
     pub xhci: Arc<Mutex<XhciDevice>>,
     dev_id: Arc<AtomicU16>,
-    name: String,
-    parent_bus: Weak<Mutex<PciBus>>,
     mem_region: Region,
 }
 
@@ -79,12 +76,14 @@ impl XhciPciDevice {
         mem_space: &Arc<AddressSpace>,
     ) -> Self {
         Self {
-            pci_config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
-            devfn,
+            base: PciDevBase {
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
+                devfn,
+                name: config.id.clone().unwrap(),
+                parent_bus,
+            },
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
-            name: config.id.clone().unwrap(),
-            parent_bus,
             mem_region: Region::init_container_region(
                 XHCI_PCI_CONFIG_LENGTH as u64,
                 "XhciPciContainer",
@@ -198,66 +197,66 @@ impl XhciPciDevice {
 
 impl PciDevOps for XhciPciDevice {
     fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_mask()
+        self.base.config.init_common_write_mask()
     }
 
     fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_clear_mask()
+        self.base.config.init_common_write_clear_mask()
     }
 
     fn realize(mut self) -> pci::Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             VENDOR_ID as usize,
             PCI_VENDOR_ID_REDHAT,
         )?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             DEVICE_ID as usize,
             PCI_DEVICE_ID_REDHAT_XHCI,
         )?;
-        le_write_u16(&mut self.pci_config.config, REVISION_ID, 0x3_u16)?;
+        le_write_u16(&mut self.base.config.config, REVISION_ID, 0x3_u16)?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             SUB_CLASS_CODE as usize,
             PCI_CLASS_SERIAL_USB,
         )?;
-        self.pci_config.config[PCI_CLASS_PI as usize] = 0x30;
+        self.base.config.config[PCI_CLASS_PI as usize] = 0x30;
 
         #[cfg(target_arch = "aarch64")]
-        self.pci_config.set_interrupt_pin();
+        self.base.config.set_interrupt_pin();
 
-        self.pci_config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
-        self.pci_config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
+        self.base.config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
+        self.base.config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
-        self.pci_config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
+        self.base.config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
             PCI_NO_FRAME_LENGTH_TIMING_CAP;
-        self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
+        self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
         self.mem_region_init()?;
 
         let intrs_num = self.xhci.lock().unwrap().intrs.len() as u32;
         init_msix(
             0_usize,
             intrs_num,
-            &mut self.pci_config,
+            &mut self.base.config,
             self.dev_id.clone(),
-            &self.name,
+            &self.base.name,
             Some(&self.mem_region),
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
         init_intx(
-            self.name.clone(),
-            &mut self.pci_config,
-            self.parent_bus.clone(),
-            self.devfn,
+            self.base.name.clone(),
+            &mut self.base.config,
+            self.base.parent_bus.clone(),
+            self.base.devfn,
         )?;
 
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
-        self.pci_config.register_bar(
+        self.base.config.register_bar(
             0_usize,
             self.mem_region.clone(),
             RegionType::Mem64Bit,
@@ -265,10 +264,10 @@ impl PciDevOps for XhciPciDevice {
             mem_region_size,
         )?;
 
-        let devfn = self.devfn;
+        let devfn = self.base.devfn;
         // It is safe to unwrap, because it is initialized in init_msix.
-        let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
-        let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
+        let cloned_msix = self.base.config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.base.config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
         self.xhci
@@ -288,7 +287,7 @@ impl PciDevOps for XhciPciDevice {
             }));
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
-        let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
+        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
@@ -308,19 +307,19 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn devfn(&self) -> Option<u8> {
-        Some(self.devfn)
+        Some(self.base.devfn)
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.pci_config.read(offset, data);
+        self.base.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        update_dev_id(&self.base.parent_bus, self.base.devfn, &self.dev_id);
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
 
-        self.pci_config.write(
+        self.base.config.write(
             offset,
             data,
             self.dev_id.clone().load(Ordering::Acquire),
@@ -331,13 +330,13 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn name(&self) -> String {
-        self.name.clone()
+        self.base.name.clone()
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
         self.xhci.lock().unwrap().reset();
 
-        self.pci_config.reset()?;
+        self.base.config.reset()?;
 
         Ok(())
     }

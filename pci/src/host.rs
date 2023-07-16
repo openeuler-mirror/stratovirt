@@ -518,8 +518,6 @@ impl AmlBuilder for PciHost {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Weak;
-
     use address_space::Region;
     use byteorder::{ByteOrder, LittleEndian};
 
@@ -527,20 +525,18 @@ pub mod tests {
     use crate::bus::PciBus;
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
     use crate::root_port::RootPort;
-    use crate::Result;
+    use crate::{PciDevBase, Result};
 
     struct PciDevice {
-        devfn: u8,
-        config: PciConfig,
-        parent_bus: Weak<Mutex<PciBus>>,
+        base: PciDevBase,
     }
 
     impl PciDevOps for PciDevice {
         fn init_write_mask(&mut self) -> Result<()> {
             let mut offset = 0_usize;
-            while offset < self.config.config.len() {
+            while offset < self.base.config.config.len() {
                 LittleEndian::write_u32(
-                    &mut self.config.write_mask[offset..offset + 4],
+                    &mut self.base.config.write_mask[offset..offset + 4],
                     0xffff_ffff,
                 );
                 offset += 4;
@@ -553,12 +549,12 @@ pub mod tests {
         }
 
         fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-            self.config.read(offset, data);
+            self.base.config.read(offset, data);
         }
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
             #[allow(unused_variables)]
-            self.config.write(
+            self.base.config.write(
                 offset,
                 data,
                 0,
@@ -573,13 +569,14 @@ pub mod tests {
         }
 
         fn realize(mut self) -> Result<()> {
-            let devfn = self.devfn;
+            let devfn = self.base.devfn;
             self.init_write_mask()?;
             self.init_write_clear_mask()?;
 
             let dev = Arc::new(Mutex::new(self));
             dev.lock()
                 .unwrap()
+                .base
                 .parent_bus
                 .upgrade()
                 .unwrap()
@@ -707,9 +704,12 @@ pub mod tests {
 
         let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
         let pci_dev = PciDevice {
-            devfn: 8,
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus: Arc::downgrade(&bus),
+            base: PciDevBase {
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 8,
+                name: "PCI device".to_string(),
+                parent_bus: Arc::downgrade(&bus),
+            },
         };
         pci_dev.realize().unwrap();
 
