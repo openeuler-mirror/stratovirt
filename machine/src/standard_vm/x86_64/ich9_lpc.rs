@@ -21,13 +21,13 @@ use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use anyhow::Context;
 use log::error;
-use pci::config::CLASS_CODE_ISA_BRIDGE;
 use pci::config::{
-    PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
-    PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
+    HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::Result as PciResult;
-use pci::{le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps};
+use pci::{
+    le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
+};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -43,8 +43,7 @@ pub const RST_CTRL_OFFSET: u16 = 0xCF9;
 /// LPC bridge of ICH9 (IO controller hub 9), Device 1F : Function 0
 #[allow(clippy::upper_case_acronyms)]
 pub struct LPCBridge {
-    config: PciConfig,
-    parent_bus: Weak<Mutex<PciBus>>,
+    base: PciDevBase,
     sys_io: Arc<AddressSpace>,
     pm_timer: Arc<Mutex<AcpiPMTimer>>,
     rst_ctrl: Arc<AtomicU8>,
@@ -63,8 +62,12 @@ impl LPCBridge {
         shutdown_req: Arc<EventFd>,
     ) -> Result<Self> {
         Ok(Self {
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus,
+            base: PciDevBase {
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 0x1F << 3,
+                name: "ICH9 LPC bridge".to_string(),
+                parent_bus,
+            },
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
             pm_evt: Arc::new(Mutex::new(AcpiPmEvent::new())),
@@ -88,7 +91,8 @@ impl LPCBridge {
         let pmtmr_region = Region::init_io_region(0x8, ops, "PmtmrRegion");
 
         let mut pm_base_addr = 0_u32;
-        self.config
+        self.base
+            .config
             .read(PM_BASE_OFFSET as usize, pm_base_addr.as_mut_bytes());
         self.sys_io
             .root()
@@ -226,31 +230,39 @@ impl LPCBridge {
 
 impl PciDevOps for LPCBridge {
     fn init_write_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_mask()
+        self.base.config.init_common_write_mask()
     }
 
     fn init_write_clear_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_clear_mask()
+        self.base.config.init_common_write_clear_mask()
     }
 
     fn realize(mut self) -> PciResult<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        le_write_u16(&mut self.config.config, VENDOR_ID as usize, VENDOR_ID_INTEL)?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
+            VENDOR_ID as usize,
+            VENDOR_ID_INTEL,
+        )?;
+        le_write_u16(
+            &mut self.base.config.config,
             DEVICE_ID as usize,
             DEVICE_ID_INTEL_ICH9,
         )?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             SUB_CLASS_CODE as usize,
             CLASS_CODE_ISA_BRIDGE,
         )?;
-        le_write_u32(&mut self.config.write_mask, PM_BASE_OFFSET as usize, 0xff80)?;
+        le_write_u32(
+            &mut self.base.config.write_mask,
+            PM_BASE_OFFSET as usize,
+            0xff80,
+        )?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             HEADER_TYPE as usize,
             (HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC) as u16,
         )?;
@@ -266,7 +278,7 @@ impl PciDevOps for LPCBridge {
         self.init_pm_ctrl_reg()
             .with_context(|| "Fail to init IO region for PM control register")?;
 
-        let parent_bus = self.parent_bus.clone();
+        let parent_bus = self.base.parent_bus.clone();
         parent_bus
             .upgrade()
             .unwrap()
@@ -278,11 +290,11 @@ impl PciDevOps for LPCBridge {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.config.read(offset, data);
+        self.base.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        self.config.write(offset, data, 0, None, None);
+        self.base.config.write(offset, data, 0, None, None);
         if ranges_overlap(offset, data.len(), PM_BASE_OFFSET as usize, 4) {
             if let Err(e) = self.update_pm_base() {
                 error!("Failed to update PM base addr: {:?}", e);

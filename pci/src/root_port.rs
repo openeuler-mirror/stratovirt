@@ -40,7 +40,7 @@ use crate::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
 use crate::hotplug::HotplugOps;
 use crate::intx::init_intx;
 use crate::msix::init_msix;
-use crate::{init_multifunction, PciError, PciIntxState, INTERRUPT_PIN};
+use crate::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRUPT_PIN};
 use crate::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
@@ -65,11 +65,8 @@ struct RootPortState {
 }
 
 pub struct RootPort {
-    name: String,
-    devfn: u8,
+    base: PciDevBase,
     port_num: u8,
-    config: PciConfig,
-    parent_bus: Weak<Mutex<PciBus>>,
     sec_bus: Arc<Mutex<PciBus>>,
     #[cfg(target_arch = "x86_64")]
     io_region: Region,
@@ -106,11 +103,13 @@ impl RootPort {
         )));
 
         Self {
-            name,
-            devfn,
+            base: PciDevBase {
+                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
+                devfn,
+                name,
+                parent_bus,
+            },
             port_num,
-            config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
-            parent_bus,
             sec_bus,
             #[cfg(target_arch = "x86_64")]
             io_region,
@@ -123,8 +122,8 @@ impl RootPort {
 
     fn hotplug_command_completed(&mut self) {
         if let Err(e) = le_write_set_value_u16(
-            &mut self.config.config,
-            (self.config.pci_express_cap_offset + PCI_EXP_SLTSTA) as usize,
+            &mut self.base.config.config,
+            (self.base.config.pci_express_cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_HP_EV_CCI,
         ) {
             error!("{}", format!("{:?}", e));
@@ -133,11 +132,17 @@ impl RootPort {
     }
 
     fn update_hp_event_status(&mut self) {
-        let cap_offset = self.config.pci_express_cap_offset;
-        let slot_status =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
-        let slot_control =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
+        let cap_offset = self.base.config.pci_express_cap_offset;
+        let slot_status = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+        )
+        .unwrap();
+        let slot_control = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTCTL) as usize,
+        )
+        .unwrap();
 
         self.hpev_notified = (slot_control & PCI_EXP_SLTCTL_HPIE != 0)
             && (slot_status & slot_control & PCI_EXP_HP_EV_SPT != 0);
@@ -150,12 +155,12 @@ impl RootPort {
             return;
         }
 
-        let msix = self.config.msix.as_ref().unwrap();
-        let intx = self.config.intx.as_ref().unwrap();
+        let msix = self.base.config.msix.as_ref().unwrap();
+        let intx = self.base.config.intx.as_ref().unwrap();
         let mut locked_msix = msix.lock().unwrap();
         if locked_msix.enabled {
             locked_msix.notify(0, self.dev_id.load(Ordering::Acquire));
-        } else if self.config.config[INTERRUPT_PIN as usize] != 0 {
+        } else if self.base.config.config[INTERRUPT_PIN as usize] != 0 {
             intx.lock().unwrap().notify(self.hpev_notified as u8);
         }
     }
@@ -163,10 +168,10 @@ impl RootPort {
     fn hotplug_event_clear(&mut self) {
         self.update_hp_event_status();
 
-        let msix = self.config.msix.as_ref().unwrap();
-        let intx = self.config.intx.as_ref().unwrap();
+        let msix = self.base.config.msix.as_ref().unwrap();
+        let intx = self.base.config.intx.as_ref().unwrap();
         let locked_msix = msix.lock().unwrap();
-        let intr_pin = self.config.config[INTERRUPT_PIN as usize];
+        let intr_pin = self.base.config.config[INTERRUPT_PIN as usize];
         if !locked_msix.enabled && intr_pin != 0 && !self.hpev_notified {
             intx.lock().unwrap().notify(0);
         }
@@ -174,19 +179,19 @@ impl RootPort {
 
     /// Update register when the guest OS trigger the removal of the device.
     fn update_register_status(&mut self) -> Result<()> {
-        let cap_offset = self.config.pci_express_cap_offset;
+        let cap_offset = self.base.config.pci_express_cap_offset;
         le_write_clear_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_SLTSTA_PDS,
         )?;
         le_write_clear_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (cap_offset + PCI_EXP_LNKSTA) as usize,
             PCI_EXP_LNKSTA_DLLLA,
         )?;
         le_write_set_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_SLTSTA_PDC,
         )?;
@@ -205,7 +210,11 @@ impl RootPort {
                 error!("{}", format!("{:?}", e));
                 error!("Failed to unrealize device {}.", locked_dev.name());
             }
-            info!("Device {} unplug from {}", locked_dev.name(), self.name);
+            info!(
+                "Device {} unplug from {}",
+                locked_dev.name(),
+                self.base.name
+            );
 
             // Send QMP event for successful hot unplugging.
             send_device_deleted_msg(&locked_dev.name());
@@ -214,10 +223,11 @@ impl RootPort {
     }
 
     fn register_region(&mut self) {
-        let command: u16 = le_read_u16(&self.config.config, COMMAND as usize).unwrap();
+        let command: u16 = le_read_u16(&self.base.config.config, COMMAND as usize).unwrap();
         if command & COMMAND_IO_SPACE != 0 {
             #[cfg(target_arch = "x86_64")]
             if let Err(e) = self
+                .base
                 .parent_bus
                 .upgrade()
                 .unwrap()
@@ -232,6 +242,7 @@ impl RootPort {
         }
         if command & COMMAND_MEMORY_SPACE != 0 {
             if let Err(e) = self
+                .base
                 .parent_bus
                 .upgrade()
                 .unwrap()
@@ -248,19 +259,22 @@ impl RootPort {
 
     fn correct_race_unplug(&mut self, offset: usize, data: &[u8], old_status: u16) {
         let size = data.len();
-        let cap_offset = self.config.pci_express_cap_offset;
+        let cap_offset = self.base.config.pci_express_cap_offset;
         if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTSTA) as usize, 2) {
             return;
         }
 
-        let status =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let status = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+        )
+        .unwrap();
         let val: u16 = data[0] as u16 + ((data[1] as u16) << 8);
         if (val & !old_status & PCI_EXP_SLOTSTA_EVENTS) != 0 {
             let tmpstat =
                 (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
             le_write_u16(
-                &mut self.config.config,
+                &mut self.base.config.config,
                 (cap_offset + PCI_EXP_SLTSTA) as usize,
                 tmpstat,
             )
@@ -272,15 +286,18 @@ impl RootPort {
         self.correct_race_unplug(offset, data, old_status);
 
         let size = data.len();
-        let cap_offset = self.config.pci_express_cap_offset;
+        let cap_offset = self.base.config.pci_express_cap_offset;
         // Only care the write config about slot control
         if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTCTL) as usize, 2) {
             return;
         }
 
-        let status =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
-        let val = le_read_u16(&self.config.config, offset).unwrap();
+        let status = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+        )
+        .unwrap();
+        let val = le_read_u16(&self.base.config.config, offset).unwrap();
         // Only unplug device when the slot is on
         // Don't unplug when slot is off for guest OS overwrite the off status before slot on.
         if (status & PCI_EXP_SLTSTA_PDS != 0)
@@ -313,20 +330,20 @@ impl RootPort {
 
 impl PciDevOps for RootPort {
     fn init_write_mask(&mut self) -> Result<()> {
-        self.config.init_common_write_mask()?;
-        self.config.init_bridge_write_mask()
+        self.base.config.init_common_write_mask()?;
+        self.base.config.init_bridge_write_mask()
     }
 
     fn init_write_clear_mask(&mut self) -> Result<()> {
-        self.config.init_common_write_clear_mask()?;
-        self.config.init_bridge_write_clear_mask()
+        self.base.config.init_common_write_clear_mask()?;
+        self.base.config.init_bridge_write_clear_mask()
     }
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        let config_space = &mut self.config.config;
+        let config_space = &mut self.base.config.config;
         le_write_u16(config_space, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
         le_write_u16(config_space, DEVICE_ID as usize, DEVICE_ID_RP)?;
         le_write_u16(config_space, SUB_CLASS_CODE as usize, CLASS_CODE_PCI_BRIDGE)?;
@@ -337,35 +354,38 @@ impl PciDevOps for RootPort {
         init_multifunction(
             self.multifunction,
             config_space,
-            self.devfn,
-            self.parent_bus.clone(),
+            self.base.devfn,
+            self.base.parent_bus.clone(),
         )?;
 
         #[cfg(target_arch = "aarch64")]
-        self.config.set_interrupt_pin();
+        self.base.config.set_interrupt_pin();
 
-        self.config
-            .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
+        self.base.config.add_pcie_cap(
+            self.base.devfn,
+            self.port_num,
+            PcieDevType::RootPort as u8,
+        )?;
 
-        self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
+        self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
         init_msix(
             0,
             1,
-            &mut self.config,
+            &mut self.base.config,
             self.dev_id.clone(),
-            &self.name,
+            &self.base.name,
             None,
             None,
         )?;
 
         init_intx(
-            self.name.clone(),
-            &mut self.config,
-            self.parent_bus.clone(),
-            self.devfn,
+            self.base.name.clone(),
+            &mut self.base.config,
+            self.base.parent_bus.clone(),
+            self.base.devfn,
         )?;
 
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
         #[cfg(target_arch = "x86_64")]
         locked_parent_bus
@@ -377,7 +397,7 @@ impl PciDevOps for RootPort {
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .with_context(|| "Failed to register subregion in memory space.")?;
 
-        let name = self.name.clone();
+        let name = self.base.name.clone();
         let root_port = Arc::new(Mutex::new(self));
         #[allow(unused_mut)]
         let mut locked_root_port = root_port.lock().unwrap();
@@ -385,18 +405,18 @@ impl PciDevOps for RootPort {
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
         locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
-        let pci_device = locked_parent_bus.devices.get(&locked_root_port.devfn);
+        let pci_device = locked_parent_bus.devices.get(&locked_root_port.base.devfn);
         if pci_device.is_none() {
             locked_parent_bus
                 .child_buses
                 .push(locked_root_port.sec_bus.clone());
             locked_parent_bus
                 .devices
-                .insert(locked_root_port.devfn, root_port.clone());
+                .insert(locked_root_port.base.devfn, root_port.clone());
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
-                locked_root_port.devfn,
+                locked_root_port.base.devfn,
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
@@ -408,7 +428,7 @@ impl PciDevOps for RootPort {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.config.read(offset, data);
+        self.base.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
@@ -422,15 +442,21 @@ impl PciDevOps for RootPort {
             return;
         }
 
-        let cap_offset = self.config.pci_express_cap_offset;
-        let old_ctl =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
-        let old_status =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let cap_offset = self.base.config.pci_express_cap_offset;
+        let old_ctl = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTCTL) as usize,
+        )
+        .unwrap();
+        let old_status = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+        )
+        .unwrap();
 
-        let old_br_ctl = le_read_u16(&self.config.config, BRIDGE_CONTROL.into()).unwrap();
+        let old_br_ctl = le_read_u16(&self.base.config.config, BRIDGE_CONTROL.into()).unwrap();
 
-        self.config.write(
+        self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
@@ -439,12 +465,12 @@ impl PciDevOps for RootPort {
             Some(&self.mem_region),
         );
 
-        let new_br_ctl = le_read_u16(&self.config.config, BRIDGE_CONTROL.into()).unwrap();
+        let new_br_ctl = le_read_u16(&self.base.config.config, BRIDGE_CONTROL.into()).unwrap();
         if (!old_br_ctl & new_br_ctl & BRIDGE_CTL_SEC_BUS_RESET) != 0 {
             if let Err(e) = self.reset(true) {
                 error!(
                     "Failed to reset child devices under root port {}: {:?}",
-                    self.name, e
+                    self.base.name, e
                 )
             }
         }
@@ -456,15 +482,18 @@ impl PciDevOps for RootPort {
             self.register_region();
         }
 
-        let mut status =
-            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let mut status = le_read_u16(
+            &self.base.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+        )
+        .unwrap();
         let exp_slot_status = (cap_offset + PCI_EXP_SLTSTA) as usize;
         if ranges_overlap(offset, size, exp_slot_status, 2) {
             let new_status = le_read_u16(data, 0).unwrap();
             if new_status & !old_status & PCI_EXP_SLOTSTA_EVENTS != 0 {
                 status = (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
                 if let Err(e) = le_write_u16(
-                    &mut self.config.config,
+                    &mut self.base.config.config,
                     (cap_offset + PCI_EXP_SLTSTA) as usize,
                     status,
                 ) {
@@ -477,11 +506,11 @@ impl PciDevOps for RootPort {
     }
 
     fn name(&self) -> String {
-        self.name.clone()
+        self.base.name.clone()
     }
 
     fn devfn(&self) -> Option<u8> {
-        Some(self.devfn)
+        Some(self.base.devfn)
     }
 
     /// Only set slot status to on, and no other device reset actions are implemented.
@@ -493,37 +522,37 @@ impl PciDevOps for RootPort {
                 .reset()
                 .with_context(|| "Fail to reset sec_bus in root port")?;
         } else {
-            let cap_offset = self.config.pci_express_cap_offset;
+            let cap_offset = self.base.config.pci_express_cap_offset;
             le_write_u16(
-                &mut self.config.config,
+                &mut self.base.config.config,
                 (cap_offset + PCI_EXP_SLTSTA) as usize,
                 PCI_EXP_SLTSTA_PDS,
             )?;
             le_write_u16(
-                &mut self.config.config,
+                &mut self.base.config.config,
                 (cap_offset + PCI_EXP_SLTCTL) as usize,
                 !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
             )?;
             le_write_u16(
-                &mut self.config.config,
+                &mut self.base.config.config,
                 (cap_offset + PCI_EXP_LNKSTA) as usize,
                 PCI_EXP_LNKSTA_DLLLA,
             )?;
         }
 
-        self.config.reset_bridge_regs()?;
-        self.config.reset()
+        self.base.config.reset_bridge_regs()?;
+        self.base.config.reset()
     }
 
     fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let parent_dev_path = self.get_parent_dev_path(parent_bus);
-        let dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/pci-bridge@");
+        let dev_path = self.populate_dev_path(parent_dev_path, self.base.devfn, "/pci-bridge@");
         Some(dev_path)
     }
 
     fn get_intx_state(&self) -> Option<Arc<Mutex<PciIntxState>>> {
-        let intx = self.config.intx.as_ref().unwrap();
+        let intx = self.base.config.intx.as_ref().unwrap();
         if intx.lock().unwrap().intx_state.is_some() {
             let intx_state = intx.lock().unwrap().intx_state.as_ref().unwrap().clone();
             return Some(intx_state);
@@ -545,14 +574,14 @@ impl HotplugOps for RootPort {
             return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
         }
 
-        let offset = self.config.pci_express_cap_offset;
+        let offset = self.base.config.pci_express_cap_offset;
         le_write_set_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
         )?;
         le_write_set_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (offset + PCI_EXP_LNKSTA) as usize,
             PCI_EXP_LNKSTA_CLS_2_5GB | PCI_EXP_LNKSTA_NLW_X1 | PCI_EXP_LNKSTA_DLLLA,
         )?;
@@ -562,9 +591,9 @@ impl HotplugOps for RootPort {
     }
 
     fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-        let pcie_cap_offset = self.config.pci_express_cap_offset;
+        let pcie_cap_offset = self.base.config.pci_express_cap_offset;
         let sltctl = le_read_u16(
-            &self.config.config,
+            &self.base.config.config,
             (pcie_cap_offset + PCI_EXP_SLTCTL) as usize,
         )
         .unwrap();
@@ -582,9 +611,9 @@ impl HotplugOps for RootPort {
             return self.unplug(dev);
         }
 
-        let offset = self.config.pci_express_cap_offset;
+        let offset = self.base.config.pci_express_cap_offset;
         le_write_clear_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (offset + PCI_EXP_LNKSTA) as usize,
             PCI_EXP_LNKSTA_DLLLA,
         )?;
@@ -594,7 +623,7 @@ impl HotplugOps for RootPort {
             slot_status |= PCI_EXP_HP_EV_PDC;
         }
         le_write_set_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
             slot_status,
         )?;
@@ -607,7 +636,7 @@ impl HotplugOps for RootPort {
         }
 
         le_write_set_value_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
             slot_status | PCI_EXP_HP_EV_ABP,
         )?;
@@ -632,14 +661,14 @@ impl StateTransfer for RootPort {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = RootPortState::default();
 
-        for idx in 0..self.config.config.len() {
-            state.config_space[idx] = self.config.config[idx];
-            state.write_mask[idx] = self.config.write_mask[idx];
-            state.write_clear_mask[idx] = self.config.write_clear_mask[idx];
+        for idx in 0..self.base.config.config.len() {
+            state.config_space[idx] = self.base.config.config[idx];
+            state.write_mask[idx] = self.base.config.write_mask[idx];
+            state.write_clear_mask[idx] = self.base.config.write_clear_mask[idx];
         }
-        state.last_cap_end = self.config.last_cap_end;
-        state.last_ext_cap_end = self.config.last_ext_cap_end;
-        state.last_ext_cap_offset = self.config.last_ext_cap_offset;
+        state.last_cap_end = self.base.config.last_cap_end;
+        state.last_ext_cap_end = self.base.config.last_ext_cap_end;
+        state.last_ext_cap_offset = self.base.config.last_ext_cap_offset;
 
         Ok(state.as_bytes().to_vec())
     }
@@ -648,13 +677,13 @@ impl StateTransfer for RootPort {
         let root_port_state = *RootPortState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
-        let length = self.config.config.len();
-        self.config.config = root_port_state.config_space[..length].to_vec();
-        self.config.write_mask = root_port_state.write_mask[..length].to_vec();
-        self.config.write_clear_mask = root_port_state.write_clear_mask[..length].to_vec();
-        self.config.last_cap_end = root_port_state.last_cap_end;
-        self.config.last_ext_cap_end = root_port_state.last_ext_cap_end;
-        self.config.last_ext_cap_offset = root_port_state.last_ext_cap_offset;
+        let length = self.base.config.config.len();
+        self.base.config.config = root_port_state.config_space[..length].to_vec();
+        self.base.config.write_mask = root_port_state.write_mask[..length].to_vec();
+        self.base.config.write_clear_mask = root_port_state.write_clear_mask[..length].to_vec();
+        self.base.config.last_cap_end = root_port_state.last_cap_end;
+        self.base.config.last_ext_cap_end = root_port_state.last_ext_cap_end;
+        self.base.config.last_ext_cap_offset = root_port_state.last_ext_cap_offset;
 
         Ok(())
     }

@@ -20,7 +20,7 @@ use pci::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
-    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps, Result as PciResult,
+    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 
 use super::VENDOR_ID_INTEL;
@@ -41,8 +41,7 @@ const PCIEXBAR_RESERVED_MASK: u64 = 0x3ff_fff8;
 
 /// Memory controller hub (Device 0:Function 0)
 pub struct Mch {
-    config: PciConfig,
-    parent_bus: Weak<Mutex<PciBus>>,
+    base: PciDevBase,
     mmconfig_region: Option<Region>,
     mmconfig_ops: RegionOps,
 }
@@ -54,15 +53,19 @@ impl Mch {
         mmconfig_ops: RegionOps,
     ) -> Self {
         Self {
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus,
+            base: PciDevBase {
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 0,
+                name: "Memory Controller Hub".to_string(),
+                parent_bus,
+            },
             mmconfig_region: Some(mmconfig_region),
             mmconfig_ops,
         }
     }
 
     fn update_pciexbar_mapping(&mut self) -> Result<()> {
-        let pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize)?;
+        let pciexbar: u64 = le_read_u64(&self.base.config.config, PCIEXBAR as usize)?;
         let enable = pciexbar & PCIEXBAR_ENABLE_MASK;
         let length: u64;
         let mut addr_mask: u64 = PCIEXBAR_ADDR_MASK;
@@ -80,7 +83,8 @@ impl Mch {
         }
 
         if let Some(region) = self.mmconfig_region.as_ref() {
-            self.parent_bus
+            self.base
+                .parent_bus
                 .upgrade()
                 .unwrap()
                 .lock()
@@ -92,7 +96,8 @@ impl Mch {
         if enable == 0x1 {
             let region = Region::init_io_region(length, self.mmconfig_ops.clone(), "PcieXBar");
             let base_addr: u64 = pciexbar & addr_mask;
-            self.parent_bus
+            self.base
+                .parent_bus
                 .upgrade()
                 .unwrap()
                 .lock()
@@ -104,7 +109,7 @@ impl Mch {
     }
 
     fn check_pciexbar_update(&self, old_pciexbar: u64) -> bool {
-        let cur_pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize).unwrap();
+        let cur_pciexbar: u64 = le_read_u64(&self.base.config.config, PCIEXBAR as usize).unwrap();
 
         if (cur_pciexbar & !PCIEXBAR_RESERVED_MASK) == (old_pciexbar & !PCIEXBAR_RESERVED_MASK) {
             return false;
@@ -115,30 +120,34 @@ impl Mch {
 
 impl PciDevOps for Mch {
     fn init_write_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_mask()
+        self.base.config.init_common_write_mask()
     }
 
     fn init_write_clear_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_clear_mask()
+        self.base.config.init_common_write_clear_mask()
     }
 
     fn realize(mut self) -> PciResult<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        le_write_u16(&mut self.config.config, VENDOR_ID as usize, VENDOR_ID_INTEL)?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
+            VENDOR_ID as usize,
+            VENDOR_ID_INTEL,
+        )?;
+        le_write_u16(
+            &mut self.base.config.config,
             DEVICE_ID as usize,
             DEVICE_ID_INTEL_Q35_MCH,
         )?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             SUB_CLASS_CODE as usize,
             CLASS_CODE_HOST_BRIDGE,
         )?;
 
-        let parent_bus = self.parent_bus.clone();
+        let parent_bus = self.base.parent_bus.clone();
         parent_bus
             .upgrade()
             .unwrap()
@@ -150,12 +159,12 @@ impl PciDevOps for Mch {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.config.read(offset, data);
+        self.base.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let old_pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize).unwrap();
-        self.config.write(offset, data, 0, None, None);
+        let old_pciexbar: u64 = le_read_u64(&self.base.config.config, PCIEXBAR as usize).unwrap();
+        self.base.config.write(offset, data, 0, None, None);
 
         if ranges_overlap(offset, data.len(), PCIEXBAR as usize, 8)
             && self.check_pciexbar_update(old_pciexbar)

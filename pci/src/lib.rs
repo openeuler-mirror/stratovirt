@@ -127,6 +127,18 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
+#[derive(Clone)]
+pub struct PciDevBase {
+    /// Pci config space.
+    pub config: PciConfig,
+    /// Devfn.
+    pub devfn: u8,
+    /// Name of this device.
+    pub name: String,
+    /// Primary Bus.
+    pub parent_bus: Weak<Mutex<PciBus>>,
+}
+
 pub trait PciDevOps: Send + AsAny {
     /// Init writable bit mask.
     fn init_write_mask(&mut self) -> Result<()>;
@@ -330,6 +342,8 @@ pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size:
 
 #[cfg(test)]
 mod tests {
+    use address_space::{AddressSpace, Region};
+
     use super::*;
 
     #[test]
@@ -384,7 +398,7 @@ mod tests {
     #[test]
     fn set_dev_id() {
         struct PciDev {
-            name: String,
+            base: PciDevBase,
         }
 
         impl PciDevOps for PciDev {
@@ -401,7 +415,7 @@ mod tests {
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
 
             fn name(&self) -> String {
-                self.name.clone()
+                self.base.name.clone()
             }
 
             fn realize(self) -> Result<()> {
@@ -409,8 +423,25 @@ mod tests {
             }
         }
 
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
+        let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16, "parent_bus"),
+            sys_mem.root().clone(),
+        )));
+
         let dev = PciDev {
-            name: "PCI device".to_string(),
+            base: PciDevBase {
+                config: PciConfig::new(1, 1),
+                devfn: 0,
+                name: "PCI device".to_string(),
+                parent_bus: Arc::downgrade(&parent_bus),
+            },
         };
         assert_eq!(dev.set_dev_id(1, 2), 258);
     }

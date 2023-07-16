@@ -17,35 +17,36 @@ use pci::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
-    le_write_u16, PciBus, PciDevOps, Result as PciResult,
+    le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
 
 /// PciHost root (Device 0:Function 0).
 pub struct PciHostRoot {
-    /// Pci config space.
-    config: PciConfig,
-    /// Primary Bus.
-    parent_bus: Weak<Mutex<PciBus>>,
+    base: PciDevBase,
 }
 
 impl PciHostRoot {
     pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
         Self {
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus,
+            base: PciDevBase {
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                parent_bus,
+                name: "PCI Host Root".to_string(),
+                devfn: 0,
+            },
         }
     }
 }
 
 impl PciDevOps for PciHostRoot {
     fn init_write_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_mask()
+        self.base.config.init_common_write_mask()
     }
 
     fn init_write_clear_mask(&mut self) -> PciResult<()> {
-        self.config.init_common_write_clear_mask()
+        self.base.config.init_common_write_clear_mask()
     }
 
     fn realize(mut self) -> PciResult<()> {
@@ -53,23 +54,23 @@ impl PciDevOps for PciHostRoot {
         self.init_write_clear_mask()?;
 
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             VENDOR_ID as usize,
             PCI_VENDOR_ID_REDHAT,
         )?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             DEVICE_ID as usize,
             DEVICE_ID_PCIE_HOST,
         )?;
         le_write_u16(
-            &mut self.config.config,
+            &mut self.base.config.config,
             SUB_CLASS_CODE as usize,
             CLASS_CODE_HOST_BRIDGE,
         )?;
-        le_write_u16(&mut self.config.config, REVISION_ID, 0)?;
+        le_write_u16(&mut self.base.config.config, REVISION_ID, 0)?;
 
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         parent_bus
             .lock()
             .unwrap()
@@ -79,14 +80,14 @@ impl PciDevOps for PciHostRoot {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.config.read(offset, data);
+        self.base.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        self.config.write(offset, data, 0, None);
+        self.base.config.write(offset, data, 0, None);
     }
 
     fn name(&self) -> String {
-        "PCI Host Root".to_string()
+        self.base.name.clone()
     }
 }
