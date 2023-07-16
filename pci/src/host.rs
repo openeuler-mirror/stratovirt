@@ -26,7 +26,7 @@ use acpi::{AmlIoDecode, AmlIoResource};
 use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use anyhow::Context;
-use sysbus::SysBusDevOps;
+use sysbus::{SysBusDevBase, SysBusDevOps};
 
 #[cfg(target_arch = "aarch64")]
 use crate::PCI_INTR_BASE;
@@ -52,6 +52,7 @@ const ECAM_OFFSET_MASK: u64 = 0xfff;
 
 #[derive(Clone)]
 pub struct PciHost {
+    _base: SysBusDevBase,
     pub root_bus: Arc<Mutex<PciBus>>,
     #[cfg(target_arch = "x86_64")]
     config_addr: u32,
@@ -95,6 +96,7 @@ impl PciHost {
             mem_region,
         );
         PciHost {
+            _base: SysBusDevBase::default(),
             root_bus: Arc::new(Mutex::new(root_bus)),
             #[cfg(target_arch = "x86_64")]
             config_addr: 0,

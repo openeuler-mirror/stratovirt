@@ -31,7 +31,7 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_data_u32;
@@ -118,12 +118,9 @@ impl PL011State {
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct PL011 {
+    base: SysBusDevBase,
     /// Device state.
     state: PL011State,
-    /// Interrupt event file descriptor.
-    interrupt_evt: EventFd,
-    /// System Resource of device.
-    res: SysRes,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
 }
@@ -132,9 +129,13 @@ impl PL011 {
     /// Create a new `PL011` instance with default parameters.
     pub fn new(cfg: SerialConfig) -> Result<Self> {
         Ok(PL011 {
+            base: SysBusDevBase {
+                dev_type: SysBusDevType::PL011,
+                res: SysRes::default(),
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+            },
+            base: SysBusDevBase::new(SysBusDevType::PL011),
             state: PL011State::new(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK)?,
-            res: SysRes::default(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         })
     }
@@ -384,12 +385,12 @@ impl SysBusDevOps for PL011 {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(&self.interrupt_evt)
+    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
+        self.base.interrupt_evt.clone()
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn get_type(&self) -> SysBusDevType {
@@ -425,8 +426,8 @@ impl AmlBuilder for PL011 {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlMemory32Fixed::new(
             AmlReadAndWrite::ReadWrite,
-            self.res.region_base as u32,
-            self.res.region_size as u32,
+            self.base.res.region_base as u32,
+            self.base.res.region_size as u32,
         ));
         // SPI start at interrupt number 32 on aarch64 platform.
         let irq_base = INTERRUPT_PPIS_COUNT + INTERRUPT_SGIS_COUNT;
@@ -435,7 +436,7 @@ impl AmlBuilder for PL011 {
             AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![self.res.irq as u32 + irq_base],
+            vec![self.base.res.irq as u32 + irq_base],
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
