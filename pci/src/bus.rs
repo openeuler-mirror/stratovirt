@@ -163,7 +163,7 @@ impl PciBus {
         // Device is attached in pci_bus.
         let locked_bus = pci_bus.lock().unwrap();
         for dev in locked_bus.devices.values() {
-            if dev.lock().unwrap().name() == name {
+            if dev.lock().unwrap().pci_base().name == name {
                 return Some((pci_bus.clone(), dev.clone()));
             }
         }
@@ -184,19 +184,18 @@ impl PciBus {
     /// * `dev` - Device attached to the bus.
     pub fn detach_device(bus: &Arc<Mutex<Self>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
         let mut dev_locked = dev.lock().unwrap();
-        dev_locked
-            .unrealize()
-            .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+        dev_locked.unrealize().with_context(|| {
+            format!("Failed to unrealize device {}", dev_locked.pci_base().name)
+        })?;
 
-        let devfn = dev_locked
-            .devfn()
-            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
-
+        let devfn = dev_locked.devfn().with_context(|| {
+            format!("Failed to get devfn: device {}", dev_locked.pci_base().name)
+        })?;
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
             locked_bus.devices.remove(&devfn);
         } else {
-            bail!("Device {} not found in the bus", dev_locked.name());
+            bail!("Device {} not found in the bus", dev_locked.pci_base().name);
         }
 
         Ok(())
@@ -264,12 +263,12 @@ mod tests {
     }
 
     impl PciDevOps for PciDevice {
-        fn init_write_mask(&mut self) -> Result<()> {
-            Ok(())
+        fn pci_base(&self) -> &PciDevBase {
+            &self.base
         }
 
-        fn init_write_clear_mask(&mut self) -> Result<()> {
-            Ok(())
+        fn pci_base_mut(&mut self) -> &mut PciDevBase {
+            &mut self.base
         }
 
         fn read_config(&mut self, offset: usize, data: &mut [u8]) {
@@ -288,14 +287,10 @@ mod tests {
             );
         }
 
-        fn name(&self) -> String {
-            self.base.name.clone()
-        }
-
         fn realize(mut self) -> Result<()> {
             let devfn = self.base.devfn;
-            self.init_write_mask()?;
-            self.init_write_clear_mask()?;
+            self.init_write_mask(false)?;
+            self.init_write_clear_mask(false)?;
 
             let dev = Arc::new(Mutex::new(self));
             dev.lock()
@@ -382,13 +377,13 @@ mod tests {
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name, "pcie.0");
-        assert_eq!(dev.lock().unwrap().name(), "test1");
+        assert_eq!(dev.lock().unwrap().pci_base().name, "test1");
 
         let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test2");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name, "pcie.1");
-        assert_eq!(dev.lock().unwrap().name(), "test2");
+        assert_eq!(dev.lock().unwrap().pci_base().name, "test2");
     }
 
     #[test]

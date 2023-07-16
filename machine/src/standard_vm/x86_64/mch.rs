@@ -119,17 +119,17 @@ impl Mch {
 }
 
 impl PciDevOps for Mch {
-    fn init_write_mask(&mut self) -> PciResult<()> {
-        self.base.config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> PciResult<()> {
-        self.base.config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     fn realize(mut self) -> PciResult<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
 
         le_write_u16(
             &mut self.base.config.config,
@@ -173,9 +173,5 @@ impl PciDevOps for Mch {
                 error!("{:?}", e);
             }
         }
-    }
-
-    fn name(&self) -> String {
-        "Memory Controller Hub".to_string()
     }
 }

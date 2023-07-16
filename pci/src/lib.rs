@@ -140,11 +140,31 @@ pub struct PciDevBase {
 }
 
 pub trait PciDevOps: Send + AsAny {
+    /// Get base property of pci device.
+    fn pci_base(&self) -> &PciDevBase;
+
+    /// Get mutable base property of pci device.
+    fn pci_base_mut(&mut self) -> &mut PciDevBase;
+
     /// Init writable bit mask.
-    fn init_write_mask(&mut self) -> Result<()>;
+    fn init_write_mask(&mut self, is_bridge: bool) -> Result<()> {
+        self.pci_base_mut().config.init_common_write_mask()?;
+        if is_bridge {
+            self.pci_base_mut().config.init_bridge_write_mask()?;
+        }
+
+        Ok(())
+    }
 
     /// Init write-and-clear bit mask.
-    fn init_write_clear_mask(&mut self) -> Result<()>;
+    fn init_write_clear_mask(&mut self, is_bridge: bool) -> Result<()> {
+        self.pci_base_mut().config.init_common_write_clear_mask()?;
+        if is_bridge {
+            self.pci_base_mut().config.init_bridge_write_clear_mask()?;
+        }
+
+        Ok(())
+    }
 
     /// Realize PCI/PCIe device.
     fn realize(self) -> Result<()>;
@@ -184,9 +204,6 @@ pub trait PciDevOps: Send + AsAny {
         let bus_shift: u16 = 8;
         ((bus_num as u16) << bus_shift) | (devfn as u16)
     }
-
-    /// Get device name.
-    fn name(&self) -> String;
 
     /// Reset device
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
@@ -402,21 +419,17 @@ mod tests {
         }
 
         impl PciDevOps for PciDev {
-            fn init_write_mask(&mut self) -> Result<()> {
-                Ok(())
+            fn pci_base(&self) -> &PciDevBase {
+                &self.base
             }
 
-            fn init_write_clear_mask(&mut self) -> Result<()> {
-                Ok(())
+            fn pci_base_mut(&mut self) -> &mut PciDevBase {
+                &mut self.base
             }
 
             fn read_config(&mut self, _offset: usize, _data: &mut [u8]) {}
 
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
-
-            fn name(&self) -> String {
-                self.base.name.clone()
-            }
 
             fn realize(self) -> Result<()> {
                 Ok(())

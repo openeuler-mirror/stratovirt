@@ -208,16 +208,16 @@ impl RootPort {
             let mut locked_dev = dev.lock().unwrap();
             if let Err(e) = locked_dev.unrealize() {
                 error!("{}", format!("{:?}", e));
-                error!("Failed to unrealize device {}.", locked_dev.name());
+                error!("Failed to unrealize device {}.", locked_dev.pci_base().name);
             }
             info!(
                 "Device {} unplug from {}",
-                locked_dev.name(),
+                locked_dev.pci_base().name,
                 self.base.name
             );
 
             // Send QMP event for successful hot unplugging.
-            send_device_deleted_msg(&locked_dev.name());
+            send_device_deleted_msg(&locked_dev.pci_base().name);
         }
         self.sec_bus.lock().unwrap().devices.clear();
     }
@@ -329,19 +329,17 @@ impl RootPort {
 }
 
 impl PciDevOps for RootPort {
-    fn init_write_mask(&mut self) -> Result<()> {
-        self.base.config.init_common_write_mask()?;
-        self.base.config.init_bridge_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> Result<()> {
-        self.base.config.init_common_write_clear_mask()?;
-        self.base.config.init_bridge_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     fn realize(mut self) -> Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(true)?;
+        self.init_write_clear_mask(true)?;
 
         let config_space = &mut self.base.config.config;
         le_write_u16(config_space, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
@@ -417,7 +415,7 @@ impl PciDevOps for RootPort {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 locked_root_port.base.devfn,
-                pci_device.unwrap().lock().unwrap().name()
+                pci_device.unwrap().lock().unwrap().pci_base().name
             );
         }
         // Need to drop locked_root_port in order to register root_port instance.
@@ -503,10 +501,6 @@ impl PciDevOps for RootPort {
             self.hotplug_event_clear();
         }
         self.do_unplug(offset, data, old_ctl, old_status);
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 
     fn devfn(&self) -> Option<u8> {

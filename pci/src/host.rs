@@ -532,7 +532,15 @@ pub mod tests {
     }
 
     impl PciDevOps for PciDevice {
-        fn init_write_mask(&mut self) -> Result<()> {
+        fn pci_base(&self) -> &PciDevBase {
+            &self.base
+        }
+
+        fn pci_base_mut(&mut self) -> &mut PciDevBase {
+            &mut self.base
+        }
+
+        fn init_write_mask(&mut self, _is_bridge: bool) -> Result<()> {
             let mut offset = 0_usize;
             while offset < self.base.config.config.len() {
                 LittleEndian::write_u32(
@@ -544,7 +552,7 @@ pub mod tests {
             Ok(())
         }
 
-        fn init_write_clear_mask(&mut self) -> Result<()> {
+        fn init_write_clear_mask(&mut self, _is_bridge: bool) -> Result<()> {
             Ok(())
         }
 
@@ -564,14 +572,10 @@ pub mod tests {
             );
         }
 
-        fn name(&self) -> String {
-            "PCI device".to_string()
-        }
-
         fn realize(mut self) -> Result<()> {
             let devfn = self.base.devfn;
-            self.init_write_mask()?;
-            self.init_write_clear_mask()?;
+            self.init_write_mask(false)?;
+            self.init_write_clear_mask(false)?;
 
             let dev = Arc::new(Mutex::new(self));
             dev.lock()

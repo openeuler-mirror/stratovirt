@@ -1082,12 +1082,12 @@ pub trait MachineOps {
             .with_context(|| format!("Parent bridge does not exist, dev id {}", dev_id))?;
         let dev = parent_bridge.upgrade().unwrap();
         let locked_dev = dev.lock().unwrap();
-        let name = locked_dev.name();
+        let name = locked_dev.pci_base().name.clone();
         drop(locked_dev);
         let mut devfn = None;
         let locked_bus = locked_pci_host.root_bus.lock().unwrap();
         for (id, dev) in &locked_bus.devices {
-            if dev.lock().unwrap().name() == name {
+            if dev.lock().unwrap().pci_base().name == name {
                 devfn = Some(*id);
                 break;
             }

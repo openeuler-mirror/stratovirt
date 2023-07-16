@@ -196,17 +196,17 @@ impl XhciPciDevice {
 }
 
 impl PciDevOps for XhciPciDevice {
-    fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.base.config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
     fn realize(mut self) -> pci::Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
         le_write_u16(
             &mut self.base.config.config,
             VENDOR_ID as usize,
@@ -296,7 +296,7 @@ impl PciDevOps for XhciPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().name()
+                pci_device.unwrap().lock().unwrap().pci_base().name
             );
         }
         Ok(())
@@ -327,10 +327,6 @@ impl PciDevOps for XhciPciDevice {
             Some(&locked_parent_bus.io_region),
             Some(&locked_parent_bus.mem_region),
         );
-    }
-
-    fn name(&self) -> String {
-        self.base.name.clone()
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
