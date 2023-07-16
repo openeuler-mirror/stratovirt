@@ -245,6 +245,14 @@ impl Ramfb {
 }
 
 impl SysBusDevOps for Ramfb {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be read!");
         false
@@ -253,10 +261,6 @@ impl SysBusDevOps for Ramfb {
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be written!");
         false
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Ramfb
     }
 
     fn reset(&mut self) -> SysBusResult<()> {

@@ -223,7 +223,6 @@ impl VirtioMmioDevice {
 
     fn assign_interrupt_cb(&mut self) {
         let interrupt_evt = self.base.interrupt_evt.clone();
-
         let locked_dev = self.device.lock().unwrap();
         let virtio_base = locked_dev.virtio_base();
         let device_status = virtio_base.device_status.clone();
@@ -371,6 +370,14 @@ impl VirtioMmioDevice {
 }
 
 impl SysBusDevOps for VirtioMmioDevice {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
@@ -498,16 +505,8 @@ impl SysBusDevOps for VirtioMmioDevice {
         ret
     }
 
-    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        self.base.interrupt_evt.clone()
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::VirtioMmio
     }
 }
 

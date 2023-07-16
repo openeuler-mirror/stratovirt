@@ -52,7 +52,7 @@ const ECAM_OFFSET_MASK: u64 = 0xfff;
 
 #[derive(Clone)]
 pub struct PciHost {
-    _base: SysBusDevBase,
+    base: SysBusDevBase,
     pub root_bus: Arc<Mutex<PciBus>>,
     #[cfg(target_arch = "x86_64")]
     config_addr: u32,
@@ -96,7 +96,7 @@ impl PciHost {
             mem_region,
         );
         PciHost {
-            _base: SysBusDevBase::default(),
+            base: SysBusDevBase::default(),
             root_bus: Arc::new(Mutex::new(root_bus)),
             #[cfg(target_arch = "x86_64")]
             config_addr: 0,
@@ -231,6 +231,14 @@ impl PciHost {
 }
 
 impl SysBusDevOps for PciHost {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let bus_num = ((offset as u32 >> ECAM_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
         let devfn = ((offset as u32 >> ECAM_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;

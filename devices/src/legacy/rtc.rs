@@ -356,6 +356,14 @@ impl RTC {
 }
 
 impl SysBusDevOps for RTC {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         if offset == 0 {
             debug!(
@@ -378,16 +386,8 @@ impl SysBusDevOps for RTC {
         }
     }
 
-    fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        self.base.interrupt_evt.clone()
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Rtc
     }
 
     fn reset(&mut self) -> sysbus::Result<()> {

@@ -468,7 +468,7 @@ pub trait MachineOps {
             // Micro_vm.
             for dev in self.get_sys_bus().devices.iter() {
                 let locked_busdev = dev.lock().unwrap();
-                if locked_busdev.get_type() == SysBusDevType::VirtioMmio {
+                if locked_busdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
                     let virtio_mmio_dev = locked_busdev
                         .as_any()
                         .downcast_ref::<VirtioMmioDevice>()

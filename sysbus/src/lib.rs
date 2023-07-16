@@ -121,7 +121,7 @@ impl SysBus {
         let locked_dev = dev.lock().unwrap();
 
         region.set_ioeventfds(&locked_dev.ioeventfds());
-        match locked_dev.get_type() {
+        match locked_dev.sysbusdev_base().dev_type {
             SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
                 #[cfg(target_arch = "x86_64")]
                 self.sys_io
@@ -201,7 +201,7 @@ impl Default for SysRes {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Eq, PartialEq, Clone, Copy)]
 pub enum SysBusDevType {
     Serial,
     Rtc,
@@ -242,10 +242,36 @@ impl SysBusDevBase {
             interrupt_evt: None,
         }
     }
+
+    fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
+        let irq = sysbus.min_free_irq;
+        if irq > sysbus.free_irqs.1 {
+            bail!("IRQ number exhausted.");
+        }
+
+        match &self.interrupt_evt {
+            None => Ok(-1_i32),
+            Some(evt) => {
+                KVM_FDS.load().register_irqfd(evt, irq as u32)?;
+                sysbus.min_free_irq = irq + 1;
+                Ok(irq)
+            }
+        }
+    }
+
+    pub fn set_sys(&mut self, irq: i32, region_base: u64, region_size: u64) {
+        self.res.irq = irq;
+        self.res.region_base = region_base;
+        self.res.region_size = region_size;
+    }
 }
 
 /// Operations for sysbus devices.
 pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
+    fn sysbusdev_base(&self) -> &SysBusDevBase;
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase;
+
     /// Read function of device.
     ///
     /// # Arguments
@@ -269,23 +295,11 @@ pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
     }
 
     fn interrupt_evt(&self) -> Option<Arc<EventFd>> {
-        None
+        self.sysbusdev_base().interrupt_evt.clone()
     }
 
     fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
-        let irq = sysbus.min_free_irq;
-        if irq > sysbus.free_irqs.1 {
-            bail!("IRQ number exhausted.");
-        }
-
-        match self.interrupt_evt() {
-            None => Ok(-1_i32),
-            Some(evt) => {
-                KVM_FDS.load().register_irqfd(&evt, irq as u32)?;
-                sysbus.min_free_irq = irq + 1;
-                Ok(irq)
-            }
-        }
+        self.sysbusdev_base_mut().set_irq(sysbus)
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
@@ -299,17 +313,11 @@ pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
         region_size: u64,
     ) -> Result<()> {
         let irq = self.set_irq(sysbus)?;
-        if let Some(res) = self.get_sys_resource() {
-            res.region_base = region_base;
-            res.region_size = region_size;
-            res.irq = irq;
-            return Ok(());
-        }
-        bail!("Failed to get sys resource.");
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Others
+        self.get_sys_resource()
+            .with_context(|| "Failed to get sys resource.")?;
+        self.sysbusdev_base_mut()
+            .set_sys(irq, region_base, region_size);
+        Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {

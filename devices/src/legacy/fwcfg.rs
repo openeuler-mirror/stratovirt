@@ -922,6 +922,14 @@ impl FwCfgOps for FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
     }
@@ -975,11 +983,6 @@ impl SysBusDevOps for FwCfgMem {
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
-    }
-
-    /// Get device type.
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::FwCfg
     }
 
     fn reset(&mut self) -> sysbus::Result<()> {
@@ -1089,6 +1092,14 @@ impl FwCfgOps for FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
     }
@@ -1145,10 +1156,6 @@ impl SysBusDevOps for FwCfgIO {
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::FwCfg
     }
 
     fn reset(&mut self) -> sysbus::Result<()> {

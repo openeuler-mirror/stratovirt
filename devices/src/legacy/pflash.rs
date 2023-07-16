@@ -646,6 +646,14 @@ impl PFlash {
 }
 
 impl SysBusDevOps for PFlash {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let mut index: u64;
         let mut ret: u32 = 0;
@@ -836,10 +844,6 @@ impl SysBusDevOps for PFlash {
         res.region_size = region_size;
         res.irq = 0;
         Ok(())
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Flash
     }
 
     fn reset(&mut self) -> sysbus::Result<()> {
