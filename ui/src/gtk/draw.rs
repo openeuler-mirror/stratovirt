@@ -68,15 +68,15 @@ pub(crate) fn set_callback_for_draw_area(
         }),
     );
     draw_area.connect_key_press_event(
-        glib::clone!(@weak gs => @default-return Inhibit(false), move |_, key_event| {
+        glib::clone!(@weak gs => @default-return Inhibit(true), move |_, key_event| {
             da_key_callback(&gs,key_event, true).unwrap_or_else(|e|error!("Press event: {}", e));
-            Inhibit(false)}
+            Inhibit(true)}
         ),
     );
     draw_area.connect_key_release_event(
-        glib::clone!(@weak gs => @default-return Inhibit(false), move |_, key_event| {
+        glib::clone!(@weak gs => @default-return Inhibit(true), move |_, key_event| {
             da_key_callback(&gs,key_event, false).unwrap_or_else(|e|error!("Key event: {}", e));
-            Inhibit(false)}
+            Inhibit(true)}
         ),
     );
     draw_area.connect_configure_event(
