@@ -521,7 +521,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                         nbytes
                     );
                 }
-                self.free_cluster(offset, 1, discard_type)?;
+                self.free_cluster(offset, 1, false, discard_type)?;
             }
             Qcow2ClusterType::Compressed => {
                 bail!("Compressed is not supported");
@@ -586,10 +586,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         &mut self,
         addr: u64,
         clusters: u64,
+        flush: bool,
         discard_type: &Qcow2DiscardType,
     ) -> Result<()> {
         self.refcount
-            .update_refcount(addr, clusters, -1, true, discard_type)
+            .update_refcount(addr, clusters, -1, flush, discard_type)
     }
 
     fn get_snapshot_by_name(&mut self, name: &String) -> i32 {
@@ -738,6 +739,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.free_cluster(
                 new_snapshot_table_offset,
                 new_snapshots_table_clusters,
+                true,
                 &Qcow2DiscardType::Never,
             )?;
         }
@@ -902,6 +904,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.free_cluster(
                 new_snapshot_table_offset,
                 num_clusters,
+                true,
                 &Qcow2DiscardType::Snapshot,
             )?;
         }
@@ -912,6 +915,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.free_cluster(
                 new_l1_table_offset,
                 l1_table_clusters,
+                true,
                 &Qcow2DiscardType::Snapshot,
             )?;
         }
@@ -1254,6 +1258,9 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
             }
         }
 
+        self.refcount
+            .flush_refcount_block_cache()
+            .unwrap_or_else(|e| error!("Flush refcount block failed: {:?}", e));
         self.table
             .flush_l2_table_cache()
             .unwrap_or_else(|e| error!("Flush l2 table cache failed: {:?}", e));
