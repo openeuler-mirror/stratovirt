@@ -764,6 +764,10 @@ pub struct blockdev_add {
     pub options: Option<String>,
     #[serde(rename = "throttling.iops-total")]
     pub iops: Option<u64>,
+    #[serde(rename = "l2-cache-size")]
+    pub l2_cache_size: Option<String>,
+    #[serde(rename = "refcount-cache-size")]
+    pub refcount_cache_size: Option<String>,
 }
 
 pub type BlockDevAddArgument = blockdev_add;

@@ -13,13 +13,17 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Context, Result};
+use log::info;
 
 use super::ENTRY_BITS;
-use crate::qcow2::{
-    cache::{CacheTable, Qcow2Cache},
-    header::QcowHeader,
-    SyncAioInfo, ENTRY_SIZE, L1_TABLE_OFFSET_MASK, L2_TABLE_OFFSET_MASK, QCOW2_OFFSET_COMPRESSED,
-    QCOW2_OFLAG_ZERO,
+use crate::{
+    qcow2::{
+        cache::{CacheTable, Qcow2Cache},
+        header::QcowHeader,
+        SyncAioInfo, ENTRY_SIZE, L1_TABLE_OFFSET_MASK, L2_TABLE_OFFSET_MASK,
+        QCOW2_OFFSET_COMPRESSED, QCOW2_OFLAG_ZERO,
+    },
+    BlockProperty,
 };
 use util::num_ops::div_round_up;
 
@@ -98,7 +102,7 @@ impl Qcow2Table {
         }
     }
 
-    pub fn init_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn init_table(&mut self, header: &QcowHeader, conf: &BlockProperty) -> Result<()> {
         let max_l2_entries =
             div_round_up(header.size, header.cluster_size()).with_context(|| {
                 format!(
@@ -115,7 +119,12 @@ impl Qcow2Table {
                     header.cluster_size()
                 )
             })?;
-        let cache_size = std::cmp::min(max_l2_cache, MAX_L2_CACHE_SIZE / header.cluster_size());
+        let cache_size = if let Some(l2_cache) = conf.l2_cache_size {
+            l2_cache / header.cluster_size()
+        } else {
+            std::cmp::min(max_l2_cache, MAX_L2_CACHE_SIZE / header.cluster_size())
+        };
+        info!("Driver {} l2 cache size {}", conf.id, cache_size);
         let l2_table_cache: Qcow2Cache = Qcow2Cache::new(cache_size as usize);
         self.cluster_bits = header.cluster_bits as u64;
         self.cluster_size = header.cluster_size();

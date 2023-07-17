@@ -1233,6 +1233,8 @@ impl DeviceInterface for LightMachine {
             discard: false,
             write_zeroes: WriteZeroesState::Off,
             format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);

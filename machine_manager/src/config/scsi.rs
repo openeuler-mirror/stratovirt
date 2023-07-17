@@ -163,6 +163,8 @@ pub struct ScsiDevConfig {
     pub target: u8,
     pub lun: u16,
     pub format: DiskFormat,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 impl Default for ScsiDevConfig {
@@ -180,6 +182,8 @@ impl Default for ScsiDevConfig {
             target: 0,
             lun: 0,
             format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         }
     }
 }
@@ -268,6 +272,8 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     scsi_dev_cfg.direct = drive_arg.direct;
     scsi_dev_cfg.aio_type = drive_arg.aio;
     scsi_dev_cfg.format = drive_arg.format;
+    scsi_dev_cfg.l2_cache_size = drive_arg.l2_cache_size;
+    scsi_dev_cfg.refcount_cache_size = drive_arg.refcount_cache_size;
 
     Ok(scsi_dev_cfg)
 }
