@@ -322,16 +322,10 @@ fn da_draw_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, cr: &cairo::Context) -> 
     }
     let (window_width, window_height) = borrowed_gs.get_window_size()?;
 
-    if scale_mode.borrow().is_full_screen() {
+    if scale_mode.borrow().is_full_screen() || scale_mode.borrow().is_free_scale() {
         borrowed_gs.scale_x = window_width / surface_width;
         borrowed_gs.scale_y = window_height / surface_height;
-    } else if scale_mode.borrow().is_free_scale() {
-        let scale_x = window_width / surface_width;
-        let scale_y = window_height / surface_height;
-        borrowed_gs.scale_x = scale_x.min(scale_y);
-        borrowed_gs.scale_y = scale_x.min(scale_y);
     }
-
     surface_width *= borrowed_gs.scale_x;
     surface_height *= borrowed_gs.scale_y;
 
