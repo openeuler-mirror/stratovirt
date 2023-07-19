@@ -728,7 +728,6 @@ impl UsbHost {
     }
 
     pub fn clear_succ_requests(&mut self) {
-        let mut updated_requests: LinkedList<Arc<Mutex<UsbHostRequest>>> = LinkedList::new();
         let mut locked_request = self.requests.lock().unwrap();
         let mut completed = self.completed.lock().unwrap();
 
@@ -747,6 +746,7 @@ impl UsbHost {
         }
 
         if *completed > COMPLETE_LIMIT {
+            let mut updated_requests: LinkedList<Arc<Mutex<UsbHostRequest>>> = LinkedList::new();
             loop {
                 let request = locked_request.pop_front();
                 if let Some(request) = request {
@@ -758,8 +758,8 @@ impl UsbHost {
                     break;
                 }
             }
+            *locked_request = updated_requests;
         }
-        *locked_request = updated_requests;
         *completed = 0;
     }
 
@@ -1032,6 +1032,7 @@ impl UsbDeviceOps for UsbHost {
             &self.usb_device.data_buf[..device_req.length as usize],
             device_req,
         );
+        self.requests.lock().unwrap().push_back(request.clone());
         fill_transfer_by_type(
             host_transfer,
             self.handle.as_mut(),
