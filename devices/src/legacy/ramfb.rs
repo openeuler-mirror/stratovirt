@@ -287,17 +287,16 @@ fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
                 .unwrap_or_else(|e| error!("Ramfb couldn't release return key: {:?}.", e));
         });
 
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.timer_add(
-                set_press_func,
-                Duration::from_millis(INSTALL_CHECK_INTERVEL_MS),
-            );
-            ctx.timer_add(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
-            ctx.timer_add(
-                release_func,
-                Duration::from_millis(INSTALL_RELEASE_INTERVEL_MS),
-            );
-        }
+        let ctx = EventLoop::get_ctx(None).unwrap();
+        ctx.timer_add(
+            set_press_func,
+            Duration::from_millis(INSTALL_CHECK_INTERVEL_MS),
+        );
+        ctx.timer_add(press_func, Duration::from_millis(INSTALL_PRESS_INTERVEL_MS));
+        ctx.timer_add(
+            release_func,
+            Duration::from_millis(INSTALL_RELEASE_INTERVEL_MS),
+        );
     } else {
         install.store(false, Ordering::Release);
     }
