@@ -96,8 +96,8 @@ impl RootPort {
         multifunction: bool,
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
-        let io_region = Region::init_container_region(1 << 16);
-        let mem_region = Region::init_container_region(u64::max_value());
+        let io_region = Region::init_container_region(1 << 16, "RootPortIo");
+        let mem_region = Region::init_container_region(u64::max_value(), "RootPortMem");
         let sec_bus = Arc::new(Mutex::new(PciBus::new(
             name.clone(),
             #[cfg(target_arch = "x86_64")]
@@ -570,7 +570,7 @@ impl HotplugOps for RootPort {
         .unwrap();
 
         if (sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_BLINK {
-            bail!("Guest is still on the fly of another (un)pluging");
+            bail!("Guest is still on the fly of another (un)plugging");
         }
 
         let devfn = dev

@@ -35,7 +35,7 @@ use std::cmp;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -424,6 +424,8 @@ pub trait VirtioDevice: Send + AsAny {
     fn has_control_queue(&mut self) -> bool {
         false
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool>;
 }
 
 /// The trait for trace descriptions of virtio device interactions
@@ -468,18 +470,17 @@ pub fn report_virtio_error(
 pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;
-    let mut hva;
 
     for iov in iovec {
-        end = cmp::min(start + iov.len as usize, buf.len());
-        hva = mem_space
-            .get_host_address(iov.addr)
-            .with_context(|| "Map iov base failed")?;
-        mem_to_buf(&mut buf[start..end], hva)?;
-        if end >= buf.len() {
-            break;
+        let addr_map = mem_space.get_address_map(iov.addr, iov.len as u64)?;
+        for addr in addr_map.into_iter() {
+            end = cmp::min(start + addr.iov_len as usize, buf.len());
+            mem_to_buf(&mut buf[start..end], addr.iov_base)?;
+            if end >= buf.len() {
+                return Ok(end);
+            }
+            start = end;
         }
-        start = end;
     }
     Ok(end)
 }
@@ -520,16 +521,8 @@ fn gpa_hva_iovec_map(
     let mut hva_iovec = Vec::new();
 
     for elem in gpa_elemiovec.iter() {
-        let hva = mem_space.get_host_address(elem.addr).with_context(|| {
-            format!(
-                "Map iov base {:x?}, iov len {:?} failed",
-                elem.addr, elem.len
-            )
-        })?;
-        hva_iovec.push(Iovec {
-            iov_base: hva,
-            iov_len: u64::from(elem.len),
-        });
+        let mut hva_vec = mem_space.get_address_map(elem.addr, elem.len as u64)?;
+        hva_iovec.append(&mut hva_vec);
         iov_size += elem.len as u64;
     }
 

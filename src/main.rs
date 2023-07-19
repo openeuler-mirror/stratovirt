@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -94,24 +93,8 @@ fn run() -> Result<()> {
         set_test_enabled();
     }
 
-    match cmd_args.value_of("display log") {
-        Some(ref logfile_path) if !logfile_path.is_empty() => {
-            let logfile = std::fs::OpenOptions::new()
-                .read(false)
-                .write(true)
-                .append(true)
-                .create(true)
-                .mode(0o640)
-                .open(logfile_path)
-                .with_context(|| "Failed to open log file")?;
-            logger::init_logger_with_env(Some(Box::new(logfile)))
-                .with_context(|| "Failed to init logger.")?;
-        }
-        _ => {
-            logger::init_logger_with_env(Some(Box::new(std::io::stderr())))
-                .with_context(|| "Failed to init logger.")?;
-        }
-    }
+    let logfile_path = cmd_args.value_of("display log").unwrap_or_default();
+    logger::init_log(logfile_path)?;
 
     std::panic::set_hook(Box::new(|panic_msg| {
         set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");

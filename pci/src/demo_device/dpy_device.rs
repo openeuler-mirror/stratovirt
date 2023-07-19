@@ -150,7 +150,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
         Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor: &mut DisplayMouse) -> Result<()> {
+    fn dpy_cursor_update(&self, cursor: &DisplayMouse) -> Result<()> {
         if DISPLAY.lock().unwrap().is_empty() {
             error!("Demo Display is empty, check initialize");
             return Ok(());

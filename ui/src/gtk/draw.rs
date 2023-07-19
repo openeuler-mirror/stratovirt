@@ -13,6 +13,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Result;
+use gdk::{prelude::SeatExt, SeatCapabilities};
 use gtk::{
     cairo,
     gdk::{self, EventMask, ScrollDirection},
@@ -91,19 +92,64 @@ pub(crate) fn set_callback_for_draw_area(
             Inhibit(false)}
         ),
     );
+    draw_area.connect_enter_notify_event(
+        glib::clone!(@weak gs => @default-return Inhibit(false), move |_,enter_event| {
+            da_enter_callback(&gs, enter_event).unwrap_or_else(|e|error!("Enter event: {:?}", e));
+            Inhibit(false)}
+        ),
+    );
+    draw_area.connect_leave_notify_event(
+        glib::clone!(@weak gs => @default-return Inhibit(false), move |_, leave_event| {
+            da_leave_callback(&gs, leave_event).unwrap_or_else(|e|error!("Leave event: {:?}", e));
+            Inhibit(false)}
+        ),
+    );
 
     let event_mask = EventMask::BUTTON_PRESS_MASK
         | EventMask::BUTTON_RELEASE_MASK
         | EventMask::BUTTON_MOTION_MASK
         | EventMask::SCROLL_MASK
+        | EventMask::SMOOTH_SCROLL_MASK
         | EventMask::KEY_PRESS_MASK
         | EventMask::KEY_RELEASE_MASK
         | EventMask::BUTTON1_MOTION_MASK
         | EventMask::FOCUS_CHANGE_MASK
+        | EventMask::ENTER_NOTIFY_MASK
+        | EventMask::LEAVE_NOTIFY_MASK
         | EventMask::POINTER_MOTION_MASK;
     draw_area.add_events(event_mask);
 
     Ok(())
+}
+
+fn da_enter_callback(
+    gs: &Rc<RefCell<GtkDisplayScreen>>,
+    _event: &gdk::EventCrossing,
+) -> Result<()> {
+    update_keyboard_grab(gs, true);
+    Ok(())
+}
+
+fn da_leave_callback(
+    gs: &Rc<RefCell<GtkDisplayScreen>>,
+    _event: &gdk::EventCrossing,
+) -> Result<()> {
+    update_keyboard_grab(gs, false);
+    Ok(())
+}
+
+fn update_keyboard_grab(gs: &Rc<RefCell<GtkDisplayScreen>>, grab: bool) {
+    let borrowed_gs = gs.borrow();
+    let display = borrowed_gs.draw_area.display();
+    if let Some(seat) = display.default_seat() {
+        if grab {
+            if let Some(w) = borrowed_gs.draw_area.window() {
+                seat.grab(&w, SeatCapabilities::KEYBOARD, false, None, None, None);
+            }
+        } else {
+            seat.ungrab();
+        }
+    }
 }
 
 /// When the window size changes,
@@ -239,6 +285,19 @@ fn da_scroll_callback(
         ScrollDirection::Down => INPUT_BUTTON_WHEEL_DOWN,
         ScrollDirection::Left => INPUT_BUTTON_WHEEL_LEFT,
         ScrollDirection::Right => INPUT_BUTTON_WHEEL_RIGHT,
+        ScrollDirection::Smooth => match scroll_event.scroll_deltas() {
+            Some((_, delta_y)) => {
+                if delta_y == 0.0 {
+                    return Ok(());
+                }
+                if delta_y > 0.0 {
+                    INPUT_BUTTON_WHEEL_DOWN
+                } else {
+                    INPUT_BUTTON_WHEEL_UP
+                }
+            }
+            None => return Ok(()),
+        },
         _ => 0x0,
     };
 

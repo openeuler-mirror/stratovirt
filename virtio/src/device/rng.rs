@@ -16,6 +16,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -109,13 +110,9 @@ impl RngHandler {
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
-                if let Some(ctx) = EventLoop::get_ctx(None) {
-                    if leak_bucket.throttled(ctx, size as u64) {
-                        queue_lock.vring.push_back();
-                        break;
-                    }
-                } else {
-                    bail!("Failed to get ctx in event loop context for virtio rng");
+                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), size as u64) {
+                    queue_lock.vring.push_back();
+                    break;
                 }
             }
 
@@ -226,6 +223,8 @@ pub struct Rng {
     state: RngState,
     /// Eventfd for device deactivate
     deactivate_evts: Vec<RawFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Rng {
@@ -238,6 +237,7 @@ impl Rng {
                 driver_features: 0,
             },
             deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -356,6 +356,10 @@ impl VirtioDevice for Rng {
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.deactivate_evts)
     }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
+    }
 }
 
 impl StateTransfer for Rng {
@@ -399,8 +403,8 @@ mod tests {
 
     // build dummy address space of vm
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "sysmem");
+        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -416,7 +420,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();

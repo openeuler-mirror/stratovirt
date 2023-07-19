@@ -125,14 +125,14 @@ impl DemoGpu {
         hot_y: u32,
         mouse_data: u32,
     ) -> Result<()> {
-        let mut mouse = DisplayMouse {
+        let mouse = DisplayMouse {
             width,
             height,
             hot_x,
             hot_y,
             data: vec![0_u8; mouse_data as usize],
         };
-        display_cursor_define(&self.con, &mut mouse)?;
+        display_cursor_define(&self.con, &mouse)?;
         self.mouse = Some(mouse);
         Ok(())
     }
@@ -170,7 +170,7 @@ impl DemoGpu {
 
     /// Update the cursor image.
     pub fn graphic_cursor_define(&mut self) -> Result<()> {
-        if let Some(mouse) = &mut self.mouse {
+        if let Some(mouse) = &self.mouse {
             display_cursor_define(&self.con, mouse)?;
         }
         Ok(())
@@ -233,14 +233,7 @@ impl DeviceTypeOperation for DemoGpu {
         self.surface = Some(surface);
 
         // Create image.
-        let mouse = DisplayMouse {
-            width: 64_u32,
-            height: 64_u32,
-            hot_x: 4_u32,
-            hot_y: 4_u32,
-            data: vec![0_u8; 64 * 64 * 4],
-        };
-        self.mouse = Some(mouse);
+        self.mouse = Some(DisplayMouse::new(64, 64, 4, 4));
         Ok(())
     }
 

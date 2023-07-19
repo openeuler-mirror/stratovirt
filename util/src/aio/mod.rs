@@ -17,6 +17,7 @@ mod uring;
 use std::clone::Clone;
 use std::io::Write;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
 
@@ -73,19 +74,19 @@ pub enum WriteZeroesState {
 }
 
 impl FromStr for WriteZeroesState {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "off" => Ok(WriteZeroesState::Off),
             "on" => Ok(WriteZeroesState::On),
             "unmap" => Ok(WriteZeroesState::Unmap),
-            _ => Err(()),
+            _ => Err(anyhow!("Unknown write zeroes state {}", s)),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Iovec {
     pub iov_base: u64,
     pub iov_len: u64,
@@ -104,6 +105,14 @@ impl Iovec {
     }
 }
 
+pub fn get_iov_size(iovecs: &[Iovec]) -> u64 {
+    let mut sum = 0;
+    for iov in iovecs {
+        sum += iov.iov_len;
+    }
+    sum
+}
+
 /// The trait for Asynchronous IO operation.
 trait AioContext<T: Clone> {
     /// Submit IO requests to the OS, the nr submitted is returned.
@@ -118,7 +127,7 @@ pub struct AioEvent {
     pub res: i64,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OpCode {
     Noop = 0,
     Preadv = 1,
@@ -126,12 +135,15 @@ pub enum OpCode {
     Fdsync = 3,
     Discard = 4,
     WriteZeroes = 5,
+    WriteZeroesUnmap = 6,
 }
 
 pub struct AioCb<T: Clone> {
     pub direct: bool,
     pub req_align: u32,
     pub buf_align: u32,
+    pub discard: bool,
+    pub write_zeroes: WriteZeroesState,
     pub file_fd: RawFd,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
@@ -139,9 +151,35 @@ pub struct AioCb<T: Clone> {
     pub nbytes: u64,
     pub user_data: u64,
     pub iocompletecb: T,
-    pub discard: bool,
-    pub write_zeroes: WriteZeroesState,
-    pub write_zeroes_unmap: bool,
+    pub combine_req: Option<(Arc<AtomicU32>, Arc<AtomicI64>)>,
+}
+
+pub enum AioReqResult {
+    Inflight,
+    Error(i64),
+    Done,
+}
+
+impl<T: Clone> AioCb<T> {
+    pub fn req_is_completed(&self, ret: i64) -> AioReqResult {
+        if let Some((cnt, res)) = self.combine_req.as_ref() {
+            if ret < 0 {
+                // Store error code in res.
+                if let Err(v) = res.compare_exchange(0, ret, Ordering::SeqCst, Ordering::SeqCst) {
+                    warn!("Error already existed, old {} new {}", v, ret);
+                }
+            }
+            if cnt.fetch_sub(1, Ordering::SeqCst) > 1 {
+                // Request is not completed.
+                return AioReqResult::Inflight;
+            }
+            let v = res.load(Ordering::SeqCst);
+            if v < 0 {
+                return AioReqResult::Error(v);
+            }
+        }
+        AioReqResult::Done
+    }
 }
 
 pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
@@ -150,10 +188,12 @@ pub struct Aio<T: Clone + 'static> {
     ctx: Option<Box<dyn AioContext<T>>>,
     engine: AioEngine,
     pub fd: EventFd,
-    pub aio_in_queue: CbList<T>,
-    pub aio_in_flight: CbList<T>,
+    aio_in_queue: CbList<T>,
+    aio_in_flight: CbList<T>,
+    /// IO in aio_in_queue and aio_in_flight.
+    pub incomplete_cnt: Arc<AtomicU64>,
     max_events: usize,
-    complete_func: Arc<AioCompleteFunc<T>>,
+    pub complete_func: Arc<AioCompleteFunc<T>>,
 }
 
 pub fn aio_probe(engine: AioEngine) -> Result<()> {
@@ -187,6 +227,7 @@ impl<T: Clone + 'static> Aio<T> {
             fd,
             aio_in_queue: List::new(),
             aio_in_flight: List::new(),
+            incomplete_cnt: Arc::new(AtomicU64::new(0)),
             max_events,
             complete_func: func,
         })
@@ -230,7 +271,7 @@ impl<T: Clone + 'static> Aio<T> {
         {
             cb.opcode = OpCode::WriteZeroes;
             if cb.write_zeroes == WriteZeroesState::Unmap && cb.discard {
-                cb.write_zeroes_unmap = true;
+                cb.opcode = OpCode::WriteZeroesUnmap;
             }
         }
 
@@ -250,7 +291,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
             OpCode::Discard => self.discard_sync(cb),
-            OpCode::WriteZeroes => self.write_zeroes_sync(cb),
+            OpCode::WriteZeroes | OpCode::WriteZeroesUnmap => self.write_zeroes_sync(cb),
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
         }
     }
@@ -284,10 +325,12 @@ impl<T: Clone + 'static> Aio<T> {
                     -1
                 };
 
-                (self.complete_func)(&(*node).value, res)?;
+                let res = (self.complete_func)(&(*node).value, res);
                 self.aio_in_flight.unlink(&(*node));
+                self.incomplete_cnt.fetch_sub(1, Ordering::SeqCst);
                 // Construct Box to free mem automatically.
                 drop(Box::from_raw(node));
+                res?;
             }
         }
         self.process_list()?;
@@ -334,6 +377,7 @@ impl<T: Clone + 'static> Aio<T> {
             if is_err {
                 // Fail one request, retry the rest.
                 if let Some(node) = self.aio_in_queue.pop_tail() {
+                    self.incomplete_cnt.fetch_sub(1, Ordering::SeqCst);
                     (self.complete_func)(&(node).value, -1)?;
                 }
             } else if nr == 0 {
@@ -350,6 +394,7 @@ impl<T: Clone + 'static> Aio<T> {
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
 
         self.aio_in_queue.add_head(node);
+        self.incomplete_cnt.fetch_add(1, Ordering::SeqCst);
         if self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
             self.process_list()?;
         }
@@ -414,13 +459,20 @@ impl<T: Clone + 'static> Aio<T> {
                         nbytes as usize,
                         offset as usize,
                     );
-                    if len < 0 || len as u64 != nbytes {
+                    if len < 0 {
                         bail!("Failed to do raw read for misaligned read.");
                     }
 
                     let real_offset = cmp::max(offset, cb.offset as u64);
                     let real_high = cmp::min(offset + nbytes, high);
                     let real_nbytes = real_high - real_offset;
+                    if (len as u64) < real_high - offset {
+                        bail!(
+                            "misaligned read len {} less than the nbytes {}",
+                            len,
+                            real_high - offset
+                        );
+                    }
                     // SAFETY: the memory is allocated by us.
                     let src = unsafe {
                         std::slice::from_raw_parts(
@@ -551,7 +603,7 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn write_zeroes_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let mut ret;
-        if cb.write_zeroes_unmap {
+        if cb.opcode == OpCode::WriteZeroesUnmap {
             ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
             if ret == 0 {
                 return (self.complete_func)(&cb, ret);
@@ -669,6 +721,26 @@ fn iovec_is_zero(iovecs: &[Iovec]) -> bool {
     true
 }
 
+pub fn iovecs_split(iovecs: Vec<Iovec>, mut size: u64) -> (Vec<Iovec>, Vec<Iovec>) {
+    let mut begin = Vec::new();
+    let mut end = Vec::new();
+    for iov in iovecs {
+        if size == 0 {
+            end.push(iov);
+            continue;
+        }
+        if iov.iov_len as u64 > size {
+            begin.push(Iovec::new(iov.iov_base, size));
+            end.push(Iovec::new(iov.iov_base + size, iov.iov_len - size));
+            size = 0;
+        } else {
+            size -= iov.iov_len as u64;
+            begin.push(iov);
+        }
+    }
+    (begin, end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,6 +785,8 @@ mod tests {
             direct,
             req_align: align,
             buf_align: align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
             file_fd,
             opcode,
             iovec,
@@ -720,9 +794,7 @@ mod tests {
             nbytes,
             user_data: 0,
             iocompletecb: 0,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            write_zeroes_unmap: false,
+            combine_req: None,
         };
         let mut aio = Aio::new(
             Arc::new(|_: &AioCb<i32>, _: i64| -> Result<()> { Ok(()) }),
@@ -794,5 +866,33 @@ mod tests {
     fn test_indirect_sync_rw() {
         test_sync_rw_all_align(OpCode::Preadv, false);
         test_sync_rw_all_align(OpCode::Pwritev, false);
+    }
+
+    #[test]
+    fn test_iovecs_split() {
+        let iovecs = vec![Iovec::new(0, 100), Iovec::new(200, 100)];
+        let (left, right) = iovecs_split(iovecs, 0);
+        assert_eq!(left, vec![]);
+        assert_eq!(right, vec![Iovec::new(0, 100), Iovec::new(200, 100)]);
+
+        let iovecs = vec![Iovec::new(0, 100), Iovec::new(200, 100)];
+        let (left, right) = iovecs_split(iovecs, 50);
+        assert_eq!(left, vec![Iovec::new(0, 50)]);
+        assert_eq!(right, vec![Iovec::new(50, 50), Iovec::new(200, 100)]);
+
+        let iovecs = vec![Iovec::new(0, 100), Iovec::new(200, 100)];
+        let (left, right) = iovecs_split(iovecs, 100);
+        assert_eq!(left, vec![Iovec::new(0, 100)]);
+        assert_eq!(right, vec![Iovec::new(200, 100)]);
+
+        let iovecs = vec![Iovec::new(0, 100), Iovec::new(200, 100)];
+        let (left, right) = iovecs_split(iovecs, 150);
+        assert_eq!(left, vec![Iovec::new(0, 100), Iovec::new(200, 50)]);
+        assert_eq!(right, vec![Iovec::new(250, 50)]);
+
+        let iovecs = vec![Iovec::new(0, 100), Iovec::new(200, 100)];
+        let (left, right) = iovecs_split(iovecs, 300);
+        assert_eq!(left, vec![Iovec::new(0, 100), Iovec::new(200, 100)]);
+        assert_eq!(right, vec![]);
     }
 }

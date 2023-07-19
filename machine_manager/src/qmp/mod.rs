@@ -443,6 +443,7 @@ fn qmp_command_exec(
         (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (query_mem, query_mem),
         (query_vnc, query_vnc),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
@@ -461,7 +462,9 @@ fn qmp_command_exec(
         (chardev_add, chardev_add),
         (cameradev_add, cameradev_add),
         (update_region, update_region),
-        (human_monitor_command, human_monitor_command)
+        (human_monitor_command, human_monitor_command),
+        (blockdev_snapshot_internal_sync, blockdev_snapshot_internal_sync),
+        (blockdev_snapshot_delete_internal_sync, blockdev_snapshot_delete_internal_sync)
     );
 
     // Handle the Qmp command which macro can't cover

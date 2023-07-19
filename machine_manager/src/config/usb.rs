@@ -289,6 +289,9 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.scsi_cfg.read_only = drive_arg.read_only;
     dev.scsi_cfg.aio_type = drive_arg.aio;
     dev.scsi_cfg.direct = drive_arg.direct;
+    dev.scsi_cfg.format = drive_arg.format;
+    dev.scsi_cfg.l2_cache_size = drive_arg.l2_cache_size;
+    dev.scsi_cfg.refcount_cache_size = drive_arg.refcount_cache_size;
     dev.media = drive_arg.media.clone();
 
     dev.check()?;
@@ -309,6 +312,8 @@ pub struct UsbHostConfig {
     pub vendorid: u16,
     /// The product id of the USB Host device.
     pub productid: u16,
+    pub iso_urb_frames: u32,
+    pub iso_urb_count: u32,
 }
 
 impl UsbHostConfig {
@@ -336,7 +341,9 @@ pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
         .push("hostaddr")
         .push("hostport")
         .push("vendorid")
-        .push("productid");
+        .push("productid")
+        .push("isobsize")
+        .push("isobufs");
 
     cmd_parser.parse(cfg_args)?;
 
@@ -353,6 +360,8 @@ pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
             .get_value::<UnsignedInteger>("productid")?
             .unwrap_or(UnsignedInteger(0))
             .0 as u16,
+        iso_urb_frames: cmd_parser.get_value::<u32>("isobsize")?.unwrap_or(32),
+        iso_urb_count: cmd_parser.get_value::<u32>("isobufs")?.unwrap_or(4),
     };
 
     dev.check()?;

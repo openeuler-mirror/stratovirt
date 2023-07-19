@@ -74,7 +74,7 @@ impl Ivshmem {
         // bar0: mmio register
         self.config.register_bar(
             0,
-            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops),
+            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops, "IvshmemIo"),
             RegionType::Mem64Bit,
             false,
             IVSHMEM_REG_BAR_SIZE,

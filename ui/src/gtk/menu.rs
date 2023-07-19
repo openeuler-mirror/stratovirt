@@ -15,11 +15,12 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::{bail, Result};
 use gettextrs::gettext;
 use gtk::{
+    ffi::{gtk_button_set_label, GtkButton, GtkWidget},
     gdk::{
         ffi::{GDK_KEY_equal, GDK_KEY_minus, GDK_KEY_B, GDK_KEY_F, GDK_KEY_M, GDK_KEY_S},
         ModifierType,
     },
-    glib::{self, object::GObject, translate::ToGlibPtr},
+    glib::{self, gobject_ffi::GObject, translate::ToGlibPtr},
     prelude::{AccelGroupExtManual, NotebookExtManual, ObjectType, WidgetExtManual},
     traits::{
         BoxExt, CheckMenuItemExt, ContainerExt, DialogExt, GtkMenuExt, GtkMenuItemExt,
@@ -380,6 +381,23 @@ fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         dialog.set_title(&gettext(
             "Please confirm whether to exit the virtual machine",
         ));
+        if let Some(button_yes) = &dialog.widget_for_response(gtk::ResponseType::Yes) {
+            let label: &str = &gettext("Yes");
+            // SAFETY: it can be ensure that the pointer is not empty.
+            unsafe {
+                let button: *mut GtkWidget = button_yes.as_ptr();
+                gtk_button_set_label(button as *mut GtkButton, label.to_glib_none().0);
+            }
+        }
+        if let Some(button_no) = dialog.widget_for_response(gtk::ResponseType::No) {
+            let label: &str = &gettext("No");
+            // SAFETY: it can be ensure that the pointer is not empty.
+            unsafe {
+                let button: *mut GtkWidget = button_no.as_ptr();
+                gtk_button_set_label(button as *mut GtkButton, label.to_glib_none().0);
+            }
+        }
+
         borrowed_gd.vm_pause();
         let answer = dialog.run();
         // SAFETY: Dialog is created in the current function and can be guaranteed not to be empty.

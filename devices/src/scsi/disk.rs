@@ -11,15 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Seek, SeekFrom};
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
-use crate::ScsiBus::{ScsiBus, ScsiCompleteCb};
+use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
+use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
 use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
-use util::aio::Aio;
+use util::aio::{Aio, WriteZeroesState};
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -90,8 +89,8 @@ pub struct ScsiDevice {
     pub config: ScsiDevConfig,
     /// State of the scsi device.
     pub state: ScsiDevState,
-    /// Image file opened.
-    pub disk_image: Option<Arc<File>>,
+    /// Block backend opened by scsi device.
+    pub block_backend: Option<Arc<Mutex<dyn BlockDriverOps<ScsiCompleteCb>>>>,
     /// The align requirement of request(offset/len).
     pub req_align: u32,
     /// The align requirement of buffer(iova_base).
@@ -123,7 +122,7 @@ impl ScsiDevice {
         ScsiDevice {
             config,
             state: ScsiDevState::new(),
-            disk_image: None,
+            block_backend: None,
             req_align: 1,
             buf_align: 1,
             disk_sectors: 0,
@@ -135,7 +134,7 @@ impl ScsiDevice {
         }
     }
 
-    pub fn realize(&mut self) -> Result<()> {
+    pub fn realize(&mut self, iothread: Option<String>) -> Result<()> {
         match self.scsi_type {
             SCSI_TYPE_DISK => {
                 self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
@@ -156,16 +155,29 @@ impl ScsiDevice {
 
         let drive_files = self.drive_files.lock().unwrap();
         // File path can not be empty string. And it has also been checked in CmdParser::parse.
-        let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
-        let disk_size = file
-            .seek(SeekFrom::End(0))
-            .with_context(|| "Failed to seek the end for scsi device")?;
-        self.disk_image = Some(Arc::new(file));
+        let file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
 
         let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
         self.req_align = alignments.0;
         self.buf_align = alignments.1;
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.config.path_on_host)?;
 
+        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
+        let conf = BlockProperty {
+            id: drive_id,
+            format: self.config.format,
+            iothread,
+            direct: self.config.direct,
+            req_align: self.req_align,
+            buf_align: self.buf_align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: self.config.l2_cache_size,
+            refcount_cache_size: self.config.refcount_cache_size,
+        };
+        let backend = create_block_backend(file, aio, conf)?;
+        let disk_size = backend.lock().unwrap().disk_size()?;
+        self.block_backend = Some(backend);
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
 
         Ok(())

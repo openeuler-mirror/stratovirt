@@ -15,6 +15,7 @@ use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -22,13 +23,14 @@ use log::{debug, error, info, warn};
 
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::XhciConfig;
-use util::aio::Iovec;
+use machine_manager::event_loop::EventLoop;
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::{
-    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_TR_DIR, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP,
-    TRB_TR_LEN_MASK, TRB_TYPE_SHIFT,
+    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_TR_DIR, TRB_TR_FRAMEID_MASK,
+    TRB_TR_FRAMEID_SHIFT, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TR_SIA,
+    TRB_TYPE_SHIFT,
 };
 use crate::usb::{config::*, TransferOps};
 use crate::usb::{
@@ -109,6 +111,8 @@ const EP_CONTEXT_EP_STATE_MASK: u32 = 0x7;
 const EP_CONTEXT_EP_STATE_SHIFT: u32 = 0;
 const EP_CONTEXT_EP_TYPE_MASK: u32 = 0x7;
 const EP_CONTEXT_EP_TYPE_SHIFT: u32 = 3;
+const ISO_BASE_TIME_INTERVAL: u64 = 125000;
+const MFINDEX_WRAP_NUM: u64 = 0x4000;
 
 type DmaAddr = u64;
 
@@ -121,17 +125,20 @@ pub struct XhciTransfer {
     slotid: u32,
     epid: u32,
     in_xfer: bool,
+    iso_xfer: bool,
+    timed_xfer: bool,
     running_retry: bool,
     running_async: bool,
     interrupter: Arc<Mutex<XhciInterrupter>>,
     ep_ring: Arc<XhciTransferRing>,
+    ep_type: EpType,
     ep_state: Arc<AtomicU32>,
+    mfindex_kick: u64,
 }
 
 impl XhciTransfer {
     fn new(
-        slotid: u32,
-        epid: u32,
+        ep_info: (u32, u32, EpType),
         in_xfer: bool,
         td: Vec<XhciTRB>,
         intr: &Arc<Mutex<XhciInterrupter>>,
@@ -143,14 +150,18 @@ impl XhciTransfer {
             status: TRBCCode::Invalid,
             td,
             complete: false,
-            slotid,
-            epid,
+            slotid: ep_info.0,
+            epid: ep_info.1,
             in_xfer,
+            iso_xfer: false,
+            timed_xfer: false,
             running_retry: false,
             running_async: false,
             interrupter: intr.clone(),
             ep_ring: ring.clone(),
+            ep_type: ep_info.2,
             ep_state: ep_state.clone(),
+            mfindex_kick: 0,
         }
     }
 
@@ -166,9 +177,14 @@ impl XhciTransfer {
             return Ok(());
         }
 
+        self.report_transfer_error()?;
+
+        if self.ep_type == EpType::IsoIn || self.ep_type == EpType::IsoOut {
+            return Ok(());
+        }
         // Set the endpoint state to halted if an error occurs in the packet.
         set_ep_state_helper(&self.ep_ring, &self.ep_state, EP_HALTED)?;
-        self.report_transfer_error()?;
+
         Ok(())
     }
 
@@ -262,6 +278,7 @@ pub struct XhciEpContext {
     output_ctx_addr: Arc<AtomicU64>,
     state: Arc<AtomicU32>,
     interval: u32,
+    mfindex_last: u64,
     transfers: LinkedList<Arc<Mutex<XhciTransfer>>>,
     retry: Option<Arc<Mutex<XhciTransfer>>>,
 }
@@ -277,6 +294,7 @@ impl XhciEpContext {
             output_ctx_addr: addr,
             state: Arc::new(AtomicU32::new(0)),
             interval: 0,
+            mfindex_last: 0,
             transfers: LinkedList::new(),
             retry: None,
         }
@@ -664,6 +682,9 @@ pub struct XhciDevice {
     pub intrs: Vec<Arc<Mutex<XhciInterrupter>>>,
     pub cmd_ring: XhciCommandRing,
     mem_space: Arc<AddressSpace>,
+    /// Runtime Register.
+    mfindex_start: Duration,
+    timer_id: Option<u64>,
 }
 
 impl XhciDevice {
@@ -708,6 +729,8 @@ impl XhciDevice {
             intrs,
             cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
+            mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
+            timer_id: None,
         };
         let xhci = Arc::new(Mutex::new(xhci));
         let clone_xhci = xhci.clone();
@@ -740,6 +763,37 @@ impl XhciDevice {
 
     pub fn run(&mut self) {
         self.oper.unset_usb_status_flag(USB_STS_HCH);
+        self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
+    }
+
+    pub fn mfindex(&mut self) -> u64 {
+        let now = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
+        (now - self.mfindex_start).as_nanos() as u64 / ISO_BASE_TIME_INTERVAL
+    }
+
+    pub fn mfwrap_update(&mut self) {
+        let bits = USB_CMD_RUN | USB_CMD_EWE;
+        if self.oper.get_usb_cmd() & bits == bits {
+            let mfindex = self.mfindex() & (MFINDEX_WRAP_NUM - 1);
+            let left = MFINDEX_WRAP_NUM - mfindex;
+            let weak_xhci = self.usb_ports[0].lock().unwrap().xhci.clone();
+
+            let xhci_mfwrap_timer = Box::new(move || {
+                let xhci = weak_xhci.upgrade().unwrap();
+                let mut locked_xhci = xhci.lock().unwrap();
+
+                let evt = XhciEvent::new(TRBType::ErMfindexWrap, TRBCCode::Success);
+                if let Err(e) = locked_xhci.intrs[0].lock().unwrap().send_event(&evt) {
+                    error!("Failed to send event: {:?}", e);
+                }
+
+                locked_xhci.mfwrap_update();
+            });
+            self.timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
+                xhci_mfwrap_timer,
+                Duration::from_nanos(left * ISO_BASE_TIME_INTERVAL),
+            ));
+        }
     }
 
     pub fn stop(&mut self) {
@@ -774,6 +828,10 @@ impl XhciDevice {
             self.intrs[i].lock().unwrap().reset();
         }
         self.cmd_ring.init(0);
+
+        self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
+
+        self.mfwrap_update();
     }
 
     /// Reset xhci port.
@@ -1003,7 +1061,7 @@ impl XhciDevice {
 
     pub fn detach_slot(&mut self, slot_id: u32) -> Result<()> {
         if slot_id < 1 || slot_id > self.slots.len() as u32 {
-            bail!("Invalid slot id {} while detaching slot", slot_id);
+            return Ok(());
         }
         for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(i - 1) as usize];
@@ -1344,6 +1402,9 @@ impl XhciDevice {
             GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
             ep_ctx.as_dwords(),
         )?;
+
+        epctx.mfindex_last = 0;
+
         Ok(TRBCCode::Success)
     }
 
@@ -1471,6 +1532,14 @@ impl XhciDevice {
                 return Ok(());
             }
         };
+
+        // If the device has been detached, but the guest has not been notified.
+        // In this case, the Transaction Error is reported when the TRB processed.
+        // Therefore, don't continue here.
+        if self.get_usb_dev(slot_id, ep_id).is_err() {
+            return Ok(());
+        }
+
         debug!(
             "kick_endpoint slotid {} epid {} dequeue {:x}",
             slot_id,
@@ -1493,7 +1562,7 @@ impl XhciDevice {
         }
         epctx.set_state(EP_RUNNING)?;
         let ep_state = epctx.state.clone();
-        const KICK_LIMIT: u32 = 32;
+        const KICK_LIMIT: u32 = 256;
         let mut count = 0;
         let ring = epctx.ring.clone();
         loop {
@@ -1508,6 +1577,19 @@ impl XhciDevice {
                     td
                 }
                 None => {
+                    if epctx.ep_type == EpType::IsoIn || epctx.ep_type == EpType::IsoOut {
+                        let ccode = match epctx.ep_type {
+                            EpType::IsoIn => TRBCCode::RingOverrun,
+                            _ => TRBCCode::RingUnderrun,
+                        };
+                        let mut evt = XhciEvent::new(TRBType::ErTransfer, ccode);
+                        evt.slot_id = slot_id as u8;
+                        evt.ep_id = ep_id as u8;
+                        evt.ptr = epctx.ring.dequeue.load(Ordering::Acquire);
+                        if let Err(e) = self.intrs[0].lock().unwrap().send_event(&evt) {
+                            error!("Failed to send event: {:?}", e);
+                        }
+                    }
                     debug!("No TD in the transfer ring.");
                     break;
                 }
@@ -1515,8 +1597,7 @@ impl XhciDevice {
             let in_xfer = transfer_in_direction(ep_id as u8, &td, epctx.ep_type);
             // NOTE: Only support primary interrupter now.
             let xfer = Arc::new(Mutex::new(XhciTransfer::new(
-                slot_id,
-                ep_id,
+                (slot_id, ep_id, epctx.ep_type),
                 in_xfer,
                 td,
                 &self.intrs[0],
@@ -1595,13 +1676,26 @@ impl XhciDevice {
             .unwrap()
             .clone();
         let mut locked_xfer = xfer.lock().unwrap();
+        if locked_xfer.timed_xfer {
+            let mfindex = self.mfindex();
+            self.check_intr_iso_kick(&mut locked_xfer, mfindex);
+            if locked_xfer.running_retry {
+                return Ok(false);
+            }
+            locked_xfer.timed_xfer = false;
+            locked_xfer.running_retry = true;
+        }
+
         self.device_handle_packet(&mut locked_xfer);
-        if locked_xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak {
+        if !locked_xfer.iso_xfer
+            && locked_xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak
+        {
             debug!("USB packet status is NAK");
             // NAK need to retry again.
             return Ok(false);
         }
         self.complete_packet(&mut locked_xfer)?;
+
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if locked_xfer.complete {
             drop(locked_xfer);
@@ -1673,7 +1767,103 @@ impl XhciDevice {
         Ok(())
     }
 
+    fn calc_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
+        let epctx = &self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
+
+        if xfer.td[0].control & TRB_TR_SIA != 0 {
+            let asap = ((mfindex as u32 + epctx.interval - 1) & !(epctx.interval - 1)) as u64;
+            if asap >= epctx.mfindex_last && asap <= epctx.mfindex_last + epctx.interval as u64 * 4
+            {
+                xfer.mfindex_kick = epctx.mfindex_last + epctx.interval as u64;
+            } else {
+                xfer.mfindex_kick = asap;
+            }
+        } else {
+            xfer.mfindex_kick =
+                (((xfer.td[0].control >> TRB_TR_FRAMEID_SHIFT) & TRB_TR_FRAMEID_MASK) as u64) << 3;
+            xfer.mfindex_kick |= mfindex & !(MFINDEX_WRAP_NUM - 1);
+            if xfer.mfindex_kick + 0x100 < mfindex {
+                xfer.mfindex_kick += MFINDEX_WRAP_NUM;
+            }
+        }
+    }
+
+    fn check_intr_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
+        let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
+        if xfer.mfindex_kick > mfindex {
+            let weak_xhci = self.usb_ports[0].lock().unwrap().xhci.clone();
+            let slotid = xfer.slotid;
+            let epid = xfer.epid;
+            let xhci_ep_kick_timer = Box::new(move || {
+                let xhci = weak_xhci.upgrade().unwrap();
+                let mut locked_xhci = xhci.lock().unwrap();
+                let epctx = match locked_xhci.get_endpoint_ctx(slotid, epid) {
+                    Ok(epctx) => epctx,
+                    Err(e) => {
+                        error!("Kick endpoint error: {:?}", e);
+                        return;
+                    }
+                };
+                let ep_state = epctx.get_ep_state();
+                if ep_state == EP_STOPPED && ep_state == EP_ERROR {
+                    return;
+                }
+                if let Err(e) = locked_xhci.kick_endpoint(slotid, epid) {
+                    error!("Failed to kick endpoint: {:?}", e);
+                }
+            });
+            let ctx = EventLoop::get_ctx(None).unwrap();
+            if self.timer_id.is_some() {
+                ctx.timer_del(self.timer_id.unwrap());
+            }
+            self.timer_id = Some(ctx.timer_add(
+                xhci_ep_kick_timer,
+                Duration::from_nanos((xfer.mfindex_kick - mfindex) * ISO_BASE_TIME_INTERVAL),
+            ));
+            xfer.running_retry = true;
+        } else {
+            epctx.mfindex_last = xfer.mfindex_kick;
+            if self.timer_id.is_some() {
+                EventLoop::get_ctx(None)
+                    .unwrap()
+                    .timer_del(self.timer_id.unwrap());
+                self.timer_id = None;
+            }
+            xfer.running_retry = false;
+        }
+    }
+
     fn do_data_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        let epctx = &self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
+        match epctx.ep_type {
+            EpType::IntrOut | EpType::IntrIn => {
+                xfer.iso_xfer = false;
+                xfer.timed_xfer = false;
+                if xfer.running_retry {
+                    return Ok(());
+                }
+            }
+            EpType::BulkOut | EpType::BulkIn => {
+                xfer.iso_xfer = false;
+                xfer.timed_xfer = false;
+            }
+            EpType::IsoOut | EpType::IsoIn => {
+                xfer.iso_xfer = true;
+                xfer.timed_xfer = true;
+                let mfindex = self.mfindex();
+                self.calc_iso_kick(xfer, mfindex);
+                self.check_intr_iso_kick(xfer, mfindex);
+                if xfer.running_retry {
+                    return Ok(());
+                }
+            }
+            _ => {
+                bail!(
+                    "endpoint type: {:?} is unsupported by data transfer",
+                    epctx.ep_type
+                );
+            }
+        }
         self.device_handle_packet(xfer);
         self.complete_packet(xfer)?;
         Ok(())
@@ -1713,21 +1903,11 @@ impl XhciDevice {
                 } else {
                     trb.parameter
                 };
-                if !self
+
+                let mut hvas = self
                     .mem_space
-                    .address_in_memory(GuestAddress(dma_addr), chunk as u64)
-                {
-                    bail!(
-                        "Invalid Address for transfer: base 0x{:X}, size {}",
-                        dma_addr,
-                        chunk
-                    );
-                }
-                if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
-                    vec.push(Iovec::new(hva, chunk as u64));
-                } else {
-                    bail!("HVA not existed {:x}", dma_addr);
-                }
+                    .get_address_map(GuestAddress(dma_addr), chunk as u64)?;
+                vec.append(&mut hvas);
             }
         }
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);
@@ -1834,11 +2014,6 @@ impl XhciDevice {
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         self.kick_endpoint(slot_id, ep_id as u32)?;
         Ok(())
-    }
-
-    /// Get microframe index
-    pub fn get_mf_index(&self) -> u64 {
-        0
     }
 
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {

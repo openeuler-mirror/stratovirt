@@ -107,8 +107,6 @@ const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 0x02;
 /// State for `CPU` lifecycle.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuLifecycleState {
-    /// `CPU` structure is only be initialized, but nothing set.
-    Nothing = 0,
     /// `CPU` structure's property is set with configuration.
     Created = 1,
     /// `CPU` start to be running.
@@ -423,7 +421,6 @@ impl CPUInterface for CPU {
         } else if *cpu_state == CpuLifecycleState::Stopped
             || *cpu_state == CpuLifecycleState::Paused
         {
-            *cpu_state = CpuLifecycleState::Nothing;
             return Ok(());
         }
 
@@ -434,7 +431,6 @@ impl CPUInterface for CPU {
             .0;
 
         if *cpu_state == CpuLifecycleState::Stopped {
-            *cpu_state = CpuLifecycleState::Nothing;
             Ok(())
         } else {
             Err(anyhow!(CpuError::DestroyVcpu(format!(
@@ -1018,7 +1014,7 @@ mod tests {
         // Wait for CPU finish state change.
         std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Stopped);
         drop(cpu_state);
     }
 

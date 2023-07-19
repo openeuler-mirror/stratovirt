@@ -40,11 +40,15 @@ pub enum RegionType {
     RomDevice,
     /// RamDevice type.
     RamDevice,
+    /// Alias type
+    Alias,
 }
 
 /// Represents a memory region, used by mem-mapped IO, Ram or Rom.
 #[derive(Clone)]
 pub struct Region {
+    /// The name of Region
+    pub name: String,
     /// Type of Region, won't be changed once initialized.
     region_type: RegionType,
     /// The priority of Region, only valid in parent Container-type Region.
@@ -67,6 +71,10 @@ pub struct Region {
     rom_dev_romd: Arc<AtomicBool>,
     /// Max access size supported by the device.
     max_access_size: Option<u64>,
+    /// Point to entity memory region
+    alias: Option<Arc<Region>>,
+    /// Offset in parent Alias-type region.
+    alias_offset: u64,
 }
 
 impl fmt::Debug for Region {
@@ -232,12 +240,14 @@ impl Region {
     /// * `mem_mapping` - Mapped memory.
     /// * `ops` - Region operations.
     fn init_region_internal(
+        name: &str,
         size: u64,
         region_type: RegionType,
         mem_mapping: Option<Arc<HostMemMapping>>,
         ops: Option<RegionOps>,
     ) -> Region {
         Region {
+            name: String::from(name),
             region_type,
             priority: Arc::new(AtomicI32::new(0)),
             offset: Arc::new(Mutex::new(GuestAddress(0))),
@@ -249,6 +259,8 @@ impl Region {
             subregions: Arc::new(RwLock::new(Vec::new())),
             rom_dev_romd: Arc::new(AtomicBool::new(false)),
             max_access_size: None,
+            alias: None,
+            alias_offset: 0_u64,
         }
     }
 
@@ -257,8 +269,14 @@ impl Region {
     /// # Arguments
     ///
     /// * `mem_mapping` - Mapped memory of this Ram region.
-    pub fn init_ram_region(mem_mapping: Arc<HostMemMapping>) -> Region {
-        Region::init_region_internal(mem_mapping.size(), RegionType::Ram, Some(mem_mapping), None)
+    pub fn init_ram_region(mem_mapping: Arc<HostMemMapping>, name: &str) -> Region {
+        Region::init_region_internal(
+            name,
+            mem_mapping.size(),
+            RegionType::Ram,
+            Some(mem_mapping),
+            None,
+        )
     }
 
     /// Initialize IO-type region.
@@ -267,8 +285,8 @@ impl Region {
     ///
     /// * `size` - Size of IO region.
     /// * `ops` - Operation of Region.
-    pub fn init_io_region(size: u64, ops: RegionOps) -> Region {
-        Region::init_region_internal(size, RegionType::IO, None, Some(ops))
+    pub fn init_io_region(size: u64, ops: RegionOps, name: &str) -> Region {
+        Region::init_region_internal(name, size, RegionType::IO, None, Some(ops))
     }
 
     /// Set the access size limit of the IO region.
@@ -285,8 +303,8 @@ impl Region {
     /// # Arguments
     ///
     /// * `size` - Size of container region.
-    pub fn init_container_region(size: u64) -> Region {
-        Region::init_region_internal(size, RegionType::Container, None, None)
+    pub fn init_container_region(size: u64, name: &str) -> Region {
+        Region::init_region_internal(name, size, RegionType::Container, None, None)
     }
 
     /// Initialize RomDevice-type region.
@@ -295,8 +313,13 @@ impl Region {
     ///
     /// * `mem_mapping` - Mapped memory of this region.
     /// * `ops` - Operation functions of this region.
-    pub fn init_rom_device_region(mem_mapping: Arc<HostMemMapping>, ops: RegionOps) -> Region {
+    pub fn init_rom_device_region(
+        mem_mapping: Arc<HostMemMapping>,
+        ops: RegionOps,
+        name: &str,
+    ) -> Region {
         let mut region = Region::init_region_internal(
+            name,
             mem_mapping.size(),
             RegionType::RomDevice,
             Some(mem_mapping),
@@ -312,13 +335,34 @@ impl Region {
     /// # Arguments
     ///
     /// * `mem_mapping` - Mapped memory of this region.
-    pub fn init_ram_device_region(mem_mapping: Arc<HostMemMapping>) -> Region {
+    pub fn init_ram_device_region(mem_mapping: Arc<HostMemMapping>, name: &str) -> Region {
         Region::init_region_internal(
+            name,
             mem_mapping.size(),
             RegionType::RamDevice,
             Some(mem_mapping),
             None,
         )
+    }
+
+    /// Initialize alias-type region.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - alias to region.
+    /// * `alias_offset` - offset of alias
+    /// * `size` - region size
+    /// * `name` - alias name
+    pub fn init_alias_region(
+        alias: Arc<Region>,
+        alias_offset: u64,
+        size: u64,
+        name: &str,
+    ) -> Region {
+        let mut region = Region::init_region_internal(name, size, RegionType::Alias, None, None);
+        region.alias = Some(alias);
+        region.alias_offset = alias_offset;
+        region
     }
 
     /// Get the type of this region.
@@ -343,6 +387,16 @@ impl Region {
     /// Get size of this region.
     pub fn size(&self) -> u64 {
         self.size.load(Ordering::SeqCst)
+    }
+
+    /// Get offset of this region.
+    pub fn alias_offset(&self) -> u64 {
+        self.alias_offset
+    }
+
+    /// Get name of this alias region.
+    pub fn alias_name(&self) -> Option<String> {
+        self.alias.as_ref().map(|mr| mr.name.clone())
     }
 
     /// Get the offset of this region.
@@ -415,10 +469,23 @@ impl Region {
     /// Get the host address if this region is backed by host-memory,
     /// Return `None` if it is not a Ram-type region.
     pub fn get_host_address(&self) -> Option<u64> {
-        if self.region_type == RegionType::IO || self.region_type == RegionType::Container {
+        if self.region_type != RegionType::Ram
+            && self.region_type != RegionType::RamDevice
+            && self.region_type != RegionType::RomDevice
+        {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
+    }
+
+    pub fn get_host_share(&self) -> Option<bool> {
+        if self.region_type != RegionType::Ram
+            && self.region_type != RegionType::RamDevice
+            && self.region_type != RegionType::RomDevice
+        {
+            return None;
+        }
+        self.mem_mapping.as_ref().map(|r| r.mem_shared())
     }
 
     /// Get the file information if this region is backed by host-memory.
@@ -658,21 +725,13 @@ impl Region {
         self.io_evtfds.lock().unwrap().to_vec()
     }
 
-    /// Add sub-region to this region.
+    /// Add sub-region to this region, but not produce flat view
     ///
     /// # Arguments
     ///
     /// * `child` - Subregion of this region.
-    /// * `offset` - Offset of subregion.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if
-    /// * This region is not a Container.
-    /// * The argument `offset` plus child region's size overflows or exceed this region's size.
-    /// * The child-region already exists in sub-regions array.
-    /// * Failed to generate flat view (topology changed after adding sub-region).
-    pub fn add_subregion(&self, child: Region, offset: u64) -> Result<()> {
+    /// * `offset` - Offset of subregion
+    pub fn add_subregion_not_update(&self, child: Region, offset: u64) -> Result<()> {
         // check parent Region's property, and check if child Region's offset is valid or not
         if self.region_type() != RegionType::Container {
             return Err(anyhow!(AddressSpaceError::RegionType(self.region_type())));
@@ -704,6 +763,26 @@ impl Region {
         }
         sub_regions.insert(index, child);
         drop(sub_regions);
+
+        Ok(())
+    }
+
+    /// Add sub-region to this region and production flat view
+    ///
+    /// # Arguments
+    ///
+    /// * `child` - Subregion of this region.
+    /// * `offset` - Offset of subregion.
+    ///
+    /// # Errors
+    ///
+    /// Return Error if
+    /// * This region is not a Container.
+    /// * The argument `offset` plus child region's size overflows or exceed this region's size.
+    /// * The child-region already exists in sub-regions array.
+    /// * Failed to generate flat view (topology changed after adding sub-region).
+    pub fn add_subregion(&self, child: Region, offset: u64) -> Result<()> {
+        self.add_subregion_not_update(child, offset)?;
 
         if let Some(space) = self.space.read().unwrap().upgrade() {
             space
@@ -781,20 +860,14 @@ impl Region {
         addr_range: AddressRange,
         flat_view: &mut FlatView,
     ) -> Result<()> {
+        let region_base = base.unchecked_add(self.offset().raw_value());
+        let region_range = AddressRange::new(region_base, self.size());
+        let intersect = match region_range.find_intersection(addr_range) {
+            Some(r) => r,
+            None => return Ok(()),
+        };
         match self.region_type {
             RegionType::Container => {
-                let region_base = base.unchecked_add(self.offset().raw_value());
-                let region_range = AddressRange::new(region_base, self.size());
-                let intersect = match region_range.find_intersection(addr_range) {
-                    Some(r) => r,
-                    None => bail!(
-                        "Generate flat view failed: region_addr 0x{:X} exceeds parent region range (0x{:X}, 0x{:X})",
-                        region_base.raw_value(),
-                        addr_range.base.raw_value(),
-                        addr_range.size
-                    ),
-                };
-
                 for sub_r in self.subregions.read().unwrap().iter() {
                     sub_r
                         .render_region_pass(region_base, intersect, flat_view)
@@ -806,6 +879,21 @@ impl Region {
                                 addr_range.size
                             )
                         })?;
+                }
+            }
+            RegionType::Alias => {
+                if let Some(alias_region) = &self.alias {
+                    let alias_base = region_base
+                        .unchecked_sub(self.alias_offset)
+                        .unchecked_sub(alias_region.offset().raw_value());
+                    alias_region.render_region_pass(alias_base, intersect, flat_view).with_context(|| {
+                        format!(
+                            "Failed to render subregion, alias_base 0x{:X}, intersect (0x{:X}, 0x{:X})",
+                            alias_base.raw_value(),
+                            intersect.base.raw_value(),
+                            intersect.size
+                        )
+                    })?;
                 }
             }
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
@@ -934,6 +1022,66 @@ impl Region {
         }
         Ok(flat_view)
     }
+
+    fn get_region_type_name(&self) -> String {
+        match self.region_type() {
+            RegionType::Ram => String::from("ram"),
+            RegionType::IO => String::from("i/o"),
+            RegionType::RomDevice => String::from("romd"),
+            RegionType::RamDevice => String::from("ramd"),
+            _ => String::from("err type"),
+        }
+    }
+
+    pub fn mtree(&self, level: u32) {
+        let mut tab = String::new();
+        let mut num = 0_u32;
+
+        loop {
+            if num == level {
+                break;
+            }
+            tab.push_str("    ");
+            num += 1;
+        }
+        match self.region_type() {
+            RegionType::Container => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, Container) : {}",
+                    tab,
+                    self.offset().raw_value(),
+                    self.offset().raw_value() + self.size(),
+                    self.priority(),
+                    self.name
+                );
+                for sub_r in self.subregions().iter() {
+                    sub_r.mtree(level + 1);
+                }
+            }
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, {}) : {}",
+                    tab,
+                    self.offset().raw_value(),
+                    self.offset().raw_value() + self.size(),
+                    self.priority(),
+                    self.get_region_type_name(),
+                    self.name
+                );
+            }
+            RegionType::Alias => {
+                println!(
+                    "{}0x{:X} - 0x{:X}, (Prio {}, alias) : {} @alias name: {}",
+                    tab,
+                    self.alias_offset(),
+                    self.alias_offset() + self.size(),
+                    self.priority(),
+                    self.name,
+                    self.alias_name().unwrap(),
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -980,7 +1128,7 @@ mod test {
         let mem_mapping = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1024, None, false, false, false).unwrap(),
         );
-        let ram_region = Region::init_ram_region(mem_mapping.clone());
+        let ram_region = Region::init_ram_region(mem_mapping.clone(), "mem_mapping");
         let data: [u8; 10] = [10; 10];
         let mut res_data: [u8; 10] = [0; 10];
         let count = data.len() as u64;
@@ -1016,7 +1164,7 @@ mod test {
         let host_mmap = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1024, None, false, false, false).unwrap(),
         );
-        let ram_region = Region::init_ram_region(host_mmap);
+        let ram_region = Region::init_ram_region(host_mmap, "mem_mapping");
 
         let file = TempFile::new().unwrap();
         let mut file_read = std::fs::File::open(file.as_path()).unwrap();
@@ -1065,7 +1213,7 @@ mod test {
             write: Arc::new(write_ops),
         };
 
-        let io_region = Region::init_io_region(16, test_dev_ops.clone());
+        let io_region = Region::init_io_region(16, test_dev_ops.clone(), "io_region");
         let data = [0x01u8; 8];
         let mut data_res = [0x0u8; 8];
         let count = data.len() as u64;
@@ -1135,7 +1283,7 @@ mod test {
     // test add/del sub-region to container-region, and check priority
     #[test]
     fn test_add_del_subregion() {
-        let container = Region::init_container_region(1 << 10);
+        let container = Region::init_container_region(1 << 10, "root");
         assert_eq!(container.region_type(), RegionType::Container);
         assert_eq!(container.priority(), 0);
 
@@ -1144,8 +1292,8 @@ mod test {
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
         };
 
-        let io_region = Region::init_io_region(1 << 4, default_ops.clone());
-        let io_region2 = Region::init_io_region(1 << 4, default_ops.clone());
+        let io_region = Region::init_io_region(1 << 4, default_ops.clone(), "io1");
+        let io_region2 = Region::init_io_region(1 << 4, default_ops.clone(), "io2");
         io_region2.set_priority(10);
 
         // add duplicate io-region or ram-region will fail
@@ -1201,11 +1349,11 @@ mod test {
         // the flat_view is as follows
         //        [CCCCCCCCCCCC][DDDDD][CCCCC][EEEEE][CCCCC]
         {
-            let region_a = Region::init_container_region(8000);
-            let region_b = Region::init_container_region(4000);
-            let region_c = Region::init_io_region(6000, default_ops.clone());
-            let region_d = Region::init_io_region(1000, default_ops.clone());
-            let region_e = Region::init_io_region(1000, default_ops.clone());
+            let region_a = Region::init_container_region(8000, "region_a");
+            let region_b = Region::init_container_region(4000, "region_b");
+            let region_c = Region::init_io_region(6000, default_ops.clone(), "region_c");
+            let region_d = Region::init_io_region(1000, default_ops.clone(), "region_d");
+            let region_e = Region::init_io_region(1000, default_ops.clone(), "region_e");
 
             region_b.set_priority(2);
             region_c.set_priority(1);
@@ -1247,11 +1395,11 @@ mod test {
         // the flat_view is as follows
         //        [CCCCCC]      [DDDDDDDDDDDD][EEEEEEEEEEEEE]
         {
-            let region_a = Region::init_container_region(8000);
-            let region_b = Region::init_container_region(5000);
-            let region_c = Region::init_io_region(1000, default_ops.clone());
-            let region_d = Region::init_io_region(3000, default_ops.clone());
-            let region_e = Region::init_io_region(2000, default_ops.clone());
+            let region_a = Region::init_container_region(8000, "region_a");
+            let region_b = Region::init_container_region(5000, "region_b");
+            let region_c = Region::init_io_region(1000, default_ops.clone(), "regionc");
+            let region_d = Region::init_io_region(3000, default_ops.clone(), "region_d");
+            let region_e = Region::init_io_region(2000, default_ops.clone(), "region_e");
 
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
             region_a.add_subregion(region_c.clone(), 0).unwrap();

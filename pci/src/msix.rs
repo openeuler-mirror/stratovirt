@@ -31,7 +31,7 @@ use util::{
     test_helper::{add_msix_msg, is_test_enabled},
 };
 
-use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
+use crate::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
@@ -390,7 +390,7 @@ impl Msix {
             read: Arc::new(table_read),
             write: Arc::new(table_write),
         };
-        let table_region = Region::init_io_region(table_size, table_region_ops);
+        let table_region = Region::init_io_region(table_size, table_region_ops, "MsixTable");
         region
             .add_subregion(table_region, table_offset)
             .with_context(|| "Failed to register MSI-X table region.")?;
@@ -414,7 +414,7 @@ impl Msix {
             read: Arc::new(pba_read),
             write: Arc::new(pba_write),
         };
-        let pba_region = Region::init_io_region(pba_size, pba_region_ops);
+        let pba_region = Region::init_io_region(pba_size, pba_region_ops, "MsixPba");
         region
             .add_subregion(pba_region, pba_offset)
             .with_context(|| "Failed to register MSI-X PBA region.")?;
@@ -676,8 +676,8 @@ pub fn init_msix(
         )?;
     } else {
         let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
-        bar_size = max(bar_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
-        let region = Region::init_container_region(bar_size);
+        bar_size = max(bar_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
+        let region = Region::init_container_region(bar_size, "Msix_region");
         Msix::register_memory_region(
             msix.clone(),
             &region,

@@ -40,7 +40,7 @@
 //!
 //! #[cfg(target_arch="x86_64")]
 //! fn main() {
-//!     let guest_mem = AddressSpace::new(Region::init_container_region(std::u64::MAX)).unwrap();
+//!     let guest_mem = AddressSpace::new(Region::init_container_region(std::u64::MAX, "guest_mem"), "guest_mem").unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: Some(kernel_file),
@@ -60,7 +60,7 @@
 //!
 //! #[cfg(target_arch="aarch64")]
 //! fn main() {
-//!     let guest_mem = AddressSpace::new(Region::init_container_region(u64::MAX)).unwrap();
+//!     let guest_mem = AddressSpace::new(Region::init_container_region(u64::MAX, "guest_mem"), "guest_mem").unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: Some(kernel_file),

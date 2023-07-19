@@ -7,19 +7,19 @@ license = "Mulan PSL v2"
 description = "Provide virtio fs for VM"
 
 [dependencies]
-capng = "0.2.2"
-errno = "0.2.8"
-log = "0.4.8"
+capng = "0.2.3"
+errno = "0.3.1"
+log = "0.4"
 libc = "0.2"
 thiserror = "1.0"
 anyhow = "1.0"
 error-chain = "0.12.4"
-vmm-sys-util = "0.11.0"
+vmm-sys-util = "0.11.1"
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
-migration_derive = { path = "../migration_derive" }
+migration_derive = { path = "../migration/migration_derive" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 pci = { path = "../pci" }

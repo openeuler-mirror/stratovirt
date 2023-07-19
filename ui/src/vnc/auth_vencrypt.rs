@@ -99,7 +99,7 @@ impl ClientIoHandler {
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             vnc_write(&client, buf);
             vnc_flush(&client);
-            return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
+            return Err(anyhow!(VncError::UnsupportedRFBProtocolVersion));
         } else {
             let mut buf = Vec::new();
             // Accept version.
@@ -276,12 +276,12 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<ServerConfig>> {
             client_auth_roots.add(&root)?;
         }
         if CLIENT_REQUIRE_AUTH {
-            AllowAnyAuthenticatedClient::new(client_auth_roots)
+            AllowAnyAuthenticatedClient::new(client_auth_roots).boxed()
         } else {
-            AllowAnyAnonymousOrAuthenticatedClient::new(client_auth_roots)
+            AllowAnyAnonymousOrAuthenticatedClient::new(client_auth_roots).boxed()
         }
     } else {
-        NoClientAuth::new()
+        NoClientAuth::boxed()
     };
 
     // Cipher suiter.

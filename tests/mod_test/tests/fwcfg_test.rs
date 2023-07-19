@@ -15,7 +15,7 @@ use devices::legacy::FwCfgEntryType;
 use mod_test::libdriver::fwcfg::{bios_args, FW_CFG_BASE};
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libtest::test_init;
-use mod_test::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 use mod_test::utils::{swap_u16, swap_u32};
 
 use std::cell::RefCell;
@@ -187,7 +187,7 @@ fn test_boot_index() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
-    let image_path = create_img(TEST_IMAGE_SIZE, 0);
+    let image_path = create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw);
 
     let dev_path = "/pci@ffffffffffffffff/scsi@1/disk@0,0\n\0".to_string();
 
@@ -228,7 +228,7 @@ fn test_boot_index() {
 }
 
 #[test]
-fn test_smbios_tyep0() {
+fn test_smbios_type0() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
@@ -267,17 +267,17 @@ fn test_smbios_tyep0() {
         talble_len,
     );
     assert_eq!(talbles_size, talble_len);
-    let talbe_type0_len = 24;
+    let table_type0_len = 24;
     assert_eq!(
-        String::from_utf8_lossy(&read_table_date[talbe_type0_len..talbe_type0_len + 7]),
+        String::from_utf8_lossy(&read_table_date[table_type0_len..table_type0_len + 7]),
         "vendor0"
     );
     assert_eq!(
-        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 8..talbe_type0_len + 16]),
+        String::from_utf8_lossy(&read_table_date[table_type0_len + 8..table_type0_len + 16]),
         "version0"
     );
     assert_eq!(
-        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 17..talbe_type0_len + 22]),
+        String::from_utf8_lossy(&read_table_date[table_type0_len + 17..table_type0_len + 22]),
         "date0"
     );
 
@@ -285,7 +285,7 @@ fn test_smbios_tyep0() {
 }
 
 #[test]
-fn test_smbios_tyep1() {
+fn test_smbios_type1() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
@@ -331,13 +331,13 @@ fn test_smbios_tyep1() {
         talble_len,
     );
     assert_eq!(talbles_size, talble_len);
-    let talbe_type0_len = 24;
+    let table_type0_len = 24;
     assert_eq!(
-        String::from_utf8_lossy(&read_table_date[talbe_type0_len..talbe_type0_len + 7]),
+        String::from_utf8_lossy(&read_table_date[table_type0_len..table_type0_len + 7]),
         "vendor0"
     );
     assert_eq!(
-        String::from_utf8_lossy(&read_table_date[talbe_type0_len + 8..talbe_type0_len + 16]),
+        String::from_utf8_lossy(&read_table_date[table_type0_len + 8..table_type0_len + 16]),
         "version0"
     );
     assert_eq!(read_table_date[48], 1);

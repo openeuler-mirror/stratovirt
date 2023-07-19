@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-//! Media Type GUID. refered with uvc.h in linux kernel.
+//! Media Type GUID. referred with uvc.h in linux kernel.
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;

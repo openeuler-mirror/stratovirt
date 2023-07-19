@@ -112,6 +112,15 @@ pub fn get_video_frame_size(width: u32, height: u32) -> Result<u32> {
         .with_context(|| format!("Invalid width {} or height {}", width, height))
 }
 
+pub fn get_bit_rate(width: u32, height: u32, interval: u32) -> Result<u32> {
+    let fm_size = get_video_frame_size(width, height)?;
+    let size_in_bit = fm_size as u64 * INTERVALS_PER_SEC as u64 * 8;
+    let rate = size_in_bit
+        .checked_div(interval as u64)
+        .with_context(|| format!("Invalid size {} or interval {}", size_in_bit, interval))?;
+    Ok(rate as u32)
+}
+
 #[macro_export]
 macro_rules! video_fourcc {
     ($a:expr, $b:expr, $c:expr, $d:expr) => {

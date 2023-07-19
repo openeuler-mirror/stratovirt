@@ -742,14 +742,23 @@ impl NetIoHandler {
         let mut iovecs = Vec::new();
         for elem_iov in elem_iovecs.iter() {
             // elem_iov.addr has been checked in pop_avail().
-            let host_addr = mem_space
-                .get_host_address_from_cache(elem_iov.addr, cache)
-                .unwrap();
-            let iovec = libc::iovec {
-                iov_base: host_addr as *mut libc::c_void,
-                iov_len: elem_iov.len as libc::size_t,
-            };
-            iovecs.push(iovec);
+            let mut len = elem_iov.len;
+            let mut start = elem_iov.addr;
+            loop {
+                let io_vec = mem_space
+                    .get_host_address_from_cache(start, cache)
+                    .map(|(hva, fr_len)| libc::iovec {
+                        iov_base: hva as *mut libc::c_void,
+                        iov_len: std::cmp::min(elem_iov.len, fr_len as u32) as libc::size_t,
+                    })
+                    .unwrap();
+                start = start.unchecked_add(io_vec.iov_len as u64);
+                len -= io_vec.iov_len as u32;
+                iovecs.push(io_vec);
+                if len == 0 {
+                    break;
+                }
+            }
         }
         iovecs
     }
@@ -1666,6 +1675,10 @@ impl VirtioDevice for Net {
         self.update_evts.clear();
         self.ctrl_info = None;
         Ok(())
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }
 

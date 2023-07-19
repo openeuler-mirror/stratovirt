@@ -22,7 +22,7 @@ pub use error::StandardVmError;
 pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
+use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 #[cfg(not(target_env = "musl"))]
 use ui::{
@@ -57,12 +57,13 @@ use address_space::{
 };
 pub use anyhow::Result;
 use anyhow::{bail, Context};
+use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig,
-    VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
+    ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
+    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -143,7 +144,7 @@ trait StdMachineOps: AcpiBuilder {
             .with_context(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
-        if let Some(numa_nodes) = self.get_numa_nodes() {
+        if let Some(numa_nodes) = self.get_guest_numa() {
             let srat_addr = self
                 .build_srat_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI SRAT table")?;
@@ -190,7 +191,7 @@ trait StdMachineOps: AcpiBuilder {
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
+    fn get_guest_numa(&self) -> &Option<NumaNodes>;
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -823,6 +824,9 @@ impl StdMachine {
                 queue_size,
                 discard: conf.discard,
                 write_zeroes: conf.write_zeroes,
+                format: conf.format,
+                l2_cache_size: conf.l2_cache_size,
+                refcount_cache_size: conf.refcount_cache_size,
             };
             dev.check()?;
             dev
@@ -1033,13 +1037,22 @@ impl StdMachine {
                 let default_value = "0".to_string();
                 let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
                 let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
-                let hostport = args.hostport.as_ref().unwrap_or(&default_value);
                 let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
                 let productid = args.productid.as_ref().unwrap_or(&default_value);
+
                 cfg_args = format!(
-                    "{},hostbus={},hostaddr={},hostport={},vendorid={},productid={}",
-                    cfg_args, hostbus, hostaddr, hostport, vendorid, productid
+                    "{},hostbus={},hostaddr={},vendorid={},productid={}",
+                    cfg_args, hostbus, hostaddr, vendorid, productid
                 );
+                if args.hostport.is_some() {
+                    cfg_args = format!("{},hostport={}", cfg_args, args.hostport.as_ref().unwrap());
+                }
+                if args.isobufs.is_some() {
+                    cfg_args = format!("{},isobufs={}", cfg_args, args.isobufs.as_ref().unwrap());
+                }
+                if args.isobsize.is_some() {
+                    cfg_args = format!("{},isobsize={}", cfg_args, args.isobsize.as_ref().unwrap());
+                }
 
                 self.add_usb_host(&mut locked_vmconfig, &cfg_args)?;
             }
@@ -1189,6 +1202,11 @@ impl DeviceInterface for StdMachine {
             ),
             None,
         )
+    }
+
+    fn query_mem(&self) -> Response {
+        self.mem_show();
+        Response::create_empty_response()
     }
 
     fn query_vnc(&self) -> Response {
@@ -1372,69 +1390,24 @@ impl DeviceInterface for StdMachine {
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        let mut config = DriveConfig {
-            id: args.node_name,
-            path_on_host: args.file.filename.clone(),
-            read_only: args.read_only.unwrap_or(false),
-            direct: true,
-            iops: args.iops,
-            // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: AioEngine::Native,
-            media: "disk".to_string(),
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
+        let config = match parse_blockdev(&args) {
+            Ok(config) => config,
+            Err(e) => {
+                error!("{:?}", e);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
         };
-        if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
-            config.direct = false;
-            config.aio = AioEngine::Off;
-        }
-        if let Some(discard) = args.discard {
-            let ret = discard.as_str().parse::<ExBool>();
-            if ret.is_err() {
-                let err_msg = format!(
-                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
-                    discard
-                );
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(err_msg),
-                    None,
-                );
-            }
-            config.discard = ret.unwrap().into();
-        }
-        if let Some(detect_zeroes) = args.detect_zeroes {
-            let state = detect_zeroes.as_str().parse::<WriteZeroesState>();
-            if state.is_err() {
-                let err_msg = format!(
-                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
-                    detect_zeroes
-                );
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(err_msg),
-                    None,
-                );
-            }
-            config.write_zeroes = state.unwrap();
-        }
-        if let Err(e) = config.check() {
-            error!("{:?}", e);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            );
-        }
-        // Check whether path is valid after configuration check
-        if let Err(e) = config.check_path() {
-            error!("{:?}", e);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            );
-        }
+
         // Register drive backend file for hotplug drive.
-        if let Err(e) =
-            self.register_drive_file(&args.file.filename, config.read_only, config.direct)
-        {
+        if let Err(e) = self.register_drive_file(
+            &config.id,
+            &args.file.filename,
+            config.read_only,
+            config.direct,
+        ) {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1670,7 +1643,7 @@ impl DeviceInterface for StdMachine {
         let region;
         match args.region_type.as_str() {
             "io_region" => {
-                region = Region::init_io_region(args.size, dummy_dev_ops);
+                region = Region::init_io_region(args.size, dummy_dev_ops, "UpdateRegionTest");
                 if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
                     let ioeventfds = vec![RegionIoEventFd {
                         fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
@@ -1699,21 +1672,25 @@ impl DeviceInterface for StdMachine {
                         .unwrap(),
                     ),
                     dummy_dev_ops,
+                    "RomDeviceRegionTest",
                 );
             }
             "ram_device_region" => {
-                region = Region::init_ram_device_region(Arc::new(
-                    HostMemMapping::new(
-                        GuestAddress(args.offset),
-                        None,
-                        args.size,
-                        fd.map(FileBackend::new_common),
-                        false,
-                        true,
-                        false,
-                    )
-                    .unwrap(),
-                ));
+                region = Region::init_ram_device_region(
+                    Arc::new(
+                        HostMemMapping::new(
+                            GuestAddress(args.offset),
+                            None,
+                            args.size,
+                            fd.map(FileBackend::new_common),
+                            false,
+                            true,
+                            false,
+                        )
+                        .unwrap(),
+                    ),
+                    "RamdeviceregionTest",
+                );
             }
             _ => {
                 return Response::create_error_response(
@@ -1808,6 +1785,7 @@ impl DeviceInterface for StdMachine {
                     }
                 };
                 if let Err(e) = self.register_drive_file(
+                    &drive_cfg.id,
                     &drive_cfg.path_on_host,
                     drive_cfg.read_only,
                     drive_cfg.direct,
@@ -1832,6 +1810,51 @@ impl DeviceInterface for StdMachine {
                 }
                 return self.blockdev_del(cmd_args[1].to_string());
             }
+            "info" => {
+                // Only support to query snapshots information by:
+                // "info snapshots"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                if cmd_args[1] != "snapshots" {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Unsupported command: {} {}",
+                            cmd_args[0], cmd_args[1]
+                        )),
+                        None,
+                    );
+                }
+
+                let qcow2_list = QCOW2_LIST.lock().unwrap();
+                if qcow2_list.len() == 0 {
+                    return Response::create_response(
+                        serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
+                        None,
+                    );
+                }
+
+                let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we don't support.
+                let vmstate_str = "None\r\n".to_string();
+                info_str += &vmstate_str;
+
+                for (drive_name, qcow2driver) in qcow2_list.iter() {
+                    let dev_str = format!(
+                        "\r\nList of partial (non-loadable) snapshots on \'{}\':\r\n",
+                        drive_name
+                    );
+                    let snap_infos = qcow2driver.lock().unwrap().list_snapshots();
+                    info_str += &(dev_str + &snap_infos);
+                }
+
+                return Response::create_response(serde_json::to_value(info_str).unwrap(), None);
+            }
             _ => {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(format!(
@@ -1844,6 +1867,148 @@ impl DeviceInterface for StdMachine {
         }
         Response::create_empty_response()
     }
+
+    fn blockdev_snapshot_internal_sync(
+        &self,
+        args: qmp_schema::BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        let qcow2_list = QCOW2_LIST.lock().unwrap();
+        let qcow2driver = qcow2_list.get(&args.device);
+        if qcow2driver.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!(
+                    "No device drive named {} while creating snapshot {}",
+                    args.device, args.name
+                )),
+                None,
+            );
+        }
+
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
+
+        // TODO: Add a method for getting guest clock. It's useless now so we can use a fake time(0).
+        let vm_clock_nsec = 0;
+        if let Err(e) = qcow2driver
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create_snapshot(args.name.clone(), vm_clock_nsec)
+        {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Device {} Creates snapshot {} error: {}.",
+                    args.device, args.name, e
+                )),
+                None,
+            );
+        }
+
+        Response::create_empty_response()
+    }
+
+    fn blockdev_snapshot_delete_internal_sync(
+        &self,
+        args: qmp_schema::BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        let qcow2_list = QCOW2_LIST.lock().unwrap();
+        let qcow2driver = qcow2_list.get(&args.device);
+        if qcow2driver.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!(
+                    "No device drive named {} while deleting snapshot {}",
+                    args.device, args.name
+                )),
+                None,
+            );
+        }
+
+        // Do not unlock or drop the locked_status in this function.
+        let status = qcow2driver.unwrap().lock().unwrap().get_status();
+        let mut locked_status = status.lock().unwrap();
+        *locked_status = BlockStatus::Snapshot;
+
+        let result = qcow2driver
+            .unwrap()
+            .lock()
+            .unwrap()
+            .delete_snapshot(args.name.clone());
+        match result {
+            Ok(snap_info) => {
+                Response::create_response(serde_json::to_value(&snap_info).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Device {} deletes snapshot {} error! {}",
+                    args.device, args.name, e
+                )),
+                None,
+            ),
+        }
+    }
+}
+
+fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
+    let mut config = DriveConfig {
+        id: args.node_name.clone(),
+        path_on_host: args.file.filename.clone(),
+        read_only: args.read_only.unwrap_or(false),
+        direct: true,
+        iops: args.iops,
+        // TODO Add aio option by qmp, now we set it based on "direct".
+        aio: AioEngine::Native,
+        media: "disk".to_string(),
+        discard: false,
+        write_zeroes: WriteZeroesState::Off,
+        format: DiskFormat::Raw,
+        l2_cache_size: None,
+        refcount_cache_size: None,
+    };
+    if args.cache.is_some() && !args.cache.as_ref().unwrap().direct.unwrap_or(true) {
+        config.direct = false;
+        config.aio = AioEngine::Off;
+    }
+    if let Some(discard) = args.discard.as_ref() {
+        config.discard = discard
+            .as_str()
+            .parse::<ExBool>()
+            .with_context(|| {
+                format!(
+                    "Invalid discard argument '{}', expected 'unwrap' or 'ignore'",
+                    discard
+                )
+            })?
+            .into();
+    }
+    if let Some(detect_zeroes) = args.detect_zeroes.as_ref() {
+        config.write_zeroes = detect_zeroes
+            .as_str()
+            .parse::<WriteZeroesState>()
+            .with_context(|| {
+                format!(
+                    "Invalid write-zeroes argument '{}', expected 'on | off | unmap'",
+                    detect_zeroes
+                )
+            })?;
+    }
+    if let Some(format) = args.driver.as_ref() {
+        config.format = format.as_str().parse::<DiskFormat>()?;
+    }
+    if let Some(l2_cache) = args.l2_cache_size.as_ref() {
+        let sz = memory_unit_conversion(l2_cache)
+            .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
+        config.l2_cache_size = Some(sz);
+    }
+    if let Some(rc_cache) = args.refcount_cache_size.as_ref() {
+        let sz = memory_unit_conversion(rc_cache)
+            .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
+        config.refcount_cache_size = Some(sz);
+    }
+    config.check()?;
+    config.check_path()?;
+    Ok(config)
 }
 
 #[cfg(not(target_env = "musl"))]

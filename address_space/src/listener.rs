@@ -642,7 +642,7 @@ mod test {
                 mem_mapping.start_address().unchecked_add(offset_in_region),
                 mem_mapping.size() - offset_in_region,
             ),
-            owner: Region::init_ram_region(mem_mapping.clone()),
+            owner: Region::init_ram_region(mem_mapping.clone(), "ram"),
             offset_in_region,
             rom_dev_romd: None,
         }

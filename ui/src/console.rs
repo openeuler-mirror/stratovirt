@@ -10,21 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{
+    cmp,
+    mem::size_of,
+    ptr,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
+
+use anyhow::Result;
+use log::error;
+use once_cell::sync::Lazy;
+
+use machine_manager::event_loop::EventLoop;
+use util::pixman::{pixman_format_code_t, pixman_image_t};
+
 use crate::pixman::{
     create_pixman_image, get_image_data, get_image_height, get_image_stride, get_image_width,
     pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, ColorNames,
     COLOR_TABLE_RGB,
 };
-use anyhow::Result;
-use log::error;
-use machine_manager::event_loop::EventLoop;
-use once_cell::sync::Lazy;
-use std::{
-    cmp, ptr,
-    sync::{Arc, Mutex, Weak},
-    time::Duration,
-};
-use util::pixman::{pixman_format_code_t, pixman_image_t};
 
 static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
     Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));
@@ -36,9 +41,9 @@ const FONT_WIDTH: i32 = 8;
 /// Height of font.
 const FONT_HEIGHT: i32 = 16;
 /// Width of image in surface.
-pub const DEFAULT_SURFACE_WIDTH: i32 = 640;
+pub const DEFAULT_SURFACE_WIDTH: i32 = 800;
 /// Height of image in surface.
-pub const DEFAULT_SURFACE_HEIGHT: i32 = 480;
+pub const DEFAULT_SURFACE_HEIGHT: i32 = 600;
 /// Maximum default window width.
 pub const MAX_WINDOW_WIDTH: u16 = 2560;
 /// Maximum default window height.
@@ -121,6 +126,19 @@ pub struct DisplayMouse {
     pub data: Vec<u8>,
 }
 
+impl DisplayMouse {
+    pub fn new(width: u32, height: u32, hot_x: u32, hot_y: u32) -> Self {
+        let data_size = (width * height) as usize * size_of::<u32>();
+        DisplayMouse {
+            width,
+            height,
+            hot_x,
+            hot_y,
+            data: vec![0_u8; data_size],
+        }
+    }
+}
+
 /// UIs (such as VNC) can register interfaces related to image display.
 /// After the graphic hardware processes images, these interfaces can be
 /// called to display images on the user's desktop.
@@ -132,7 +150,7 @@ pub trait DisplayChangeListenerOperations {
     /// Update image.
     fn dpy_image_update(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<()>;
     /// Update the cursor data.
-    fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()>;
+    fn dpy_cursor_update(&self, _cursor: &DisplayMouse) -> Result<()>;
     /// Set the current display as major.
     fn dpy_set_major(&self) -> Result<()> {
         Ok(())
@@ -366,9 +384,9 @@ pub fn setup_refresh(update_interval: u64) {
     });
 
     if update_interval != 0 {
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            ctx.timer_add(func, Duration::from_millis(update_interval));
-        }
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(func, Duration::from_millis(update_interval));
     }
 }
 
@@ -460,7 +478,7 @@ pub fn display_graphic_update(
 /// * `cursor` - data of curosr image.
 pub fn display_cursor_define(
     console: &Option<Weak<Mutex<DisplayConsole>>>,
-    cursor: &mut DisplayMouse,
+    cursor: &DisplayMouse,
 ) -> Result<()> {
     let con = match console.as_ref().and_then(|c| c.upgrade()) {
         Some(c) => c,
@@ -523,12 +541,12 @@ pub fn graphic_hardware_ui_info(
         (*con_opts).hw_ui_info(clone_con.clone(), width, height);
     });
 
-    if let Some(ctx) = EventLoop::get_ctx(None) {
-        if let Some(timer_id) = locked_con.timer_id {
-            ctx.timer_del(timer_id);
-        }
-        locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+    let ctx = EventLoop::get_ctx(None).unwrap();
+    if let Some(timer_id) = locked_con.timer_id {
+        ctx.timer_del(timer_id);
     }
+    locked_con.timer_id = Some(ctx.timer_add(func, Duration::from_millis(500)));
+
     Ok(())
 }
 
@@ -801,7 +819,7 @@ mod tests {
             Ok(())
         }
 
-        fn dpy_cursor_update(&self, _cursor: &mut DisplayMouse) -> Result<()> {
+        fn dpy_cursor_update(&self, _cursor: &DisplayMouse) -> Result<()> {
             Ok(())
         }
     }

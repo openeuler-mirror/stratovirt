@@ -13,7 +13,6 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -25,7 +24,7 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use util::aio::{AioCb, Iovec, OpCode, WriteZeroesState};
+use util::aio::{AioCb, AioReqResult, Iovec};
 use util::AsAny;
 
 /// Scsi Operation code.
@@ -352,7 +351,7 @@ const GC_FC_PROFILE_LIST: u16 = 0x0000;
 /// Mandatory behavior for all devices.
 const GC_FC_CORE: u16 = 0x0001;
 /// The medium may be removed from the device.
-const GC_FC_REMOVEABLE_MEDIUM: u16 = 0x0003;
+const GC_FC_REMOVABLE_MEDIUM: u16 = 0x0003;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ScsiXferMode {
@@ -423,7 +422,7 @@ fn scsi_bus_parse_req_cdb(
     }
 
     // When CDB's Group Code is vendor specific or reserved, len/xfer/lba will be negative.
-    // So, don't need to check again afer checking in cdb length.
+    // So, don't need to check again after checking in cdb length.
     let xfer = scsi_cdb_xfer(&cdb, dev);
     let lba = scsi_cdb_lba(&cdb);
 
@@ -458,7 +457,13 @@ pub struct ScsiCompleteCb {
     pub req: Arc<Mutex<ScsiRequest>>,
 }
 
-pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
+pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, mut ret: i64) -> Result<()> {
+    match aiocb.req_is_completed(ret) {
+        AioReqResult::Inflight => return Ok(()),
+        AioReqResult::Error(v) => ret = v,
+        AioReqResult::Done => (),
+    }
+
     let (status, sense) = if ret < 0 {
         (CHECK_CONDITION, Some(SCSI_SENSE_IO_ERROR))
     } else {
@@ -472,7 +477,7 @@ pub fn aio_complete_cb(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
     Ok(())
 }
 
-pub trait ScsiRequestOps: AsAny {
+pub trait ScsiRequestOps: Send + Sync + AsAny {
     // Will be called in the end of this scsi instruction execution.
     fn scsi_request_complete_cb(&mut self, status: u8, scsisense: Option<ScsiSense>) -> Result<()>;
 }
@@ -545,57 +550,47 @@ impl ScsiRequest {
         let op = self.cmd.op;
         let dev = self.dev.clone();
         let locked_dev = dev.lock().unwrap();
-        let mut aio = locked_dev.aio.as_ref().unwrap().lock().unwrap();
+        // SAFETY: the block_backend is assigned after device realized.
+        let block_backend = locked_dev.block_backend.as_ref().unwrap();
+        let mut locked_backend = block_backend.lock().unwrap();
         let s_req = Arc::new(Mutex::new(self));
 
-        let offset = match locked_dev.scsi_type {
+        let scsicompletecb = ScsiCompleteCb { req: s_req.clone() };
+        let offset_bits = match locked_dev.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
         let locked_req = s_req.lock().unwrap();
-
-        let mut aiocb = AioCb {
-            direct: locked_dev.config.direct,
-            req_align: locked_dev.req_align,
-            buf_align: locked_dev.buf_align,
-            file_fd: locked_dev.disk_image.as_ref().unwrap().as_raw_fd(),
-            opcode: OpCode::Noop,
-            iovec: locked_req.iovec.clone(),
-            offset: (locked_req.cmd.lba << offset) as usize,
-            nbytes: locked_req.cmd.xfer as u64,
-            user_data: 0,
-            iocompletecb: ScsiCompleteCb { req: s_req.clone() },
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            write_zeroes_unmap: false,
-        };
+        let iovecs = locked_req.iovec.clone();
+        let offset = (locked_req.cmd.lba << offset_bits) as usize;
         drop(locked_req);
 
         if op == SYNCHRONIZE_CACHE {
-            aiocb.opcode = OpCode::Fdsync;
-            aio.submit_request(aiocb)
+            locked_backend
+                .datasync(scsicompletecb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
-            aio.flush_request()?;
+            locked_backend.flush_request()?;
+
             return Ok(s_req);
         }
 
         match mode {
             ScsiXferMode::ScsiXferFromDev => {
-                aiocb.opcode = OpCode::Preadv;
-                aio.submit_request(aiocb)
+                locked_backend
+                    .read_vectored(&iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for reading")?;
             }
             ScsiXferMode::ScsiXferToDev => {
-                aiocb.opcode = OpCode::Pwritev;
-                aio.submit_request(aiocb)
-                    .with_context(|| "Failed to process block request for writing")?;
+                locked_backend
+                    .write_vectored(&iovecs, offset, scsicompletecb)
+                    .with_context(|| "Failed to process scsi request for writing")?;
             }
             _ => {
                 info!("xfer none");
             }
         }
 
-        aio.flush_request()?;
+        locked_backend.flush_request()?;
         Ok(s_req)
     }
 
@@ -635,7 +630,7 @@ impl ScsiRequest {
             }
             TEST_UNIT_READY => {
                 let dev_lock = self.dev.lock().unwrap();
-                if dev_lock.disk_image.is_none() {
+                if dev_lock.block_backend.is_none() {
                     Err(anyhow!("No scsi backend!"))
                 } else {
                     Ok(Vec::new())
@@ -1608,7 +1603,7 @@ fn scsi_command_emulate_get_configuration(
     // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1). Bit 2: Pvnt Jmpr.
     //           Bit 1: DBML. Bit 0: Lock(1).
     // Byte[37-39]: Reserved.
-    BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVEABLE_MEDIUM);
+    BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVABLE_MEDIUM);
     outbuf[34] = 0x0b;
     outbuf[35] = 4;
     outbuf[36] = 0x39;

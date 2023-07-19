@@ -129,9 +129,12 @@ $ cat /proc/meminfo
 ### 1.5 NUMA node
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
 The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
+The configuration items(mem-path, mem-prealloc) here will cause the global configuration to be invalidated
 
 Each NUMA node is given a list of command lines option, there will be described in detail below.
-1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
+1. -object memory-backend-ram,size=<size>,id=<memid>[,policy=<bind>][,host-nodes=<0>][,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]
+   -object memory-backend-file,size=<size>,id=<memid>[,host-nodes=<0-1>][,policy=bind][,mem-path=<path/to/file>][,dump-guest-core=<true|false>][,mem-prealloc=<true|false>][,share=<on|off>]
+   -object memory-backend-memfd,size=<size>,id=<memid>[,host-nodes=0-1][,policy=bind][,mem-prealloc=<true|false>][,dump-guest-core=<true|false>][,share=<on|off>]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
    The optional policies are default, preferred, bind and interleave. If it is not configured, `default` is used.
@@ -154,6 +157,10 @@ The following command shows how to set NUMA node:
 
 -object memory-backend-ram,size=2G,id=mem0,host-nodes=0-1,policy=bind
 -object memory-backend-ram,size=2G,id=mem1,host-nodes=0-1,policy=bind
+or
+-object memory-backend-file,size=2G,id=mem0,host-nodes=0-1,policy=bind,mem-path=/path/to/file
+-object memory-backend-memfd,size=2G,id=mem1,host-nodes=0-1,policy=bind,mem-prealloc=true
+
 -numa node,nodeid=0,cpus=0-1:4-5,memdev=mem0
 -numa node,nodeid=1,cpus=2-3:6-7,memdev=mem1
 [-numa dist,src=0,dst=0,val=10]
@@ -165,6 +172,8 @@ The following command shows how to set NUMA node:
 Detailed configuration instructions:
 ```
 -object memory-backend-ram,size=<num[M|m|G|g]>,id=<memid>,policy={bind|default|preferred|interleave},host-nodes=<id>
+-object memory-backend-file,size=<num[M|m|G|g]>,id=<memid>,policy={bind|default|preferred|interleave},host-nodes=<id>,mem-path=</path/to/file>[,dump-guest-core=<true|false>]
+-object memory-backend-memfd,size=<num[M|m|G|g]>,id=<memid>[,host-nodes=0-1][,policy=bind][,mem-prealloc=true][,dump-guest-core=false]
 -numa node[,nodeid=<node>][,cpus=<firstcpu>[-<lastcpus>][:<secondcpus>[-<lastcpus>]]][,memdev=<memid>]
 -numa dist,src=<source>,dst=<destination>,val=<distance>
 ```
@@ -294,9 +303,9 @@ fourteen properties are supported for virtio block device.
 * iothread: indicate which iothread will be used. (optional) if not set, the main thread will be used.
 * throttling.iops-total: used to limit IO operations for block device. (optional)
 * discard: free up unused disk space. (optional) `unmap/ignore` means `on/off`. If not set, default is `ignore`.
-* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If dicard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
+* detect-zeroes: optimize writing zeroes to disk space. (optional) `unmap` means it can free up disk space when discard is `unmap`. If discard is `ignore`, `unmap` of detect-zeroes is same as `on`. If not set, default is `off`.
 * if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
-* format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
+* format: the format of block image. (optional) Possible values are `raw` or `qcow2`. If not set, default is `raw`. NB: currently only `raw` is supported for microvm.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
 The number ranges from 0 to 255, the smaller the number, the higher the priority.
@@ -799,7 +808,7 @@ One property can be set for USB Tablet.
 
 Note: Only one tablet can be configured.
 
-### 2.13.4 USB Camera
+#### 2.13.4 USB Camera
 Video Camera Device that based on USB video class protocol. It should be attached to USB controller.
 
 3 properties can be set for USB Camera.
@@ -831,7 +840,7 @@ Three properties can be set for USB Storage.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
-### 2.13.6 USB Host
+#### 2.13.6 USB Host
 USB Host Device that based on USB protocol. It should be attached to USB controller.
 
 Six properties can be set for USB Host.
@@ -842,23 +851,28 @@ Six properties can be set for USB Host.
 * hostport: the physical number of the usb host device.
 * vendorid: the vendor ID of the usb host device.
 * productid: the product ID of the usb host device.
+* isobufs: the number of Isochronous Transfers buffer. If not set, default is 4.
+* isobsize: the size of Isochronous Transfers buffer. If not set, default is 32.
 
 Pass through the host device identified by bus and addr:
 
 ```shell
--device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>
+-device usb-host,id=<hostid>,hostbus=<bus>,hostaddr=<addr>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Pass through the host device identified by bus and physical port:
 
 ```shell
--device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>
+-device usb-host,id=<hostid>,hostbus=<bus>,hostport=<port>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Pass through the host device identified by the vendor and product ID:
 
 ```shell
--device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>
+-device usb-host,id=<hostid>,vendorid=<vendor>,productid=<product>[,isobufs=<number>][,isobsize=<size>]
+
 ```
 
 Note:
@@ -881,8 +895,6 @@ Six properties can be set for Virtio-Scsi controller.
 ```
 ### 2.15 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
-
-Note: Only support using raw image file as backend now.
 
 Ten properties can be set for virtio-scsi hd.
 

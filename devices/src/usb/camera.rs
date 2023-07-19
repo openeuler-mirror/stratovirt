@@ -36,8 +36,8 @@ use util::loop_context::{
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    camera_ops, get_video_frame_size, CamBasicFmt, CameraBrokenCallback, CameraFormatList,
-    CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
+    camera_ops, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraBrokenCallback,
+    CameraFormatList, CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
@@ -93,6 +93,7 @@ const VS_COMMIT_CONTROL: u8 = 2;
 
 const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
+const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 pub struct UsbCamera {
     id: String,                                                 // uniq device id
@@ -393,7 +394,6 @@ struct VsDescInputHeader {
     bTriggerSupport: u8,
     bTriggerUsage: u8,
     bControlSize: u8,
-    bmaControls: u16,
 }
 
 impl ByteCode for VsDescInputHeader {}
@@ -559,7 +559,7 @@ fn gen_desc_device_camera(fmt_list: Vec<CameraFormatList>) -> Result<Arc<UsbDesc
                 bNumInterfaces: 2,
                 bConfigurationValue: 1,
                 iConfiguration: UsbCameraStringIDs::Configuration as u8,
-                bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
+                bmAttributes: USB_CONFIGURATION_ATTR_ONE,
                 bMaxPower: 50,
             },
             iad_desc: vec![gen_desc_iad_camera(fmt_list)?],
@@ -611,7 +611,7 @@ impl UsbCamera {
         let camera = camera_ops(config.clone())?;
         Ok(Self {
             id: config.id.unwrap(),
-            usb_device: UsbDevice::new(),
+            usb_device: UsbDevice::new(USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
             camera_dev: camera,
@@ -662,7 +662,7 @@ impl UsbCamera {
         if self.listening {
             return Ok(());
         }
-        let cam_handler = Arc::new(Mutex::new(CameraIoHander::new(
+        let cam_handler = Arc::new(Mutex::new(CameraIoHandler::new(
             &self.camera_fd,
             &self.packet_list,
             &self.camera_dev,
@@ -1015,21 +1015,21 @@ impl UvcPayload {
 }
 
 /// Camere handler for copying frame data to usb packet.
-struct CameraIoHander {
+struct CameraIoHandler {
     camera: Arc<Mutex<dyn CameraHostdevOps>>,
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
 }
 
-impl CameraIoHander {
+impl CameraIoHandler {
     fn new(
         fd: &Arc<EventFd>,
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
         camera: &Arc<Mutex<dyn CameraHostdevOps>>,
         payload: &Arc<Mutex<UvcPayload>>,
     ) -> Self {
-        CameraIoHander {
+        CameraIoHandler {
             camera: camera.clone(),
             fd: fd.clone(),
             packet_list: list.clone(),
@@ -1088,15 +1088,15 @@ impl CameraIoHander {
             iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
                 .with_context(|| format!("Invalid iov size {}", pkt_size))?;
         }
-        let copyed = locked_camera.get_frame(
+        let copied = locked_camera.get_frame(
             iovecs,
             locked_payload.frame_offset,
             frame_data_size as usize,
         )?;
-        pkt.actual_length += copyed as u32;
+        pkt.actual_length += copied as u32;
         debug!(
-            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copyed {}",
-            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copyed
+            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copied {}",
+            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copied
         );
         locked_payload.frame_offset += frame_data_size as usize;
         locked_payload.payload_offset += frame_data_size as usize;
@@ -1112,7 +1112,7 @@ impl CameraIoHander {
     }
 }
 
-impl EventNotifierHelper for CameraIoHander {
+impl EventNotifierHelper for CameraIoHandler {
     fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let cloned_io_handler = io_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
@@ -1151,9 +1151,9 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
     header_struct.wTotalLength = header_struct.bLength as u16
         + body.clone().iter().fold(0, |len, x| len + x.data.len()) as u16;
 
-    buf.push(Arc::new(UsbDescOther {
-        data: header_struct.as_bytes().to_vec(),
-    }));
+    let mut vec = header_struct.as_bytes().to_vec();
+    vec.resize(header_struct.bLength as usize, 0);
+    buf.push(Arc::new(UsbDescOther { data: vec }));
     buf.append(&mut body);
 
     Ok(buf)
@@ -1161,7 +1161,7 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
 
 fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
     VsDescInputHeader {
-        bLength: 0xf,
+        bLength: 0xd + fmt_num,
         bDescriptorType: CS_INTERFACE,
         bDescriptorSubtype: VS_INPUT_HEADER,
         bNumFormats: fmt_num,
@@ -1173,7 +1173,6 @@ fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
         bTriggerSupport: 0x00,
         bTriggerUsage: 0x00,
         bControlSize: 0x01,
-        bmaControls: 0x00,
     }
 }
 
@@ -1218,6 +1217,7 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
 }
 
 fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
+    let bitrate = get_bit_rate(frm.width, frm.height, frm.interval)?;
     let desc = VsDescFrm {
         bLength: 0x1e, // TODO: vary with interval number.
         bDescriptorType: CS_INTERFACE,
@@ -1226,11 +1226,11 @@ fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
             FmtType::Mjpg => VS_FRAME_MJPEG,
         },
         bFrameIndex: frm.index,
-        bmCapabilities: 0x00,
+        bmCapabilities: 0x1,
         wWidth: frm.width as u16,
         wHeight: frm.height as u16,
-        dwMinBitRate: 442368000,
-        dwMaxBitRate: 442368000,
+        dwMinBitRate: bitrate,
+        dwMaxBitRate: bitrate,
         dwMaxVideoFrameBufSize: get_video_frame_size(frm.width, frm.height)?,
         dwDefaultFrameInterval: frm.interval,
         bFrameIntervalType: 1,
@@ -1323,8 +1323,8 @@ mod test {
 
     #[test]
     fn test_interfaces_table_data_len() {
-        // VC and VS's header differents, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
-        // the rest datas follow the same principle that the 1st element is the very data vector's length.
+        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
+        // the rest data follow the same principle that the 1st element is the very data vector's length.
         test_interface_table_data_len(gen_desc_interface_camera_vc().unwrap(), 5);
         test_interface_table_data_len(gen_desc_interface_camera_vs(list_format()).unwrap(), 4);
     }

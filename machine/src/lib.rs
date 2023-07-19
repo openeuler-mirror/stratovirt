@@ -32,7 +32,6 @@ use devices::misc::scream::Scream;
 use log::warn;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::scream::parse_scream;
-#[cfg(not(target_env = "musl"))]
 use machine_manager::event_loop::EventLoop;
 #[cfg(not(target_env = "musl"))]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -45,7 +44,7 @@ pub use micro_vm::LightMachine;
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{
-    create_host_mmaps, set_host_memory_policy, AddressSpace, KvmMemoryListener, Region,
+    create_backend_mem, create_default_mem, AddressSpace, KvmMemoryListener, Region,
 };
 pub use anyhow::Result;
 use anyhow::{anyhow, bail, Context};
@@ -100,18 +99,6 @@ use virtio::{
 };
 
 pub trait MachineOps {
-    /// Calculate the ranges of memory according to architecture.
-    ///
-    /// # Arguments
-    ///
-    /// * `mem_size` - memory size of VM.
-    ///
-    /// # Returns
-    ///
-    /// A array of ranges, it's element represents (start_addr, size).
-    /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
-    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
-
     fn build_smbios(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
         let smbioscfg = self.get_vm_config().lock().unwrap().smbios.clone();
 
@@ -137,6 +124,37 @@ pub trait MachineOps {
         Ok((&vmcfg.machine_config.cpu_config).into())
     }
 
+    /// Init memory of vm to architecture.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_size` - memory size of VM.
+    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()>;
+
+    fn create_machine_ram(&self, mem_config: &MachineMemConfig, thread_num: u8) -> Result<()> {
+        let root = self.get_vm_ram();
+        let numa_nodes = self.get_numa_nodes();
+
+        if numa_nodes.is_none() || mem_config.mem_zones.is_none() {
+            let default_mem = create_default_mem(mem_config, thread_num)?;
+            root.add_subregion_not_update(default_mem, 0_u64)?;
+            return Ok(());
+        }
+        let zones = mem_config.mem_zones.as_ref().unwrap();
+        let mut offset = 0_u64;
+        for (_, node) in numa_nodes.as_ref().unwrap().iter().enumerate() {
+            for zone in zones.iter() {
+                if zone.id.eq(&node.1.mem_dev) {
+                    let ram = create_backend_mem(zone, thread_num)?;
+                    root.add_subregion_not_update(ram, offset)?;
+                    offset += zone.size;
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Init I/O & memory address space and mmap guest memory.
     ///
     /// # Arguments
@@ -155,14 +173,9 @@ pub trait MachineOps {
         // call registers some notifier functions in the KVM, which are frequently triggered when
         // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
         // needs to be invoked first.
-        let mut mem_mappings = Vec::new();
         let migrate_info = self.get_migrate_info();
         if migrate_info.0 != MigrateMode::File {
-            let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-            mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
-                .with_context(|| "Failed to mmap guest ram.")?;
-            set_host_memory_policy(&mem_mappings, &mem_config.mem_zones)
-                .with_context(|| "Failed to set host memory NUMA policy.")?;
+            self.create_machine_ram(mem_config, nr_cpus)?;
         }
 
         sys_mem
@@ -176,14 +189,7 @@ pub trait MachineOps {
             .with_context(|| "Failed to register KVM listener for I/O address space.")?;
 
         if migrate_info.0 != MigrateMode::File {
-            for mmap in mem_mappings.iter() {
-                let base = mmap.start_address().raw_value();
-                let size = mmap.size();
-                sys_mem
-                    .root()
-                    .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                    .with_context(|| MachineError::RegMemRegionErr(base, size))?;
-            }
+            self.init_machine_ram(sys_mem, mem_config.mem_size)?;
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
@@ -342,6 +348,10 @@ pub trait MachineOps {
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 
+    fn get_vm_ram(&self) -> &Arc<Region>;
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
+
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
@@ -359,11 +369,7 @@ pub trait MachineOps {
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_balloon(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
-        let balloon = Arc::new(Mutex::new(Balloon::new(
-            &device_cfg,
-            sys_mem.clone(),
-            vm_config.machine_config.mem_config.mem_share,
-        )));
+        let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         if cfg_args.contains("virtio-balloon-device") {
             let device = VirtioMmioDevice::new(sys_mem, balloon);
@@ -845,13 +851,13 @@ pub trait MachineOps {
         {
             bail!("Wrong! Two scsi devices have the same scsi-id and lun");
         }
+        let iothread = cntlr.config.iothread.clone();
+        device.lock().unwrap().realize(iothread)?;
         bus.lock()
             .unwrap()
             .devices
             .insert((device_cfg.target, device_cfg.lun), device.clone());
         device.lock().unwrap().parent_bus = Arc::downgrade(bus);
-
-        device.lock().unwrap().realize()?;
 
         if let Some(bootindex) = device_cfg.boot_index {
             // Eg: OpenFirmware device path(virtio-scsi disk):
@@ -1122,6 +1128,7 @@ pub trait MachineOps {
                     }
                     let mut numa_node = NumaNode {
                         cpus: numa_config.cpus,
+                        mem_dev: numa_config.mem_dev.clone(),
                         ..Default::default()
                     };
 
@@ -1132,7 +1139,7 @@ pub trait MachineOps {
                         .map(|mem_conf| mem_conf.size)
                         .with_context(|| {
                             format!(
-                                "Object for memory-backend-ram {} config not found",
+                                "Object for memory-backend {} config not found",
                                 numa_config.mem_dev
                             )
                         })?;
@@ -1598,10 +1605,16 @@ pub trait MachineOps {
     }
 
     /// Register a new drive backend file.
-    fn register_drive_file(&self, path: &str, read_only: bool, direct: bool) -> Result<()> {
+    fn register_drive_file(
+        &self,
+        id: &str,
+        path: &str,
+        read_only: bool,
+        direct: bool,
+    ) -> Result<()> {
         let files = self.get_drive_files();
         let mut drive_files = files.lock().unwrap();
-        VmConfig::add_drive_file(&mut drive_files, path, read_only, direct)?;
+        VmConfig::add_drive_file(&mut drive_files, id, path, read_only, direct)?;
 
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
@@ -1673,6 +1686,7 @@ pub trait MachineOps {
     /// * `vm_state` - Vm kvm vm state.
     fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         if !paused {
+            EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
         }
 
@@ -1708,6 +1722,8 @@ pub trait MachineOps {
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
     ) -> Result<()> {
+        EventLoop::get_ctx(None).unwrap().disable_clock();
+
         self.deactive_drive_files()?;
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -1733,6 +1749,8 @@ pub trait MachineOps {
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
     fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+        EventLoop::get_ctx(None).unwrap().enable_clock();
+
         self.active_drive_files()?;
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -1933,7 +1951,7 @@ fn check_windows_emu_pid(
             shutdown_req.clone(),
         );
     });
-    if let Some(ctx) = EventLoop::get_ctx(None) {
-        ctx.timer_add(check_emu_alive, check_delay);
-    }
+    EventLoop::get_ctx(None)
+        .unwrap()
+        .timer_add(check_emu_alive, check_delay);
 }

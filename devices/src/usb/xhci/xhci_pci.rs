@@ -20,7 +20,7 @@ use address_space::{AddressSpace, Region};
 use log::debug;
 use machine_manager::config::XhciConfig;
 use pci::config::{
-    PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
+    PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::update_dev_id;
@@ -85,21 +85,30 @@ impl XhciPciDevice {
             dev_id: Arc::new(AtomicU16::new(0)),
             name: config.id.clone().unwrap(),
             parent_bus,
-            mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
+            mem_region: Region::init_container_region(
+                XHCI_PCI_CONFIG_LENGTH as u64,
+                "XhciPciContainer",
+            ),
         }
     }
 
     fn mem_region_init(&mut self) -> pci::Result<()> {
-        let cap_region =
-            Region::init_io_region(XHCI_PCI_CAP_LENGTH as u64, build_cap_ops(&self.xhci));
+        let cap_region = Region::init_io_region(
+            XHCI_PCI_CAP_LENGTH as u64,
+            build_cap_ops(&self.xhci),
+            "XhciPciCapRegion",
+        );
         pci::Result::with_context(
             self.mem_region
                 .add_subregion(cap_region, XHCI_PCI_CAP_OFFSET as u64),
             || "Failed to register cap region.",
         )?;
 
-        let mut oper_region =
-            Region::init_io_region(XHCI_PCI_OPER_LENGTH as u64, build_oper_ops(&self.xhci));
+        let mut oper_region = Region::init_io_region(
+            XHCI_PCI_OPER_LENGTH as u64,
+            build_oper_ops(&self.xhci),
+            "XhciPciOperRegion",
+        );
         oper_region.set_access_size(4);
         pci::Result::with_context(
             self.mem_region
@@ -110,8 +119,11 @@ impl XhciPciDevice {
         let port_num = self.xhci.lock().unwrap().usb_ports.len();
         for i in 0..port_num {
             let port = &self.xhci.lock().unwrap().usb_ports[i];
-            let port_region =
-                Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
+            let port_region = Region::init_io_region(
+                XHCI_PCI_PORT_LENGTH as u64,
+                build_port_ops(port),
+                "XhciPciPortRegion",
+            );
             let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
             pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
                 "Failed to register port region."
@@ -121,6 +133,7 @@ impl XhciPciDevice {
         let mut runtime_region = Region::init_io_region(
             XHCI_PCI_RUNTIME_LENGTH as u64,
             build_runtime_ops(&self.xhci),
+            "XhciPciRuntimeRegion",
         );
         runtime_region.set_access_size(4);
         pci::Result::with_context(
@@ -132,6 +145,7 @@ impl XhciPciDevice {
         let doorbell_region = Region::init_io_region(
             XHCI_PCI_DOORBELL_LENGTH as u64,
             build_doorbell_ops(&self.xhci),
+            "XhciPciDoorbellRegion",
         );
         pci::Result::with_context(
             self.mem_region
@@ -242,7 +256,7 @@ impl PciDevOps for XhciPciDevice {
         )?;
 
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
-        mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
+        mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         self.pci_config.register_bar(
             0_usize,
             self.mem_region.clone(),

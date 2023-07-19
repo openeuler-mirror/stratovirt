@@ -15,6 +15,7 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
@@ -49,10 +50,10 @@ use util::pixman::{
 };
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, Element, Queue, VirtioDevice, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
-    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, ElemIovec, Element, Queue, VirtioDevice,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
@@ -66,6 +67,9 @@ use crate::{
 const QUEUE_NUM_GPU: usize = 2;
 /// Display changed event
 const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
+
+/// The flag indicates that the frame buffer only used in windows.
+const VIRTIO_GPU_RES_WIN_FRAMEBUF: u32 = 0x80000000;
 
 #[derive(Debug)]
 struct GpuResource {
@@ -307,8 +311,8 @@ impl HardWareOperations for GpuOpts {
         if self.interrupt_cb.is_none() {
             return;
         }
-        let interrup_cb = self.interrupt_cb.as_ref().unwrap();
-        if let Err(e) = (interrup_cb)(&VirtioInterruptType::Config, None, false) {
+        let interrupt_cb = self.interrupt_cb.as_ref().unwrap();
+        if let Err(e) = (interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
                 "{:?}. {:?}",
                 VirtioError::InterruptTrigger("gpu", VirtioInterruptType::Config),
@@ -404,9 +408,6 @@ struct GpuScanout {
     x: u32,
     y: u32,
     resource_id: u32,
-    // Unused with vnc backend, work in others.
-    cursor: VirtioGpuUpdateCursor,
-    // Cursor visable
     cursor_visible: bool,
 }
 
@@ -667,8 +668,10 @@ impl GpuIoHandler {
     }
 
     fn update_cursor_image(&mut self, info_cursor: &VirtioGpuUpdateCursor) {
-        let res_idx = self.get_resource_idx(info_cursor.resource_id);
+        let (res_idx, error) =
+            self.get_backed_resource_idx(info_cursor.resource_id, "cmd_update_cursor");
         if res_idx.is_none() {
+            error!("Failed to update cursor image, errcode: {}", error);
             return;
         }
 
@@ -687,7 +690,7 @@ impl GpuIoHandler {
             ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
         }
 
-        // Windows front-end drvier does not deliver data in format sequence.
+        // Windows front-end driver does not deliver data in format sequence.
         // So we fix it in back-end.
         // TODO: Fix front-end driver is a better solution.
         if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
@@ -716,8 +719,6 @@ impl GpuIoHandler {
 
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
-            scanout.cursor.pos.x_coord = info_cursor.hot_x;
-            scanout.cursor.pos.y_coord = info_cursor.hot_y;
             if info_cursor.resource_id == 0 && scanout.cursor_visible && scanout.mouse.is_some() {
                 let data = &mut scanout.mouse.as_mut().unwrap().data;
                 // In order to improve performance, displaying cursor by virtio-gpu.
@@ -735,20 +736,14 @@ impl GpuIoHandler {
                         *item = 0_u8;
                     }
                 }
-                display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
+                display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
                 scanout.cursor_visible = false;
             }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
             match &mut scanout.mouse {
                 None => {
-                    let tmp_mouse = DisplayMouse {
-                        height: 64,
-                        width: 64,
-                        hot_x: info_cursor.hot_x,
-                        hot_y: info_cursor.hot_y,
-                        data: vec![0_u8; 64 * 64 * size_of::<u32>()],
-                    };
-                    scanout.mouse = Some(tmp_mouse);
+                    let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
+                    scanout.mouse = Some(mouse);
                 }
                 Some(mouse) => {
                     mouse.hot_x = info_cursor.hot_x;
@@ -760,8 +755,7 @@ impl GpuIoHandler {
                 self.update_cursor_image(&info_cursor);
             }
             let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
-            display_cursor_define(&scanout.con, scanout.mouse.as_mut().unwrap())?;
-            scanout.cursor = info_cursor;
+            display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
         } else {
             bail!("Wrong header type for cursor queue");
         }
@@ -964,7 +958,11 @@ impl GpuIoHandler {
         let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
-        let res_data = unsafe { pixman_image_get_data(res.pixman_image) };
+        let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+            res.iov[0].iov_base as *mut u32
+        } else {
+            unsafe { pixman_image_get_data(res.pixman_image) }
+        };
         let res_data_offset = unsafe { res_data.offset(offset as isize) };
 
         // Create surface for the scanout.
@@ -1090,6 +1088,9 @@ impl GpuIoHandler {
         }
 
         let res = &self.resources_list[res_idx.unwrap()];
+        if res.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+            return (None, VIRTIO_GPU_RESP_OK_NODATA);
+        }
         if !is_rect_in_resource(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
@@ -1128,7 +1129,7 @@ impl GpuIoHandler {
             data = pixman_image_get_data(res.pixman_image).cast() as *mut u8;
         }
 
-        // When the dedicated area is continous.
+        // When the dedicated area is continuous.
         if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {
             let offset_dst = (trans_info.rect.y_coord * stride) as usize;
             let trans_size = (trans_info.rect.height * stride) as usize;
@@ -1231,23 +1232,23 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
         }
 
-        for entry in ents.iter() {
-            match self.mem_space.get_host_address(GuestAddress(entry.addr)) {
-                Some(iov_base) => {
-                    let iov_item = Iovec {
-                        iov_base,
-                        iov_len: entry.length as u64,
-                    };
-                    res.iov.push(iov_item);
-                }
-                None => {
-                    error!("Virtio-GPU: Map entry base {:?} failed", entry.addr);
-                    res.iov.clear();
-                    return self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req);
-                }
+        let mut elemiovec = Vec::with_capacity(ents.len());
+        for ent in ents.iter() {
+            elemiovec.push(ElemIovec {
+                addr: GuestAddress(ent.addr),
+                len: ent.length,
+            });
+        }
+        match gpa_hva_iovec_map(&elemiovec, &self.mem_space) {
+            Ok((_, iov)) => {
+                res.iov = iov;
+                self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
+            }
+            Err(e) => {
+                error!("Virtio-GPU: Map entry base failed, {:?}", e);
+                self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)
             }
         }
-        self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
     fn cmd_resource_detach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {
@@ -1449,6 +1450,8 @@ pub struct Gpu {
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1465,6 +1468,7 @@ impl Gpu {
             )),
             consoles: Vec::new(),
             deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1660,5 +1664,9 @@ impl VirtioDevice for Gpu {
             set_run_stage(VmRunningStage::Bios);
         }
         unregister_event_helper(None, &mut self.deactivate_evts)
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }

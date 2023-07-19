@@ -22,7 +22,7 @@ use v4l2_sys_mit::{
     v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE, v4l2_buffer, v4l2_fmtdesc, v4l2_format,
     v4l2_frmivalenum, v4l2_frmsizeenum, v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE,
     v4l2_memory_V4L2_MEMORY_MMAP, v4l2_requestbuffers, v4l2_streamparm, V4L2_CAP_STREAMING,
-    V4L2_CAP_VIDEO_CAPTURE,
+    V4L2_CAP_VIDEO_CAPTURE, V4L2_FMT_FLAG_EMULATED,
 };
 use vmm_sys_util::epoll::EventSet;
 
@@ -133,7 +133,7 @@ impl V4l2CameraBackend {
         let backend = self.backend.as_ref().with_context(|| "Backend is none")?;
         debug!("Camera {} register fd {}", self.id, backend.as_raw_fd());
         // Register event notifier for /dev/videoX.
-        let handler = Arc::new(Mutex::new(V4l2IoHander::new(
+        let handler = Arc::new(Mutex::new(V4l2IoHandler::new(
             &self.sample,
             backend,
             self.notify_cb.clone(),
@@ -174,7 +174,7 @@ impl V4l2CameraBackend {
                 break;
             }
             // NOTE: Only support discrete now.
-            if (frmsize.type_) != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
+            if frmsize.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
             let width = unsafe { frmsize.__bindgen_anon_1.discrete.width };
@@ -187,8 +187,8 @@ impl V4l2CameraBackend {
                     interval,
                     index: frm_idx,
                 });
+                frm_idx += 1;
             }
-            frm_idx += 1;
         }
         Ok(list)
     }
@@ -206,6 +206,10 @@ impl V4l2CameraBackend {
             let interval_end = backend.enum_frame_interval(&mut frame_val)?;
             if interval_end {
                 break;
+            }
+            // NOTE: Only support discrete now.
+            if frame_val.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
+                continue;
             }
             let numerator = unsafe { frame_val.__bindgen_anon_1.discrete.numerator };
             let denominator = unsafe { frame_val.__bindgen_anon_1.discrete.denominator };
@@ -323,7 +327,9 @@ impl CameraHostdevOps for V4l2CameraBackend {
             if format_end {
                 break;
             }
-            if !self.is_pixfmt_supported(desc.pixelformat) {
+            if desc.flags & V4L2_FMT_FLAG_EMULATED != 0
+                || !self.is_pixfmt_supported(desc.pixelformat)
+            {
                 continue;
             }
             list.push(CameraFormatList {
@@ -415,20 +421,20 @@ impl CameraHostdevOps for V4l2CameraBackend {
         if frame_offset + len > locked_sample.used_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);
         }
-        let mut copyed = 0;
+        let mut copied = 0;
         for iov in iovecs {
-            if len == copyed {
+            if len == copied {
                 break;
             }
-            let cnt = std::cmp::min(iov.iov_len as usize, len - copyed);
-            let src_ptr = locked_sample.addr + frame_offset as u64 + copyed as u64;
+            let cnt = std::cmp::min(iov.iov_len as usize, len - copied);
+            let src_ptr = locked_sample.addr + frame_offset as u64 + copied as u64;
             // SAFETY: the address is not out of range.
             unsafe {
                 std::ptr::copy(src_ptr as *const u8, iov.iov_base as *mut u8, cnt);
             }
-            copyed += cnt;
+            copied += cnt;
         }
-        Ok(copyed)
+        Ok(copied)
     }
 
     fn register_notify_cb(&mut self, cb: CameraNotifyCallback) {
@@ -458,21 +464,21 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
     Ok(fmt)
 }
 
-pub struct V4l2IoHander {
+pub struct V4l2IoHandler {
     sample: Arc<Mutex<Sample>>,
     backend: Arc<V4l2Backend>,
     notify_cb: Option<CameraNotifyCallback>,
     broken_cb: Option<CameraNotifyCallback>,
 }
 
-impl V4l2IoHander {
+impl V4l2IoHandler {
     pub fn new(
         sample: &Arc<Mutex<Sample>>,
         backend: &Arc<V4l2Backend>,
         cb: Option<CameraNotifyCallback>,
         broken_cb: Option<CameraNotifyCallback>,
     ) -> Self {
-        V4l2IoHander {
+        V4l2IoHandler {
             sample: sample.clone(),
             backend: backend.clone(),
             notify_cb: cb,
@@ -521,7 +527,7 @@ impl V4l2IoHander {
     }
 }
 
-impl EventNotifierHelper for V4l2IoHander {
+impl EventNotifierHelper for V4l2IoHandler {
     fn internal_notifiers(v4l2_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let cloend_v4l2_handler = v4l2_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _fd: RawFd| {

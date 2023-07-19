@@ -15,7 +15,8 @@ mod syscall;
 
 pub use crate::error::MachineError;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
-use log::{error, info};
+use devices::acpi::power::PowerDev;
+use log::{error, info, warn};
 use machine_manager::config::ShutdownAction;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::UiContext;
@@ -32,15 +33,16 @@ use vmm_sys_util::eventfd::EventFd;
 use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
 
 use acpi::{
-    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
-    AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, ProcessorHierarchyNode, TableLoader,
-    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
-    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
-    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
-    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
-    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
-    ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT, ROOT_COMPLEX_ENTRY_SIZE,
+    processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
+    AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
+    AmlNameDecl, AmlScope, AmlScopeBuilder, AmlString, CacheHierarchyNode, CacheType,
+    ProcessorHierarchyNode, TableLoader, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ,
+    ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ,
+    ACPI_GTDT_CAP_ALWAYS_ON, ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP,
+    ACPI_IORT_NODE_PCI_ROOT_COMPLEX, ACPI_MADT_GENERIC_CPU_INTERFACE,
+    ACPI_MADT_GENERIC_DISTRIBUTOR, ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR,
+    ARCH_GIC_MAINT_IRQ, ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    ROOT_COMPLEX_ENTRY_SIZE,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -92,6 +94,7 @@ pub enum LayoutEntryType {
     Rtc,
     FwCfg,
     Ged,
+    PowerDev,
     Mmio,
     PcieMmio,
     PciePio,
@@ -111,6 +114,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0901_0000, 0x0000_1000),    // Rtc
     (0x0902_0000, 0x0000_0018),    // FwCfg
     (0x0908_0000, 0x0000_0004),    // Ged
+    (0x0909_0000, 0x0000_1000),    // PowerDev
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
@@ -173,6 +177,8 @@ pub struct StdMachine {
     fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// machine all backend memory region tree
+    machine_ram: Arc<Region>,
 }
 
 impl StdMachine {
@@ -186,8 +192,11 @@ impl StdMachine {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| MachineError::CrtIoSpaceErr)?;
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "SysMem"),
+            "sys_mem",
+        )
+        .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_mem,
             (
@@ -243,6 +252,10 @@ impl StdMachine {
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            machine_ram: Arc::new(Region::init_container_region(
+                u64::max_value(),
+                "MachineRam",
+            )),
         })
     }
 
@@ -296,21 +309,34 @@ impl StdMachine {
 
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
         for core in 0..self.cpu_topo.cores {
+            let mut priv_resources = vec![0; 3];
+            priv_resources[0] = pptt.table_len() as u32;
+            let mut cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L2);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+            priv_resources[1] = pptt.table_len() as u32;
+            cache_hierarchy_node = CacheHierarchyNode::new(priv_resources[0], CacheType::L1D);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+            priv_resources[2] = pptt.table_len() as u32;
+            cache_hierarchy_node = CacheHierarchyNode::new(priv_resources[0], CacheType::L1I);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+
             if self.cpu_topo.threads > 1 {
                 let core_offset = pptt.table_len();
                 let core_hierarchy_node =
-                    ProcessorHierarchyNode::new(0, 0x0, cluster_offset, core as u32);
+                    ProcessorHierarchyNode::new(0x0, cluster_offset, core as u32, 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
+                processor_append_priv_res(pptt, priv_resources);
                 for _thread in 0..self.cpu_topo.threads {
                     let thread_hierarchy_node =
-                        ProcessorHierarchyNode::new(0, 0xE, core_offset as u32, *uid);
+                        ProcessorHierarchyNode::new(0xE, core_offset as u32, *uid, 0);
                     pptt.append_child(&thread_hierarchy_node.aml_bytes());
                     (*uid) += 1;
                 }
             } else {
-                let core_hierarchy_node = ProcessorHierarchyNode::new(0, 0xA, cluster_offset, *uid);
+                let core_hierarchy_node = ProcessorHierarchyNode::new(0xA, cluster_offset, *uid, 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
                 (*uid) += 1;
+                processor_append_priv_res(pptt, priv_resources);
             }
         }
     }
@@ -319,7 +345,7 @@ impl StdMachine {
         for cluster in 0..self.cpu_topo.clusters {
             let cluster_offset = pptt.table_len();
             let cluster_hierarchy_node =
-                ProcessorHierarchyNode::new(0, 0x0, socket_offset, cluster as u32);
+                ProcessorHierarchyNode::new(0x0, socket_offset, cluster as u32, 0);
             pptt.append_child(&cluster_hierarchy_node.aml_bytes());
             self.build_pptt_cores(pptt, cluster_offset as u32, uid);
         }
@@ -327,9 +353,15 @@ impl StdMachine {
 
     fn build_pptt_sockets(&self, pptt: &mut AcpiTable, uid: &mut u32) {
         for socket in 0..self.cpu_topo.sockets {
+            let priv_resources = vec![pptt.table_len() as u32];
+            let cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L3);
+            pptt.append_child(&cache_hierarchy_node.aml_bytes());
+
             let socket_offset = pptt.table_len();
-            let socket_hierarchy_node = ProcessorHierarchyNode::new(0, 0x1, 0, socket as u32);
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, socket as u32, 1);
             pptt.append_child(&socket_hierarchy_node.aml_bytes());
+            processor_append_priv_res(pptt, priv_resources);
+
             self.build_pptt_clusters(pptt, socket_offset as u32, uid);
         }
     }
@@ -344,6 +376,12 @@ impl StdMachine {
         }
         Ok(())
     }
+
+    pub fn mem_show(&self) {
+        self.sys_mem.memspace_show();
+        let machine_ram = self.get_vm_ram();
+        machine_ram.mtree(0_u32);
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -353,6 +391,7 @@ impl StdMachineOps for StdMachine {
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1,
             mmconfig_region_ops,
+            "PcieEcamIo",
         );
         self.sys_mem
             .root()
@@ -421,14 +460,26 @@ impl StdMachineOps for StdMachine {
         &self.cpus
     }
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+    fn get_guest_numa(&self) -> &Option<NumaNodes> {
         &self.numa_nodes
     }
 }
 
 impl MachineOps for StdMachine {
-    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        vec![(MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size)]
+    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+        let vm_ram = self.get_vm_ram();
+
+        let layout_size = MEM_LAYOUT[LayoutEntryType::Mem as usize].1;
+        let ram = Region::init_alias_region(
+            vm_ram.clone(),
+            0,
+            std::cmp::min(layout_size, mem_size),
+            "pc_ram",
+        );
+        sys_mem
+            .root()
+            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        Ok(())
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
@@ -514,14 +565,26 @@ impl MachineOps for StdMachine {
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
+        let battery_present = self.vm_config.lock().unwrap().machine_config.battery;
         let ged = Ged::default();
-        ged.realize(
-            &mut self.sysbus,
-            self.power_button.clone(),
-            MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
-            MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
-        )
-        .with_context(|| "Failed to realize Ged")?;
+        let ged_dev = ged
+            .realize(
+                &mut self.sysbus,
+                self.power_button.clone(),
+                battery_present,
+                MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
+                MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
+            )
+            .with_context(|| "Failed to realize Ged")?;
+        if battery_present {
+            let pdev = PowerDev::new(ged_dev);
+            pdev.realize(
+                &mut self.sysbus,
+                MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
+                MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
+            )
+            .with_context(|| "Failed to realize PowerDev")?;
+        }
         Ok(())
     }
 
@@ -758,6 +821,14 @@ impl MachineOps for StdMachine {
 
     fn get_sys_bus(&mut self) -> &SysBus {
         &self.sysbus
+    }
+
+    fn get_vm_ram(&self) -> &Arc<Region> {
+        &self.machine_ram
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
@@ -1084,13 +1155,16 @@ impl MachineLifecycle for StdMachine {
         };
 
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if self.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
             return false;
         }
 
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            info!("vm destroy");
-            ctx.kick();
-        }
+        info!("vm destroy");
+        EventLoop::get_ctx(None).unwrap().kick();
+
         true
     }
 

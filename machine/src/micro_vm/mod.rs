@@ -30,6 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
+use machine_manager::config::DiskFormat;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 use util::aio::{AioEngine, WriteZeroesState};
@@ -68,7 +69,7 @@ use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::{
     config::{
         parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
-        Incoming, MigrateMode, NetworkInterfaceConfig, SerialConfig, VmConfig,
+        Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
         DEFAULT_VIRTQUEUE_SIZE,
     },
     event,
@@ -184,8 +185,12 @@ pub struct LightMachine {
     boot_source: Arc<Mutex<BootSource>>,
     // All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
+    // List of guest NUMA nodes information.
+    numa_nodes: Option<NumaNodes>,
     // Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    // All backend memory region tree.
+    machine_ram: Arc<Region>,
 }
 
 impl LightMachine {
@@ -195,10 +200,13 @@ impl LightMachine {
     ///
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .with_context(|| MachineError::CrtMemSpaceErr)?;
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "SysMem"),
+            "sys_mem",
+        )
+        .with_context(|| MachineError::CrtMemSpaceErr)?;
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16, "SysIo"), "SysIo")
             .with_context(|| MachineError::CrtIoSpaceErr)?;
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (
@@ -239,7 +247,9 @@ impl LightMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
+            numa_nodes: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            machine_ram: Arc::new(Region::init_container_region(u64::max_value(), "pc.ram")),
         })
     }
 
@@ -260,6 +270,15 @@ impl LightMachine {
             .with_context(|| MachineError::CrtPitErr)?;
 
         Ok(())
+    }
+
+    pub fn mem_show(&self) {
+        self.sys_mem.memspace_show();
+        #[cfg(target_arch = "x86_64")]
+        self.sys_io.memspace_show();
+
+        let machine_ram = self.get_vm_ram();
+        machine_ram.mtree(0_u32);
     }
 
     fn create_replaceable_devices(&mut self) -> Result<()> {
@@ -481,26 +500,49 @@ impl LightMachine {
 }
 
 impl MachineOps for LightMachine {
-    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        #[allow(unused_mut)]
-        let mut ranges: Vec<(u64, u64)>;
+    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+        let vm_ram = self.get_vm_ram();
 
         #[cfg(target_arch = "aarch64")]
         {
-            let mem_start = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-            ranges = vec![(mem_start, mem_size)];
+            let layout_size = MEM_LAYOUT[LayoutEntryType::Mem as usize].1;
+            let ram = Region::init_alias_region(
+                vm_ram.clone(),
+                0,
+                std::cmp::min(layout_size, mem_size),
+                "pc_ram",
+            );
+            sys_mem
+                .root()
+                .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
         }
         #[cfg(target_arch = "x86_64")]
         {
-            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            ranges = vec![(0, std::cmp::min(gap_start, mem_size))];
-            if mem_size > gap_start {
-                let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-                ranges.push((gap_end, mem_size - gap_start));
+            let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+
+            let below4g_ram = Region::init_alias_region(
+                vm_ram.clone(),
+                0,
+                std::cmp::min(below4g_size, mem_size),
+                "below4g_ram",
+            );
+            sys_mem.root().add_subregion(
+                below4g_ram,
+                MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            )?;
+
+            if mem_size > below4g_size {
+                let above4g_ram = Region::init_alias_region(
+                    vm_ram.clone(),
+                    below4g_size,
+                    mem_size - below4g_size,
+                    "above4g_ram",
+                );
+                let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+                sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
             }
         }
-        ranges
+        Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -657,6 +699,14 @@ impl MachineOps for LightMachine {
         &self.sysbus
     }
 
+    fn get_vm_ram(&self) -> &Arc<Region> {
+        &self.machine_ram
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         PL031::realize(
@@ -766,7 +816,7 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_dies,
         ));
         trace_cpu_topo(&topology);
-
+        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
@@ -899,10 +949,9 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        if let Some(ctx) = EventLoop::get_ctx(None) {
-            info!("vm destroy");
-            ctx.kick();
-        }
+        info!("vm destroy");
+        EventLoop::get_ctx(None).unwrap().kick();
+
         true
     }
 
@@ -1086,6 +1135,11 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    fn query_mem(&self) -> Response {
+        self.mem_show();
+        Response::create_empty_response()
+    }
+
     /// VNC is not supported by light machine currently.
     fn query_vnc(&self) -> Response {
         Response::create_error_response(
@@ -1177,6 +1231,9 @@ impl DeviceInterface for LightMachine {
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);
@@ -1186,7 +1243,8 @@ impl DeviceInterface for LightMachine {
             );
         }
         // Register drive backend file for hotplugged drive.
-        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+        if let Err(e) = self.register_drive_file(&config.id, &args.file.filename, read_only, direct)
+        {
             error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),

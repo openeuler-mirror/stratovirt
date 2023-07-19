@@ -866,62 +866,6 @@ fn test_xhci_keyboard_over_transfer_ring() {
 }
 
 #[test]
-fn test_xhci_keyboard_over_event_ring() {
-    let (xhci, test_state, _) = TestUsbBuilder::new()
-        .with_xhci("xhci")
-        .with_usb_keyboard("kbd")
-        .with_config("auto_run", true)
-        .with_config("command_auto_doorbell", true)
-        .build();
-    let mut xhci = xhci.borrow_mut();
-    // reset event ring.
-    let evt_ring_sz = 16;
-    xhci.init_event_ring(0, 1, evt_ring_sz);
-    xhci.init_msix();
-    let port_id = 1;
-    let slot_id = xhci.init_device(port_id);
-
-    // only one trb left in event ring it will report ring full error.
-    for i in 0..evt_ring_sz - 1 {
-        qmp_send_key_event(test_state.borrow_mut(), 2 + i, true);
-    }
-    xhci.queue_multi_indirect_td(
-        slot_id,
-        HID_DEVICE_ENDPOINT_ID,
-        HID_KEYBOARD_LEN,
-        evt_ring_sz as usize - 1,
-    );
-    xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
-    // NOTE: the last event is lost for the current implementation.
-    for _ in 0..evt_ring_sz - 2 {
-        let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-        assert_eq!(evt.ccode, TRBCCode::Success as u32);
-    }
-    let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
-    assert_eq!(evt.ccode, TRBCCode::EventRingFullError as u32);
-
-    for i in 0..evt_ring_sz {
-        qmp_send_key_event(test_state.borrow_mut(), 2 + i, false);
-    }
-
-    xhci.queue_multi_indirect_td(
-        slot_id,
-        HID_DEVICE_ENDPOINT_ID,
-        HID_KEYBOARD_LEN,
-        evt_ring_sz as usize,
-    );
-
-    xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
-    assert!(status & USB_STS_HCE == USB_STS_HCE);
-
-    xhci.reset_controller(true);
-    let slot_id = xhci.init_device(port_id);
-    xhci.test_keyboard_event(slot_id, test_state.clone());
-    test_state.borrow_mut().stop();
-}
-
-#[test]
 fn test_xhci_keyboard_invalid_doorbell() {
     let (xhci, test_state, _) = TestUsbBuilder::new()
         .with_xhci("xhci")
@@ -1070,7 +1014,7 @@ fn test_xhci_keyboard_controller_init_invalid_register() {
     let mf_index = xhci
         .pci_dev
         .io_readl(xhci.bar_addr, XHCI_PCI_RUNTIME_OFFSET as u64);
-    assert_eq!(mf_index, 0);
+    assert!(mf_index <= 0x3fff);
     // invalid offset
     xhci.pci_dev
         .io_writel(xhci.bar_addr, XHCI_PCI_RUNTIME_OFFSET as u64 + 0x1008, 0xf);
@@ -2707,7 +2651,7 @@ fn test_tablet_keyboard_plug() {
 /// TestStep:
 ///   1. Start a domain without tablet and keyboard.
 ///   2. Plug 15 tablets and keyboards.
-///   3. Continue to hotplug tablet and keyboard, exceptation is failure.
+///   3. Continue to hotplug tablet and keyboard, expectation is failure.
 ///   4. Unplug all tablets and keyboards.
 /// Except:
 ///   1/2/4: success.
@@ -2741,6 +2685,9 @@ fn test_max_number_of_device() {
     i = 1;
     while i <= max_num_of_port2 {
         qmp_unplug_usb_event(test_state.borrow_mut(), i);
+        let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
+        assert_eq!(evt.ccode, TRBCCode::Success as u32);
+        qmp_event_read(test_state.borrow_mut());
         i += 1;
     }
     test_state.borrow_mut().stop();
@@ -2749,10 +2696,10 @@ fn test_max_number_of_device() {
 /// Test abnormal hotplug operation
 /// TestStep:
 ///   1. Start a domain without tablet and keyboard.
-///   2. Unplug tablet and keyboard, exceptation is failure.
+///   2. Unplug tablet and keyboard, expectation is failure.
 ///   3. Hotplug tablet and keyboard.
-///   4. Unplug tablet and keyboard, exceptation is success.
-///   5. Repeat the unplug operation, exceptation is failure.
+///   4. Unplug tablet and keyboard, expectation is success.
+///   5. Repeat the unplug operation, expectation is failure.
 /// Except:
 ///   1/3/4: success.
 ///   2/5: Failed to detach device: id input1 not found.

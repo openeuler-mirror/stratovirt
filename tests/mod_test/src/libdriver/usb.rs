@@ -613,7 +613,7 @@ impl TestXhciPciDevice {
                 assert_eq!(buf, [3, 0]);
             }
             UsbDeviceType::Camera => {
-                assert_eq!(buf, [3, 0]);
+                assert_eq!(buf, [2, 0]);
             }
             _ => {}
         }
@@ -2294,8 +2294,8 @@ impl TestXhciPciDevice {
                 let mut buf = self.get_transfer_data_indirect(evt.ptr, TRB_MAX_LEN as u64);
                 data.append(&mut buf);
             } else if evt.ccode == TRBCCode::ShortPacket as u32 {
-                let copyed = (TRB_MAX_LEN - evt.length) as u64;
-                let mut buf = self.get_transfer_data_indirect(evt.ptr, copyed);
+                let copied = (TRB_MAX_LEN - evt.length) as u64;
+                let mut buf = self.get_transfer_data_indirect(evt.ptr, copied);
                 data.append(&mut buf);
                 if total == data.len() as u32 {
                     return (false, data);

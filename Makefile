@@ -23,3 +23,4 @@ yum-deps:
 	@yum install gtk3-devel
 	@yum install libusbx
 	@yum install alsa-lib-devel
+	@yum install make

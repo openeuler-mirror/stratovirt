@@ -31,7 +31,7 @@ use mod_test::libdriver::virtio_block::{
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::TestState;
-use mod_test::utils::TEST_IMAGE_SIZE;
+use mod_test::utils::{ImageType, TEST_IMAGE_SIZE};
 
 fn add_request(
     test_state: Rc<RefCell<TestState>>,
@@ -198,7 +198,7 @@ fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: 
 }
 
 fn do_event_idx_with_flag(flag: u16) {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -310,7 +310,7 @@ fn do_event_idx_with_flag(flag: u16) {
 ///   2: device can't handle the io request.
 #[test]
 fn virtio_feature_none() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk
         .borrow_mut()
@@ -357,7 +357,7 @@ fn virtio_feature_none() {
 ///   1/2/3/4: success.
 #[test]
 fn virtio_feature_vertion_1() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -434,7 +434,7 @@ fn virtio_feature_vertion_1() {
 ///   1/2/3: success.
 #[test]
 fn virtio_feature_indirect() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -572,7 +572,7 @@ fn virtio_feature_event_idx() {
 ///   1/2/3: success.
 #[test]
 fn virtio_feature_indirect_and_event_idx() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -701,7 +701,7 @@ fn virtio_feature_indirect_and_event_idx() {
 ///   3/4: success.
 #[test]
 fn virtio_init_device_abnormal_status() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     // Test some special status.
     let status = [31, 0, 2, 16, 31, 0, 1, 16, 31, 0, 7, 16, 31, 64, 128];
@@ -787,7 +787,7 @@ fn virtio_init_device_abnormal_status() {
 #[test]
 fn virtio_init_device_abnormal_features() {
     for i in 0..2 {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         // 1. Init device.
         blk.borrow_mut().reset();
@@ -898,7 +898,7 @@ fn virtio_init_device_abnormal_vring_info() {
     ];
 
     for (err_type, value, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         // 1. Init device.
         blk.borrow_mut().reset();
@@ -1102,7 +1102,7 @@ fn virtio_init_device_abnormal_vring_info() {
 ///   3/4: success.
 #[test]
 fn virtio_init_device_out_of_order_1() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let tests = vec![
         [1, 3, 2, 4, 5, 6, 7, 8],
@@ -1161,7 +1161,7 @@ fn virtio_init_device_out_of_order_1() {
 ///   3/4: success.
 #[test]
 fn virtio_init_device_out_of_order_2() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let tests = vec![
         [1, 2, 3, 4, 8, 6, 7, 5],
@@ -1220,7 +1220,7 @@ fn virtio_init_device_out_of_order_2() {
 ///   3/4: success.
 #[test]
 fn virtio_init_device_out_of_order_3() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let tests = vec![
         [1, 2, 3, 4, 5, 6, 7, 0],
@@ -1279,7 +1279,7 @@ fn virtio_init_device_out_of_order_3() {
 ///   3/4: success.
 #[test]
 fn virtio_init_device_repeat() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     // Reset virtio device twice.
     blk.borrow_mut().reset();
@@ -1355,7 +1355,7 @@ fn virtio_io_abnormal_desc_addr() {
         (u64::MAX, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
     ];
     for (mut addr, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -1423,7 +1423,7 @@ fn virtio_io_abnormal_desc_len() {
         (16, 65, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
     ];
     for (length, io_num, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -1529,7 +1529,7 @@ fn virtio_io_abnormal_desc_flags_1() {
         (16, 0, 0),
     ];
     for (flag, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -1580,7 +1580,7 @@ fn virtio_io_abnormal_desc_flags_1() {
 ///   1/3/4: success.
 #[test]
 fn virtio_io_abnormal_desc_flags_2() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -1654,7 +1654,7 @@ fn virtio_io_abnormal_desc_flags_3() {
         (VRING_DESC_F_NEXT, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
     ];
     for (flag, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -1740,7 +1740,7 @@ fn virtio_io_abnormal_desc_next() {
         (u16::MAX, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET),
     ];
     for (next, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -1798,7 +1798,7 @@ fn virtio_io_abnormal_desc_next() {
 ///   1/3/4: success.
 #[test]
 fn virtio_io_abnormal_desc_elem_place() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -1856,7 +1856,7 @@ fn virtio_io_abnormal_desc_elem_place() {
 ///   2: success or failure.
 #[test]
 fn virtio_io_abnormal_indirect_desc_elem_num() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -1958,7 +1958,7 @@ fn virtio_io_abnormal_avail_flags() {
 fn virtio_io_abnormal_avail_idx() {
     let idxs = [16, u16::MAX];
     for idx in idxs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -2009,7 +2009,7 @@ fn virtio_io_abnormal_avail_ring() {
     // (ring[i], ack, device_status)
     let reqs = [(u16::MAX, 0xff, VIRTIO_CONFIG_S_NEEDS_RESET), (0, 0xff, 0)];
     for (value, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -2074,7 +2074,7 @@ fn virtio_io_abnormal_used_event() {
         (VIRTIO_RING_F_EVENT_IDX, 0, 0, 0),
     ];
     for (feature, used_event, ack, device_status) in reqs {
-        let (blk, test_state, alloc, image_path) = set_up();
+        let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
         let vqs = blk.borrow_mut().init_device(
             test_state.clone(),
@@ -2154,7 +2154,7 @@ fn virtio_io_abnormal_used_event() {
 ///   1/2/3: success.
 #[test]
 fn virtio_io_abnormal_used_idx() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -2210,7 +2210,7 @@ fn virtio_io_abnormal_used_idx() {
 ///   3/4: success or failure.
 #[test]
 fn virtio_test_out_of_order_1() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -2278,7 +2278,7 @@ fn virtio_test_out_of_order_1() {
 ///   1/2/3/4/5: success.
 #[test]
 fn virtio_test_out_of_order_2() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -2294,7 +2294,7 @@ fn virtio_test_out_of_order_2() {
         image_path.clone(),
     );
 
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -2339,7 +2339,7 @@ fn virtio_test_out_of_order_2() {
 ///   1/2/3/4/5/6/7: success.
 #[test]
 fn virtio_test_repeat() {
-    let (blk, test_state, alloc, image_path) = set_up();
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
 
     blk.borrow_mut().init_device(
         test_state.clone(),

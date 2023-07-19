@@ -18,10 +18,11 @@ use strum::VariantNames;
 
 use crate::config::ShutdownAction;
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, CameraDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine,
-    CmdParameter, DeviceAddArgument, DeviceProps, Events, GicCap, HumanMonitorCmdArgument,
-    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
-    QmpCommand, QmpErrorClass, QmpEvent, Target, TypeLists, UpdateRegionArgument,
+    BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
+    CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
+    Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
+    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
+    TypeLists, UpdateRegionArgument,
 };
 use crate::qmp::{Response, Version};
 
@@ -192,6 +193,9 @@ pub trait DeviceInterface {
 
     /// Query balloon's size.
     fn query_balloon(&self) -> Response;
+
+    /// Query machine mem size.
+    fn query_mem(&self) -> Response;
 
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
@@ -364,12 +368,12 @@ pub trait DeviceInterface {
             CmdParameter {
                 name: "discard".to_string(),
                 help: "discard operation (unmap|ignore)".to_string(),
-                paramter_type: "string".to_string(),
+                parameter_type: "string".to_string(),
             },
             CmdParameter {
                 name: "detect-zeroes".to_string(),
                 help: "optimize zero writes (unmap|on|off)".to_string(),
-                paramter_type: "string".to_string(),
+                parameter_type: "string".to_string(),
             },
         ];
         let cmd_lines = vec![CmdLine {
@@ -465,6 +469,17 @@ pub trait DeviceInterface {
             QmpErrorClass::GenericError("human-monitor-command is not supported yet".to_string()),
             None,
         )
+    }
+
+    fn blockdev_snapshot_internal_sync(&self, _args: BlockdevSnapshotInternalArgument) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn blockdev_snapshot_delete_internal_sync(
+        &self,
+        _args: BlockdevSnapshotInternalArgument,
+    ) -> Response {
+        Response::create_empty_response()
     }
 }
 

@@ -181,6 +181,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-mem")]
+    query_mem {
+        #[serde(default)]
+        arguments: query_mem,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-balloon")]
     query_balloon {
         #[serde(default)]
@@ -415,6 +422,18 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "blockdev-snapshot-internal-sync")]
+    blockdev_snapshot_internal_sync {
+        arguments: blockdev_snapshot_internal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "blockdev-snapshot-delete-internal-sync")]
+    blockdev_snapshot_delete_internal_sync {
+        arguments: blockdev_snapshot_internal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -620,6 +639,8 @@ pub struct device_add {
     pub hostport: Option<String>,
     pub vendorid: Option<String>,
     pub productid: Option<String>,
+    pub isobufs: Option<String>,
+    pub isobsize: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;
@@ -743,6 +764,10 @@ pub struct blockdev_add {
     pub options: Option<String>,
     #[serde(rename = "throttling.iops-total")]
     pub iops: Option<u64>,
+    #[serde(rename = "l2-cache-size")]
+    pub l2_cache_size: Option<String>,
+    #[serde(rename = "refcount-cache-size")]
+    pub refcount_cache_size: Option<String>,
 }
 
 pub type BlockDevAddArgument = blockdev_add;
@@ -1921,7 +1946,7 @@ pub struct CmdParameter {
     pub name: String,
     pub help: String,
     #[serde(rename = "type")]
-    pub paramter_type: String,
+    pub parameter_type: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -2255,6 +2280,97 @@ pub struct human_monitor_command {
     pub command_line: String,
 }
 pub type HumanMonitorCmdArgument = human_monitor_command;
+
+/// blockdev-snapshot-internal-sync
+///
+/// Create disk internal snapshot.
+///
+/// # Arguments
+///
+/// * `device` - the valid block device.
+/// * `name` - the snapshot name.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "blockdev-snapshot-internal-sync",
+///      "arguments": { "device": "disk0",
+///                     "name": "snapshot1" }}
+/// <- { "return": {} }
+/// ```
+///
+/// blockdev-snapshot-delete-internal-sync
+///
+/// Delete disk internal snapshot.
+///
+/// # Arguments
+///
+/// * `device` - the valid block device.
+/// * `name` - the snapshot name.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "blockdev-snapshot-delete-internal-sync",
+///      "arguments": { "device": "disk0",
+///                     "name": "snapshot1" }}
+/// <- { "return": {
+///                    "id": "1",
+///                    "name": "snapshot0",
+///                    "vm-state-size": 0,
+///                    "date-sec": 1000012,
+///                    "date-nsec": 10,
+///                    "vm-clock-sec": 100,
+///                    "vm-clock-nsec": 20,
+///                    "icount": 220414
+///  } }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct blockdev_snapshot_internal {
+    pub device: String,
+    pub name: String,
+}
+pub type BlockdevSnapshotInternalArgument = blockdev_snapshot_internal;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "vm-state-size")]
+    pub vm_state_size: u64,
+    #[serde(rename = "date-sec")]
+    pub date_sec: u32,
+    #[serde(rename = "date-nsec")]
+    pub date_nsec: u32,
+    #[serde(rename = "vm-clock-nsec")]
+    pub vm_clock_nsec: u64,
+    #[serde(rename = "icount")]
+    pub icount: u64,
+}
+
+/// query-mem
+///
+/// This command  
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-mem" }
+/// <- { "return": {}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem {}
+impl Command for query_mem {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests {

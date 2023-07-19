@@ -185,7 +185,7 @@ impl DisplayChangeListenerOperations for GtkInterface {
         Ok(())
     }
 
-    fn dpy_cursor_update(&self, cursor_data: &mut DisplayMouse) -> Result<()> {
+    fn dpy_cursor_update(&self, cursor_data: &DisplayMouse) -> Result<()> {
         let mut event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::CursorDefine);
         event.cursor = Some(cursor_data.clone());
@@ -379,7 +379,7 @@ impl GtkDisplayScreen {
         .map_or(DisplaySurface::default(), |s| s);
 
         // SAFETY: The image is created within the function, it can be ensure
-        // that the data ptr is not nullptr and the image size matchs the image data.
+        // that the data ptr is not nullptr and the image size matches the image data.
         let cairo_image = unsafe {
             ImageSurface::create_for_data_unsafe(
                 surface.data() as *mut u8,
@@ -663,9 +663,9 @@ fn gs_show_menu_callback(
 /// 1. Switch operation 1, the gtk display should change the image from a to b.
 /// 2. Switch operation 2, the gtk display should change the image from b to c, but
 /// the channel between stratovirt mainloop and gtk mainloop lost the event.
-/// 3. The gtk display always show th image a.
+/// 3. The gtk display always show the image.
 /// So, the refresh operation will always check if the image has been switched, if
-/// the result is yes, then use the switch operation to switch the  latest image.
+/// the result is yes, then use the switch operation to switch the latest image.
 fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let borrowed_gs = gs.borrow();
     let active_con = borrowed_gs.con.upgrade();
@@ -847,12 +847,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         bail!("Image data is invalid.");
     }
 
-    let source_suface = DisplaySurface {
+    let source_surface = DisplaySurface {
         format: surface.format,
         image: ref_pixman_image(surface.image),
     };
     unref_pixman_image(borrowed_gs.source_surface.image);
-    borrowed_gs.source_surface = source_suface;
+    borrowed_gs.source_surface = source_surface;
     if let Some(s) = borrowed_gs.transfer_surface {
         unref_pixman_image(s.image);
         borrowed_gs.transfer_surface = None;
@@ -933,7 +933,11 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
 
 /// Activate the current screen.
 fn do_set_major_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
-    gs.borrow().show_menu.activate();
+    let borrowed_gs = gs.borrow();
+    if borrowed_gs.show_menu.is_active() {
+        return Ok(());
+    }
+    borrowed_gs.show_menu.activate();
     Ok(())
 }
 
@@ -944,30 +948,33 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
         Some(image) => (image.width() as f64, image.height() as f64),
         None => (0.0, 0.0),
     };
-    let (scale_width, scale_height) = if scale_mode.is_free_scale() {
+    let (mut scale_width, mut scale_height) = if scale_mode.is_free_scale() {
         (width * GTK_SCALE_MIN, height * GTK_SCALE_MIN)
     } else {
         (width * borrowed_gs.scale_x, height * borrowed_gs.scale_y)
     };
+    scale_width = scale_width.max(DEFAULT_SURFACE_WIDTH as f64);
+    scale_height = scale_height.max(DEFAULT_SURFACE_HEIGHT as f64);
 
-    let geo: Geometry = Geometry {
-        min_width: scale_width as i32,
-        min_height: scale_height as i32,
-        max_width: 0,
-        max_height: 0,
-        base_width: 0,
-        base_height: 0,
-        width_inc: 0,
-        height_inc: 0,
-        min_aspect: 0.0,
-        max_aspect: 0.0,
-        win_gravity: Gravity::Center,
-    };
+    let geo: Geometry = Geometry::new(
+        scale_width as i32,
+        scale_height as i32,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        0.0,
+        Gravity::Center,
+    );
+
     let geo_mask = WindowHints::MIN_SIZE;
 
     borrowed_gs
         .draw_area
-        .set_size_request(geo.min_width, geo.min_height);
+        .set_size_request(geo.min_width(), geo.min_height());
     if let Some(window) = borrowed_gs.draw_area.window() {
         window.set_geometry_hints(&geo, geo_mask)
     }

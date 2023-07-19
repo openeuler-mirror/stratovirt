@@ -13,6 +13,7 @@
 use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
+use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -20,8 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    check_arg_too_long, get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, CmdParser, ConfigCheck,
+    ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
@@ -36,6 +37,8 @@ const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
 /// Represent a single drive backend file.
 pub struct DriveFile {
+    /// Drive id.
+    pub id: String,
     /// The opened file.
     pub file: File,
     /// The num of drives share same file.
@@ -70,6 +73,9 @@ pub struct BlkDevConfig {
     pub queue_size: u16,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
+    pub format: DiskFormat,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +103,27 @@ impl Default for BlkDevConfig {
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiskFormat {
+    Raw,
+    Qcow2,
+}
+
+impl FromStr for DiskFormat {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "raw" => Ok(DiskFormat::Raw),
+            "qcow2" => Ok(DiskFormat::Qcow2),
+            _ => Err(anyhow!("Unknown format type")),
         }
     }
 }
@@ -115,6 +142,9 @@ pub struct DriveConfig {
     pub media: String,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
+    pub format: DiskFormat,
+    pub l2_cache_size: Option<u64>,
+    pub refcount_cache_size: Option<u64>,
 }
 
 impl Default for DriveConfig {
@@ -129,6 +159,9 @@ impl Default for DriveConfig {
             media: "disk".to_string(),
             discard: false,
             write_zeroes: WriteZeroesState::Off,
+            format: DiskFormat::Raw,
+            l2_cache_size: None,
+            refcount_cache_size: None,
         }
     }
 }
@@ -278,11 +311,8 @@ impl ConfigCheck for BlkDevConfig {
 
 fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     let mut drive = DriveConfig::default();
-
-    if let Some(format) = cmd_parser.get_value::<String>("format")? {
-        if format.ne("raw") {
-            bail!("Only \'raw\' type of block is supported");
-        }
+    if let Some(fmt) = cmd_parser.get_value::<DiskFormat>("format")? {
+        drive.format = fmt;
     }
 
     drive.id = cmd_parser
@@ -315,6 +345,17 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     drive.write_zeroes = cmd_parser
         .get_value::<WriteZeroesState>("detect-zeroes")?
         .unwrap_or(WriteZeroesState::Off);
+
+    if let Some(l2_cache) = cmd_parser.get_value::<String>("l2-cache-size")? {
+        let sz = memory_unit_conversion(&l2_cache)
+            .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
+        drive.l2_cache_size = Some(sz);
+    }
+    if let Some(rc_cache) = cmd_parser.get_value::<String>("refcount-cache-size")? {
+        let sz = memory_unit_conversion(&rc_cache)
+            .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
+        drive.refcount_cache_size = Some(sz);
+    }
 
     drive.check()?;
     #[cfg(not(test))]
@@ -376,17 +417,20 @@ pub fn parse_blk(
         blkdevcfg.queue_size = queue_size;
     }
 
-    if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
-        blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
-        blkdevcfg.read_only = drive_arg.read_only;
-        blkdevcfg.direct = drive_arg.direct;
-        blkdevcfg.iops = drive_arg.iops;
-        blkdevcfg.aio = drive_arg.aio;
-        blkdevcfg.discard = drive_arg.discard;
-        blkdevcfg.write_zeroes = drive_arg.write_zeroes;
-    } else {
-        bail!("No drive configured matched for blk device");
-    }
+    let drive_arg = &vm_config
+        .drives
+        .remove(&blkdrive)
+        .with_context(|| "No drive configured matched for blk device")?;
+    blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
+    blkdevcfg.read_only = drive_arg.read_only;
+    blkdevcfg.direct = drive_arg.direct;
+    blkdevcfg.iops = drive_arg.iops;
+    blkdevcfg.aio = drive_arg.aio;
+    blkdevcfg.discard = drive_arg.discard;
+    blkdevcfg.write_zeroes = drive_arg.write_zeroes;
+    blkdevcfg.format = drive_arg.format;
+    blkdevcfg.l2_cache_size = drive_arg.l2_cache_size;
+    blkdevcfg.refcount_cache_size = drive_arg.refcount_cache_size;
     blkdevcfg.check()?;
     Ok(blkdevcfg)
 }
@@ -514,7 +558,10 @@ impl VmConfig {
             .push("aio")
             .push("media")
             .push("discard")
-            .push("detect-zeroes");
+            .push("detect-zeroes")
+            .push("format")
+            .push("l2-cache-size")
+            .push("refcount-cache-size");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;

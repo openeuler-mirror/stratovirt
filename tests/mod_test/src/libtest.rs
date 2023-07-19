@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use serde_json::Value;
+use std::cell::RefCell;
 use std::io::Read;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -22,6 +22,7 @@ use std::time::Instant;
 use std::{env, fs};
 
 use hex;
+use serde_json::Value;
 
 use crate::utils::get_tmp_dir;
 
@@ -29,11 +30,15 @@ const MAX_SOCKET_MSG_LENGTH: usize = 8192;
 
 pub struct StreamHandler {
     stream: UnixStream,
+    read_buffer: RefCell<String>,
 }
 
 impl StreamHandler {
     fn new(stream: UnixStream) -> Self {
-        StreamHandler { stream }
+        StreamHandler {
+            stream,
+            read_buffer: RefCell::new(String::new()),
+        }
     }
 
     fn write_line(&self, cmd: &str) {
@@ -47,7 +52,7 @@ impl StreamHandler {
 
     fn read_line(&self, timeout: Duration) -> String {
         let start = Instant::now();
-        let mut resp = String::new();
+        let mut resp = self.read_buffer.borrow_mut();
         let mut stream = self.stream.try_clone().unwrap();
         stream.set_nonblocking(true).unwrap();
 
@@ -62,8 +67,11 @@ impl StreamHandler {
             }
         };
 
-        let (line, _) = resp.split_at(pos.unwrap());
-        line.trim().to_string()
+        let (line, left) = resp.split_at(pos.unwrap());
+        let line = line.trim().to_string();
+        // Save the remaining strings to the buffer, except the prefix '\n'.
+        *resp = left[1..].to_string();
+        line
     }
 }
 

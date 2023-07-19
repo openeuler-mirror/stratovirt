@@ -12,8 +12,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -21,6 +20,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::{error, warn};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::VirtioError;
 use crate::{
@@ -34,9 +38,9 @@ use crate::{
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Context, Result};
-use byteorder::{ByteOrder, LittleEndian};
-use log::{error, warn};
+use block_backend::{
+    create_block_backend, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+};
 use machine_manager::config::{BlkDevConfig, ConfigCheck, DriveFile, VmConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
@@ -45,7 +49,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::aio::{
-    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioEngine, Iovec, OpCode,
+    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioReqResult, Iovec, OpCode,
     WriteZeroesState,
 };
 use util::byte_code::ByteCode;
@@ -55,7 +59,7 @@ use util::loop_context::{
 };
 use util::num_ops::read_u32;
 use util::offset_of;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
 /// Used to compute the number of sectors.
@@ -76,13 +80,12 @@ const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 const MAX_REQUEST_SECTORS: u32 = u32::MAX >> SECTOR_SHIFT;
 
 type SenderConfig = (
-    Option<Arc<File>>,
+    Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
     u32,
     u32,
     u64,
     Option<String>,
     bool,
-    AioEngine,
 );
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
@@ -123,7 +126,7 @@ pub struct AioCompleteCb {
     queue: Arc<Mutex<Queue>>,
     mem_space: Arc<AddressSpace>,
     /// The head of merged Request list.
-    req: Rc<Request>,
+    req: Arc<Request>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
 }
@@ -132,7 +135,7 @@ impl AioCompleteCb {
     fn new(
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
-        req: Rc<Request>,
+        req: Arc<Request>,
         interrupt_cb: Arc<VirtioInterrupt>,
         driver_features: u64,
     ) -> Self {
@@ -286,50 +289,49 @@ impl Request {
     fn execute(
         &self,
         iohandler: &mut BlockIoHandler,
-        mut aiocb: AioCb<AioCompleteCb>,
+        block_backend: Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>,
+        aiocompletecb: AioCompleteCb,
     ) -> Result<()> {
         let mut req = Some(self);
+        let mut iovecs = Vec::new();
         while let Some(req_raw) = req {
             for iov in req_raw.iovec.iter() {
                 let iovec = Iovec {
                     iov_base: iov.iov_base,
                     iov_len: iov.iov_len,
                 };
-                aiocb.iovec.push(iovec);
-                // Note: total len of each req is no more than 1<<32,
-                // and reqs count is no more than 1024.
-                aiocb.nbytes += iov.iov_len;
+                iovecs.push(iovec);
             }
             req = req_raw.next.as_ref().as_ref();
         }
-
+        let offset = (aiocompletecb.req.out_header.sector << SECTOR_SHIFT) as usize;
         let request_type = self.out_header.request_type;
         if MigrationManager::is_active()
             && (request_type == VIRTIO_BLK_T_IN || request_type == VIRTIO_BLK_T_GET_ID)
         {
             // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
-            for iov in aiocb.iovec.iter() {
+            for iov in iovecs.iter() {
                 // Mark vmm dirty page manually if live migration is active.
                 MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
             }
         }
 
-        let aio = &mut iohandler.aio;
         let serial_num = &iohandler.serial_num;
+        let mut locked_backend = block_backend.lock().unwrap();
         match request_type {
             VIRTIO_BLK_T_IN => {
-                aiocb.opcode = OpCode::Preadv;
-                aio.submit_request(aiocb)
+                locked_backend
+                    .read_vectored(&iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for reading")?;
             }
             VIRTIO_BLK_T_OUT => {
-                aiocb.opcode = OpCode::Pwritev;
-                aio.submit_request(aiocb)
+                locked_backend
+                    .write_vectored(&iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for writing")?;
             }
             VIRTIO_BLK_T_FLUSH => {
-                aiocb.opcode = OpCode::Fdsync;
-                aio.submit_request(aiocb)
+                locked_backend
+                    .datasync(aiocompletecb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
@@ -342,23 +344,27 @@ impl Request {
                     },
                     |_| VIRTIO_BLK_S_OK,
                 );
-                aiocb.iocompletecb.complete_request(status)?;
+                aiocompletecb.complete_request(status)?;
             }
             VIRTIO_BLK_T_DISCARD => {
                 if !iohandler.discard {
                     error!("Device does not support discard");
-                    return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+                    return aiocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
                 }
-                aiocb.opcode = OpCode::Discard;
-                self.handle_discard_write_zeroes_req(iohandler, aiocb)?;
+                drop(locked_backend);
+                self.handle_discard_write_zeroes_req(iohandler, aiocompletecb, OpCode::Discard)?;
             }
             VIRTIO_BLK_T_WRITE_ZEROES => {
                 if iohandler.write_zeroes == WriteZeroesState::Off {
                     error!("Device does not support write-zeroes");
-                    return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+                    return aiocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
                 }
-                aiocb.opcode = OpCode::WriteZeroes;
-                self.handle_discard_write_zeroes_req(iohandler, aiocb)?;
+                drop(locked_backend);
+                self.handle_discard_write_zeroes_req(
+                    iohandler,
+                    aiocompletecb,
+                    OpCode::WriteZeroes,
+                )?;
             }
             // The illegal request type has been handled in method new().
             _ => {}
@@ -369,13 +375,14 @@ impl Request {
     fn handle_discard_write_zeroes_req(
         &self,
         iohandler: &mut BlockIoHandler,
-        mut aiocb: AioCb<AioCompleteCb>,
+        iocompletecb: AioCompleteCb,
+        opcode: OpCode,
     ) -> Result<()> {
         let size = size_of::<DiscardWriteZeroesSeg>() as u64;
         // Just support one segment per request.
         if self.data_len > size {
             error!("More than one discard or write-zeroes segment is not supported");
-            return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+            return iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
         }
 
         // Get and check the discard segment.
@@ -399,32 +406,34 @@ impl Request {
                 "Invalid discard or write zeroes request, sector offset {}, num_sectors {}",
                 sector, num_sectors
             );
-            return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+            return iocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
         }
         let flags = LittleEndian::read_u32(segment.flags.as_bytes());
         if flags & !VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP != 0 {
             error!("Invalid unmap flags 0x{:x}", flags);
-            return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+            return iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
         }
 
-        if aiocb.opcode == OpCode::Discard {
+        // The block_backend is not None here.
+        let block_backend = iohandler.block_backend.as_ref().unwrap();
+        let mut locked_backend = block_backend.lock().unwrap();
+        let offset = (sector as usize) << SECTOR_SHIFT;
+        let nbytes = (num_sectors as u64) << SECTOR_SHIFT;
+        if opcode == OpCode::Discard {
             if flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP {
                 error!("Discard request must not set unmap flags");
-                return aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
+                return iocompletecb.complete_request(VIRTIO_BLK_S_UNSUPP);
             }
-        } else if aiocb.opcode == OpCode::WriteZeroes
-            && flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP
-            && iohandler.discard
-        {
-            aiocb.write_zeroes_unmap = true;
+            locked_backend
+                .discard(offset, nbytes, iocompletecb)
+                .with_context(|| "Failed to process block request for discard")?;
+        } else if opcode == OpCode::WriteZeroes {
+            let unmap = flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP && iohandler.discard;
+            locked_backend
+                .write_zeroes(offset, nbytes, iocompletecb, unmap)
+                .with_context(|| "Failed to process block request for write-zeroes")?;
         }
-
-        aiocb.offset = (sector as usize) << SECTOR_SHIFT;
-        aiocb.nbytes = (num_sectors as u64) << SECTOR_SHIFT;
-        iohandler
-            .aio
-            .submit_request(aiocb)
-            .with_context(|| "Failed to process block request for discard or write-zeroes")
+        Ok(())
     }
 
     fn io_range_valid(&self, disk_sectors: u64) -> bool {
@@ -465,8 +474,8 @@ struct BlockIoHandler {
     queue_evt: Arc<EventFd>,
     /// The address space to which the block device belongs.
     mem_space: Arc<AddressSpace>,
-    /// The image file opened by the block device.
-    disk_image: Option<Arc<File>>,
+    /// The block backend opened by the block device.
+    block_backend: Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
     /// The align requirement of request(offset/len).
     pub req_align: u32,
     /// The align requirement of buffer(iova_base).
@@ -477,8 +486,6 @@ struct BlockIoHandler {
     serial_num: Option<String>,
     /// If use direct access io.
     direct: bool,
-    /// Aio context.
-    aio: Box<Aio<AioCompleteCb>>,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// The receiving half of Rust's channel to receive the image file.
@@ -575,7 +582,7 @@ impl BlockIoHandler {
                 let aiocompletecb = AioCompleteCb::new(
                     self.queue.clone(),
                     self.mem_space.clone(),
-                    Rc::new(req),
+                    Arc::new(req),
                     self.interrupt_cb.clone(),
                     self.driver_features,
                 );
@@ -598,7 +605,7 @@ impl BlockIoHandler {
 
         let merge_req_queue = self.merge_req_queue(req_queue);
         for req in merge_req_queue.into_iter() {
-            let req_rc = Rc::new(req);
+            let req_rc = Arc::new(req);
             let aiocompletecb = AioCompleteCb::new(
                 self.queue.clone(),
                 self.mem_space.clone(),
@@ -606,34 +613,40 @@ impl BlockIoHandler {
                 self.interrupt_cb.clone(),
                 self.driver_features,
             );
-            if let Some(disk_img) = self.disk_image.as_ref() {
-                let aiocb = AioCb {
-                    direct: self.direct,
-                    req_align: self.req_align,
-                    buf_align: self.buf_align,
-                    file_fd: disk_img.as_raw_fd(),
-                    opcode: OpCode::Noop,
-                    iovec: Vec::new(),
-                    offset: (req_rc.out_header.sector << SECTOR_SHIFT) as usize,
-                    nbytes: 0,
-                    user_data: 0,
-                    iocompletecb: aiocompletecb,
-                    discard: self.discard,
-                    write_zeroes: self.write_zeroes,
-                    write_zeroes_unmap: false,
-                };
-                req_rc.execute(self, aiocb)?;
+            if let Some(block_backend) = self.block_backend.as_ref() {
+                req_rc.execute(self, block_backend.clone(), aiocompletecb)?;
             } else {
-                warn!("Failed to execute block request, disk_img not specified");
+                warn!("Failed to execute block request, block_backend not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
             }
         }
-        self.aio.flush_request()?;
-
+        if let Some(block_backend) = self.block_backend.as_ref() {
+            block_backend.lock().unwrap().flush_request()?;
+        }
         Ok(done)
     }
 
     fn process_queue_suppress_notify(&mut self) -> Result<bool> {
+        // Note: locked_status has two function:
+        // 1) set the status of the block device.
+        // 2) as a mutex lock which is mutual exclusive with snapshot operations.
+        // Do not unlock or drop the locked_status in this function.
+        let status;
+        let mut locked_status;
+        let len = self
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .avail_ring_len(&self.mem_space)?;
+        if len > 0 {
+            if let Some(block_backend) = self.block_backend.as_ref() {
+                status = block_backend.lock().unwrap().get_status();
+                locked_status = status.lock().unwrap();
+                *locked_status = BlockStatus::NormalIO;
+            }
+        }
+
         let mut done = false;
         let start_time = Instant::now();
 
@@ -692,7 +705,12 @@ impl BlockIoHandler {
         result
     }
 
-    fn complete_func(aiocb: &AioCb<AioCompleteCb>, ret: i64) -> Result<()> {
+    fn complete_func(aiocb: &AioCb<AioCompleteCb>, mut ret: i64) -> Result<()> {
+        match aiocb.req_is_completed(ret) {
+            AioReqResult::Inflight => return Ok(()),
+            AioReqResult::Error(v) => ret = v,
+            AioReqResult::Done => (),
+        }
         let mut status = if ret < 0 {
             VIRTIO_BLK_S_IOERR
         } else {
@@ -714,57 +732,26 @@ impl BlockIoHandler {
         complete_cb.complete_request(status)
     }
 
-    fn aio_complete_handler(&mut self) -> Result<bool> {
-        self.aio.handle_complete().map_err(|e| {
-            report_virtio_error(
-                self.interrupt_cb.clone(),
-                self.driver_features,
-                &self.device_broken,
-            );
-            e
-        })
-    }
-
     fn update_evt_handler(&mut self) {
-        let aio_engine;
         match self.receiver.recv() {
-            Ok((image, req_align, buf_align, disk_sectors, serial_num, direct, aio)) => {
+            Ok((image, req_align, buf_align, disk_sectors, serial_num, direct)) => {
                 self.disk_sectors = disk_sectors;
-                self.disk_image = image;
+                self.block_backend = image;
                 self.req_align = req_align;
                 self.buf_align = buf_align;
                 self.serial_num = serial_num;
                 self.direct = direct;
-                aio_engine = aio;
             }
             Err(e) => {
                 error!("Failed to receive config in updating handler {:?}", e);
                 self.disk_sectors = 0;
-                self.disk_image = None;
+                self.block_backend = None;
                 self.req_align = 1;
                 self.buf_align = 1;
                 self.serial_num = None;
                 self.direct = true;
-                aio_engine = AioEngine::Native;
             }
         };
-
-        if self.aio.get_engine() != aio_engine {
-            match Aio::new(Arc::new(Self::complete_func), aio_engine) {
-                Ok(aio) => {
-                    self.aio = Box::new(aio);
-                }
-                Err(e) => {
-                    error!("{:?}", e);
-                    report_virtio_error(
-                        self.interrupt_cb.clone(),
-                        self.driver_features,
-                        &self.device_broken,
-                    );
-                    return;
-                }
-            }
-        }
 
         if let Err(e) = (self.interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
@@ -883,48 +870,6 @@ impl EventNotifierHelper for BlockIoHandler {
             notifiers.push(build_event_notifier(lb.as_raw_fd(), vec![h], None));
         }
 
-        // Register event notifier for aio.
-        let h_clone = handler.clone();
-        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
-                return None;
-            }
-            if let Err(ref e) = h_lock.aio_complete_handler() {
-                error!("Failed to handle aio {:?}", e);
-            }
-            None
-        });
-        let h_clone = handler.clone();
-        let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
-            let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
-                return None;
-            }
-            if h_lock.aio.get_engine() == AioEngine::Off {
-                return None;
-            }
-            match h_lock.aio_complete_handler() {
-                Ok(done) => {
-                    if done {
-                        Some(Vec::new())
-                    } else {
-                        None
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to handle aio {:?}", e);
-                    None
-                }
-            }
-        });
-        notifiers.push(build_event_notifier(
-            handler_raw.aio.fd.as_raw_fd(),
-            vec![h],
-            Some(handler_iopoll),
-        ));
-
         notifiers
     }
 }
@@ -1003,8 +948,8 @@ pub struct BlockState {
 pub struct Block {
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
-    /// Image file opened.
-    disk_image: Option<Arc<File>>,
+    /// BLock backend opened by the block device.
+    block_backend: Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
     /// The align requirement of request(offset/len).
     pub req_align: u32,
     /// The align requirement of buffer(iova_base).
@@ -1034,7 +979,7 @@ impl Block {
     ) -> Block {
         Self {
             blk_cfg,
-            disk_image: None,
+            block_backend: None,
             req_align: 1,
             buf_align: 1,
             disk_sectors: 0,
@@ -1082,6 +1027,14 @@ impl Block {
             offset_of!(VirtioBlkConfig, max_discard_sectors) as u64
         }
     }
+
+    fn gen_error_cb(&self, interrupt_cb: Arc<VirtioInterrupt>) -> BlockIoErrorCallback {
+        let cloned_features = self.state.driver_features;
+        let clone_broken = self.broken.clone();
+        Arc::new(move || {
+            report_virtio_error(interrupt_cb.clone(), cloned_features, &clone_broken);
+        })
+    }
 }
 
 impl VirtioDevice for Block {
@@ -1112,22 +1065,35 @@ impl VirtioDevice for Block {
             self.state.config_space.num_queues = self.blk_cfg.queues;
         }
 
-        self.disk_image = None;
+        self.block_backend = None;
         self.disk_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         self.req_align = 1;
         self.buf_align = 1;
         if !self.blk_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
-            let mut file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
+            let file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
             let alignments = VmConfig::fetch_drive_align(&drive_files, &self.blk_cfg.path_on_host)?;
-            let disk_size = file
-                .seek(SeekFrom::End(0))
-                .with_context(|| "Failed to seek the end for block")?;
-
-            self.disk_image = Some(Arc::new(file));
-            self.disk_sectors = disk_size >> SECTOR_SHIFT;
             self.req_align = alignments.0;
             self.buf_align = alignments.1;
+            let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
+
+            let aio = Aio::new(Arc::new(BlockIoHandler::complete_func), self.blk_cfg.aio)?;
+            let conf = BlockProperty {
+                id: drive_id,
+                format: self.blk_cfg.format,
+                iothread: self.blk_cfg.iothread.clone(),
+                direct: self.blk_cfg.direct,
+                req_align: self.req_align,
+                buf_align: self.buf_align,
+                discard: self.blk_cfg.discard,
+                write_zeroes: self.blk_cfg.write_zeroes,
+                l2_cache_size: self.blk_cfg.l2_cache_size,
+                refcount_cache_size: self.blk_cfg.refcount_cache_size,
+            };
+            let backend = create_block_backend(file, aio, conf)?;
+            let disk_size = backend.lock().unwrap().disk_size()?;
+            self.block_backend = Some(backend);
+            self.disk_sectors = disk_size >> SECTOR_SHIFT;
         }
         self.state.config_space.capacity = self.disk_sectors;
 
@@ -1219,22 +1185,17 @@ impl VirtioDevice for Block {
             }
             let (sender, receiver) = channel();
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
-            let aio = Box::new(Aio::new(
-                Arc::new(BlockIoHandler::complete_func),
-                self.blk_cfg.aio,
-            )?);
             let driver_features = self.state.driver_features;
             let handler = BlockIoHandler {
                 queue: queue.clone(),
                 queue_evt: queue_evts[index].clone(),
                 mem_space: mem_space.clone(),
-                disk_image: self.disk_image.clone(),
+                block_backend: self.block_backend.clone(),
                 req_align: self.req_align,
                 buf_align: self.buf_align,
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
                 serial_num: self.blk_cfg.serial_num.clone(),
-                aio,
                 driver_features,
                 receiver,
                 update_evt: update_evt.clone(),
@@ -1258,19 +1219,40 @@ impl VirtioDevice for Block {
             self.update_evts.push(update_evt);
             self.senders.push(sender);
         }
+
+        if let Some(block_backend) = self.block_backend.as_ref() {
+            let err_cb = self.gen_error_cb(interrupt_cb.clone());
+            block_backend
+                .lock()
+                .unwrap()
+                .register_io_event(self.broken.clone(), err_cb)?;
+        } else {
+            warn!(
+                "No disk image when block device {} activate",
+                self.blk_cfg.id
+            );
+        }
         self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        // Stop receiving virtqueue requests and drain incomplete IO.
         unregister_event_helper(self.blk_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        if let Some(block_backend) = self.block_backend.as_ref() {
+            let mut block_backend = block_backend.lock().unwrap();
+            // Must drain requests before unregister.
+            block_backend.drain_request();
+            block_backend.unregister_io_event()?;
+        }
         self.update_evts.clear();
         self.senders.clear();
         Ok(())
     }
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
+        let is_plug = dev_config.is_some();
         if let Some(conf) = dev_config {
             self.blk_cfg = conf
                 .as_any()
@@ -1283,18 +1265,53 @@ impl VirtioDevice for Block {
             self.blk_cfg = Default::default();
         }
 
+        if !is_plug {
+            // If it is an unplug operation, the block backend is set to none. Unregister aio before it.
+            if let Some(block_backend) = self.block_backend.as_ref() {
+                block_backend.lock().unwrap().unregister_io_event()?;
+            } else {
+                bail!(
+                    "No block backend when block device {} unplug",
+                    self.blk_cfg.id
+                );
+            }
+        }
+
         self.realize()?;
+
+        if is_plug {
+            // Block backend is set after device realized.
+            if let Some(cb) = self.interrupt_cb.as_ref() {
+                // NOTE: interrupter_cb may be is none for replaceable device.
+                let err_cb = self.gen_error_cb(cb.clone());
+                self.block_backend
+                    .as_ref()
+                    .with_context(|| {
+                        format!(
+                            "No block backend when block device {} plug",
+                            self.blk_cfg.id
+                        )
+                    })?
+                    .lock()
+                    .unwrap()
+                    .register_io_event(self.broken.clone(), err_cb)?;
+            } else {
+                warn!(
+                    "No interrupter cb, may be device {} is not activated",
+                    self.blk_cfg.id
+                );
+            }
+        }
 
         for sender in &self.senders {
             sender
                 .send((
-                    self.disk_image.clone(),
+                    self.block_backend.clone(),
                     self.req_align,
                     self.buf_align,
                     self.disk_sectors,
                     self.blk_cfg.serial_num.clone(),
                     self.blk_cfg.direct,
-                    self.blk_cfg.aio,
                 ))
                 .with_context(|| VirtioError::ChannelSend("image fd".to_string()))?;
         }
@@ -1305,6 +1322,10 @@ impl VirtioDevice for Block {
         }
 
         Ok(())
+    }
+
+    fn get_device_broken(&self) -> &Arc<AtomicBool> {
+        &self.broken
     }
 }
 
@@ -1357,7 +1378,7 @@ mod tests {
         fn default() -> Self {
             Block {
                 blk_cfg: Default::default(),
-                disk_image: None,
+                block_backend: None,
                 req_align: 1,
                 buf_align: 1,
                 disk_sectors: 0,
@@ -1374,8 +1395,8 @@ mod tests {
 
     // build dummy address space of vm
     fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36);
-        let sys_space = AddressSpace::new(root).unwrap();
+        let root = Region::init_container_region(1 << 36, "sysmem");
+        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
@@ -1391,7 +1412,7 @@ mod tests {
         sys_space
             .root()
             .add_subregion(
-                Region::init_ram_region(host_mmap.clone()),
+                Region::init_ram_region(host_mmap.clone(), "sysmem"),
                 host_mmap.start_address().raw_value(),
             )
             .unwrap();
@@ -1407,7 +1428,7 @@ mod tests {
         assert_eq!(block.state.device_features, 0);
         assert_eq!(block.state.driver_features, 0);
         assert_eq!(block.state.config_space.as_bytes().len(), CONFIG_SPACE_SIZE);
-        assert!(block.disk_image.is_none());
+        assert!(block.block_backend.is_none());
         assert!(block.interrupt_cb.is_none());
         assert!(block.senders.is_empty());
 
@@ -1418,6 +1439,7 @@ mod tests {
         block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
+            "",
             &block.blk_cfg.path_on_host,
             block.blk_cfg.read_only,
             block.blk_cfg.direct,
@@ -1556,6 +1578,7 @@ mod tests {
 
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
+            "",
             &block.blk_cfg.path_on_host,
             block.blk_cfg.read_only,
             block.blk_cfg.direct,

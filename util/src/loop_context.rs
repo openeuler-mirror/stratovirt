@@ -19,10 +19,15 @@ use std::time::{Duration, Instant};
 
 use libc::{c_void, read, EFD_NONBLOCK};
 use log::warn;
+use nix::errno::Errno;
+use nix::{
+    poll::{ppoll, PollFd, PollFlags},
+    sys::time::TimeSpec,
+};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::test_helper::{get_test_time, is_test_enabled};
+use crate::clock::{get_current_time, ClockState};
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -148,14 +153,6 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
-pub fn get_current_time() -> Instant {
-    if is_test_enabled() {
-        get_test_time()
-    } else {
-        Instant::now()
-    }
-}
-
 /// EventLoop manager, advise continue running or stop running
 pub trait EventLoopManager: Send + Sync {
     fn loop_should_exit(&self) -> bool;
@@ -205,6 +202,8 @@ pub struct EventLoopContext {
     ready_events: Vec<EpollEvent>,
     /// Timer list
     timers: Arc<Mutex<Vec<Box<Timer>>>>,
+    /// Record VM clock state.
+    pub clock_state: Arc<Mutex<ClockState>>,
 }
 
 // SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
@@ -224,6 +223,7 @@ impl EventLoopContext {
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
             timers: Arc::new(Mutex::new(Vec::new())),
+            clock_state: Arc::new(Mutex::new(ClockState::default())),
         };
         ctx.init_kick();
         ctx
@@ -271,7 +271,7 @@ impl EventLoopContext {
                 break;
             }
             // SAFETY: We will stop removing when reach max_cnt and no other place
-            // removes element of gc. This is to avoid infinite poping if other
+            // removes element of gc. This is to avoid infinite popping if other
             // thread continuously adds element to gc.
             self.gc.write().unwrap().remove(0);
             pop_cnt += 1;
@@ -468,7 +468,7 @@ impl EventLoopContext {
             }
         }
 
-        self.epoll_wait_manager(self.timers_min_timeout_ms())
+        self.epoll_wait_manager(self.timers_min_duration())
     }
 
     pub fn iothread_run(&mut self) -> Result<bool> {
@@ -479,23 +479,22 @@ impl EventLoopContext {
             }
         }
 
-        let timeout = self.timers_min_timeout_ms();
-        if timeout == -1 {
+        let min_timeout_ns = self.timers_min_duration();
+        if min_timeout_ns.is_none() {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
-                for notifer in self.events.read().unwrap().values() {
-                    let status_locked = notifer.status.lock().unwrap();
-                    if *status_locked != EventStatus::Alive || notifer.handler_poll.is_none() {
+                for notifier in self.events.read().unwrap().values() {
+                    let status_locked = notifier.status.lock().unwrap();
+                    if *status_locked != EventStatus::Alive || notifier.handler_poll.is_none() {
                         continue;
                     }
-                    let handler_poll = notifer.handler_poll.as_ref().unwrap();
-                    if handler_poll(EventSet::empty(), notifer.raw_fd).is_some() {
+                    let handler_poll = notifier.handler_poll.as_ref().unwrap();
+                    if handler_poll(EventSet::empty(), notifier.raw_fd).is_some() {
                         break;
                     }
                 }
             }
         }
-
-        self.epoll_wait_manager(timeout)
+        self.epoll_wait_manager(min_timeout_ns)
     }
 
     /// Call the function given by `func` after `delay` time.
@@ -535,7 +534,7 @@ impl EventLoopContext {
     }
 
     /// Get the expire_time of the soonest Timer, and then translate it to duration.
-    fn timers_min_duration(&self) -> Option<Duration> {
+    pub fn timers_min_duration(&self) -> Option<Duration> {
         // The kick event happens before re-evaluate can be ignored.
         self.kicked.store(false, Ordering::SeqCst);
         let timers = self.timers.lock().unwrap();
@@ -548,34 +547,6 @@ impl EventLoopContext {
                 .expire_time
                 .saturating_duration_since(get_current_time()),
         )
-    }
-
-    fn timers_min_timeout_ms(&self) -> i32 {
-        match self.timers_min_duration() {
-            Some(d) => {
-                let timeout = d.as_millis();
-                if timeout >= i32::MAX as u128 {
-                    i32::MAX - 1
-                } else {
-                    timeout as i32
-                }
-            }
-            None => -1,
-        }
-    }
-
-    pub fn timers_min_timeout_ns(&self) -> i64 {
-        match self.timers_min_duration() {
-            Some(d) => {
-                let timeout = d.as_nanos();
-                if timeout >= i64::MAX as u128 {
-                    i64::MAX
-                } else {
-                    timeout as i64
-                }
-            }
-            None => -1,
-        }
     }
 
     /// Call function of the timers which have already expired.
@@ -598,15 +569,33 @@ impl EventLoopContext {
         }
     }
 
-    fn epoll_wait_manager(&mut self, mut time_out: i32) -> Result<bool> {
-        let need_kick = time_out != 0;
+    fn epoll_wait_manager(&mut self, mut time_out: Option<Duration>) -> Result<bool> {
+        let need_kick = !(time_out.is_some() && *time_out.as_ref().unwrap() == Duration::ZERO);
         if need_kick {
             self.kick_me.store(true, Ordering::SeqCst);
             if self.kicked.load(Ordering::SeqCst) {
-                time_out = 0;
+                time_out = Some(Duration::ZERO);
             }
         }
-        let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
+
+        // When time_out greater then zero, use ppoll as a more precise timer.
+        if time_out.is_some() && *time_out.as_ref().unwrap() != Duration::ZERO {
+            let time_out_spec = Some(TimeSpec::from_duration(*time_out.as_ref().unwrap()));
+            let pollflags = PollFlags::POLLIN | PollFlags::POLLOUT | PollFlags::POLLHUP;
+            let mut pollfds: [PollFd; 1] = [PollFd::new(self.epoll.as_raw_fd(), pollflags)];
+
+            match ppoll(&mut pollfds, time_out_spec, None) {
+                Ok(_) => time_out = Some(Duration::ZERO),
+                Err(e) if e == Errno::EINTR => time_out = Some(Duration::ZERO),
+                Err(e) => return Err(anyhow!(UtilError::EpollWait(e.into()))),
+            };
+        }
+
+        let time_out_ms = match time_out {
+            Some(t) => t.as_millis() as i32,
+            None => -1,
+        };
+        let ev_count = match self.epoll.wait(time_out_ms, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),

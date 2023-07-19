@@ -13,6 +13,7 @@
 pub mod error;
 pub use anyhow::Result;
 pub use error::UsbError;
+use util::byte_code::ByteCode;
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
@@ -49,6 +50,8 @@ use xhci::xhci_controller::{UsbPort, XhciDevice};
 const USB_MAX_ENDPOINTS: u32 = 15;
 /// USB max address.
 const USB_MAX_ADDRESS: u8 = 127;
+/// USB device default buffer length.
+pub const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
 
 /// USB packet return status.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -72,6 +75,8 @@ pub struct UsbDeviceRequest {
     pub length: u16,
 }
 
+impl ByteCode for UsbDeviceRequest {}
+
 /// The data transmission channel.
 #[derive(Default, Clone)]
 pub struct UsbEndpoint {
@@ -80,6 +85,7 @@ pub struct UsbEndpoint {
     pub ep_type: u8,
     pub ifnum: u8,
     pub halted: bool,
+    pub max_packet_size: u32,
 }
 
 impl UsbEndpoint {
@@ -90,6 +96,17 @@ impl UsbEndpoint {
             ep_type,
             ..Default::default()
         }
+    }
+
+    fn set_max_packet_size(&mut self, raw: u16) {
+        let size = raw & 0x7ff;
+        let micro_frames: u32 = match (raw >> 11) & 3 {
+            1 => 2,
+            2 => 3,
+            _ => 1,
+        };
+
+        self.max_packet_size = size as u32 * micro_frames;
     }
 }
 
@@ -112,7 +129,7 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    pub fn new() -> Self {
+    pub fn new(data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
             port: None,
             speed: 0,
@@ -120,7 +137,7 @@ impl UsbDevice {
             ep_ctl: UsbEndpoint::new(0, false, USB_ENDPOINT_ATTR_CONTROL),
             ep_in: Vec::new(),
             ep_out: Vec::new(),
-            data_buf: vec![0_u8; 4096],
+            data_buf: vec![0_u8; data_buf_len],
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
             unplugged_id: None,
@@ -297,12 +314,6 @@ impl UsbDevice {
             }
         }
         Ok(true)
-    }
-}
-
-impl Default for UsbDevice {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

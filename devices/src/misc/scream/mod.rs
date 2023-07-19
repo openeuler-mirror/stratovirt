@@ -32,7 +32,7 @@ use self::{alsa::AlsaStreamData, audio_demo::AudioDemo};
 use super::ivshmem::Ivshmem;
 use machine_manager::config::scream::ScreamConfig;
 use pci::{PciBus, PciDevOps};
-use pulseaudio::{PulseStreamData, TAGET_LATENCY_MS};
+use pulseaudio::{PulseStreamData, TARGET_LATENCY_MS};
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
@@ -43,7 +43,7 @@ pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
 // the better. However, if the value is too small, the overhead is high. So take a
 // compromise: 50 * 1000 / 8 us.
-const POLL_DELAY_US: u64 = (TAGET_LATENCY_MS as u64) * 1000 / 8;
+const POLL_DELAY_US: u64 = (TARGET_LATENCY_MS as u64) * 1000 / 8;
 
 pub const SCREAM_MAGIC: u64 = 0x02032023;
 
@@ -388,7 +388,7 @@ impl Scream {
         )?);
         self.hva = host_mmap.host_address();
 
-        let mem_region = Region::init_ram_region(host_mmap);
+        let mem_region = Region::init_ram_region(host_mmap, "ivshmem_ram");
 
         let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
         ivshmem.realize()?;

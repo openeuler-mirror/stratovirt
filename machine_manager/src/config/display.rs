@@ -52,7 +52,7 @@ impl VmConfig {
         if let Some(str) = cmd_parser.get_value::<String>("")? {
             match str.as_str() {
                 "gtk" => display_config.gtk = true,
-                _ => bail!("Unsupport device: {}", str),
+                _ => bail!("Unsupported device: {}", str),
             }
         }
         if let Some(name) = cmd_parser.get_value::<String>("app-name")? {

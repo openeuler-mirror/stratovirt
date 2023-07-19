@@ -67,7 +67,6 @@ pub mod vnc;
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -211,14 +210,8 @@ impl VmConfig {
                     bail!("Object: {} has been added", id);
                 }
             }
-            "memory-backend-ram" => {
-                let config = self.add_mem_zone(object_args)?;
-                let id = config.id.clone();
-                if self.object.mem_object.get(&id).is_none() {
-                    self.object.mem_object.insert(id, config);
-                } else {
-                    bail!("Object: {} has been added", id);
-                }
+            "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
+                self.add_mem_zone(object_args, device_type)?;
             }
             "tls-creds-x509" => {
                 self.add_tlscred(object_args)?;
@@ -277,6 +270,7 @@ impl VmConfig {
     /// Add a file to drive file store.
     pub fn add_drive_file(
         drive_files: &mut HashMap<String, DriveFile>,
+        id: &str,
         path: &str,
         read_only: bool,
         direct: bool,
@@ -294,7 +288,7 @@ impl VmConfig {
                 ));
             }
         }
-        let mut file = open_file(path, read_only, direct)?;
+        let file = open_file(path, read_only, direct)?;
         let (req_align, buf_align) = get_file_alignment(&file, direct);
         if req_align == 0 || buf_align == 0 {
             bail!(
@@ -302,11 +296,8 @@ impl VmConfig {
                 path
             );
         }
-        let file_size = file.seek(SeekFrom::End(0))?;
-        if file_size & (req_align as u64 - 1) != 0 {
-            bail!("The size of file {} is not aligned to {}.", path, req_align);
-        }
         let drive_file = DriveFile {
+            id: id.to_string(),
             file,
             count: 1,
             read_only,
@@ -349,6 +340,14 @@ impl VmConfig {
         }
     }
 
+    /// Get drive id from drive file store.
+    pub fn get_drive_id(drive_files: &HashMap<String, DriveFile>, path: &str) -> Result<String> {
+        match drive_files.get(path) {
+            Some(drive_file) => Ok(drive_file.id.clone()),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
     /// Get alignment requirement from drive file store.
     pub fn fetch_drive_align(
         drive_files: &HashMap<String, DriveFile>,
@@ -366,6 +365,7 @@ impl VmConfig {
         for drive in self.drives.values() {
             Self::add_drive_file(
                 &mut drive_files,
+                &drive.id,
                 &drive.path_on_host,
                 drive.read_only,
                 drive.direct,
@@ -375,6 +375,7 @@ impl VmConfig {
             for pflash in pflashs {
                 Self::add_drive_file(
                     &mut drive_files,
+                    "",
                     &pflash.path_on_host,
                     pflash.read_only,
                     false,
@@ -571,13 +572,13 @@ pub struct ExBool {
 }
 
 impl FromStr for ExBool {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "true" | "on" | "yes" | "unmap" => Ok(ExBool { inner: true }),
             "false" | "off" | "no" | "ignore" => Ok(ExBool { inner: false }),
-            _ => Err(()),
+            _ => Err(anyhow!("Unknown Exbool value {}", s)),
         }
     }
 }
@@ -659,6 +660,16 @@ pub fn check_arg_too_long(arg: &str, name: &str) -> Result<()> {
         bail!(ConfigError::StringLengthTooLong(
             name.to_string(),
             MAX_STRING_LENGTH
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_path_too_long(arg: &str, name: &str) -> Result<()> {
+    if arg.len() > MAX_PATH_LENGTH {
+        bail!(ConfigError::StringLengthTooLong(
+            name.to_string(),
+            MAX_PATH_LENGTH
         ));
     }
     Ok(())
