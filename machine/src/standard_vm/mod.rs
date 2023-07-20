@@ -1889,8 +1889,10 @@ impl DeviceInterface for StdMachine {
         let mut locked_status = status.lock().unwrap();
         *locked_status = BlockStatus::Snapshot;
 
-        // TODO: Add a method for getting guest clock. It's useless now so we can use a fake time(0).
-        let vm_clock_nsec = 0;
+        let vm_clock_nsec = EventLoop::get_ctx(None)
+            .unwrap()
+            .get_virtual_clock()
+            .as_nanos() as u64;
         if let Err(e) = qcow2driver
             .unwrap()
             .lock()
