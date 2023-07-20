@@ -45,7 +45,10 @@ use crate::{
 };
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
 use util::{
-    aio::{get_iov_size, iov_from_buf_direct, iovecs_split, Aio, AioCb, AioEngine, Iovec, OpCode},
+    aio::{
+        get_iov_size, iov_from_buf_direct, iovecs_split, raw_write_zeroes, Aio, AioCb, AioEngine,
+        Iovec, OpCode,
+    },
     num_ops::{div_round_up, round_down, round_up},
     time::{get_format_time, gettime},
 };
@@ -561,9 +564,14 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let size = clusters * self.header.cluster_size();
         let addr = self.refcount.alloc_cluster(&mut self.header, size)?;
         if write_zero && addr < self.driver.disk_size()? {
-            // Clean the cluster.
-            let zero = vec![0_u8; self.header.cluster_size() as usize];
-            self.sync_aio.borrow_mut().write_buffer(addr, &zero)?;
+            let ret = raw_write_zeroes(self.sync_aio.borrow_mut().fd, addr as usize, size);
+            if ret < 0 {
+                let zero_buf = vec![0_u8; self.header.cluster_size() as usize];
+                for i in 0..clusters {
+                    let offset = addr + i * self.header.cluster_size();
+                    self.sync_aio.borrow_mut().write_buffer(offset, &zero_buf)?;
+                }
+            }
         }
         self.driver.extend_len(addr + size)?;
         Ok(addr)
