@@ -459,10 +459,6 @@ pub trait VirtioDevice: Send + AsAny {
     fn has_control_queue(&mut self) -> bool {
         false
     }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.virtio_base().broken
-    }
 }
 
 /// The trait for trace descriptions of virtio device interactions
