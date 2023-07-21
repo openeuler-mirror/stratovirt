@@ -287,6 +287,8 @@ fn handle_process(opt: SeccompOpt) -> Vec<SockFilter> {
 /// A wrapper structure of a list of bpf_filters for a syscall's rule.
 #[derive(Debug)]
 pub struct BpfRule {
+    /// The staged rules to avoid jump offset overflow.
+    staged_rules: Vec<SockFilter>,
     /// The first bpf_filter to compare syscall number.
     header_rule: SockFilter,
     /// The last args index.
@@ -304,6 +306,7 @@ impl BpfRule {
     /// * `syscall_num` - the number of system call.
     pub fn new(syscall_num: i64) -> BpfRule {
         BpfRule {
+            staged_rules: Vec::new(),
             header_rule: bpf_jump(BPF_JMP + BPF_JEQ + BPF_K, syscall_num as u32, 0, 1),
             args_idx_last: None,
             inner_rules: Vec::new(),
@@ -345,25 +348,47 @@ impl BpfRule {
         inner_append.push(constraint_filter);
         inner_append.push(bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW));
 
-        self.append(&mut inner_append);
-        self
+        if !self.append(&mut inner_append) {
+            self.start_new_session();
+            self.add_constraint(cmp, args_idx, args_value)
+        } else {
+            self
+        }
     }
 
     /// Change `BpfRules` to a list of `SockFilter`. It will be used when
     /// seccomp taking effect.
-    fn as_vec(&mut self) -> Vec<SockFilter> {
-        let mut bpf_filters = vec![self.header_rule];
-        bpf_filters.append(&mut self.inner_rules);
+    fn as_vec(&self) -> Vec<SockFilter> {
+        let mut bpf_filters = self.staged_rules.clone();
+        bpf_filters.push(self.header_rule);
+        bpf_filters.append(&mut self.inner_rules.clone());
         bpf_filters.push(self.tail_rule);
         bpf_filters
     }
 
+    /// Stage current rules and start new session. Used when header rule jump
+    /// is about to overflow.
+    fn start_new_session(&mut self) {
+        // Save current rules to staged.
+        self.staged_rules.push(self.header_rule);
+        self.staged_rules.append(&mut self.inner_rules);
+        self.staged_rules.push(self.tail_rule);
+
+        self.header_rule.jf = 1;
+        self.args_idx_last = None;
+    }
+
     /// Add bpf_filters to `inner_rules`.
-    fn append(&mut self, bpf_filters: &mut Vec<SockFilter>) {
+    fn append(&mut self, bpf_filters: &mut Vec<SockFilter>) -> bool {
         let offset = bpf_filters.len() as u8;
 
-        self.header_rule.jf += offset;
-        self.inner_rules.append(bpf_filters);
+        if let Some(jf_added) = self.header_rule.jf.checked_add(offset) {
+            self.header_rule.jf = jf_added;
+            self.inner_rules.append(bpf_filters);
+            true
+        } else {
+            false
+        }
     }
 }
 
