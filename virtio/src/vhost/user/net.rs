@@ -52,8 +52,16 @@ pub struct Net {
 
 impl Net {
     pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
+        let queue_num = if cfg.mq {
+            // If support multi-queue, it should add 1 control queue.
+            (cfg.queues + 1) as usize
+        } else {
+            QUEUE_NUM_NET
+        };
+        let queue_size = cfg.queue_size;
+
         Net {
-            base: VirtioBase::new(VIRTIO_TYPE_NET),
+            base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
             net_cfg: cfg.clone(),
             config_space: Default::default(),
             mem_space: mem_space.clone(),
@@ -162,19 +170,6 @@ impl VirtioDevice for Net {
         }
 
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        if self.net_cfg.mq {
-            // If support multi-queue, it should add 1 control queue.
-            (self.net_cfg.queues + 1) as usize
-        } else {
-            QUEUE_NUM_NET
-        }
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        self.net_cfg.queue_size
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

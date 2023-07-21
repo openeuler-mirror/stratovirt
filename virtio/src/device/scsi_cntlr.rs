@@ -119,8 +119,12 @@ pub struct ScsiCntlr {
 
 impl ScsiCntlr {
     pub fn new(config: ScsiCntlrConfig) -> ScsiCntlr {
+        // Note: config.queues <= MAX_VIRTIO_QUEUE(32).
+        let queue_num = config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM;
+        let queue_size = config.queue_size;
+
         Self {
-            base: VirtioBase::new(VIRTIO_TYPE_SCSI),
+            base: VirtioBase::new(VIRTIO_TYPE_SCSI, queue_num, queue_size),
             config,
             ..Default::default()
         }
@@ -179,15 +183,6 @@ impl VirtioDevice for ScsiCntlr {
 
     fn unrealize(&mut self) -> Result<()> {
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        // Note: self.config.queues <= MAX_VIRTIO_QUEUE(32).
-        self.config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        self.config.queue_size
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

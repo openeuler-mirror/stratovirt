@@ -326,6 +326,10 @@ pub struct VirtioBase {
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
+    /// The number of device queues.
+    queue_num: usize,
+    /// The max size of each queue.
+    queue_size_max: u16,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -333,9 +337,11 @@ pub struct VirtioBase {
 }
 
 impl VirtioBase {
-    fn new(device_type: u32) -> Self {
+    fn new(device_type: u32, queue_num: usize, queue_size_max: u16) -> Self {
         Self {
             device_type,
+            queue_num,
+            queue_size_max,
             ..Default::default()
         }
     }
@@ -363,10 +369,14 @@ pub trait VirtioDevice: Send + AsAny {
     }
 
     /// Get the count of virtio device queues.
-    fn queue_num(&self) -> usize;
+    fn queue_num(&self) -> usize {
+        self.virtio_base().queue_num
+    }
 
     /// Get the queue size of virtio device.
-    fn queue_size_max(&self) -> u16;
+    fn queue_size_max(&self) -> u16 {
+        self.virtio_base().queue_size_max
+    }
 
     /// Init device configure space and features.
     fn init_config_features(&mut self) -> Result<()>;

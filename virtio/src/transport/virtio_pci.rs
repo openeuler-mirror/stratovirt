@@ -1476,7 +1476,11 @@ mod tests {
 
     impl VirtioDeviceTest {
         pub fn new() -> Self {
-            let mut base = VirtioBase::new(VIRTIO_DEVICE_TEST_TYPE);
+            let mut base = VirtioBase::new(
+                VIRTIO_DEVICE_TEST_TYPE,
+                VIRTIO_DEVICE_QUEUE_NUM,
+                VIRTIO_DEVICE_QUEUE_SIZE,
+            );
             base.device_features = 0xFFFF_FFF0;
             VirtioDeviceTest {
                 base,
@@ -1501,14 +1505,6 @@ mod tests {
 
         fn init_config_features(&mut self) -> VirtioResult<()> {
             Ok(())
-        }
-
-        fn queue_num(&self) -> usize {
-            VIRTIO_DEVICE_QUEUE_NUM
-        }
-
-        fn queue_size_max(&self) -> u16 {
-            VIRTIO_DEVICE_QUEUE_SIZE
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {

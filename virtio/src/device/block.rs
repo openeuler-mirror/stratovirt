@@ -974,8 +974,10 @@ impl Block {
         blk_cfg: BlkDevConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Block {
+        let queue_num = blk_cfg.queues as usize;
+        let queue_size = blk_cfg.queue_size;
         Self {
-            base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
+            base: VirtioBase::new(VIRTIO_TYPE_BLOCK, queue_num, queue_size),
             blk_cfg,
             req_align: 1,
             buf_align: 1,
@@ -1112,14 +1114,6 @@ impl VirtioDevice for Block {
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        self.blk_cfg.queues as usize
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        self.blk_cfg.queue_size
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

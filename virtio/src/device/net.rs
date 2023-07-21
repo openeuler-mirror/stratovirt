@@ -1182,8 +1182,15 @@ pub struct Net {
 
 impl Net {
     pub fn new(net_cfg: NetworkInterfaceConfig) -> Self {
+        let queue_num = if net_cfg.mq {
+            (net_cfg.queues + 1) as usize
+        } else {
+            QUEUE_NUM_NET
+        };
+        let queue_size = net_cfg.queue_size;
+
         Self {
-            base: VirtioBase::new(VIRTIO_TYPE_NET),
+            base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
             net_cfg,
             ..Default::default()
         }
@@ -1455,18 +1462,6 @@ impl VirtioDevice for Net {
             &self.net_cfg.id,
         );
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        if self.net_cfg.mq {
-            (self.net_cfg.queues + 1) as usize
-        } else {
-            QUEUE_NUM_NET
-        }
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        self.net_cfg.queue_size
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

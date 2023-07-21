@@ -46,8 +46,11 @@ pub struct Block {
 
 impl Block {
     pub fn new(cfg: &BlkDevConfig, mem_space: &Arc<AddressSpace>) -> Self {
+        let queue_num = cfg.queues as usize;
+        let queue_size = cfg.queue_size;
+
         Block {
-            base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
+            base: VirtioBase::new(VIRTIO_TYPE_BLOCK, queue_num, queue_size),
             blk_cfg: cfg.clone(),
             config_space: Default::default(),
             mem_space: mem_space.clone(),
@@ -175,14 +178,6 @@ impl VirtioDevice for Block {
         self.base.device_features &= features;
 
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        self.blk_cfg.queues as usize
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        self.blk_cfg.queue_size
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

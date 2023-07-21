@@ -225,7 +225,7 @@ pub struct Rng {
 impl Rng {
     pub fn new(rng_cfg: RngConfig) -> Self {
         Rng {
-            base: VirtioBase::new(VIRTIO_TYPE_RNG),
+            base: VirtioBase::new(VIRTIO_TYPE_RNG, QUEUE_NUM_RNG, DEFAULT_VIRTQUEUE_SIZE),
             rng_cfg,
             ..Default::default()
         }
@@ -273,14 +273,6 @@ impl VirtioDevice for Rng {
     fn init_config_features(&mut self) -> Result<()> {
         self.base.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_RNG
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, _data: &mut [u8]) -> Result<()> {
