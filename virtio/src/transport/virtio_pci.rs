@@ -729,7 +729,7 @@ impl VirtioPciDevice {
         let dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
+        let broken = &dev_lock.virtio_base().broken;
         for q_config in queues_config.iter_mut() {
             if !q_config.ready {
                 debug!("queue is not ready, please check your init process");
@@ -1396,7 +1396,7 @@ impl StateTransfer for VirtioPciDevice {
             let dev_lock = self.device.lock().unwrap();
             let features =
                 (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
-            let broken = dev_lock.get_device_broken();
+            let broken = &dev_lock.virtio_base().broken;
             for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter_mut() {
                 queue_state.set_addr_cache(
                     self.sys_mem.clone(),

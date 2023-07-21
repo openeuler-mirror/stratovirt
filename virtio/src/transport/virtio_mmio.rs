@@ -406,7 +406,7 @@ impl VirtioMmioDevice {
         let dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
+        let broken = &dev_lock.virtio_base().broken;
 
         for q_config in queues_config.iter_mut() {
             q_config.set_addr_cache(
@@ -677,7 +677,7 @@ impl StateTransfer for VirtioMmioDevice {
         let dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
+        let broken = &dev_lock.virtio_base().broken;
         self.queues = queue_states
             .iter_mut()
             .map(|queue_state| {
