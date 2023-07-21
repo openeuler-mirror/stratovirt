@@ -116,8 +116,11 @@ impl Fs {
     /// `mem_space` - The address space of this Fs device.
     /// `enable_irqfd` - Whether irqfd is enabled on this Fs device.
     pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>, enable_irqfd: bool) -> Self {
+        let queue_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
+        let queue_size = VIRTIO_FS_QUEUE_SIZE;
+
         Fs {
-            base: VirtioBase::new(VIRTIO_TYPE_FS),
+            base: VirtioBase::new(VIRTIO_TYPE_FS, queue_num, queue_size),
             fs_cfg,
             config_space: VirtioFsConfig::default(),
             client: None,
@@ -170,14 +173,6 @@ impl VirtioDevice for Fs {
             .with_context(|| "Failed to get features for virtio fs")?;
 
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        VIRTIO_FS_QUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

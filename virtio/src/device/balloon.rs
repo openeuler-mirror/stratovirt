@@ -900,8 +900,16 @@ impl Balloon {
     ///
     /// * `bln_cfg` - Balloon configuration.
     pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
+        let mut queue_num = QUEUE_NUM_BALLOON;
+        if bln_cfg.free_page_reporting {
+            queue_num += 1;
+        }
+        if bln_cfg.auto_balloon {
+            queue_num += 1;
+        }
+
         Balloon {
-            base: VirtioBase::new(VIRTIO_TYPE_BALLOON),
+            base: VirtioBase::new(VIRTIO_TYPE_BALLOON, queue_num, DEFAULT_VIRTQUEUE_SIZE),
             bln_cfg: bln_cfg.clone(),
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
@@ -1005,21 +1013,6 @@ impl VirtioDevice for Balloon {
             self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
         }
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        let mut queue_num = QUEUE_NUM_BALLOON;
-        if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_REPORTING) {
-            queue_num += 1;
-        }
-        if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
-            queue_num += 1;
-        }
-        queue_num
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

@@ -1445,7 +1445,7 @@ unsafe impl Send for Gpu {}
 impl Gpu {
     pub fn new(cfg: GpuDevConfig) -> Gpu {
         Self {
-            base: VirtioBase::new(VIRTIO_TYPE_GPU),
+            base: VirtioBase::new(VIRTIO_TYPE_GPU, QUEUE_NUM_GPU, DEFAULT_VIRTQUEUE_SIZE),
             cfg,
             ..Default::default()
         }
@@ -1516,14 +1516,6 @@ impl VirtioDevice for Gpu {
 
         // TODO: support migration
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_GPU
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

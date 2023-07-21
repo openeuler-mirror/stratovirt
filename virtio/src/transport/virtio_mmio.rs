@@ -781,7 +781,7 @@ mod tests {
             }
 
             VirtioDeviceTest {
-                base: VirtioBase::new(VIRTIO_TYPE_BLOCK),
+                base: VirtioBase::new(VIRTIO_TYPE_BLOCK, QUEUE_NUM, QUEUE_SIZE),
                 b_active: false,
                 b_realized: false,
                 config_space,
@@ -806,14 +806,6 @@ mod tests {
 
         fn init_config_features(&mut self) -> Result<()> {
             Ok(())
-        }
-
-        fn queue_num(&self) -> usize {
-            QUEUE_NUM
-        }
-
-        fn queue_size_max(&self) -> u16 {
-            QUEUE_SIZE
         }
 
         fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

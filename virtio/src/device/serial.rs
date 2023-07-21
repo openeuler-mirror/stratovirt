@@ -146,8 +146,13 @@ impl Serial {
     ///
     /// * `serial_cfg` - Device configuration set by user.
     pub fn new(serial_cfg: VirtioSerialInfo) -> Self {
+        // Each port has 2 queues(receiveq/transmitq).
+        // And there exist 2 control queues(control receiveq/control transmitq).
+        let queue_num = serial_cfg.max_ports as usize * 2 + 2;
+        let queue_size = DEFAULT_VIRTQUEUE_SIZE;
+
         Serial {
-            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE),
+            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
             ..Default::default()
@@ -228,16 +233,6 @@ impl VirtioDevice for Serial {
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        // Each port has 2 queues(receiveq/transmitq).
-        // And there exist 2 control queues(control receiveq/control transmitq).
-        self.max_nr_ports as usize * 2 + 2
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {

@@ -114,7 +114,7 @@ pub struct Vsock {
 impl Vsock {
     pub fn new(cfg: &VsockConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Vsock {
-            base: VirtioBase::new(VIRTIO_TYPE_VSOCK),
+            base: VirtioBase::new(VIRTIO_TYPE_VSOCK, QUEUE_NUM_VSOCK, DEFAULT_VIRTQUEUE_SIZE),
             vsock_cfg: cfg.clone(),
             backend: None,
             config_space: Default::default(),
@@ -199,14 +199,6 @@ impl VirtioDevice for Vsock {
             .get_features()
             .with_context(|| "Failed to get features for vsock")?;
         Ok(())
-    }
-
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_VSOCK
-    }
-
-    fn queue_size_max(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
