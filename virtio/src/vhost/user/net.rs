@@ -24,8 +24,8 @@ use super::super::VhostOps;
 use super::{VhostBackendType, VhostUserClient};
 use crate::{
     device::net::{build_device_config_space, CtrlInfo, MAC_ADDR_LEN},
-    read_config_default, virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase,
-    VirtioDevice, VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
+    read_config_default, virtio_has_feature, CtrlVirtio, NetCtrlHandler, VirtioBase, VirtioDevice,
+    VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR,
     VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
@@ -199,9 +199,9 @@ impl VirtioDevice for Net {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         let queue_num = queues.len();
         let driver_features = self.base.driver_features;
         let has_control_queue =
@@ -240,7 +240,7 @@ impl VirtioDevice for Net {
             client.set_queues(&queues[..(queue_num - 1)]);
             client.set_queue_evts(&queue_evts[..(queue_num - 1)]);
         } else {
-            client.set_queues(queues);
+            client.set_queues(&queues);
             client.set_queue_evts(&queue_evts);
         }
         client.activate_vhost_user()?;
@@ -275,7 +275,7 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn has_control_queue(&mut self) -> bool {
+    fn has_control_queue(&self) -> bool {
         virtio_has_feature(self.base.device_features, VIRTIO_NET_F_CTRL_VQ)
     }
 }

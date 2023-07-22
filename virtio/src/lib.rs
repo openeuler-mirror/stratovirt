@@ -330,6 +330,8 @@ pub struct VirtioBase {
     queue_num: usize,
     /// The max size of each queue.
     queue_size_max: u16,
+    /// Virtio queues.
+    queues: Vec<Arc<Mutex<Queue>>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -430,7 +432,6 @@ pub trait VirtioDevice: Send + AsAny {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()>;
 
@@ -470,7 +471,7 @@ pub trait VirtioDevice: Send + AsAny {
 
     /// Get whether the virtio device has a control queue,
     /// devices with a control queue should override this function.
-    fn has_control_queue(&mut self) -> bool {
+    fn has_control_queue(&self) -> bool {
         false
     }
 }

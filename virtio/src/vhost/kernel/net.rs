@@ -30,12 +30,11 @@ use crate::read_config_default;
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, MAC_ADDR_LEN},
     error::VirtioError,
-    virtio_has_feature, CtrlVirtio, NetCtrlHandler, Queue, VirtioBase, VirtioDevice,
-    VirtioInterrupt, VirtioNetConfig, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
+    virtio_has_feature, CtrlVirtio, NetCtrlHandler, VirtioBase, VirtioDevice, VirtioInterrupt,
+    VirtioNetConfig, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -240,9 +239,9 @@ impl VirtioDevice for Net {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         let queue_num = queues.len();
         let driver_features = self.base.driver_features;
         if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {

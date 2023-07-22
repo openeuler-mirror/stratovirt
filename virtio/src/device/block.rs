@@ -1135,10 +1135,10 @@ impl VirtioDevice for Block {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
+        let queues = self.base.queues.clone();
         for (index, queue) in queues.iter().enumerate() {
             if !queue.lock().unwrap().is_enabled() {
                 continue;
@@ -1570,18 +1570,12 @@ mod tests {
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
-        let queues: Vec<Arc<Mutex<Queue>>> =
-            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
+        block.base.queues = vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
         let event = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
 
         // activate block device
         block
-            .activate(
-                mem_space.clone(),
-                interrupt_cb,
-                &queues,
-                vec![event.clone()],
-            )
+            .activate(mem_space.clone(), interrupt_cb, vec![event.clone()])
             .unwrap();
 
         // make first descriptor entry

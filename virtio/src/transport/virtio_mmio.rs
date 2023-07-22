@@ -333,8 +333,6 @@ pub struct VirtioMmioDevice {
     state: Arc<Mutex<VirtioMmioState>>,
     // System address space.
     mem_space: Arc<AddressSpace>,
-    // Virtio queues.
-    queues: Vec<Arc<Mutex<Queue>>>,
     // System Resource of device.
     res: SysRes,
     /// The function for interrupt triggering.
@@ -356,7 +354,6 @@ impl VirtioMmioDevice {
                 config_space: VirtioMmioCommonConfig::new(&device_clone),
             })),
             mem_space: mem_space.clone(),
-            queues: Vec::new(),
             res: SysRes::default(),
             interrupt_cb: None,
         }
@@ -403,11 +400,12 @@ impl VirtioMmioDevice {
         let queue_num = locked_state.config_space.queue_num;
         let queue_type = locked_state.config_space.queue_type;
         let queues_config = &mut locked_state.config_space.queues_config[0..queue_num];
-        let dev_lock = self.device.lock().unwrap();
+        let mut dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = &dev_lock.virtio_base().broken;
 
+        let mut queues = Vec::with_capacity(queue_num);
         for q_config in queues_config.iter_mut() {
             q_config.set_addr_cache(
                 self.mem_space.clone(),
@@ -420,8 +418,9 @@ impl VirtioMmioDevice {
             if !queue.is_valid(&self.mem_space) {
                 bail!("Invalid queue");
             }
-            self.queues.push(Arc::new(Mutex::new(queue)));
+            queues.push(Arc::new(Mutex::new(queue)));
         }
+        dev_lock.virtio_base_mut().queues = queues;
         drop(dev_lock);
         drop(locked_state);
 
@@ -438,12 +437,10 @@ impl VirtioMmioDevice {
         self.device.lock().unwrap().set_guest_notifiers(&events)?;
 
         if let Some(cb) = self.interrupt_cb.clone() {
-            self.device.lock().unwrap().activate(
-                self.mem_space.clone(),
-                cb,
-                &self.queues,
-                queue_evts,
-            )?;
+            self.device
+                .lock()
+                .unwrap()
+                .activate(self.mem_space.clone(), cb, queue_evts)?;
         } else {
             bail!("Failed to activate device: No interrupt callback");
         }
@@ -655,7 +652,8 @@ impl StateTransfer for VirtioMmioDevice {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = self.state.lock().unwrap();
 
-        for (index, queue) in self.queues.iter().enumerate() {
+        let locked_dev = self.device.lock().unwrap();
+        for (index, queue) in locked_dev.virtio_base().queues.iter().enumerate() {
             state.config_space.queues_config[index] =
                 queue.lock().unwrap().vring.get_queue_config();
         }
@@ -674,11 +672,11 @@ impl StateTransfer for VirtioMmioDevice {
         let mut queue_states = locked_state.config_space.queues_config
             [0..locked_state.config_space.queue_num]
             .to_vec();
-        let dev_lock = self.device.lock().unwrap();
+        let mut dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = &dev_lock.virtio_base().broken;
-        self.queues = queue_states
+        dev_lock.virtio_base_mut().queues = queue_states
             .iter_mut()
             .map(|queue_state| {
                 queue_state.set_addr_cache(
@@ -712,12 +710,12 @@ impl MigrationHook for VirtioMmioDevice {
             }
 
             if let Some(cb) = self.interrupt_cb.clone() {
-                if let Err(e) = self.device.lock().unwrap().activate(
-                    self.mem_space.clone(),
-                    cb,
-                    &self.queues,
-                    queue_evts,
-                ) {
+                if let Err(e) =
+                    self.device
+                        .lock()
+                        .unwrap()
+                        .activate(self.mem_space.clone(), cb, queue_evts)
+                {
                     bail!("Failed to resume virtio mmio device: {}", e);
                 }
             } else {
@@ -824,7 +822,6 @@ mod tests {
             &mut self,
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
-            _queues: &[Arc<Mutex<Queue>>],
             mut _queue_evts: Vec<Arc<EventFd>>,
         ) -> Result<()> {
             self.b_active = true;

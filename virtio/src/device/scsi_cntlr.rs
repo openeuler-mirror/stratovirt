@@ -201,9 +201,9 @@ impl VirtioDevice for ScsiCntlr {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         if queues.len() < SCSI_MIN_QUEUE_NUM {
             bail!("virtio scsi controller queues num can not be less than 3!");
         }

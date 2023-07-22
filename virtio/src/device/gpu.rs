@@ -1542,9 +1542,9 @@ impl VirtioDevice for Gpu {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         if queues.len() != QUEUE_NUM_GPU {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
                 QUEUE_NUM_GPU,
