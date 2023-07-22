@@ -1475,13 +1475,6 @@ impl VirtioDevice for Gpu {
             );
         }
 
-        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1;
-        self.base.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
-        self.base.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        if self.cfg.edid {
-            self.base.device_features |= 1 << VIRTIO_GPU_F_EDID;
-        }
-
         let mut output_states = self.output_states.lock().unwrap();
         output_states[0].width = self.cfg.xres;
         output_states[0].height = self.cfg.yres;
@@ -1500,8 +1493,19 @@ impl VirtioDevice for Gpu {
         }
         drop(output_states);
 
-        self.build_device_config_space();
+        self.init_config_features()?;
 
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1
+            | 1u64 << VIRTIO_F_RING_INDIRECT_DESC
+            | 1u64 << VIRTIO_F_RING_EVENT_IDX;
+        if self.cfg.edid {
+            self.base.device_features |= 1 << VIRTIO_GPU_F_EDID;
+        }
+        self.build_device_config_space();
         Ok(())
     }
 

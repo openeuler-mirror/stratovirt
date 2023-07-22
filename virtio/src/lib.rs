@@ -368,6 +368,9 @@ pub trait VirtioDevice: Send + AsAny {
     /// Get the queue size of virtio device.
     fn queue_size_max(&self) -> u16;
 
+    /// Init device configure space and features.
+    fn init_config_features(&mut self) -> Result<()>;
+
     /// Get device features from host.
     fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.virtio_base().device_features, features_select)

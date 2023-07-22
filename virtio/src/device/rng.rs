@@ -265,8 +265,12 @@ impl VirtioDevice for Rng {
             .with_context(|| "Failed to check random file")?;
         let file = File::open(&self.rng_cfg.random_file)
             .with_context(|| "Failed to open file of random number generator")?;
-
         self.random_file = Some(file);
+        self.init_config_features()?;
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
         self.base.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
         Ok(())
     }

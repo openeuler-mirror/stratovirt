@@ -800,6 +800,11 @@ mod tests {
 
         fn realize(&mut self) -> Result<()> {
             self.b_realized = true;
+            self.init_config_features()?;
+            Ok(())
+        }
+
+        fn init_config_features(&mut self) -> Result<()> {
             Ok(())
         }
 

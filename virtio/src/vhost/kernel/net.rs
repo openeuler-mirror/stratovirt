@@ -138,7 +138,22 @@ impl VirtioDevice for Net {
             backends.push(backend);
         }
 
-        let mut vhost_features = backends[0]
+        let host_dev_name = match self.net_cfg.host_dev_name.as_str() {
+            "" => None,
+            _ => Some(self.net_cfg.host_dev_name.as_str()),
+        };
+
+        self.taps = create_tap(self.net_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
+            .with_context(|| "Failed to create tap for vhost net")?;
+        self.backends = Some(backends);
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        let mut vhost_features = self.backends.as_ref().unwrap()[0]
             .get_features()
             .with_context(|| "Failed to get features for vhost net")?;
         vhost_features &= !(1_u64 << VHOST_NET_F_VIRTIO_NET_HDR);
@@ -155,6 +170,7 @@ impl VirtioDevice for Net {
 
         let mut locked_config = self.config_space.lock().unwrap();
 
+        let queue_pairs = self.net_cfg.queues / 2;
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)
@@ -168,14 +184,6 @@ impl VirtioDevice for Net {
             device_features |= build_device_config_space(&mut locked_config, mac);
         }
 
-        let host_dev_name = match self.net_cfg.host_dev_name.as_str() {
-            "" => None,
-            _ => Some(self.net_cfg.host_dev_name.as_str()),
-        };
-
-        self.taps = create_tap(self.net_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
-            .with_context(|| "Failed to create tap for vhost net")?;
-        self.backends = Some(backends);
         self.base.device_features = device_features;
         self.vhost_features = vhost_features;
 

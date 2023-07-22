@@ -1495,6 +1495,11 @@ mod tests {
         }
 
         fn realize(&mut self) -> VirtioResult<()> {
+            self.init_config_features()?;
+            Ok(())
+        }
+
+        fn init_config_features(&mut self) -> VirtioResult<()> {
             Ok(())
         }
 

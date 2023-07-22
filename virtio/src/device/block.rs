@@ -986,13 +986,15 @@ impl Block {
 
     fn build_device_config_space(&mut self) {
         // capacity: 64bits
-        let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
-        self.config_space.capacity = num_sectors;
+        self.config_space.capacity = self.disk_sectors;
         // seg_max = queue_size - 2: 32bits
         self.config_space.seg_max = self.queue_size_max() as u32 - 2;
 
+        if self.blk_cfg.queues > 1 {
+            self.config_space.num_queues = self.blk_cfg.queues;
+        }
+
         if self.blk_cfg.discard {
-            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_DISCARD;
             // Just support one segment per request.
             self.config_space.max_discard_seg = 1;
             // The default discard alignment is 1 sector.
@@ -1001,7 +1003,6 @@ impl Block {
         }
 
         if self.blk_cfg.write_zeroes != WriteZeroesState::Off {
-            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
             // Just support one segment per request.
             self.config_space.max_write_zeroes_seg = 1;
             self.config_space.max_write_zeroes_sectors = MAX_REQUEST_SECTORS;
@@ -1048,25 +1049,6 @@ impl VirtioDevice for Block {
             );
         }
 
-        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
-        if self.blk_cfg.read_only {
-            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
-        };
-        self.base.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        self.base.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        self.base.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
-
-        self.build_device_config_space();
-
-        if self.blk_cfg.queues > 1 {
-            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
-            self.config_space.num_queues = self.blk_cfg.queues;
-        }
-
-        self.block_backend = None;
-        self.disk_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
-        self.req_align = 1;
-        self.buf_align = 1;
         if !self.blk_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
             let file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
@@ -1092,8 +1074,37 @@ impl VirtioDevice for Block {
             let disk_size = backend.lock().unwrap().disk_size()?;
             self.block_backend = Some(backend);
             self.disk_sectors = disk_size >> SECTOR_SHIFT;
+        } else {
+            self.req_align = 1;
+            self.buf_align = 1;
+            self.block_backend = None;
+            self.disk_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         }
-        self.config_space.capacity = self.disk_sectors;
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
+            | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC
+            | 1_u64 << VIRTIO_F_RING_EVENT_IDX
+            | 1_u64 << VIRTIO_BLK_F_FLUSH
+            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
+        if self.blk_cfg.read_only {
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
+        };
+        if self.blk_cfg.queues > 1 {
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
+        }
+        if self.blk_cfg.discard {
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_DISCARD;
+        }
+        if self.blk_cfg.write_zeroes != WriteZeroesState::Off {
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
+        }
+        self.build_device_config_space();
 
         Ok(())
     }

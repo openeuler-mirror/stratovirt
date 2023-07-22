@@ -88,9 +88,24 @@ impl Block {
         self.client = Some(client);
         Ok(())
     }
+}
 
-    /// Negotiate features with spdk.
-    fn negotiate_features(&mut self) -> Result<()> {
+impl VirtioDevice for Block {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
+    fn realize(&mut self) -> Result<()> {
+        self.init_client()?;
+        self.init_config_features()?;
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
         let locked_client = self.client.as_ref().unwrap().lock().unwrap();
         let features = locked_client
             .get_features()
@@ -158,23 +173,6 @@ impl Block {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
         self.base.device_features &= features;
-
-        Ok(())
-    }
-}
-
-impl VirtioDevice for Block {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
-
-    fn realize(&mut self) -> Result<()> {
-        self.init_client()?;
-        self.negotiate_features()?;
 
         Ok(())
     }
