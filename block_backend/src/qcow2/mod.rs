@@ -2174,66 +2174,57 @@ mod test {
         let path = "./discard_write_zero.qcow2";
         let image_bits = 24;
         let cluster_bits = 16;
-        let image = TestImage::new(path, image_bits, cluster_bits);
-        let conf = BlockProperty {
-            id: path.to_string(),
-            format: DiskFormat::Qcow2,
-            iothread: None,
-            direct: true,
-            req_align: 512,
-            buf_align: 512,
-            discard: true,
-            write_zeroes: WriteZeroesState::On,
-            l2_cache_size: None,
-            refcount_cache_size: None,
-        };
-        let mut qcow2_driver = image.create_qcow2_driver(conf);
 
-        // Test 1.
-        let mut test_buf: Vec<u8> = vec![1_u8; 65536 * 6];
-        let test_data = vec![
-            TestData::new(0, 65536),
-            TestData::new(0, 65536 + 32768),
-            TestData::new(0, 65536 * 2),
-            TestData::new(0, 65536 + 32768),
+        // let test_data = vec![65536, 65536 + 32768, 65536 * 2, 65536 + 32768];
+        let cluster_size: u64 = 1 << cluster_bits;
+        // (offset_begin, offset_end)
+        let test_data: Vec<(u64, u64)> = vec![
+            (0, cluster_size * 5),
+            (cluster_size * 5, cluster_size * 10),
+            (cluster_size * 5 + 32768, cluster_size * 10),
+            (cluster_size * 5, cluster_size * 10 + 32768),
+            (cluster_size * 5, cluster_size * 5 + 32768),
+            (cluster_size * 5 + 32768, cluster_size * 5 + 32768),
+            (cluster_size * 5 + 32768, cluster_size * 5 + 49152),
+            (cluster_size * 5 + 32768, cluster_size * 6),
+            (cluster_size * 5 + 32768, cluster_size * 10 + 32768),
+            (0, 1 << image_bits),
         ];
-        let offset_start = 0;
-        let mut guest_offset = offset_start;
-        assert!(qcow2_write(&mut qcow2_driver, &test_buf, offset_start).is_ok());
-        for data in test_data.iter() {
-            assert!(qcow2_driver
-                .write_zeroes(guest_offset, data.sz as u64, (), true)
-                .is_ok());
-            let mut tmp_buf = vec![1_u8; data.sz];
-            assert!(qcow2_read(&mut qcow2_driver, &mut tmp_buf, guest_offset).is_ok());
-            assert!(vec_is_zero(&tmp_buf));
-            guest_offset += data.sz;
-        }
-        assert!(qcow2_read(&mut qcow2_driver, &mut test_buf, offset_start).is_ok());
-        assert!(vec_is_zero(&test_buf));
+        for (offset_start, offset_end) in test_data {
+            for discard in [true, false] {
+                let image = TestImage::new(path, image_bits, cluster_bits);
+                let conf = BlockProperty {
+                    id: path.to_string(),
+                    format: DiskFormat::Qcow2,
+                    iothread: None,
+                    direct: true,
+                    req_align: 512,
+                    buf_align: 512,
+                    discard,
+                    write_zeroes: WriteZeroesState::On,
+                    l2_cache_size: None,
+                    refcount_cache_size: None,
+                };
 
-        // Test 2.
-        let mut test_buf: Vec<u8> = vec![1_u8; 65536 * 6];
-        let test_data = vec![
-            TestData::new(0, 65536),
-            TestData::new(0, 65536 + 32768),
-            TestData::new(0, 65536 * 2),
-            TestData::new(0, 65536 + 32768),
-        ];
-        let offset_start = 459752;
-        let mut guest_offset = offset_start;
-        assert!(qcow2_write(&mut qcow2_driver, &test_buf, offset_start).is_ok());
-        for data in test_data.iter() {
-            assert!(qcow2_driver
-                .write_zeroes(guest_offset, data.sz as u64, (), true)
-                .is_ok());
-            let mut tmp_buf = vec![1_u8; data.sz];
-            assert!(qcow2_read(&mut qcow2_driver, &mut tmp_buf, guest_offset).is_ok());
-            assert!(vec_is_zero(&tmp_buf));
-            guest_offset += data.sz;
+                let mut qcow2_driver = image.create_qcow2_driver(conf);
+                assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
+
+                assert!(qcow2_driver
+                    .write_zeroes(
+                        offset_start as usize,
+                        offset_end - offset_start,
+                        (),
+                        discard
+                    )
+                    .is_ok());
+
+                let mut read_buf = vec![1_u8; (offset_end - offset_start) as usize];
+                assert!(
+                    qcow2_read(&mut qcow2_driver, &mut read_buf, offset_start as usize).is_ok()
+                );
+                assert!(vec_is_zero(&read_buf));
+            }
         }
-        assert!(qcow2_read(&mut qcow2_driver, &mut test_buf, offset_start).is_ok());
-        assert!(vec_is_zero(&test_buf));
     }
 
     #[test]
