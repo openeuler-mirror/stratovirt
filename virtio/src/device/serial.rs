@@ -228,11 +228,11 @@ impl VirtioDevice for Serial {
         self.max_nr_ports as usize * 2 + 2
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -240,7 +240,7 @@ impl VirtioDevice for Serial {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -944,13 +944,13 @@ mod tests {
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+        assert_eq!(serial.driver_features(page) as u64, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+        assert_eq!(serial.driver_features(page) as u64, 0_u64);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
@@ -963,7 +963,7 @@ mod tests {
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         assert_eq!(
-            serial.get_driver_features(page) as u64,
+            serial.driver_features(page) as u64,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         serial.base.driver_features = 0;
