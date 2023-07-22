@@ -877,6 +877,8 @@ impl EventNotifierHelper for BalloonIoHandler {
 pub struct Balloon {
     /// Virtio device base property.
     base: VirtioBase,
+    /// Configuration of the balloon device.
+    bln_cfg: BalloonConfig,
     /// Actual memory pages of balloon device.
     actual: Arc<AtomicU32>,
     /// Target memory pages of balloon device.
@@ -889,9 +891,6 @@ pub struct Balloon {
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
-    /// For auto balloon
-    membuf_percent: u32,
-    monitor_interval: u32,
 }
 
 impl Balloon {
@@ -901,30 +900,15 @@ impl Balloon {
     ///
     /// * `bln_cfg` - Balloon configuration.
     pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
-        let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
-        if bln_cfg.deflate_on_oom {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
-        }
-        if bln_cfg.free_page_reporting {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_REPORTING;
-        }
-        if bln_cfg.auto_balloon {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
-        }
-
-        let mut base = VirtioBase::new(VIRTIO_TYPE_BALLOON);
-        base.device_features = device_features;
-
         Balloon {
-            base,
+            base: VirtioBase::new(VIRTIO_TYPE_BALLOON),
+            bln_cfg: bln_cfg.clone(),
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
             mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
-            membuf_percent: bln_cfg.membuf_percent,
-            monitor_interval: bln_cfg.monitor_interval,
         }
     }
 
@@ -1005,6 +989,21 @@ impl VirtioDevice for Balloon {
         self.mem_space
             .register_listener(self.mem_info.clone())
             .with_context(|| "Failed to register memory listener defined by balloon device.")?;
+        self.init_config_features()?;
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1;
+        if self.bln_cfg.deflate_on_oom {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
+        }
+        if self.bln_cfg.free_page_reporting {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_REPORTING;
+        }
+        if self.bln_cfg.auto_balloon {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
+        }
         Ok(())
     }
 
@@ -1029,8 +1028,8 @@ impl VirtioDevice for Balloon {
             actual: self.actual.load(Ordering::Acquire),
             _reserved: 0_u32,
             _reserved1: 0_u32,
-            membuf_percent: self.membuf_percent,
-            monitor_interval: self.monitor_interval,
+            membuf_percent: self.bln_cfg.membuf_percent,
+            monitor_interval: self.bln_cfg.monitor_interval,
         };
 
         let config_len =
@@ -1247,6 +1246,13 @@ mod tests {
 
         let mem_space = address_space_init();
         let mut bln = Balloon::new(&bln_cfg, mem_space);
+
+        // Test realize function.
+        bln.realize().unwrap();
+        assert_eq!(bln.device_type(), 5);
+        assert_eq!(bln.queue_num(), 2);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
+
         assert_eq!(bln.base.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -1271,11 +1277,6 @@ mod tests {
             (bln.driver_features(1) as u64) << 32
         );
 
-        // Test realize function.
-        bln.realize().unwrap();
-        assert_eq!(bln.device_type(), 5);
-        assert_eq!(bln.queue_num(), 2);
-        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
@@ -1635,6 +1636,13 @@ mod tests {
         };
         let mem_space = address_space_init();
         let mut bln = Balloon::new(&bln_cfg, mem_space);
+
+        // Test realize function.
+        bln.realize().unwrap();
+        assert_eq!(bln.device_type(), 5);
+        assert_eq!(bln.queue_num(), 3);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
+
         assert_eq!(bln.base.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -1648,11 +1656,6 @@ mod tests {
         let fts = bln.device_features(1);
         assert_eq!(fts, (feature >> 32) as u32);
 
-        // Test realize function.
-        bln.realize().unwrap();
-        assert_eq!(bln.device_type(), 5);
-        assert_eq!(bln.queue_num(), 3);
-        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);

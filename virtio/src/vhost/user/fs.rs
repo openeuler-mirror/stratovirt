@@ -138,10 +138,6 @@ impl VirtioDevice for Fs {
     }
 
     fn realize(&mut self) -> Result<()> {
-        let tag_bytes_vec = self.fs_cfg.tag.clone().into_bytes();
-        self.config_space.tag[..tag_bytes_vec.len()].copy_from_slice(tag_bytes_vec.as_slice());
-        self.config_space.num_request_queues = VIRTIO_FS_REQ_QUEUES_NUM as u32;
-
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
         let client = VhostUserClient::new(
             &self.mem_space,
@@ -154,12 +150,24 @@ impl VirtioDevice for Fs {
         })?;
         let client = Arc::new(Mutex::new(client));
         VhostUserClient::add_event(&client)?;
+        self.client = Some(client);
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        let tag_bytes_vec = self.fs_cfg.tag.clone().into_bytes();
+        self.config_space.tag[..tag_bytes_vec.len()].copy_from_slice(tag_bytes_vec.as_slice());
+        self.config_space.num_request_queues = VIRTIO_FS_REQ_QUEUES_NUM as u32;
+
+        let client = self.client.as_ref().unwrap();
         self.base.device_features = client
             .lock()
             .unwrap()
             .get_features()
             .with_context(|| "Failed to get features for virtio fs")?;
-        self.client = Some(client);
 
         Ok(())
     }

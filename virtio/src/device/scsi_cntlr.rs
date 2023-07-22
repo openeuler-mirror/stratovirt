@@ -154,7 +154,11 @@ impl VirtioDevice for ScsiCntlr {
                 self.config.iothread,
             );
         }
+        self.init_config_features()?;
+        Ok(())
+    }
 
+    fn init_config_features(&mut self) -> Result<()> {
         self.config_space.num_queues = self.config.queues;
         self.config_space.max_sectors = 0xFFFF_u32;
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.

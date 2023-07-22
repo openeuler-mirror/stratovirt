@@ -186,11 +186,18 @@ impl VirtioDevice for Vsock {
         backend
             .set_owner()
             .with_context(|| "Failed to set owner for vsock")?;
+        self.backend = Some(backend);
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        let backend = self.backend.as_ref().unwrap();
         self.base.device_features = backend
             .get_features()
             .with_context(|| "Failed to get features for vsock")?;
-        self.backend = Some(backend);
-
         Ok(())
     }
 

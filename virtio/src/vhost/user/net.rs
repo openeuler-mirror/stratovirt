@@ -108,11 +108,10 @@ impl VirtioDevice for Net {
             .net_cfg
             .socket_path
             .as_ref()
-            .map(|path| path.to_string())
             .with_context(|| "vhost-user: socket path is not found")?;
         let client = VhostUserClient::new(
             &self.mem_space,
-            &socket_path,
+            socket_path,
             self.queue_num() as u64,
             VhostBackendType::TypeNet,
         )
@@ -121,7 +120,15 @@ impl VirtioDevice for Net {
         })?;
         let client = Arc::new(Mutex::new(client));
         VhostUserClient::add_event(&client)?;
+        self.client = Some(client);
 
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        let client = self.client.as_ref().unwrap();
         self.base.device_features = client
             .lock()
             .unwrap()
@@ -149,8 +156,6 @@ impl VirtioDevice for Net {
             self.base.device_features |= 1 << VIRTIO_NET_F_MQ;
             locked_config.max_virtqueue_pairs = queue_pairs;
         }
-
-        self.client = Some(client);
 
         if let Some(mac) = &self.net_cfg.mac {
             self.base.device_features |= build_device_config_space(&mut locked_config, mac);

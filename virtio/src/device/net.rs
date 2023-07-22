@@ -1368,6 +1368,34 @@ impl VirtioDevice for Net {
             );
         }
 
+        let queue_pairs = self.net_cfg.queues / 2;
+        if !self.net_cfg.host_dev_name.is_empty() {
+            self.taps = create_tap(None, Some(&self.net_cfg.host_dev_name), queue_pairs)
+                .with_context(|| "Failed to open tap with file path")?;
+        } else if let Some(fds) = self.net_cfg.tap_fds.as_mut() {
+            let mut created_fds = 0;
+            if let Some(taps) = &self.taps {
+                for (index, tap) in taps.iter().enumerate() {
+                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
+                        created_fds += 1;
+                    }
+                }
+            }
+
+            if created_fds != fds.len() {
+                self.taps = create_tap(Some(fds), None, queue_pairs)
+                    .with_context(|| "Failed to open tap")?;
+            }
+        } else {
+            self.taps = None;
+        }
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
         self.base.device_features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
@@ -1394,28 +1422,6 @@ impl VirtioDevice for Net {
         {
             self.base.device_features |= 1 << VIRTIO_NET_F_MQ;
             locked_config.max_virtqueue_pairs = queue_pairs;
-        }
-
-        if !self.net_cfg.host_dev_name.is_empty() {
-            self.taps = None;
-            self.taps = create_tap(None, Some(&self.net_cfg.host_dev_name), queue_pairs)
-                .with_context(|| "Failed to open tap with file path")?;
-        } else if let Some(fds) = self.net_cfg.tap_fds.as_mut() {
-            let mut created_fds = 0;
-            if let Some(taps) = &self.taps {
-                for (index, tap) in taps.iter().enumerate() {
-                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
-                        created_fds += 1;
-                    }
-                }
-            }
-
-            if created_fds != fds.len() {
-                self.taps = create_tap(Some(fds), None, queue_pairs)
-                    .with_context(|| "Failed to open tap")?;
-            }
-        } else {
-            self.taps = None;
         }
 
         // Using the first tap to test if all the taps have ufo.
