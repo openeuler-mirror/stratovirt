@@ -595,8 +595,6 @@ pub struct VirtioPciDevice {
     notify_eventfds: Arc<NotifyEventFds>,
     /// The function for interrupt triggering
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    /// Virtio queues. The vector and Queue will be shared acrossing thread, so all with Arc<Mutex<..>> wrapper.
-    queues: Arc<Mutex<Vec<Arc<Mutex<Queue>>>>>,
     /// Multi-Function flag.
     multi_func: bool,
     /// If the device need to register irqfd to kvm.
@@ -630,7 +628,6 @@ impl VirtioPciDevice {
             parent_bus,
             notify_eventfds: Arc::new(NotifyEventFds::new(queue_num)),
             interrupt_cb: None,
-            queues: Arc::new(Mutex::new(Vec::with_capacity(queue_num))),
             multi_func,
             need_irqfd: false,
         }
@@ -725,8 +722,8 @@ impl VirtioPciDevice {
 
         let queue_type = common_cfg_lock.queue_type;
         let queues_config = &mut common_cfg_lock.queues_config;
-        let mut locked_queues = self.queues.lock().unwrap();
-        let dev_lock = self.device.lock().unwrap();
+        let mut queues = Vec::new();
+        let mut dev_lock = self.device.lock().unwrap();
         let features =
             (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = &dev_lock.virtio_base().broken;
@@ -747,10 +744,10 @@ impl VirtioPciDevice {
                 return false;
             }
             let arc_queue = Arc::new(Mutex::new(queue));
-            locked_queues.push(arc_queue.clone());
+            queues.push(arc_queue.clone());
         }
+        dev_lock.virtio_base_mut().queues = queues;
         drop(dev_lock);
-        drop(locked_queues);
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
         if self.need_irqfd {
@@ -780,7 +777,6 @@ impl VirtioPciDevice {
         if let Err(e) = self.device.lock().unwrap().activate(
             self.sys_mem.clone(),
             self.interrupt_cb.clone().unwrap(),
-            &self.queues.lock().unwrap(),
             queue_evts,
         ) {
             error!("Failed to activate device, error is {:?}", e);
@@ -799,7 +795,7 @@ impl VirtioPciDevice {
             }
         }
 
-        self.queues.lock().unwrap().clear();
+        self.device.lock().unwrap().virtio_base_mut().queues.clear();
         if self.device_activated.load(Ordering::Acquire) {
             self.device_activated.store(false, Ordering::Release);
             if let Err(e) = self.device.lock().unwrap().deactivate() {
@@ -1013,18 +1009,19 @@ impl VirtioPciDevice {
     }
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
-        let mut locked_msix = if let Some(msix) = &self.config.msix {
-            msix.lock().unwrap()
-        } else {
+        if self.config.msix.is_none() {
             error!("Failed to get msix in virtio pci device configure");
             return false;
-        };
+        }
 
-        let locked_queues = self.queues.lock().unwrap();
-        for (queue_index, queue_mutex) in locked_queues.iter().enumerate() {
-            if self.device.lock().unwrap().has_control_queue()
-                && queue_index + 1 == locked_queues.len()
-                && locked_queues.len() % 2 != 0
+        let locked_dev = self.device.lock().unwrap();
+        let mut locked_msix = self.config.msix.as_ref().unwrap().lock().unwrap();
+
+        let queues = &locked_dev.virtio_base().queues;
+        for (queue_index, queue_mutex) in queues.iter().enumerate() {
+            if locked_dev.has_control_queue()
+                && queue_index + 1 == queues.len()
+                && queues.len() % 2 != 0
             {
                 break;
             }
@@ -1343,8 +1340,9 @@ impl StateTransfer for VirtioPciDevice {
         state.activated = self.device_activated.load(Ordering::Relaxed);
         state.dev_id = self.dev_id.load(Ordering::Acquire);
         {
-            let locked_queues = self.queues.lock().unwrap();
-            for (index, queue) in locked_queues.iter().enumerate() {
+            let locked_dev = self.device.lock().unwrap();
+            let queues = &locked_dev.virtio_base().queues;
+            for (index, queue) in queues.iter().enumerate() {
                 state.queues_config[index] = queue.lock().unwrap().vring.get_queue_config();
                 state.queue_num += 1;
             }
@@ -1392,7 +1390,8 @@ impl StateTransfer for VirtioPciDevice {
         self.dev_id.store(pci_state.dev_id, Ordering::Release);
         {
             let queue_type = self.common_config.lock().unwrap().queue_type;
-            let mut locked_queues = self.queues.lock().unwrap();
+            let mut locked_dev = self.device.lock().unwrap();
+            let queues = &mut locked_dev.virtio_base_mut().queues;
             let dev_lock = self.device.lock().unwrap();
             let features =
                 (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
@@ -1404,7 +1403,7 @@ impl StateTransfer for VirtioPciDevice {
                     features,
                     broken,
                 );
-                locked_queues.push(Arc::new(Mutex::new(
+                queues.push(Arc::new(Mutex::new(
                     Queue::new(*queue_state, queue_type).unwrap(),
                 )))
             }
@@ -1434,12 +1433,12 @@ impl MigrationHook for VirtioPciDevice {
 
             let queue_evts = (*self.notify_eventfds).clone().events;
             if let Some(cb) = self.interrupt_cb.clone() {
-                if let Err(e) = self.device.lock().unwrap().activate(
-                    self.sys_mem.clone(),
-                    cb,
-                    &self.queues.lock().unwrap(),
-                    queue_evts,
-                ) {
+                if let Err(e) =
+                    self.device
+                        .lock()
+                        .unwrap()
+                        .activate(self.sys_mem.clone(), cb, queue_evts)
+                {
                     error!("Failed to resume device, error is {:?}", e);
                 }
             } else {
@@ -1519,7 +1518,6 @@ mod tests {
             &mut self,
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
-            _queues: &[Arc<Mutex<Queue>>],
             _queue_evts: Vec<Arc<EventFd>>,
         ) -> VirtioResult<()> {
             self.is_activated = true;

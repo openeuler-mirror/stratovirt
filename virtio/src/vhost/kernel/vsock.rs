@@ -237,10 +237,10 @@ impl VirtioDevice for Vsock {
         &mut self,
         _: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let cid = self.vsock_cfg.guest_cid;
+        let queues = &self.base.queues;
         // The receive queue and transmit queue will be handled in vhost.
         let vhost_queues = queues[..2].to_vec();
         let mut host_notifies = Vec::new();

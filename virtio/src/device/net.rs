@@ -1490,9 +1490,9 @@ impl VirtioDevice for Net {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         let queue_num = queues.len();
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));
         self.ctrl_info = Some(ctrl_info.clone());

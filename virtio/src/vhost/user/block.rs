@@ -207,7 +207,6 @@ impl VirtioDevice for Block {
         &mut self,
         _mem_space: Arc<AddressSpace>,
         _interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<crate::Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut client = match &self.client {
@@ -215,7 +214,7 @@ impl VirtioDevice for Block {
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
         client.features = self.base.driver_features;
-        client.set_queues(queues);
+        client.set_queues(&self.base.queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
         Ok(())

@@ -247,9 +247,9 @@ impl VirtioDevice for Serial {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
                 self.queue_num(),
@@ -288,7 +288,7 @@ impl VirtioDevice for Serial {
         self.control_queues_activate(
             mem_space,
             interrupt_cb,
-            queues,
+            &queues,
             queue_evts,
             self.base.broken.clone(),
         )?;

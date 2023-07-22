@@ -33,7 +33,7 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 
-use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
+use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackendType, VhostUserClient};
 use crate::{read_config_default, VirtioBase, VirtioInterrupt, VirtioInterruptType};
@@ -187,9 +187,9 @@ impl VirtioDevice for Fs {
         &mut self,
         _mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         let mut host_notifies = Vec::new();
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
