@@ -34,15 +34,16 @@ pub mod vhost;
 use std::cmp;
 use std::io::Write;
 use std::os::unix::prelude::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::AddressSpace;
 use machine_manager::config::ConfigCheck;
+use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
 use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
@@ -326,10 +327,30 @@ pub struct VirtioBase {
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
+    /// Device (host) feature-setting selector.
+    hfeatures_sel: u32,
+    /// Driver (guest) feature-setting selector.
+    gfeatures_sel: u32,
+    /// Interrupt status.
+    interrupt_status: Arc<AtomicU32>,
+    /// Device status.
+    device_status: Arc<AtomicU32>,
+    /// If this device is activated or not.
+    device_activated: Arc<AtomicBool>,
+    /// Configuration atomicity value.
+    config_generation: Arc<AtomicU8>,
+    /// The MSI-X vector for config change notification.
+    config_vector: Arc<AtomicU16>,
+    /// The type of queue, split-vring or packed-vring.
+    queue_type: u16,
     /// The number of device queues.
     queue_num: usize,
     /// The max size of each queue.
     queue_size_max: u16,
+    /// Queue selector.
+    queue_select: u16,
+    /// The configuration of queues.
+    queues_config: Vec<QueueConfig>,
     /// Virtio queues.
     queues: Vec<Arc<Mutex<Queue>>>,
     /// Eventfd for device deactivate.
@@ -338,14 +359,121 @@ pub struct VirtioBase {
     broken: Arc<AtomicBool>,
 }
 
+#[derive(Copy, Clone, ByteCode)]
+struct VirtioBaseState {
+    device_activated: bool,
+    hfeatures_sel: u32,
+    gfeatures_sel: u32,
+    interrupt_status: u32,
+    device_status: u32,
+    config_generation: u8,
+    queue_select: u16,
+    config_vector: u16,
+    queues_config: [QueueConfig; 32],
+    /// The number of activated queues.
+    queue_num: usize,
+    queue_type: u16,
+}
+
 impl VirtioBase {
     fn new(device_type: u32, queue_num: usize, queue_size_max: u16) -> Self {
         Self {
             device_type,
+            config_vector: Arc::new(AtomicU16::new(INVALID_VECTOR_NUM)),
             queue_num,
             queue_size_max,
+            queue_type: QUEUE_TYPE_SPLIT_VRING,
+            queues_config: vec![QueueConfig::new(queue_size_max); queue_num],
             ..Default::default()
         }
+    }
+
+    fn reset(&mut self) {
+        // device_type, device_features, queue_num and queue_size_max
+        // is not mutable, thus no need to reset.
+        self.driver_features = 0;
+        self.hfeatures_sel = 0;
+        self.gfeatures_sel = 0;
+        self.interrupt_status.store(0, Ordering::SeqCst);
+        self.device_status.store(0, Ordering::SeqCst);
+        self.device_activated.store(false, Ordering::SeqCst);
+        self.config_generation.store(0, Ordering::SeqCst);
+        self.config_vector
+            .store(INVALID_VECTOR_NUM, Ordering::SeqCst);
+        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
+        self.queue_select = 0;
+        self.queues_config.iter_mut().for_each(|q| q.reset());
+        self.queues.clear();
+        self.broken.store(false, Ordering::SeqCst);
+    }
+
+    fn get_state(&self) -> VirtioBaseState {
+        let mut state = VirtioBaseState {
+            device_activated: self.device_activated.load(Ordering::Acquire),
+            hfeatures_sel: self.hfeatures_sel,
+            gfeatures_sel: self.gfeatures_sel,
+            interrupt_status: self.interrupt_status.load(Ordering::Acquire),
+            device_status: self.device_status.load(Ordering::Acquire),
+            config_generation: self.config_generation.load(Ordering::Acquire),
+            queue_select: self.queue_select,
+            config_vector: self.config_vector.load(Ordering::Acquire),
+            queues_config: [QueueConfig::default(); 32],
+            queue_num: 0,
+            queue_type: self.queue_type,
+        };
+
+        for (index, queue) in self.queues_config.iter().enumerate() {
+            state.queues_config[index] = *queue;
+        }
+        for (index, queue) in self.queues.iter().enumerate() {
+            state.queues_config[index] = queue.lock().unwrap().vring.get_queue_config();
+            state.queue_num += 1;
+        }
+
+        state
+    }
+
+    fn set_state(
+        &mut self,
+        state: &VirtioBaseState,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+    ) {
+        self.device_activated
+            .store(state.device_activated, Ordering::SeqCst);
+        self.hfeatures_sel = state.hfeatures_sel;
+        self.gfeatures_sel = state.gfeatures_sel;
+        self.interrupt_status
+            .store(state.interrupt_status, Ordering::SeqCst);
+        self.device_status
+            .store(state.device_status, Ordering::SeqCst);
+        self.config_generation
+            .store(state.config_generation, Ordering::SeqCst);
+        self.queue_select = state.queue_select;
+        self.config_vector
+            .store(state.config_vector, Ordering::SeqCst);
+        self.queues_config = state.queues_config[..self.queue_num].to_vec();
+        self.queue_type = state.queue_type;
+
+        if state.queue_num == 0 {
+            return;
+        }
+
+        let mut queues = Vec::with_capacity(self.queue_num);
+        for queue_config in self.queues_config.iter_mut().take(state.queue_num) {
+            if queue_config.ready {
+                queue_config.set_addr_cache(
+                    mem_space.clone(),
+                    interrupt_cb.clone(),
+                    self.driver_features,
+                    &self.broken,
+                );
+            }
+            queues.push(Arc::new(Mutex::new(
+                Queue::new(*queue_config, self.queue_type).unwrap(),
+            )));
+        }
+        self.queues = queues;
     }
 }
 
@@ -411,6 +539,138 @@ pub trait VirtioDevice: Send + AsAny {
     /// Get driver features by guest.
     fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.virtio_base().driver_features, features_select)
+    }
+
+    /// Get host feature selector.
+    fn hfeatures_sel(&self) -> u32 {
+        self.virtio_base().hfeatures_sel
+    }
+
+    /// Set host feature selector.
+    fn set_hfeatures_sel(&mut self, val: u32) {
+        self.virtio_base_mut().hfeatures_sel = val;
+    }
+
+    /// Get guest feature selector.
+    fn gfeatures_sel(&self) -> u32 {
+        self.virtio_base().gfeatures_sel
+    }
+
+    /// Set guest feature selector.
+    fn set_gfeatures_sel(&mut self, val: u32) {
+        self.virtio_base_mut().gfeatures_sel = val;
+    }
+
+    /// Check whether virtio device status is as expected.
+    fn check_device_status(&self, set: u32, clr: u32) -> bool {
+        self.device_status() & (set | clr) == set
+    }
+
+    /// Get the status of virtio device.
+    fn device_status(&self) -> u32 {
+        self.virtio_base().device_status.load(Ordering::Acquire)
+    }
+
+    /// Set the status of virtio device.
+    fn set_device_status(&mut self, val: u32) {
+        self.virtio_base_mut()
+            .device_status
+            .store(val, Ordering::SeqCst)
+    }
+
+    /// Check device is activated or not.
+    fn device_activated(&self) -> bool {
+        self.virtio_base().device_activated.load(Ordering::Acquire)
+    }
+
+    /// Set device activate status.
+    fn set_device_activated(&mut self, val: bool) {
+        self.virtio_base_mut()
+            .device_activated
+            .store(val, Ordering::SeqCst)
+    }
+
+    /// Get config generation.
+    fn config_generation(&self) -> u8 {
+        self.virtio_base().config_generation.load(Ordering::Acquire)
+    }
+
+    /// Set config generation.
+    fn set_config_generation(&mut self, val: u8) {
+        self.virtio_base_mut()
+            .config_generation
+            .store(val, Ordering::SeqCst);
+    }
+
+    /// Get msix vector of config change interrupt.
+    fn config_vector(&self) -> u16 {
+        self.virtio_base().config_vector.load(Ordering::Acquire)
+    }
+
+    /// Set msix vector of config change interrupt.
+    fn set_config_vector(&mut self, val: u16) {
+        self.virtio_base_mut()
+            .config_vector
+            .store(val, Ordering::SeqCst);
+    }
+
+    /// Get virtqueue type.
+    fn queue_type(&self) -> u16 {
+        self.virtio_base().queue_type
+    }
+
+    /// Set virtqueue type.
+    fn set_queue_type(&mut self, val: u16) {
+        self.virtio_base_mut().queue_type = val;
+    }
+
+    /// Get virtqueue selector.
+    fn queue_select(&self) -> u16 {
+        self.virtio_base().queue_select
+    }
+
+    /// Set virtqueue selector.
+    fn set_queue_select(&mut self, val: u16) {
+        self.virtio_base_mut().queue_select = val;
+    }
+
+    /// Get virtqueue config.
+    fn queue_config(&self) -> Result<&QueueConfig> {
+        let queues_config = &self.virtio_base().queues_config;
+        let queue_select = self.virtio_base().queue_select;
+        queues_config
+            .get(queue_select as usize)
+            .with_context(|| "queue_select overflows")
+    }
+
+    /// Get mutable virtqueue config.
+    fn queue_config_mut(&mut self, need_check: bool) -> Result<&mut QueueConfig> {
+        if need_check
+            && !self.check_device_status(
+                CONFIG_STATUS_FEATURES_OK,
+                CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
+            )
+        {
+            return Err(anyhow!(VirtioError::DevStatErr(self.device_status())));
+        }
+
+        let queue_select = self.virtio_base().queue_select;
+        let queues_config = &mut self.virtio_base_mut().queues_config;
+        return queues_config
+            .get_mut(queue_select as usize)
+            .with_context(|| "queue_select overflows");
+    }
+
+    /// Get ISR register.
+    fn interrupt_status(&self) -> u32 {
+        self.virtio_base().interrupt_status.load(Ordering::Acquire)
+    }
+
+    /// Set ISR register.
+    fn set_interrupt_status(&mut self, val: u32) {
+        self.virtio_base_mut()
+            .interrupt_status
+            .store(val, Ordering::SeqCst)
     }
 
     /// Read data of config from guest.

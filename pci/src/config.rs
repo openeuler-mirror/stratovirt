@@ -17,7 +17,7 @@ use address_space::Region;
 use log::{error, warn};
 
 use crate::intx::Intx;
-use crate::msix::{is_msix_enabled, Msix};
+use crate::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
@@ -1171,6 +1171,16 @@ impl PciConfig {
 
     pub fn set_interrupt_pin(&mut self) {
         self.config[INTERRUPT_PIN as usize] = 0x01;
+    }
+
+    pub fn revise_msix_vector(&self, vector_nr: u32) -> bool {
+        if self.msix.is_none() {
+            return false;
+        }
+
+        let table_len = self.msix.as_ref().unwrap().lock().unwrap().table.len();
+        let max_vector = table_len / MSIX_TABLE_ENTRY_SIZE as usize;
+        vector_nr < max_vector as u32
     }
 }
 
