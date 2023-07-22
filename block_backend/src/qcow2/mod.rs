@@ -1977,40 +1977,44 @@ mod test {
     ///   Newly allocated data is full of zero.
     #[test]
     fn test_alloc_cluster_with_zero() {
-        let path = "/tmp/alloc_cluster_with_zero.qcow2";
         // Create a new image, with size = 16M, cluster_size = 64K.
         let image_bits = 24;
         let cluster_bits = 16;
-        let alloc_clusters: Vec<u64> = vec![1, 2, 4, 8, 16, 32];
+        let paths = [
+            "/tmp/alloc_cluster_with_zero.qcow2",
+            "./alloc_cluster_with_zero.qcow2",
+        ];
+        for path in paths {
+            let alloc_clusters: Vec<u64> = vec![1, 2, 4, 8, 16, 32];
+            for n_clusters in alloc_clusters {
+                let image = TestImage::new(path, image_bits, cluster_bits);
+                let (req_align, buf_align) = get_file_alignment(&image.file, true);
+                let conf = BlockProperty {
+                    id: path.to_string(),
+                    format: DiskFormat::Qcow2,
+                    iothread: None,
+                    direct: true,
+                    req_align,
+                    buf_align,
+                    discard: true,
+                    write_zeroes: WriteZeroesState::On,
+                    l2_cache_size: None,
+                    refcount_cache_size: None,
+                };
+                let mut qcow2_driver = image.create_qcow2_driver(conf.clone());
 
-        for n_clusters in alloc_clusters {
-            let image = TestImage::new(path, image_bits, cluster_bits);
-            let (req_align, buf_align) = get_file_alignment(&image.file, true);
-            let conf = BlockProperty {
-                id: path.to_string(),
-                format: DiskFormat::Qcow2,
-                iothread: None,
-                direct: true,
-                req_align,
-                buf_align,
-                discard: true,
-                write_zeroes: WriteZeroesState::On,
-                l2_cache_size: None,
-                refcount_cache_size: None,
-            };
-            let mut qcow2_driver = image.create_qcow2_driver(conf.clone());
+                assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
+                assert!(qcow2_driver.discard(0, 1 << image_bits, ()).is_ok());
 
-            assert!(image.write_full_disk(&mut qcow2_driver, 1).is_ok());
-            assert!(qcow2_driver.discard(0, 1 << image_bits, ()).is_ok());
-
-            let times: u64 = (1 << (image_bits - cluster_bits)) / n_clusters;
-            for _time in 0..times {
-                let addr = qcow2_driver.alloc_cluster(n_clusters, true).unwrap();
-                for i in 0..n_clusters {
-                    let mut buf = vec![1_u8; qcow2_driver.header.cluster_size() as usize];
-                    let offset = addr + i * qcow2_driver.header.cluster_size();
-                    assert!(image.file.read_at(&mut buf, offset).is_ok());
-                    assert!(vec_is_zero(&buf));
+                let times: u64 = (1 << (image_bits - cluster_bits)) / n_clusters;
+                for _time in 0..times {
+                    let addr = qcow2_driver.alloc_cluster(n_clusters, true).unwrap();
+                    for i in 0..n_clusters {
+                        let mut buf = vec![1_u8; qcow2_driver.header.cluster_size() as usize];
+                        let offset = addr + i * qcow2_driver.header.cluster_size();
+                        assert!(image.file.read_at(&mut buf, offset).is_ok());
+                        assert!(vec_is_zero(&buf));
+                    }
                 }
             }
         }
@@ -2025,7 +2029,7 @@ mod test {
     ///   The size of disk space has been reduced.
     #[test]
     fn test_discard_basic() {
-        let path = "/tmp/discard_basic.qcow2";
+        let path = "./discard_basic.qcow2";
         // Create a new image, with size = 16M, cluster_size = 64K.
         let image_bits = 24;
         let cluster_bits = 16;
@@ -2096,7 +2100,7 @@ mod test {
     ///   The size of disk space has been reduced.
     #[test]
     fn test_snapshot_with_discard() {
-        let path = "/tmp/snapshot_with_discard.qcow2";
+        let path = "./snapshot_with_discard.qcow2";
         // Create a new image, with size = 1G, cluster_size = 64K.
         let image_bits = 24;
         let cluster_bits = 16;
@@ -2167,7 +2171,7 @@ mod test {
     #[test]
     fn test_write_zero_basic() {
         // Create a new image, with size = 16M, cluster_size = 64K.
-        let path = "/tmp/discard_write_zero.qcow2";
+        let path = "./discard_write_zero.qcow2";
         let image_bits = 24;
         let cluster_bits = 16;
         let image = TestImage::new(path, image_bits, cluster_bits);
