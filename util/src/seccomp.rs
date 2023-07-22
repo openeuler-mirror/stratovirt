@@ -289,6 +289,8 @@ fn handle_process(opt: SeccompOpt) -> Vec<SockFilter> {
 pub struct BpfRule {
     /// The first bpf_filter to compare syscall number.
     header_rule: SockFilter,
+    /// The last args index.
+    args_idx_last: Option<u32>,
     /// The inner rules to limit the arguments of syscall.
     inner_rules: Vec<SockFilter>,
     /// The last bpf_filter to allow syscall.
@@ -303,6 +305,7 @@ impl BpfRule {
     pub fn new(syscall_num: i64) -> BpfRule {
         BpfRule {
             header_rule: bpf_jump(BPF_JMP + BPF_JEQ + BPF_K, syscall_num as u32, 0, 1),
+            args_idx_last: None,
             inner_rules: Vec::new(),
             tail_rule: bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
         }
@@ -312,16 +315,23 @@ impl BpfRule {
     ///
     /// # Arguments
     /// * `cmp` - Compare operator for given args_value and the raw args_value.
-    /// * `args_num` - The index number of system call's arguments.
+    /// * `args_idx` - The index number of system call's arguments.
     /// * `args_value` - The value of args_num you want to limit. This value
     ///                  used with `cmp` together.
-    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_num: u32, args_value: u32) -> BpfRule {
+    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_idx: u32, args_value: u32) -> BpfRule {
         if self.inner_rules.is_empty() {
             self.tail_rule = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::nr());
         }
 
-        // Create a bpf_filter to get args in `SeccompData`.
-        let args_filter = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::args(args_num));
+        let mut inner_append = Vec::new();
+
+        // Reload new args if idx changes.
+        if self.args_idx_last.ne(&Some(args_idx)) {
+            // Create a bpf_filter to get args in `SeccompData`.
+            let args_filter = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::args(args_idx));
+            inner_append.push(args_filter);
+            self.args_idx_last = Some(args_idx);
+        }
 
         // Create a bpf_filter to limit args in syscall.
         let constraint_filter = match cmp {
@@ -332,12 +342,10 @@ impl BpfRule {
             SeccompCmpOpt::Le => bpf_jump(BPF_JMP + BPF_JGE + BPF_K, args_value, 1, 0),
             SeccompCmpOpt::Lt => bpf_jump(BPF_JMP + BPF_JGT + BPF_K, args_value, 1, 0),
         };
+        inner_append.push(constraint_filter);
+        inner_append.push(bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW));
 
-        self.append(&mut vec![
-            args_filter,
-            constraint_filter,
-            bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
-        ]);
+        self.append(&mut inner_append);
         self
     }
 
