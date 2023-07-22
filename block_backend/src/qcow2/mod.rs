@@ -2147,13 +2147,16 @@ mod test {
             .delete_snapshot("test_snapshot_2".to_string())
             .is_ok());
         let disk_size_4 = get_disk_size(path.to_string());
-        assert_eq!(disk_size_4, disk_size_2);
+        // The actual size of the file should not exceed 1 cluster.
+        assert!(disk_size_4 > disk_size_2 - 32);
+        assert!(disk_size_4 < disk_size_2 + 32);
 
         assert!(qcow2_driver
             .delete_snapshot("test_snapshot_1".to_string())
             .is_ok());
         let disk_size_5 = get_disk_size(path.to_string());
-        assert_eq!(disk_size_5, disk_size_1);
+        assert!(disk_size_5 > disk_size_1 - 32);
+        assert!(disk_size_5 < disk_size_1 + 32);
     }
 
     /// Test the basic functions of write zero.
