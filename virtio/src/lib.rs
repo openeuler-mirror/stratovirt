@@ -346,15 +346,15 @@ pub trait VirtioDevice: Send + AsAny {
     fn queue_num(&self) -> usize;
 
     /// Get the queue size of virtio device.
-    fn queue_size(&self) -> u16;
+    fn queue_size_max(&self) -> u16;
 
     /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32;
+    fn device_features(&self, features_select: u32) -> u32;
 
     /// Get checked driver features before set the value at the page.
     fn checked_driver_features(&mut self, page: u32, value: u32) -> u64 {
         let mut v = value;
-        let unsupported_features = value & !self.get_device_features(page);
+        let unsupported_features = value & !self.device_features(page);
         if unsupported_features != 0 {
             warn!(
                 "Receive acknowledge request with unknown feature: {:x}",
@@ -363,9 +363,9 @@ pub trait VirtioDevice: Send + AsAny {
             v &= !unsupported_features;
         }
         if page == 0 {
-            (self.get_driver_features(1) as u64) << 32 | (v as u64)
+            (self.driver_features(1) as u64) << 32 | (v as u64)
         } else {
-            (v as u64) << 32 | (self.get_driver_features(0) as u64)
+            (v as u64) << 32 | (self.driver_features(0) as u64)
         }
     }
 
@@ -373,7 +373,7 @@ pub trait VirtioDevice: Send + AsAny {
     fn set_driver_features(&mut self, page: u32, value: u32);
 
     /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32;
+    fn driver_features(&self, features_select: u32) -> u32;
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()>;

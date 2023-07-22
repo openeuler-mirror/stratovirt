@@ -1014,11 +1014,11 @@ impl VirtioDevice for Balloon {
         queue_num
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -1026,7 +1026,7 @@ impl VirtioDevice for Balloon {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -1275,28 +1275,28 @@ mod tests {
         let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
         assert_eq!(bln.base.device_features, feature);
 
-        let fts = bln.get_device_features(0);
+        let fts = bln.device_features(0);
         assert_eq!(fts, feature as u32);
-        let fts = bln.get_device_features(1);
+        let fts = bln.device_features(1);
         assert_eq!(fts, (feature >> 32) as u32);
         bln.base.driver_features = 0;
         bln.base.device_features = 1 | 1 << 32;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.base.driver_features, 1);
-        assert_eq!(bln.base.driver_features, bln.get_driver_features(0) as u64);
+        assert_eq!(bln.base.driver_features, bln.driver_features(0) as u64);
         bln.base.driver_features = 1 << 32;
         bln.set_driver_features(1, 1);
         assert_eq!(bln.base.driver_features, 1 << 32);
         assert_eq!(
             bln.base.driver_features,
-            (bln.get_driver_features(1) as u64) << 32
+            (bln.driver_features(1) as u64) << 32
         );
 
         // Test realize function.
         bln.realize().unwrap();
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 2);
-        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
@@ -1664,16 +1664,16 @@ mod tests {
             | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM | 1u64 << VIRTIO_BALLOON_F_REPORTING);
         assert_eq!(bln.base.device_features, feature);
 
-        let fts = bln.get_device_features(0);
+        let fts = bln.device_features(0);
         assert_eq!(fts, feature as u32);
-        let fts = bln.get_device_features(1);
+        let fts = bln.device_features(1);
         assert_eq!(fts, (feature >> 32) as u32);
 
         // Test realize function.
         bln.realize().unwrap();
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 3);
-        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);

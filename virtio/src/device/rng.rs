@@ -272,11 +272,11 @@ impl VirtioDevice for Rng {
         QUEUE_NUM_RNG
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -284,7 +284,7 @@ impl VirtioDevice for Rng {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
-        assert_eq!(rng.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
+        assert_eq!(rng.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
         assert_eq!(rng.device_type(), VIRTIO_TYPE_RNG);
     }
 
@@ -454,15 +454,15 @@ mod tests {
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.base.driver_features, 0_u64);
-        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
-        assert_eq!(rng.get_device_features(0_u32), 0_u32);
+        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(rng.device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.base.driver_features, 0_u64);
-        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
-        assert_eq!(rng.get_device_features(1_u32), 0_u32);
+        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(rng.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time,  this driver feature bit is supported.
@@ -476,11 +476,11 @@ mod tests {
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
-            rng.get_driver_features(page) as u64,
+            rng.driver_features(page) as u64,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
-            rng.get_device_features(page),
+            rng.device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         rng.base.driver_features = 0;
@@ -490,7 +490,7 @@ mod tests {
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.base.driver_features, 0);
-        assert_eq!(rng.get_device_features(page), 0_u32);
+        assert_eq!(rng.device_features(page), 0_u32);
         rng.base.driver_features = 0;
     }
 

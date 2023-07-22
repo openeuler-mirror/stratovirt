@@ -195,11 +195,11 @@ impl VirtioDevice for Vsock {
         QUEUE_NUM_VSOCK
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         DEFAULT_VIRTQUEUE_SIZE
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -207,7 +207,7 @@ impl VirtioDevice for Vsock {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -448,26 +448,26 @@ mod tests {
 
         assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
         assert_eq!(vsock.queue_num(), QUEUE_NUM_VSOCK);
-        assert_eq!(vsock.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
+        assert_eq!(vsock.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
 
         // test vsock get_device_features
         vsock.base.device_features = 0x0123_4567_89ab_cdef;
-        let features = vsock.get_device_features(0);
+        let features = vsock.device_features(0);
         assert_eq!(features, 0x89ab_cdef);
-        let features = vsock.get_device_features(1);
+        let features = vsock.device_features(1);
         assert_eq!(features, 0x0123_4567);
-        let features = vsock.get_device_features(3);
+        let features = vsock.device_features(3);
         assert_eq!(features, 0);
 
         // test vsock set_driver_features
         vsock.base.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
-        assert_eq!(vsock.get_driver_features(0) as u64, 0_u64);
+        assert_eq!(vsock.driver_features(0) as u64, 0_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
-        assert_eq!(vsock.get_driver_features(0) as u64, 0x8000_0000_u64);
+        assert_eq!(vsock.driver_features(0) as u64, 0x8000_0000_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config

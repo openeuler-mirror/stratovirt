@@ -154,7 +154,7 @@ impl VirtioDevice for ScsiCntlr {
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
-        self.config_space.seg_max = self.queue_size() as u32 - 2;
+        self.config_space.seg_max = self.queue_size_max() as u32 - 2;
         self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
         self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
         // num_queues: request queues number.
@@ -180,11 +180,11 @@ impl VirtioDevice for ScsiCntlr {
         self.config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         self.config.queue_size
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -192,7 +192,7 @@ impl VirtioDevice for ScsiCntlr {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 

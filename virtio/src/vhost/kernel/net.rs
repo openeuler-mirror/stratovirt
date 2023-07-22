@@ -192,11 +192,11 @@ impl VirtioDevice for Net {
         }
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         self.net_cfg.queue_size
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -204,7 +204,7 @@ impl VirtioDevice for Net {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -523,16 +523,16 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.get_driver_features(page) as u64, 0_u64);
-        let new_page = vhost_net.get_device_features(page);
+        assert_eq!(vhost_net.driver_features(page) as u64, 0_u64);
+        let new_page = vhost_net.device_features(page);
         assert_eq!(new_page, page);
 
         vhost_net.base.device_features = 0xffff_ffff_ffff_ffff;
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.get_driver_features(page) as u64, 0xff_u64);
-        let new_page = vhost_net.get_device_features(page);
+        assert_eq!(vhost_net.driver_features(page) as u64, 0xff_u64);
+        let new_page = vhost_net.device_features(page);
         assert_ne!(new_page, page);
 
         // test for read/write_config

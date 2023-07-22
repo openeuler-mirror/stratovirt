@@ -142,7 +142,7 @@ impl VirtioMmioCommonConfig {
     pub fn new(device: &Arc<Mutex<dyn VirtioDevice>>) -> Self {
         let locked_device = device.lock().unwrap();
         let mut queues_config = [QueueConfig::default(); 8];
-        let queue_size = locked_device.queue_size();
+        let queue_size = locked_device.queue_size_max();
         let queue_num = locked_device.queue_num();
         for queue_config in queues_config.iter_mut().take(queue_num) {
             *queue_config = QueueConfig::new(queue_size);
@@ -217,10 +217,7 @@ impl VirtioMmioCommonConfig {
             DEVICE_ID_REG => device.lock().unwrap().device_type(),
             VENDOR_ID_REG => VENDOR_ID,
             DEVICE_FEATURES_REG => {
-                let mut features = device
-                    .lock()
-                    .unwrap()
-                    .get_device_features(self.features_select);
+                let mut features = device.lock().unwrap().device_features(self.features_select);
                 if self.features_select == 1 {
                     features |= 0x1; // enable support of VirtIO Version 1
                 }
@@ -408,7 +405,7 @@ impl VirtioMmioDevice {
         let queues_config = &mut locked_state.config_space.queues_config[0..queue_num];
         let dev_lock = self.device.lock().unwrap();
         let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+            (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = dev_lock.get_device_broken();
 
         for q_config in queues_config.iter_mut() {
@@ -679,7 +676,7 @@ impl StateTransfer for VirtioMmioDevice {
             .to_vec();
         let dev_lock = self.device.lock().unwrap();
         let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+            (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = dev_lock.get_device_broken();
         self.queues = queue_states
             .iter_mut()
@@ -809,11 +806,11 @@ mod tests {
             QUEUE_NUM
         }
 
-        fn queue_size(&self) -> u16 {
+        fn queue_size_max(&self) -> u16 {
             QUEUE_SIZE
         }
 
-        fn get_device_features(&self, features_select: u32) -> u32 {
+        fn device_features(&self, features_select: u32) -> u32 {
             read_u32(self.base.device_features, features_select)
         }
 
@@ -821,7 +818,7 @@ mod tests {
             self.base.driver_features = self.checked_driver_features(page, value);
         }
 
-        fn get_driver_features(&self, features_select: u32) -> u32 {
+        fn driver_features(&self, features_select: u32) -> u32 {
             read_u32(self.base.driver_features, features_select)
         }
 

@@ -1454,11 +1454,11 @@ impl VirtioDevice for Net {
         }
     }
 
-    fn queue_size(&self) -> u16 {
+    fn queue_size_max(&self) -> u16 {
         self.net_cfg.queue_size
     }
 
-    fn get_device_features(&self, features_select: u32) -> u32 {
+    fn device_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.device_features, features_select)
     }
 
@@ -1466,7 +1466,7 @@ impl VirtioDevice for Net {
         self.base.driver_features = self.checked_driver_features(page, value);
     }
 
-    fn get_driver_features(&self, features_select: u32) -> u32 {
+    fn driver_features(&self, features_select: u32) -> u32 {
         read_u32(self.base.driver_features, features_select)
     }
 
@@ -1547,7 +1547,7 @@ impl VirtioDevice for Net {
         }
 
         // The features about offload is included in bits 0 to 31.
-        let features = self.get_driver_features(0_u32);
+        let features = self.driver_features(0_u32);
         let flags = get_tap_offload_flags(features as u64);
 
         let mut senders = Vec::new();
@@ -1580,7 +1580,7 @@ impl VirtioDevice for Net {
                 device_broken: self.base.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),
-                queue_size: self.queue_size(),
+                queue_size: self.queue_size_max(),
             };
             if let Some(tap) = &handler.tap {
                 handler.tap_fd = tap.as_raw_fd();
@@ -1610,7 +1610,7 @@ impl VirtioDevice for Net {
 
             // Set tap offload.
             // The features about offload is included in bits 0 to 31.
-            let features = self.get_driver_features(0_u32);
+            let features = self.driver_features(0_u32);
             let flags = get_tap_offload_flags(features as u64);
             if let Some(taps) = &self.taps {
                 for (_, tap) in taps.iter().enumerate() {
@@ -1729,7 +1729,7 @@ mod tests {
         net.realize().unwrap();
         assert_eq!(net.device_type(), 1);
         assert_eq!(net.queue_num(), 3);
-        assert_eq!(net.queue_size(), 256);
+        assert_eq!(net.queue_size_max(), 256);
 
         // test read_config and write_config method
         let write_data: Vec<u8> = vec![7; 4];

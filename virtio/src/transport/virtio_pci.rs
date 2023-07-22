@@ -256,10 +256,7 @@ impl VirtioPciCommonConfig {
             COMMON_DFSELECT_REG => self.features_select,
             COMMON_DF_REG => {
                 if self.features_select < MAX_FEATURES_SELECT_NUM {
-                    device
-                        .lock()
-                        .unwrap()
-                        .get_device_features(self.features_select)
+                    device.lock().unwrap().device_features(self.features_select)
                 } else {
                     0
                 }
@@ -270,7 +267,7 @@ impl VirtioPciCommonConfig {
                     device
                         .lock()
                         .unwrap()
-                        .get_driver_features(self.acked_features_select)
+                        .driver_features(self.acked_features_select)
                 } else {
                     0
                 }
@@ -355,7 +352,7 @@ impl VirtioPciCommonConfig {
                     .set_driver_features(self.acked_features_select, value);
 
                 if self.acked_features_select == 1 {
-                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    let features = (device.lock().unwrap().driver_features(1) as u64) << 32;
                     if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
                         self.queue_type = QUEUE_TYPE_PACKED_VRING;
                     } else {
@@ -370,7 +367,7 @@ impl VirtioPciCommonConfig {
             }
             COMMON_STATUS_REG => {
                 if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
-                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    let features = (device.lock().unwrap().driver_features(1) as u64) << 32;
                     if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
                         error!(
                             "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
@@ -616,7 +613,7 @@ impl VirtioPciDevice {
         multi_func: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
-        let queue_size = device.lock().unwrap().queue_size();
+        let queue_size = device.lock().unwrap().queue_size_max();
 
         VirtioPciDevice {
             name,
@@ -731,7 +728,7 @@ impl VirtioPciDevice {
         let mut locked_queues = self.queues.lock().unwrap();
         let dev_lock = self.device.lock().unwrap();
         let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
+            (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
         let broken = dev_lock.get_device_broken();
         for q_config in queues_config.iter_mut() {
             if !q_config.ready {
@@ -1397,8 +1394,8 @@ impl StateTransfer for VirtioPciDevice {
             let queue_type = self.common_config.lock().unwrap().queue_type;
             let mut locked_queues = self.queues.lock().unwrap();
             let dev_lock = self.device.lock().unwrap();
-            let features = (dev_lock.get_driver_features(1) as u64) << 32
-                | dev_lock.get_driver_features(0) as u64;
+            let features =
+                (dev_lock.driver_features(1) as u64) << 32 | dev_lock.driver_features(0) as u64;
             let broken = dev_lock.get_device_broken();
             for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter_mut() {
                 queue_state.set_addr_cache(
@@ -1502,11 +1499,11 @@ mod tests {
             VIRTIO_DEVICE_QUEUE_NUM
         }
 
-        fn queue_size(&self) -> u16 {
+        fn queue_size_max(&self) -> u16 {
             VIRTIO_DEVICE_QUEUE_SIZE
         }
 
-        fn get_device_features(&self, features_select: u32) -> u32 {
+        fn device_features(&self, features_select: u32) -> u32 {
             read_u32(self.base.device_features, features_select)
         }
 
@@ -1514,7 +1511,7 @@ mod tests {
             self.base.driver_features = self.checked_driver_features(page, value);
         }
 
-        fn get_driver_features(&self, features_select: u32) -> u32 {
+        fn driver_features(&self, features_select: u32) -> u32 {
             read_u32(self.base.driver_features, features_select)
         }
 
@@ -1578,7 +1575,7 @@ mod tests {
             false,
         );
 
-        let queue_size = dev.lock().unwrap().queue_size();
+        let queue_size = dev.lock().unwrap().queue_size_max();
         let queue_num = dev.lock().unwrap().queue_num();
 
         let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
@@ -1617,7 +1614,7 @@ mod tests {
     fn test_common_config_queue() {
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let queue_size = virtio_dev.lock().unwrap().queue_size();
+        let queue_size = virtio_dev.lock().unwrap().queue_size_max();
         let queue_num = virtio_dev.lock().unwrap().queue_num();
         let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
 
@@ -1645,7 +1642,7 @@ mod tests {
     fn test_common_config_queue_error() {
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let queue_size = virtio_dev.lock().unwrap().queue_size();
+        let queue_size = virtio_dev.lock().unwrap().queue_size_max();
         let queue_num = virtio_dev.lock().unwrap().queue_num();
         let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
         let sys_mem = AddressSpace::new(
