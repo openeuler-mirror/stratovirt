@@ -483,7 +483,11 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .long("smbios")
             .value_name("<parameters>")
             .help("\n\t\tadd type0 table: -smbios type=0[,vendor=str][,version=str][,date=str]; \
-                   \n\t\tadd type1 table: -smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str];")
+                   \n\t\tadd type1 table: -smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str]; \
+                   \n\t\tadd type2 table: -smbios type=2[,manufacturer=str][,product=str][,version=str][,serial=str][,asset=str][,location=str]; \
+                   \n\t\tadd type3 table: -smbios type=3[,manufacturer=str][,version=str][,serial=str][,asset=str][,sku=str]; \
+                   \n\t\tadd type4 table: -smbios type=4[,sock_pfx=str][,manufacturer=str][,version=str][,serial=str][,asset=str][,part=str][,max-speed=%d][,current-speed=%d]; \
+                   \n\t\tadd type17 table: -smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str][,asset=str][,part=str][,speed=%d]")
             .takes_values(true),
         )
 }

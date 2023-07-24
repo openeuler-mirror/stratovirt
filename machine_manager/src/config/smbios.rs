@@ -37,9 +37,59 @@ pub struct SmbiosType1Config {
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct SmbiosType2Config {
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub version: Option<String>,
+    pub serial: Option<String>,
+    pub asset: Option<String>,
+    pub location: Option<String>,
+    pub added: bool,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct SmbiosType3Config {
+    pub manufacturer: Option<String>,
+    pub version: Option<String>,
+    pub serial: Option<String>,
+    pub sku: Option<String>,
+    pub asset: Option<String>,
+    pub added: bool,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct SmbiosType4Config {
+    pub manufacturer: Option<String>,
+    pub version: Option<String>,
+    pub serial: Option<String>,
+    pub asset: Option<String>,
+    pub sock_pfx: Option<String>,
+    pub part: Option<String>,
+    pub max_speed: Option<u64>,
+    pub current_speed: Option<u64>,
+    pub added: bool,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct SmbiosType17Config {
+    pub manufacturer: Option<String>,
+    pub serial: Option<String>,
+    pub asset: Option<String>,
+    pub loc_pfx: Option<String>,
+    pub part: Option<String>,
+    pub speed: u16,
+    pub bank: Option<String>,
+    pub added: bool,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct SmbiosConfig {
     pub type0: SmbiosType0Config,
     pub type1: SmbiosType1Config,
+    pub type2: SmbiosType2Config,
+    pub type3: SmbiosType3Config,
+    pub type4: SmbiosType4Config,
+    pub type17: SmbiosType17Config,
 }
 
 /// Check if the uuid is valid.
@@ -157,6 +207,138 @@ impl VmConfig {
         Ok(())
     }
 
+    /// # Arguments
+    ///
+    /// * `type2` - The type2 cmdline string.
+    fn add_smbios_type2(&mut self, type2: &str) -> Result<()> {
+        if self.smbios.type2.added {
+            bail!("smbios type2 has been added");
+        }
+
+        let mut cmd_parser = CmdParser::new("smbios");
+        cmd_parser
+            .push("")
+            .push("type")
+            .push("manufacturer")
+            .push("product")
+            .push("version")
+            .push("serial")
+            .push("asset")
+            .push("location");
+        cmd_parser.parse(type2)?;
+
+        self.smbios.type2.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
+        self.smbios.type2.product = cmd_parser.get_value::<String>("product")?;
+        self.smbios.type2.version = cmd_parser.get_value::<String>("version")?;
+        self.smbios.type2.serial = cmd_parser.get_value::<String>("serial")?;
+        self.smbios.type2.asset = cmd_parser.get_value::<String>("asset")?;
+        self.smbios.type2.location = cmd_parser.get_value::<String>("location")?;
+        self.smbios.type2.added = true;
+
+        Ok(())
+    }
+
+    /// # Arguments
+    ///
+    /// * `type3` - The type3 cmdline string.
+    fn add_smbios_type3(&mut self, type3: &str) -> Result<()> {
+        if self.smbios.type3.added {
+            bail!("smbios type3 has been added");
+        }
+
+        let mut cmd_parser = CmdParser::new("smbios");
+        cmd_parser
+            .push("")
+            .push("type")
+            .push("manufacturer")
+            .push("version")
+            .push("serial")
+            .push("sku")
+            .push("asset");
+        cmd_parser.parse(type3)?;
+
+        self.smbios.type3.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
+        self.smbios.type3.version = cmd_parser.get_value::<String>("version")?;
+        self.smbios.type3.serial = cmd_parser.get_value::<String>("serial")?;
+        self.smbios.type3.sku = cmd_parser.get_value::<String>("sku")?;
+        self.smbios.type3.asset = cmd_parser.get_value::<String>("asset")?;
+        self.smbios.type3.added = true;
+
+        Ok(())
+    }
+
+    /// # Arguments
+    ///
+    /// * `type4` - The type4 cmdline string.
+    fn add_smbios_type4(&mut self, type4: &str) -> Result<()> {
+        if self.smbios.type4.added {
+            bail!("smbios type4 has been added");
+        }
+
+        let mut cmd_parser = CmdParser::new("smbios");
+        cmd_parser
+            .push("")
+            .push("type")
+            .push("manufacturer")
+            .push("version")
+            .push("serial")
+            .push("sock_pfx")
+            .push("max-speed")
+            .push("current-speed")
+            .push("part")
+            .push("asset");
+        cmd_parser.parse(type4)?;
+
+        self.smbios.type4.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
+        self.smbios.type4.version = cmd_parser.get_value::<String>("version")?;
+        self.smbios.type4.serial = cmd_parser.get_value::<String>("serial")?;
+        self.smbios.type4.asset = cmd_parser.get_value::<String>("asset")?;
+        self.smbios.type4.part = cmd_parser.get_value::<String>("part")?;
+        self.smbios.type4.sock_pfx = cmd_parser.get_value::<String>("sock_pfx")?;
+        self.smbios.type4.max_speed = cmd_parser.get_value::<u64>("max-speed")?;
+        self.smbios.type4.current_speed = cmd_parser.get_value::<u64>("current-speed")?;
+        self.smbios.type4.added = true;
+
+        Ok(())
+    }
+
+    /// # Arguments
+    ///
+    /// * `type17` - The type17 cmdline string.
+    fn add_smbios_type17(&mut self, type17: &str) -> Result<()> {
+        if self.smbios.type17.added {
+            bail!("smbios type17 has been added");
+        }
+
+        let mut cmd_parser = CmdParser::new("smbios");
+        cmd_parser
+            .push("")
+            .push("type")
+            .push("loc_pfx")
+            .push("bank")
+            .push("manufacturer")
+            .push("serial")
+            .push("speed")
+            .push("part")
+            .push("asset");
+        cmd_parser.parse(type17)?;
+
+        self.smbios.type17.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
+        self.smbios.type17.loc_pfx = cmd_parser.get_value::<String>("loc_pfx")?;
+        self.smbios.type17.serial = cmd_parser.get_value::<String>("serial")?;
+        self.smbios.type17.asset = cmd_parser.get_value::<String>("asset")?;
+        self.smbios.type17.part = cmd_parser.get_value::<String>("part")?;
+        self.smbios.type17.speed = if let Some(speed) = cmd_parser.get_value::<u16>("speed")? {
+            speed
+        } else {
+            0
+        };
+        self.smbios.type17.bank = cmd_parser.get_value::<String>("bank")?;
+        self.smbios.type17.added = true;
+
+        Ok(())
+    }
+
     /// Add argument `smbios_args` to `VmConfig`.
     ///
     /// # Arguments
@@ -176,6 +358,18 @@ impl VmConfig {
             }
             "1" => {
                 self.add_smbios_type1(smbios_args)?;
+            }
+            "2" => {
+                self.add_smbios_type2(smbios_args)?;
+            }
+            "3" => {
+                self.add_smbios_type3(smbios_args)?;
+            }
+            "4" => {
+                self.add_smbios_type4(smbios_args)?;
+            }
+            "17" => {
+                self.add_smbios_type17(smbios_args)?;
             }
             _ => {
                 bail!("Unknow smbios type: {:?}", &smbios_type);

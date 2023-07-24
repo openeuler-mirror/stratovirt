@@ -100,11 +100,20 @@ use virtio::{
 };
 
 pub trait MachineOps {
-    fn build_smbios(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
-        let smbioscfg = self.get_vm_config().lock().unwrap().smbios.clone();
+    fn build_smbios(
+        &self,
+        fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
+        mem_array: Vec<(u64, u64)>,
+    ) -> Result<()> {
+        let vm_config = self.get_vm_config();
+        let vmcfg_lock = vm_config.lock().unwrap();
 
         let mut smbios = SmbiosTable::new();
-        let table = smbios.build_smbios_tables(smbioscfg);
+        let table = smbios.build_smbios_tables(
+            vmcfg_lock.smbios.clone(),
+            &vmcfg_lock.machine_config,
+            mem_array,
+        );
         let ep = build_smbios_ep30(table.len() as u32);
 
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();

@@ -261,8 +261,27 @@ The SMBIOS specification defines the data structures and information that will e
 
 ```shell
 # cmdline
+# type 0: BIOS infomation,Support Version and Release Date string
 -smbios type=0[,vendor=str][,version=str][,date=str]
+# type 1: System infomation,The information in this structure defines attributes of 
+# the overall system and is intended to be associated with the Component ID group of the system’s MIF.
 -smbios type=1[,manufacturer=str][,version=str][,product=str][,serial=str][,uuid=str][,sku=str][,family=str]
+# type 2: Baseboard infomation,the information in this structure defines attributes of a system baseboard 
+# (for example, a motherboard, planar, server blade, or other standard system module).
+-smbios type=2[,manufacturer=str][,product=str][,version=str][,serial=str][,asset=str][,location=str]
+# type 3: System Enclosure infomation,defines attributes of the system’s mechanical enclosure(s). 
+# For example, if a system included a separate enclosure for its peripheral devices,
+# two structures would be returned: one for the main system enclosure and the second for the peripheral device enclosure.
+-smbios type=3[,manufacturer=str][,version=str][,serial=str][,asset=str][,sku=str]
+# type 4: Processor infomation,defines the attributes of a single processor;
+# a separate structure instance is provided for each system processor socket/slot.
+# For example, a system with an IntelDX2 processor would have a single structure instance
+# while a system with an IntelSX2 processor would have a structure to describe the main CPU
+# and a second structure to describe the 80487 co-processor
+-smbios type=4[,sock_pfx=str][,manufacturer=str][,version=str][,serial=str][,asset=str][,part=str][,max-speed=%d][,current-speed=%d]
+# type 17: Memory Device,this structure describes a single memory device.
+-smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str][,asset=str][,part=str][,speed=%d]
+
 ```
 
 ## 2. Device Configuration
