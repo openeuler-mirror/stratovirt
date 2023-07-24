@@ -250,12 +250,10 @@ impl VirtioDevice for Vsock {
     }
 
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
-        if self.disable_irqfd {
-            return Err(anyhow!("The irqfd cannot be used on the current machine."));
-        }
-
-        for fd in queue_evts.iter() {
-            self.call_events.push(fd.clone());
+        if !self.disable_irqfd {
+            for fd in queue_evts.iter() {
+                self.call_events.push(fd.clone());
+            }
         }
 
         Ok(())
