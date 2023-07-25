@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -20,6 +19,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
+
+use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::{error, warn};
+use once_cell::sync::Lazy;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -38,8 +43,6 @@ use crate::{
     VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use address_space::{AddressSpace, RegionCache};
-use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
@@ -59,7 +62,7 @@ use util::num_ops::{read_u32, str_to_usize};
 use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
 /// Number of virtqueues(rx/tx/ctrl).
 const QUEUE_NUM_NET: usize = 3;
 /// The Mac Address length.
@@ -332,6 +335,7 @@ impl CtrlInfo {
         if ack == VIRTIO_NET_ERR {
             return ack;
         }
+        vid = LittleEndian::read_u16(vid.as_bytes());
         if vid >= CTRL_MAX_VLAN {
             return VIRTIO_NET_ERR;
         }
@@ -360,6 +364,7 @@ impl CtrlInfo {
     fn handle_mq(
         &mut self,
         mem_space: &AddressSpace,
+        taps: Option<&mut Vec<Tap>>,
         cmd: u8,
         data_iovec: &mut Vec<ElemIovec>,
     ) -> u8 {
@@ -376,11 +381,19 @@ impl CtrlInfo {
                 return ack;
             }
 
-            if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
-                .contains(&queue_pairs)
-            {
+            queue_pairs = LittleEndian::read_u16(queue_pairs.as_bytes());
+            let max_pairs = self.state.lock().unwrap().config_space.max_virtqueue_pairs;
+            if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=max_pairs).contains(&queue_pairs) {
                 error!("Invalid queue pairs {}", queue_pairs);
-                ack = VIRTIO_NET_ERR;
+                return VIRTIO_NET_ERR;
+            }
+            if let Some(taps) = taps {
+                for (index, tap) in taps.iter_mut().enumerate() {
+                    if tap.set_queue(index < queue_pairs as usize) != 0 {
+                        error!("Failed to set queue, index is {}", index);
+                        return VIRTIO_NET_ERR;
+                    }
+                }
             }
         } else {
             error!(
@@ -509,6 +522,7 @@ pub struct NetCtrlHandler {
     pub driver_features: u64,
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
+    pub taps: Option<Vec<Tap>>,
 }
 
 #[repr(C, packed)]
@@ -585,6 +599,7 @@ impl NetCtrlHandler {
                 VIRTIO_NET_CTRL_MQ => {
                     ack = self.ctrl.ctrl_info.lock().unwrap().handle_mq(
                         &self.mem_space,
+                        self.taps.as_mut(),
                         ctrl_hdr.cmd,
                         &mut data_iovec,
                     );
@@ -765,10 +780,13 @@ impl NetIoHandler {
 
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
-        let mut queue = self.rx.queue.lock().unwrap();
+        if self.tap.is_none() {
+            return Ok(());
+        }
 
+        let mut queue = self.rx.queue.lock().unwrap();
         let mut rx_packets = 0;
-        while let Some(tap) = self.tap.as_mut() {
+        loop {
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -794,7 +812,7 @@ impl NetIoHandler {
             }
 
             // Read the data from the tap device.
-            let size = NetIoHandler::read_from_tap(&iovecs, tap);
+            let size = NetIoHandler::read_from_tap(&iovecs, self.tap.as_mut().unwrap());
             if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as i32 {
                 queue.vring.push_back();
                 break;
@@ -1553,6 +1571,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.broken.clone(),
+                taps: self.taps.clone(),
             };
 
             let notifiers =

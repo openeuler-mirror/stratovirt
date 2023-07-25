@@ -252,6 +252,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.broken.clone(),
+                taps: None,
             };
 
             let notifiers =
