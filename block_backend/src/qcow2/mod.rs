@@ -677,12 +677,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 break;
             }
 
-            if let Err(e) = self.refcount.flush_refcount_block_cache() {
-                err_msg = format!("{:?}", e);
-                error_stage = 5;
-                break;
-            }
-
             let mut new_header = self.header.clone();
             new_header.snapshots_offset = new_snapshot_table_offset;
             new_header.nb_snapshots -= 1;
@@ -711,6 +705,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         // Error handling, to revert some operation.
+        self.refcount.discard_list.clear();
         if error_stage >= 6 {
             self.refcount.update_refcount(
                 self.header.snapshots_offset,
@@ -882,6 +877,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         // Error handling, to revert some operation.
+        self.refcount.discard_list.clear();
         if error_stage >= 5 && self.header.snapshots_offset != 0 {
             self.refcount.update_refcount(
                 self.header.snapshots_offset,
@@ -2044,5 +2040,217 @@ mod test {
         }
         assert!(qcow2_read(&mut qcow2_driver, &mut test_buf, offset_start).is_ok());
         assert!(vec_is_zero(&test_buf));
+    }
+
+    #[test]
+    fn test_snapshot_basic() {
+        // TODO:
+        // 1) add check step when stratovirt-img works.
+        // 2) add snapshot apply step to check function.
+        let path = "/tmp/snashot_test.qcow2";
+        let cluster_bits = 16;
+        let cluster_size = 1 << cluster_bits;
+        let (_, mut qcow2) = create_qcow2(path);
+
+        let guest_offsets = [
+            cluster_size * 0,
+            cluster_size * 10,
+            cluster_size * 100,
+            cluster_size * 1000,
+            cluster_size * 10000,
+        ];
+
+        let wbuf = vec![1_u8; CLUSTER_SIZE as usize];
+        // Write data and create snapshot 'snap1'.
+        for offset in guest_offsets {
+            qcow2_write(&mut qcow2, &wbuf, offset).unwrap();
+        }
+        qcow2.qcow2_create_snapshot("snap1".to_string(), 0).unwrap();
+
+        let wbuf = vec![2_u8; CLUSTER_SIZE as usize];
+        // Write data and create snapshot 'snap2'.
+        for offset in guest_offsets {
+            qcow2_write(&mut qcow2, &wbuf, offset).unwrap();
+        }
+        qcow2.qcow2_create_snapshot("snap2".to_string(), 0).unwrap();
+
+        // Read 1 byte for checking. Add more checks after implementing snapshot restore.
+        let mut rbuf = vec![0_u8; 1];
+        for offset in guest_offsets {
+            qcow2_read(&mut qcow2, &mut rbuf, offset).unwrap();
+            assert_eq!(rbuf, [2]);
+        }
+
+        // Delete snapshot 'snap2'.
+        qcow2.qcow2_delete_snapshot("snap2".to_string()).unwrap();
+
+        // Delete snapshot 'snap1'.
+        qcow2.qcow2_delete_snapshot("snap1".to_string()).unwrap();
+    }
+
+    fn get_host_offset(qcow2_driver: &mut Qcow2Driver<()>, guest_offset: u64) -> u64 {
+        let l2_index = qcow2_driver.table.get_l2_table_index(guest_offset);
+        // All used l2 table will be cached for it's little data size in these tests.
+        let l2_table = qcow2_driver
+            .table
+            .get_l2_table_cache_entry(guest_offset)
+            .unwrap();
+        let l2_entry = l2_table
+            .borrow_mut()
+            .get_entry_map(l2_index as usize)
+            .unwrap();
+        let host_offset = l2_entry & L2_TABLE_OFFSET_MASK;
+
+        host_offset
+    }
+
+    // Change snapshot table offset to unaligned address which will lead to error in refcount update process.
+    #[test]
+    fn simulate_revert_snapshot_creation() {
+        let path = "/tmp/revert_create.qcow2";
+        let (_image, mut qcow2_driver) = create_qcow2(path);
+
+        // Write some random data.
+        let (case_list, _buf_list) = generate_rw_random_list();
+        for case in &case_list {
+            qcow2_driver
+                .write_vectored(&case.wiovec, case.offset, ())
+                .unwrap();
+        }
+
+        // Change snapshot table offset to a fake address which is not align to cluster size and
+        // it will fail in update_refcount.
+        qcow2_driver.header.snapshots_offset = 0x1111;
+        let result = qcow2_driver.create_snapshot("snapshot1".to_string(), 0);
+        assert!(result.is_err());
+
+        // Check
+        // 1) No snapshot.
+        assert_eq!(qcow2_driver.header.nb_snapshots, 0);
+        // 2) Refcount is right.
+        for case in &case_list {
+            let host_offset = get_host_offset(&mut qcow2_driver, case.offset as u64);
+            assert_eq!(qcow2_driver.refcount.get_refcount(host_offset).unwrap(), 1);
+        }
+        // 3) L1 table refcount is right.
+        assert_eq!(
+            qcow2_driver
+                .refcount
+                .get_refcount(qcow2_driver.header.l1_table_offset)
+                .unwrap(),
+            1
+        );
+        // 4) L2 table refcount is right.
+        let mut l1_table = qcow2_driver.table.l1_table.clone();
+        for l1_entry in l1_table.iter_mut() {
+            if *l1_entry == 0 {
+                // No l2 table.
+                continue;
+            }
+            assert_eq!(
+                qcow2_driver
+                    .refcount
+                    .get_refcount(*l1_entry & L1_TABLE_OFFSET_MASK)
+                    .unwrap(),
+                1
+            );
+        }
+    }
+
+    // Change snapshot table offset to unaligned address which will lead to error in refcount update process.
+    #[test]
+    fn simulate_revert_snapshot_deletion() {
+        let path = "/tmp/revert_delete.qcow2";
+        let (_image, mut qcow2_driver) = create_qcow2(path);
+
+        // Write some random data.
+        let (case_list, _buf_list) = generate_rw_random_list();
+        for case in &case_list {
+            qcow2_driver
+                .write_vectored(&case.wiovec, case.offset, ())
+                .unwrap();
+        }
+
+        // Create two new snapshots.
+        qcow2_driver
+            .qcow2_create_snapshot("snaptest1".to_string(), 0)
+            .unwrap();
+        qcow2_driver
+            .qcow2_create_snapshot("snaptest2".to_string(), 0)
+            .unwrap();
+
+        // Check.
+        // 1) 2 snapshots: snaptest1, snaptest2.
+        assert_eq!(qcow2_driver.header.nb_snapshots, 2);
+        assert_eq!(qcow2_driver.snapshot.snapshots[0].name, "snaptest1");
+        assert_eq!(qcow2_driver.snapshot.snapshots[1].name, "snaptest2");
+        // 2) Data cluster refcount is right.
+        for case in &case_list {
+            let host_offset = get_host_offset(&mut qcow2_driver, case.offset as u64);
+            assert_eq!(qcow2_driver.refcount.get_refcount(host_offset).unwrap(), 3);
+        }
+        // 3) L1 table refcount is right.
+        assert_eq!(
+            qcow2_driver
+                .refcount
+                .get_refcount(qcow2_driver.header.l1_table_offset)
+                .unwrap(),
+            1
+        );
+        // 4) L2 table refcount is right.
+        let mut l1_table = qcow2_driver.table.l1_table.clone();
+        for l1_entry in l1_table.iter_mut() {
+            if *l1_entry == 0 {
+                // No l2 table.
+                continue;
+            }
+            assert_eq!(
+                qcow2_driver
+                    .refcount
+                    .get_refcount(*l1_entry & L1_TABLE_OFFSET_MASK)
+                    .unwrap(),
+                3
+            );
+        }
+
+        // Change snapshot table offset to a fake address which is not align to cluster size and
+        // it will fail in update_refcount.
+        qcow2_driver.header.snapshots_offset = 0x1111;
+        let result = qcow2_driver.delete_snapshot("snapshot1".to_string());
+        assert!(result.is_err());
+
+        // Check again.
+        // 1) 2 snapshots: snaptest1, snaptest2.
+        assert_eq!(qcow2_driver.header.nb_snapshots, 2);
+        assert_eq!(qcow2_driver.snapshot.snapshots[0].name, "snaptest1");
+        assert_eq!(qcow2_driver.snapshot.snapshots[1].name, "snaptest2");
+        // 2) Data cluster refcount is right.
+        for case in &case_list {
+            let host_offset = get_host_offset(&mut qcow2_driver, case.offset as u64);
+            assert_eq!(qcow2_driver.refcount.get_refcount(host_offset).unwrap(), 3);
+        }
+        // 3) L1 table refcount is right.
+        assert_eq!(
+            qcow2_driver
+                .refcount
+                .get_refcount(qcow2_driver.header.l1_table_offset)
+                .unwrap(),
+            1
+        );
+        // 4) L2 table refcount is right.
+        let mut l1_table = qcow2_driver.table.l1_table.clone();
+        for l1_entry in l1_table.iter_mut() {
+            if *l1_entry == 0 {
+                // No l2 table.
+                continue;
+            }
+            assert_eq!(
+                qcow2_driver
+                    .refcount
+                    .get_refcount(*l1_entry & L1_TABLE_OFFSET_MASK)
+                    .unwrap(),
+                3
+            );
+        }
     }
 }
