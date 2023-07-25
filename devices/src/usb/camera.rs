@@ -130,7 +130,7 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "USB Camera",
     "4",
     "USB Camera Configuration",
-    "StratoVirt Camera",
+    "STRATO CAM",
     "Video Control",
     "Input Terminal",
     "Output Terminal",
@@ -841,6 +841,10 @@ impl UsbCamera {
             .unwrap_or_default();
         self.vs_control.reset(&default_fmt);
     }
+
+    fn generate_iad(&self, prefix: &str) -> String {
+        format!("{} ({})", prefix, self.device_id())
+    }
 }
 
 impl UsbDeviceOps for UsbCamera {
@@ -854,6 +858,8 @@ impl UsbDeviceOps for UsbCamera {
         let prefix = &s[UsbCameraStringIDs::SerialNumber as usize];
         s[UsbCameraStringIDs::SerialNumber as usize] =
             self.usb_device.generate_serial_number(prefix);
+        let iad = &s[UsbCameraStringIDs::Iad as usize];
+        s[UsbCameraStringIDs::Iad as usize] = self.generate_iad(iad);
         let device_desc = gen_desc_device_camera(fmt_list)?;
         self.usb_device.init_descriptor(device_desc, s)?;
         self.register_cb();
