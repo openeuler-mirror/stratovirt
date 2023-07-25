@@ -121,16 +121,6 @@ impl CacheTable {
         Ok(())
     }
 
-    pub fn find_empty_entry(&self, start: usize) -> Result<usize> {
-        let len = self.table_data.len() / self.entry_size;
-        for i in start..len {
-            if self.be_read(i)? == 0 {
-                return Ok(i);
-            }
-        }
-        Ok(len)
-    }
-
     pub fn get_value(&self) -> &[u8] {
         &self.table_data
     }
