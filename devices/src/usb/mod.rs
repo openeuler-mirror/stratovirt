@@ -112,6 +112,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
+    pub id: String,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -129,8 +130,9 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    pub fn new(data_buf_len: usize) -> Self {
+    pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
+            id,
             port: None,
             speed: 0,
             addr: 0,
@@ -186,6 +188,10 @@ impl UsbDevice {
             self.ep_out[i as usize].in_direction = false;
             self.ep_out[i as usize].ep_type = USB_ENDPOINT_ATTR_INVALID;
         }
+    }
+
+    pub fn generate_serial_number(&self, prefix: &str) -> String {
+        format!("{}-{}", prefix, self.id)
     }
 
     /// Handle USB control request which is for descriptor.
@@ -384,7 +390,9 @@ pub trait UsbDeviceOps: Send + Sync {
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
-    fn device_id(&self) -> String;
+    fn device_id(&self) -> &str {
+        &self.get_usb_device().id
+    }
 
     /// Get the UsbDevice.
     fn get_usb_device(&self) -> &UsbDevice;
