@@ -224,7 +224,6 @@ impl UsbStorageState {
 
 /// USB storage device.
 pub struct UsbStorage {
-    id: String,
     usb_device: UsbDevice,
     state: UsbStorageState,
     /// USB controller used to notify controller to transfer data.
@@ -315,8 +314,7 @@ impl UsbStorage {
         };
 
         Self {
-            id: config.id.clone().unwrap(),
-            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
+            usb_device: UsbDevice::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
             config: config.clone(),
@@ -575,13 +573,13 @@ impl UsbDeviceOps for UsbStorage {
         };
 
         if let Err(e) = result {
-            warn!("USB-storage {}: handle data error: {:?}", self.id, e);
+            warn!(
+                "USB-storage {}: handle data error: {:?}",
+                self.device_id(),
+                e
+            );
             locked_packet.status = UsbPacketStatus::Stall;
         }
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn get_usb_device(&self) -> &UsbDevice {

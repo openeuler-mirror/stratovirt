@@ -112,6 +112,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
+    pub id: String,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -129,8 +130,9 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    pub fn new(data_buf_len: usize) -> Self {
+    pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
+            id,
             port: None,
             speed: 0,
             addr: 0,
@@ -384,7 +386,9 @@ pub trait UsbDeviceOps: Send + Sync {
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
-    fn device_id(&self) -> String;
+    fn device_id(&self) -> &str {
+        &self.get_usb_device().id
+    }
 
     /// Get the UsbDevice.
     fn get_usb_device(&self) -> &UsbDevice;
