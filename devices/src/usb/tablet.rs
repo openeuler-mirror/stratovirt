@@ -171,7 +171,9 @@ impl UsbDeviceOps for UsbTablet {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_FULL;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_TABLET_INDEX as usize];
+        s[STR_SERIAL_TABLET_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
         self.usb_device
             .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
         let id = self.device_id().to_string();

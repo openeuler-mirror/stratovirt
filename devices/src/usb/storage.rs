@@ -129,7 +129,7 @@ const DESC_STRINGS: [&str; 7] = [
     "",
     "StratoVirt",
     "StratoVirt USB Storage",
-    "1",
+    "3",
     "Full speed config (usb 1.1)",
     "High speed config (usb 2.0)",
     "Super speed config (usb 3.0)",
@@ -513,7 +513,9 @@ impl UsbDeviceOps for UsbStorage {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_HIGH;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
+        s[STR_SERIAL_STORAGE_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
