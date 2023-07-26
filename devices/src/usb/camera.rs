@@ -128,7 +128,7 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "",
     "StratoVirt",
     "USB Camera",
-    "1",
+    "4",
     "USB Camera Configuration",
     "StratoVirt Camera",
     "Video Control",
@@ -850,7 +850,10 @@ impl UsbDeviceOps for UsbCamera {
 
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_SUPER;
-        let s = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[UsbCameraStringIDs::SerialNumber as usize];
+        s[UsbCameraStringIDs::SerialNumber as usize] =
+            self.usb_device.generate_serial_number(prefix);
         let device_desc = gen_desc_device_camera(fmt_list)?;
         self.usb_device.init_descriptor(device_desc, s)?;
         self.register_cb();

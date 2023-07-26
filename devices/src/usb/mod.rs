@@ -190,6 +190,10 @@ impl UsbDevice {
         }
     }
 
+    pub fn generate_serial_number(&self, prefix: &str) -> String {
+        format!("{}-{}", prefix, self.id)
+    }
+
     /// Handle USB control request which is for descriptor.
     ///
     /// # Arguments
