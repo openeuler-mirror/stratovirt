@@ -96,15 +96,14 @@ const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 pub struct UsbCamera {
-    id: String,                                                 // uniq device id
-    usb_device: UsbDevice,                                      // general usb device object
-    vs_control: VideoStreamingControl,                          // video stream control info
-    camera_fd: Arc<EventFd>,                                    // camera io fd
-    camera_dev: Arc<Mutex<dyn CameraHostdevOps>>,               // backend device
+    usb_device: UsbDevice,                        // general usb device object
+    vs_control: VideoStreamingControl,            // video stream control info
+    camera_fd: Arc<EventFd>,                      // camera io fd
+    camera_dev: Arc<Mutex<dyn CameraHostdevOps>>, // backend device
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>, // packet to be processed
-    payload: Arc<Mutex<UvcPayload>>,                            // uvc payload
-    listening: bool,                                            // if the camera is listening or not
-    broken: Arc<AtomicBool>,                                    // if the device broken or not
+    payload: Arc<Mutex<UvcPayload>>,              // uvc payload
+    listening: bool,                              // if the camera is listening or not
+    broken: Arc<AtomicBool>,                      // if the device broken or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
 }
@@ -610,8 +609,7 @@ impl UsbCamera {
     pub fn new(config: UsbCameraConfig) -> Result<Self> {
         let camera = camera_ops(config.clone())?;
         Ok(Self {
-            id: config.id.unwrap(),
-            usb_device: UsbDevice::new(USB_CAMERA_BUFFER_LEN),
+            usb_device: UsbDevice::new(config.id.unwrap(), USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
             camera_dev: camera,
@@ -636,7 +634,7 @@ impl UsbCamera {
             }
         });
         let clone_broken = self.broken.clone();
-        let clone_id = self.id.clone();
+        let clone_id = self.device_id().to_string();
         let broken_cb: CameraBrokenCallback = Arc::new(move || {
             clone_broken.store(true, Ordering::SeqCst);
             error!("USB Camera {} device broken", clone_id);
@@ -647,7 +645,7 @@ impl UsbCamera {
     }
 
     fn activate(&mut self, fmt: &CamBasicFmt) -> Result<()> {
-        info!("USB Camera {} activate", self.id);
+        info!("USB Camera {} activate", self.device_id());
         self.camera_dev.lock().unwrap().reset();
         self.payload.lock().unwrap().reset();
         let mut locked_camera = self.camera_dev.lock().unwrap();
@@ -678,9 +676,12 @@ impl UsbCamera {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        info!("USB Camera {} deactivate", self.id);
+        info!("USB Camera {} deactivate", self.device_id());
         if self.broken.load(Ordering::Acquire) {
-            info!("USB Camera {} broken when deactivate, reset it.", self.id);
+            info!(
+                "USB Camera {} broken when deactivate, reset it.",
+                self.device_id()
+            );
             self.camera_dev.lock().unwrap().reset();
             self.broken.store(false, Ordering::SeqCst);
         } else {
@@ -859,13 +860,13 @@ impl UsbDeviceOps for UsbCamera {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        info!("Camera {} unrealize", self.id);
+        info!("Camera {} unrealize", self.device_id());
         self.camera_dev.lock().unwrap().reset();
         Ok(())
     }
 
     fn reset(&mut self) {
-        info!("Camera {} device reset", self.id);
+        info!("Camera {} device reset", self.device_id());
         self.usb_device.addr = 0;
         if let Err(e) = self.unregister_camera_fd() {
             error!("Failed to unregister fd when reset {:?}", e);
@@ -911,7 +912,8 @@ impl UsbDeviceOps for UsbCamera {
             if let Err(e) = self.camera_fd.write(1) {
                 error!(
                     "Failed to write fd when handle data for {} {:?}",
-                    self.id, e
+                    self.device_id(),
+                    e
                 );
                 // SAFETY: packet is push before, and no other thread modify the list.
                 let p = locked_list.pop_back().unwrap();
@@ -924,10 +926,6 @@ impl UsbDeviceOps for UsbCamera {
             error!("Invalid ep number {}", packet.lock().unwrap().ep_number);
             packet.lock().unwrap().status = UsbPacketStatus::Stall;
         }
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn set_controller(&mut self, _cntlr: Weak<Mutex<XhciDevice>>) {}

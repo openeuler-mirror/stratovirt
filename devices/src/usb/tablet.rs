@@ -113,7 +113,6 @@ const STR_SERIAL_TABLET_INDEX: u8 = 4;
 const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
 /// USB tablet device.
 pub struct UsbTablet {
-    id: String,
     usb_device: UsbDevice,
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
@@ -123,8 +122,7 @@ pub struct UsbTablet {
 impl UsbTablet {
     pub fn new(id: String) -> Self {
         Self {
-            id,
-            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
+            usb_device: UsbDevice::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Tablet),
             cntlr: None,
         }
@@ -176,7 +174,7 @@ impl UsbDeviceOps for UsbTablet {
         let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         self.usb_device
             .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
-        let id = self.id.clone();
+        let id = self.device_id().to_string();
         let tablet = Arc::new(Mutex::new(self));
         let tablet_adapter = Arc::new(Mutex::new(UsbTabletAdapter {
             tablet: tablet.clone(),
@@ -186,7 +184,7 @@ impl UsbDeviceOps for UsbTablet {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        unregister_pointer(&self.id.clone());
+        unregister_pointer(self.device_id());
         Ok(())
     }
 
@@ -226,10 +224,6 @@ impl UsbDeviceOps for UsbTablet {
     fn handle_data(&mut self, p: &Arc<Mutex<UsbPacket>>) {
         let mut locked_p = p.lock().unwrap();
         self.hid.handle_data_packet(&mut locked_p);
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn get_usb_device(&self) -> &UsbDevice {
