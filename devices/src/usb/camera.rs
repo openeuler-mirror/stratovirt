@@ -519,9 +519,14 @@ impl UsbCamera {
         });
         let clone_broken = self.broken.clone();
         let clone_id = self.device_id().to_string();
+        let clone_fd = self.camera_fd.clone();
         let broken_cb: CameraBrokenCallback = Arc::new(move || {
             clone_broken.store(true, Ordering::SeqCst);
             error!("USB Camera {} device broken", clone_id);
+            // Notify the camera to process the packet.
+            if let Err(e) = clone_fd.write(1) {
+                error!("Failed to notify camera fd {:?}", e);
+            }
         });
         let mut locked_camera = self.camera_dev.lock().unwrap();
         locked_camera.register_notify_cb(notify_cb);
@@ -549,6 +554,7 @@ impl UsbCamera {
             &self.packet_list,
             &self.camera_dev,
             &self.payload,
+            &self.broken,
         )));
         register_event_helper(
             EventNotifierHelper::internal_notifiers(cam_handler),
@@ -909,6 +915,7 @@ struct CameraIoHandler {
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
+    broken: Arc<AtomicBool>,
 }
 
 impl CameraIoHandler {
@@ -917,12 +924,14 @@ impl CameraIoHandler {
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
         camera: &Arc<Mutex<dyn CameraHostdevOps>>,
         payload: &Arc<Mutex<UvcPayload>>,
+        broken: &Arc<AtomicBool>,
     ) -> Self {
         CameraIoHandler {
             camera: camera.clone(),
             fd: fd.clone(),
             packet_list: list.clone(),
             payload: payload.clone(),
+            broken: broken.clone(),
         }
     }
 
@@ -1006,7 +1015,22 @@ impl EventNotifierHelper for CameraIoHandler {
         let cloned_io_handler = io_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
             read_fd(fd);
-            cloned_io_handler.lock().unwrap().handle_io();
+            let mut locked_handler = cloned_io_handler.lock().unwrap();
+            if locked_handler.broken.load(Ordering::Acquire) {
+                let mut locked_list = locked_handler.packet_list.lock().unwrap();
+                while let Some(p) = locked_list.pop_front() {
+                    let mut locked_p = p.lock().unwrap();
+                    locked_p.status = UsbPacketStatus::IoError;
+                    if let Some(transfer) = locked_p.xfer_ops.as_ref() {
+                        if let Some(ops) = transfer.clone().upgrade() {
+                            drop(locked_p);
+                            ops.lock().unwrap().submit_transfer();
+                        }
+                    }
+                }
+                return None;
+            }
+            locked_handler.handle_io();
             None
         });
         vec![EventNotifier::new(
