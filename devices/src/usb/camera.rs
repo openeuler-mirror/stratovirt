@@ -56,7 +56,7 @@ pub const INTERFACE_ID_STREAMING: u8 = 1;
 const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
 const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 2;
 
-pub const ENDPOINT_ID_STREAMING: u8 = 0x1;
+const ENDPOINT_ID_STREAMING: u8 = 0x1;
 const VS_INTERFACE_NUM: u8 = 1;
 
 // According to UVC specification 1.5
@@ -190,122 +190,6 @@ struct OutputTerminalDescriptor {
 }
 
 impl ByteCode for OutputTerminalDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct VSInputHeaderDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bNumFormats: u8,
-    pub wTotalLength: u16,
-    pub bEndpointAddress: u8,
-    pub bmInfo: u8,
-    pub bTerminalLink: u8,
-    pub bStillCaptureMethod: u8,
-    pub bTriggerSupport: u8,
-    pub bTriggerUsage: u8,
-    pub bControlSize: u8,
-    pub bmaControls: [u8; 2],
-}
-
-impl ByteCode for VSInputHeaderDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub bmFlags: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for MjpgFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for MjpgFrameDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct ColorMatchingDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bColorPrimaries: u8,
-    pub bTransferCharacteristics: u8,
-    pub bMatrixCoefficients: u8,
-}
-
-impl ByteCode for ColorMatchingDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub guidFormat: [u8; 16],
-    pub bBitsPerPixel: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for UncompressedFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for UncompressedFrameDescriptor {}
 
 fn gen_desc_interface_camera_vc() -> Result<Arc<UsbDescIface>> {
     // VideoControl Interface Descriptor
@@ -849,9 +733,7 @@ impl UsbCamera {
 
 impl UsbDeviceOps for UsbCamera {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        self.camera_dev.lock().unwrap().list_format()?;
-        let fmt_list = self.camera_dev.lock().unwrap().get_fmt()?;
-
+        let fmt_list = self.camera_dev.lock().unwrap().list_format()?;
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_SUPER;
         let mut s: Vec<String> = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
