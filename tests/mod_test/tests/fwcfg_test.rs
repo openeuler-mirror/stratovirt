@@ -257,7 +257,7 @@ fn test_smbios_type0() {
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
     assert_eq!(read_data[6], 24 as u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
-    assert_eq!(talble_len, 109);
+    assert_eq!(talble_len, 339);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
     let talbles_size = test_state.borrow().fw_cfg_read_file(
@@ -321,7 +321,7 @@ fn test_smbios_type1() {
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
     assert_eq!(read_data[6], 24 as u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
-    assert_eq!(talble_len, 162);
+    assert_eq!(talble_len, 381);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
     let talbles_size = test_state.borrow().fw_cfg_read_file(
@@ -384,6 +384,323 @@ fn test_smbios_type1() {
     assert_eq!(read_table_date[69], 0xe4);
     assert_eq!(read_table_date[70], 0x1f);
     assert_eq!(read_table_date[71], 0x6c);
+
+    test_state.borrow_mut().stop();
+}
+
+/// smbios table2 test
+/// TestStep:
+///     1.Init device
+///     2.config type2 message
+/// Expect:
+///     1.Success
+///     2.Verify that the data in the table is as expected
+#[test]
+fn test_smbios_type2() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let mut extra_args = "-smbios type=2,manufacturer=manufacturer2,product=product2,\
+    version=version2,serial=serial2,asset=asset2,location=location2"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    let table_type2_len = 107;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len..table_type2_len + 13]),
+        "manufacturer2"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 14..table_type2_len + 22]),
+        "product2"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 23..table_type2_len + 31]),
+        "version2"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 32..table_type2_len + 39]),
+        "serial2"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 40..table_type2_len + 49]),
+        "location2"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 50..table_type2_len + 56]),
+        "asset2"
+    );
+
+    test_state.borrow_mut().stop();
+}
+
+/// TestStep:
+///     1.Init device
+///     2.config type3 message
+/// Expect:
+///     1.Success
+///     2.Verify that the data in the table is as expected
+#[test]
+fn test_smbios_type3() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let mut extra_args = "-smbios type=3,manufacturer=manufacturer3,version=version3,\
+    serial=serial3,asset=asset3,sku=sku3"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    let table_type3_len = 114;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type3_len..table_type3_len + 13]),
+        "manufacturer3"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type3_len + 14..table_type3_len + 22]),
+        "version3"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type3_len + 23..table_type3_len + 30]),
+        "serial3"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type3_len + 31..table_type3_len + 35]),
+        "sku3"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type3_len + 36..table_type3_len + 42]),
+        "asset3"
+    );
+
+    test_state.borrow_mut().stop();
+}
+
+/// TestStep:
+///     1.Init device
+///     2.config type4 message
+/// Expect:
+///     1.Success
+///     2.Verify that the data in the table is as expected
+#[test]
+fn test_smbios_type4() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let cpu_args = format!("-smp 8,maxcpus=8,sockets=2,cores=2,threads=2");
+    let mut extra_args = cpu_args.split(' ').collect();
+    args.append(&mut extra_args);
+
+    let mut extra_args = "-smbios type=4,sock_pfx=sock_pfx4,manufacturer=manufacturer4,\
+    version=version4,serial=serial4,asset=asset4,part=part4,max-speed=65534,current-speed=65534"
+        .split(' ')
+        .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    // check speed
+    assert_eq!(read_table_date[157], 0xFE);
+    assert_eq!(read_table_date[158], 0xFF);
+    assert_eq!(read_table_date[159], 0xFE);
+    assert_eq!(read_table_date[160], 0xFF);
+
+    let table_type4_len = 185;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len..table_type4_len + 11]),
+        "sock_pfx4 0"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len + 12..table_type4_len + 25]),
+        "manufacturer4"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len + 26..table_type4_len + 34]),
+        "version4"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len + 35..table_type4_len + 42]),
+        "serial4"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len + 43..table_type4_len + 49]),
+        "asset4"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type4_len + 50..table_type4_len + 55]),
+        "part4"
+    );
+    test_state.borrow_mut().stop();
+}
+
+/// TestStep:
+///     1.Init device
+///     2.config type17 message
+/// Expect:
+///     1.Success
+///     2.Verify that the data in the table is as expected
+#[test]
+fn test_smbios_type17() {
+    let mut args: Vec<&str> = Vec::new();
+    bios_args(&mut args);
+
+    let cpu_args = format!("-smp 8,maxcpus=8,sockets=2,cores=2,threads=2");
+    let mut extra_args = cpu_args.split(' ').collect();
+    args.append(&mut extra_args);
+
+    let mut extra_args =
+        "-smbios type=17,loc_pfx=loc_pfx17,bank=bank17,manufacturer=manufacturer17,\
+    serial=serial17,asset=asset17,part=part17,speed=65534"
+            .split(' ')
+            .collect();
+    args.append(&mut extra_args);
+
+    let test_state = Rc::new(RefCell::new(test_init(args)));
+    let machine = TestStdMachine::new(test_state.clone());
+    let allocator = machine.allocator.clone();
+
+    let anchor_file = "etc/smbios/smbios-anchor";
+    let tables_file = "etc/smbios/smbios-tables";
+    let mut read_data: Vec<u8> = Vec::with_capacity(24);
+
+    // Select FileDir entry and read it.
+    let anchor_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        anchor_file,
+        &mut read_data,
+        24 as u32,
+    );
+
+    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
+    assert_eq!(read_data[6], 24 as u8);
+    let talble_len = LittleEndian::read_u32(&read_data[12..]);
+    assert_eq!(talble_len, 434);
+
+    let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
+    let talbles_size = test_state.borrow().fw_cfg_read_file(
+        &mut allocator.borrow_mut(),
+        tables_file,
+        &mut read_table_date,
+        talble_len,
+    );
+    assert_eq!(talbles_size, talble_len);
+    // check speed
+    assert_eq!(read_table_date[337], 0xFE);
+    assert_eq!(read_table_date[338], 0xFF);
+
+    let table_type2_len = 356;
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len..table_type2_len + 14]),
+        "manufacturer17"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 15..table_type2_len + 26]),
+        "loc_pfx17 0"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 27..table_type2_len + 33]),
+        "bank17"
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 34..table_type2_len + 42]),
+        "serial17"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 43..table_type2_len + 49]),
+        "part17"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read_table_date[table_type2_len + 50..table_type2_len + 57]),
+        "asset17"
+    );
 
     test_state.borrow_mut().stop();
 }

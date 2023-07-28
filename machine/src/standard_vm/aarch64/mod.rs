@@ -696,7 +696,7 @@ impl MachineOps for StdMachine {
                     .build_acpi_tables(&fw_cfg)
                     .with_context(|| "Failed to create ACPI tables")?;
                 locked_vm
-                    .build_smbios(&fw_cfg)
+                    .build_smbios(&fw_cfg, Vec::new())
                     .with_context(|| "Failed to create smbios tables")?;
             }
         }
