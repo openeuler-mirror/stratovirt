@@ -689,7 +689,7 @@ impl SmbiosTable {
         if let Some(product) = type1.product {
             table1.set_str(product);
         } else {
-            table1.set_str(String::from(HYPERVISOR_STR));
+            table1.set_str(String::from("Virtual Machine"));
         }
 
         table1.header.version = table1.str_index + 1;
