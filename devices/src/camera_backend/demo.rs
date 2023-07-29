@@ -376,18 +376,6 @@ fn build_rgb565_list() -> CameraFormatList {
 }
 
 impl CameraHostdevOps for DemoCamera {
-    fn init(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn is_camera(&self) -> Result<bool> {
-        Ok(true)
-    }
-
-    fn get_fmt(&self) -> Result<Vec<CameraFormatList>> {
-        Ok(self.format_list.clone())
-    }
-
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
         *self.cur_format.lock().unwrap() = *cam_fmt;
         info!("Demo camera backend set format {:?}", cam_fmt);

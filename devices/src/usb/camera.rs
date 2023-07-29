@@ -56,7 +56,7 @@ pub const INTERFACE_ID_STREAMING: u8 = 1;
 const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
 const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 2;
 
-pub const ENDPOINT_ID_STREAMING: u8 = 0x1;
+const ENDPOINT_ID_STREAMING: u8 = 0x1;
 const VS_INTERFACE_NUM: u8 = 1;
 
 // According to UVC specification 1.5
@@ -190,122 +190,6 @@ struct OutputTerminalDescriptor {
 }
 
 impl ByteCode for OutputTerminalDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct VSInputHeaderDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bNumFormats: u8,
-    pub wTotalLength: u16,
-    pub bEndpointAddress: u8,
-    pub bmInfo: u8,
-    pub bTerminalLink: u8,
-    pub bStillCaptureMethod: u8,
-    pub bTriggerSupport: u8,
-    pub bTriggerUsage: u8,
-    pub bControlSize: u8,
-    pub bmaControls: [u8; 2],
-}
-
-impl ByteCode for VSInputHeaderDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub bmFlags: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for MjpgFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for MjpgFrameDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct ColorMatchingDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bColorPrimaries: u8,
-    pub bTransferCharacteristics: u8,
-    pub bMatrixCoefficients: u8,
-}
-
-impl ByteCode for ColorMatchingDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub guidFormat: [u8; 16],
-    pub bBitsPerPixel: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for UncompressedFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for UncompressedFrameDescriptor {}
 
 fn gen_desc_interface_camera_vc() -> Result<Arc<UsbDescIface>> {
     // VideoControl Interface Descriptor
@@ -635,9 +519,14 @@ impl UsbCamera {
         });
         let clone_broken = self.broken.clone();
         let clone_id = self.device_id().to_string();
+        let clone_fd = self.camera_fd.clone();
         let broken_cb: CameraBrokenCallback = Arc::new(move || {
             clone_broken.store(true, Ordering::SeqCst);
             error!("USB Camera {} device broken", clone_id);
+            // Notify the camera to process the packet.
+            if let Err(e) = clone_fd.write(1) {
+                error!("Failed to notify camera fd {:?}", e);
+            }
         });
         let mut locked_camera = self.camera_dev.lock().unwrap();
         locked_camera.register_notify_cb(notify_cb);
@@ -665,6 +554,7 @@ impl UsbCamera {
             &self.packet_list,
             &self.camera_dev,
             &self.payload,
+            &self.broken,
         )));
         register_event_helper(
             EventNotifierHelper::internal_notifiers(cam_handler),
@@ -849,9 +739,7 @@ impl UsbCamera {
 
 impl UsbDeviceOps for UsbCamera {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        self.camera_dev.lock().unwrap().list_format()?;
-        let fmt_list = self.camera_dev.lock().unwrap().get_fmt()?;
-
+        let fmt_list = self.camera_dev.lock().unwrap().list_format()?;
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_SUPER;
         let mut s: Vec<String> = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
@@ -1027,6 +915,7 @@ struct CameraIoHandler {
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
+    broken: Arc<AtomicBool>,
 }
 
 impl CameraIoHandler {
@@ -1035,12 +924,14 @@ impl CameraIoHandler {
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
         camera: &Arc<Mutex<dyn CameraHostdevOps>>,
         payload: &Arc<Mutex<UvcPayload>>,
+        broken: &Arc<AtomicBool>,
     ) -> Self {
         CameraIoHandler {
             camera: camera.clone(),
             fd: fd.clone(),
             packet_list: list.clone(),
             payload: payload.clone(),
+            broken: broken.clone(),
         }
     }
 
@@ -1124,7 +1015,22 @@ impl EventNotifierHelper for CameraIoHandler {
         let cloned_io_handler = io_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
             read_fd(fd);
-            cloned_io_handler.lock().unwrap().handle_io();
+            let mut locked_handler = cloned_io_handler.lock().unwrap();
+            if locked_handler.broken.load(Ordering::Acquire) {
+                let mut locked_list = locked_handler.packet_list.lock().unwrap();
+                while let Some(p) = locked_list.pop_front() {
+                    let mut locked_p = p.lock().unwrap();
+                    locked_p.status = UsbPacketStatus::IoError;
+                    if let Some(transfer) = locked_p.xfer_ops.as_ref() {
+                        if let Some(ops) = transfer.clone().upgrade() {
+                            drop(locked_p);
+                            ops.lock().unwrap().submit_transfer();
+                        }
+                    }
+                }
+                return None;
+            }
+            locked_handler.handle_io();
             None
         });
         vec![EventNotifier::new(

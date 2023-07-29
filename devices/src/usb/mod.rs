@@ -123,8 +123,8 @@ pub struct UsbDevice {
     pub ep_out: Vec<UsbEndpoint>,
     /// USB descriptor
     pub descriptor: UsbDescriptor,
-    /// The usb device id which is hot unplugged.
-    pub unplugged_id: Option<String>,
+    /// Check whether the usb device is hot unplugged.
+    pub unplugged: bool,
     /// The index of the interfaces.
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
@@ -142,7 +142,7 @@ impl UsbDevice {
             data_buf: vec![0_u8; data_buf_len],
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
-            unplugged_id: None,
+            unplugged: false,
             altsetting: [0_u32; USB_MAX_INTERFACES as usize],
         };
 
@@ -325,8 +325,8 @@ impl UsbDevice {
 
 impl Drop for UsbDevice {
     fn drop(&mut self) {
-        if let Some(id) = &self.unplugged_id {
-            send_device_deleted_msg(id);
+        if self.unplugged {
+            send_device_deleted_msg(&self.id);
         }
     }
 }
