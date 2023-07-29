@@ -23,7 +23,7 @@ pub mod edid;
 pub mod error;
 pub mod file;
 pub mod leak_bucket;
-mod link_list;
+pub mod link_list;
 pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
