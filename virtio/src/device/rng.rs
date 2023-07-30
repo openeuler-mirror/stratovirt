@@ -16,7 +16,6 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -32,7 +31,6 @@ use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 use log::error;
 use migration_derive::{ByteCode, Desc};
@@ -41,7 +39,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
 use crate::{
-    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    ElemIovec, Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
 use anyhow::{bail, Context, Result};
@@ -214,30 +212,22 @@ pub struct RngState {
 }
 
 /// Random number generator device structure
+#[derive(Default)]
 pub struct Rng {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of virtio rng device
     rng_cfg: RngConfig,
     /// The file descriptor of random number generator
     random_file: Option<File>,
-    /// The state of Rng device.
-    state: RngState,
-    /// Eventfd for device deactivate
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl Rng {
     pub fn new(rng_cfg: RngConfig) -> Self {
         Rng {
+            base: VirtioBase::new(VIRTIO_TYPE_RNG, QUEUE_NUM_RNG, DEFAULT_VIRTQUEUE_SIZE),
             rng_cfg,
-            random_file: None,
-            state: RngState {
-                device_features: 0,
-                driver_features: 0,
-            },
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
+            ..Default::default()
         }
     }
 
@@ -262,49 +252,29 @@ impl Rng {
 }
 
 impl VirtioDevice for Rng {
-    /// Realize virtio rng device.
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
             .with_context(|| "Failed to check random file")?;
         let file = File::open(&self.rng_cfg.random_file)
             .with_context(|| "Failed to open file of random number generator")?;
-
         self.random_file = Some(file);
-        self.state.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
+        self.init_config_features()?;
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_RNG
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
+        Ok(())
     }
 
-    /// Get the count of virtio device queues.
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_RNG
-    }
-
-    /// Get the queue size of virtio device.
-    fn queue_size(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
-    }
-
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
-    }
-
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, _data: &mut [u8]) -> Result<()> {
         bail!(
             "Reading device config space for rng is not supported, offset: {}",
@@ -312,7 +282,6 @@ impl VirtioDevice for Rng {
         );
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, _data: &[u8]) -> Result<()> {
         bail!(
             "Writing device config space for rng is not supported, offset: {}",
@@ -320,20 +289,18 @@ impl VirtioDevice for Rng {
         );
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         let handler = RngHandler {
             queue: queues[0].clone(),
             queue_evt: queue_evts[0].clone(),
             interrupt_cb,
-            driver_features: self.state.driver_features,
+            driver_features: self.base.driver_features,
             mem_space,
             random_file: self
                 .random_file
@@ -348,29 +315,30 @@ impl VirtioDevice for Rng {
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(None, &mut self.deactivate_evts)
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        unregister_event_helper(None, &mut self.base.deactivate_evts)
     }
 }
 
 impl StateTransfer for Rng {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        let state = RngState {
+            device_features: self.base.device_features,
+            driver_features: self.base.driver_features,
+        };
+        Ok(state.as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = *RngState::from_bytes(state)
+        let state = RngState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("RNG"))?;
-
+        self.base.device_features = state.device_features;
+        self.base.driver_features = state.driver_features;
         Ok(())
     }
 
@@ -438,13 +406,13 @@ mod tests {
         };
         let rng = Rng::new(rng_config);
         assert!(rng.random_file.is_none());
-        assert_eq!(rng.state.driver_features, 0_u64);
-        assert_eq!(rng.state.device_features, 0_u64);
+        assert_eq!(rng.base.driver_features, 0_u64);
+        assert_eq!(rng.base.device_features, 0_u64);
         assert_eq!(rng.rng_cfg.random_file, random_file);
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
-        assert_eq!(rng.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
+        assert_eq!(rng.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
         assert_eq!(rng.device_type(), VIRTIO_TYPE_RNG);
     }
 
@@ -464,49 +432,49 @@ mod tests {
         let mut rng = Rng::new(rng_config);
 
         // If the device feature is 0, all driver features are not supported.
-        rng.state.device_features = 0;
+        rng.base.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.state.driver_features, 0_u64);
-        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
-        assert_eq!(rng.get_device_features(0_u32), 0_u32);
+        assert_eq!(rng.base.driver_features, 0_u64);
+        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(rng.device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.state.driver_features, 0_u64);
-        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
-        assert_eq!(rng.get_device_features(1_u32), 0_u32);
+        assert_eq!(rng.base.driver_features, 0_u64);
+        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(rng.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time,  this driver feature bit is supported.
-        rng.state.device_features =
+        rng.base.device_features =
             1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64;
         let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(
-            rng.state.driver_features,
+            rng.base.driver_features,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
-            rng.get_driver_features(page) as u64,
+            rng.driver_features(page) as u64,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
-            rng.get_device_features(page),
+            rng.device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
-        rng.state.driver_features = 0;
+        rng.base.driver_features = 0;
 
-        rng.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        rng.base.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.state.driver_features, 0);
-        assert_eq!(rng.get_device_features(page), 0_u32);
-        rng.state.driver_features = 0;
+        assert_eq!(rng.base.driver_features, 0);
+        assert_eq!(rng.device_features(page), 0_u32);
+        rng.base.driver_features = 0;
     }
 
     #[test]

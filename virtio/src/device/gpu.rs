@@ -10,12 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
@@ -39,7 +37,6 @@ use util::edid::EdidInfo;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 use util::pixman::{
     pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
     pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
@@ -50,17 +47,18 @@ use util::pixman::{
 };
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, ElemIovec, Element, Queue, VirtioDevice,
-    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
-    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
-    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
-    VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
-    VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
-    VIRTIO_GPU_F_EDID, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
-    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
-    VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
-    VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
+    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR,
+    VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
+    VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
+    VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
+    VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE, VIRTIO_GPU_F_EDID,
+    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
+    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
+    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
+    VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
 
 /// Number of virtqueues
@@ -1425,33 +1423,19 @@ pub struct VirtioGpuConfig {
     _reserved: u32,
 }
 
-/// State of gpu device.
-#[repr(C)]
-#[derive(Clone, Default)]
-pub struct GpuState {
-    /// Bitmask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Config space of the GPU device.
-    config_space: Arc<Mutex<VirtioGpuConfig>>,
-}
-
 /// GPU device structure.
 #[derive(Default)]
 pub struct Gpu {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the GPU device.
     cfg: GpuDevConfig,
-    /// Status of the GPU device.
-    state: GpuState,
+    /// Config space of the GPU device.
+    config_space: Arc<Mutex<VirtioGpuConfig>>,
     /// Status of the emulated physical outputs.
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
-    /// Eventfd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1461,25 +1445,27 @@ unsafe impl Send for Gpu {}
 impl Gpu {
     pub fn new(cfg: GpuDevConfig) -> Gpu {
         Self {
+            base: VirtioBase::new(VIRTIO_TYPE_GPU, QUEUE_NUM_GPU, DEFAULT_VIRTQUEUE_SIZE),
             cfg,
-            state: GpuState::default(),
-            output_states: Arc::new(Mutex::new(
-                [VirtioGpuOutputState::default(); VIRTIO_GPU_MAX_OUTPUTS],
-            )),
-            consoles: Vec::new(),
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
+            ..Default::default()
         }
     }
 
     fn build_device_config_space(&mut self) {
-        let mut config_space = self.state.config_space.lock().unwrap();
+        let mut config_space = self.config_space.lock().unwrap();
         config_space.num_scanouts = self.cfg.max_outputs;
     }
 }
 
 impl VirtioDevice for Gpu {
-    /// Realize virtio gpu device.
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         if self.cfg.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 {
             bail!(
@@ -1489,20 +1475,13 @@ impl VirtioDevice for Gpu {
             );
         }
 
-        self.state.device_features = 1u64 << VIRTIO_F_VERSION_1;
-        self.state.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
-        self.state.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        if self.cfg.edid {
-            self.state.device_features |= 1 << VIRTIO_GPU_F_EDID;
-        }
-
         let mut output_states = self.output_states.lock().unwrap();
         output_states[0].width = self.cfg.xres;
         output_states[0].height = self.cfg.yres;
 
         let gpu_opts = Arc::new(GpuOpts {
             output_states: self.output_states.clone(),
-            config_space: self.state.config_space.clone(),
+            config_space: self.config_space.clone(),
             interrupt_cb: None,
         });
         for i in 0..self.cfg.max_outputs {
@@ -1514,12 +1493,22 @@ impl VirtioDevice for Gpu {
         }
         drop(output_states);
 
-        self.build_device_config_space();
+        self.init_config_features()?;
 
         Ok(())
     }
 
-    /// Unrealize low level device.
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1
+            | 1u64 << VIRTIO_F_RING_INDIRECT_DESC
+            | 1u64 << VIRTIO_F_RING_EVENT_IDX;
+        if self.cfg.edid {
+            self.base.device_features |= 1 << VIRTIO_GPU_F_EDID;
+        }
+        self.build_device_config_space();
+        Ok(())
+    }
+
     fn unrealize(&mut self) -> Result<()> {
         for con in &self.consoles {
             console_close(con)?;
@@ -1529,70 +1518,17 @@ impl VirtioDevice for Gpu {
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_GPU
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        let config_space = self.config_space.lock().unwrap();
+        read_config_default(config_space.as_bytes(), offset, data)
     }
 
-    /// Get the count of virtio gpu queues.
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_GPU
-    }
-
-    /// Get the queue size of virtio gpu.
-    fn queue_size(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
-    }
-
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
-    }
-
-    /// Read data of config from guest.
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_space = *self.state.config_space.lock().unwrap();
-        let config_slice = config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-
-        if offset
-            .checked_add(data.len() as u64)
-            .filter(|&end| end <= config_len)
-            .is_none()
-        {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
-        let read_end: usize = offset as usize + data.len();
-        data.write_all(&config_slice[offset as usize..read_end])?;
-
-        Ok(())
-    }
-
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let mut config_space = self.state.config_space.lock().unwrap();
+        let mut config_space = self.config_space.lock().unwrap();
+        check_config_space_rw(config_space.as_bytes(), offset, data)?;
+
         let mut config_cpy = *config_space;
         let config_cpy_slice = config_cpy.as_mut_bytes();
-        let config_len = config_cpy_slice.len() as u64;
-
-        if offset
-            .checked_add(data.len() as u64)
-            .filter(|&end| end <= config_len)
-            .is_none()
-        {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
         if config_space.events_clear != 0 {
@@ -1602,15 +1538,13 @@ impl VirtioDevice for Gpu {
         Ok(())
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         if queues.len() != QUEUE_NUM_GPU {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
                 QUEUE_NUM_GPU,
@@ -1621,7 +1555,7 @@ impl VirtioDevice for Gpu {
         let mut scanouts = vec![];
         let gpu_opts = Arc::new(GpuOpts {
             output_states: self.output_states.clone(),
-            config_space: self.state.config_space.clone(),
+            config_space: self.config_space.clone(),
             interrupt_cb: Some(interrupt_cb.clone()),
         });
         for con in &self.consoles {
@@ -1642,7 +1576,7 @@ impl VirtioDevice for Gpu {
             ctrl_queue_evt: queue_evts[0].clone(),
             cursor_queue_evt: queue_evts[1].clone(),
             interrupt_cb,
-            driver_features: self.state.driver_features,
+            driver_features: self.base.driver_features,
             resources_list: Vec::new(),
             enable_output_bitmask: 1,
             num_scanouts: self.cfg.max_outputs,
@@ -1653,7 +1587,7 @@ impl VirtioDevice for Gpu {
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
     }
@@ -1663,10 +1597,6 @@ impl VirtioDevice for Gpu {
             display_set_major_screen("ramfb")?;
             set_run_stage(VmRunningStage::Bios);
         }
-        unregister_event_helper(None, &mut self.deactivate_evts)
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
+        unregister_event_helper(None, &mut self.base.deactivate_evts)
     }
 }

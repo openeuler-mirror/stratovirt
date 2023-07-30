@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -26,12 +26,12 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::read_u32;
 
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use crate::{
-    Queue, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
+    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_TYPE_VSOCK,
 };
 
 /// Number of virtqueues.
@@ -89,22 +89,22 @@ pub struct VsockState {
 
 /// Vsock device structure.
 pub struct Vsock {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the vsock device.
     vsock_cfg: VsockConfig,
+    /// Configuration of virtio vsock.
+    config_space: [u8; 8],
     /// Related vhost-vsock kernel device.
     backend: Option<VhostBackend>,
-    /// The status of vsock.
-    state: VsockState,
+    /// Last avail idx in vsock backend queue.
+    last_avail_idx: [u16; 2],
     /// System address space.
     mem_space: Arc<AddressSpace>,
     /// Event queue for vsock.
     event_queue: Option<Arc<Mutex<Queue>>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
     /// Save irqfd used for vhost-vsock
     call_events: Vec<Arc<EventFd>>,
     /// Whether irqfd can be used.
@@ -114,14 +114,14 @@ pub struct Vsock {
 impl Vsock {
     pub fn new(cfg: &VsockConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Vsock {
+            base: VirtioBase::new(VIRTIO_TYPE_VSOCK, QUEUE_NUM_VSOCK, DEFAULT_VIRTQUEUE_SIZE),
             vsock_cfg: cfg.clone(),
             backend: None,
-            state: VsockState::default(),
+            config_space: Default::default(),
+            last_avail_idx: Default::default(),
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
             call_events: Vec::new(),
             disable_irqfd: false,
         }
@@ -135,7 +135,7 @@ impl Vsock {
             let mut event_queue_locked = evt_queue.lock().unwrap();
             let element = event_queue_locked
                 .vring
-                .pop_avail(&self.mem_space, self.state.driver_features)
+                .pop_avail(&self.mem_space, self.base.driver_features)
                 .with_context(|| "Failed to get avail ring element.")?;
             if element.desc_num == 0 {
                 return Ok(());
@@ -171,7 +171,14 @@ impl Vsock {
 }
 
 impl VirtioDevice for Vsock {
-    /// Realize vhost virtio vsock device.
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
@@ -179,45 +186,21 @@ impl VirtioDevice for Vsock {
         backend
             .set_owner()
             .with_context(|| "Failed to set owner for vsock")?;
-        self.state.device_features = backend
-            .get_features()
-            .with_context(|| "Failed to get features for vsock")?;
         self.backend = Some(backend);
+
+        self.init_config_features()?;
 
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_VSOCK
+    fn init_config_features(&mut self) -> Result<()> {
+        let backend = self.backend.as_ref().unwrap();
+        self.base.device_features = backend
+            .get_features()
+            .with_context(|| "Failed to get features for vsock")?;
+        Ok(())
     }
 
-    /// Get the count of virtio device queues.
-    fn queue_num(&self) -> usize {
-        QUEUE_NUM_VSOCK
-    }
-
-    /// Get the queue size of virtio device.
-    fn queue_size(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
-    }
-
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
-    }
-
-    /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         match offset {
             0 if data.len() == 8 => LittleEndian::write_u64(data, self.vsock_cfg.guest_cid),
@@ -233,19 +216,10 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+        check_config_space_rw(&self.config_space, offset, data)?;
         let data_len = data.len();
-        let config_len = self.state.config_space.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
-        }
-
-        self.state.config_space[(offset as usize)..(offset as usize + data_len)]
-            .copy_from_slice(data);
+        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
         Ok(())
     }
 
@@ -259,16 +233,14 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         _: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let cid = self.vsock_cfg.guest_cid;
+        let queues = &self.base.queues;
         // The receive queue and transmit queue will be handled in vhost.
         let vhost_queues = queues[..2].to_vec();
         let mut host_notifies = Vec::new();
@@ -282,7 +254,7 @@ impl VirtioDevice for Vsock {
             Some(backend_) => backend_,
         };
         backend
-            .set_features(self.state.driver_features)
+            .set_features(self.base.driver_features)
             .with_context(|| "Failed to set features for vsock")?;
         backend
             .set_mem_table()
@@ -304,7 +276,7 @@ impl VirtioDevice for Vsock {
                     format!("Failed to set vring addr for vsock, index: {}", queue_index)
                 })?;
             backend
-                .set_vring_base(queue_index, self.state.last_avail_idx[queue_index])
+                .set_vring_base(queue_index, self.last_avail_idx[queue_index])
                 .with_context(|| {
                     format!("Failed to set vring base for vsock, index: {}", queue_index)
                 })?;
@@ -343,19 +315,19 @@ impl VirtioDevice for Vsock {
             let handler = VhostIoHandler {
                 interrupt_cb: interrupt_cb.clone(),
                 host_notifies,
-                device_broken: self.broken.clone(),
+                device_broken: self.base.broken.clone(),
             };
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+            register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
         }
 
-        self.broken.store(false, Ordering::SeqCst);
+        self.base.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(None, &mut self.deactivate_evts)?;
+        unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         if !self.disable_irqfd {
             self.call_events.clear();
         }
@@ -366,21 +338,24 @@ impl VirtioDevice for Vsock {
     fn reset(&mut self) -> Result<()> {
         self.backend.as_ref().unwrap().set_running(false)
     }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
-    }
 }
 
 impl StateTransfer for Vsock {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        let mut state = self.state;
         migration::Result::with_context(self.backend.as_ref().unwrap().set_running(false), || {
             "Failed to set vsock backend stopping"
         })?;
-        state.last_avail_idx[0] = self.backend.as_ref().unwrap().get_vring_base(0).unwrap();
-        state.last_avail_idx[1] = self.backend.as_ref().unwrap().get_vring_base(1).unwrap();
-        state.broken = self.broken.load(Ordering::SeqCst);
+
+        let last_avail_idx_0 = self.backend.as_ref().unwrap().get_vring_base(0).unwrap();
+        let last_avail_idx_1 = self.backend.as_ref().unwrap().get_vring_base(1).unwrap();
+        let state = VsockState {
+            device_features: self.base.device_features,
+            driver_features: self.base.driver_features,
+            config_space: self.config_space,
+            last_avail_idx: [last_avail_idx_0, last_avail_idx_1],
+            broken: self.base.broken.load(Ordering::SeqCst),
+        };
+
         migration::Result::with_context(self.backend.as_ref().unwrap().set_running(true), || {
             "Failed to set vsock backend running"
         })?;
@@ -392,9 +367,13 @@ impl StateTransfer for Vsock {
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = *VsockState::from_bytes(state)
+        let state = VsockState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("VSOCK"))?;
-        self.broken.store(self.state.broken, Ordering::SeqCst);
+        self.base.device_features = state.device_features;
+        self.base.driver_features = state.driver_features;
+        self.base.broken.store(state.broken, Ordering::SeqCst);
+        self.config_space = state.config_space;
+        self.last_avail_idx = state.last_avail_idx;
         Ok(())
     }
 
@@ -442,33 +421,33 @@ mod tests {
         // test vsock new method
         let mut vsock = vsock_create_instance();
 
-        assert_eq!(vsock.state.device_features, 0);
-        assert_eq!(vsock.state.driver_features, 0);
+        assert_eq!(vsock.base.device_features, 0);
+        assert_eq!(vsock.base.driver_features, 0);
         assert!(vsock.backend.is_none());
 
         assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
         assert_eq!(vsock.queue_num(), QUEUE_NUM_VSOCK);
-        assert_eq!(vsock.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
+        assert_eq!(vsock.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
 
         // test vsock get_device_features
-        vsock.state.device_features = 0x0123_4567_89ab_cdef;
-        let features = vsock.get_device_features(0);
+        vsock.base.device_features = 0x0123_4567_89ab_cdef;
+        let features = vsock.device_features(0);
         assert_eq!(features, 0x89ab_cdef);
-        let features = vsock.get_device_features(1);
+        let features = vsock.device_features(1);
         assert_eq!(features, 0x0123_4567);
-        let features = vsock.get_device_features(3);
+        let features = vsock.device_features(3);
         assert_eq!(features, 0);
 
         // test vsock set_driver_features
-        vsock.state.device_features = 0x0123_4567_89ab_cdef;
+        vsock.base.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
-        assert_eq!(vsock.get_driver_features(0) as u64, 0_u64);
-        assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
+        assert_eq!(vsock.driver_features(0) as u64, 0_u64);
+        assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
-        assert_eq!(vsock.get_driver_features(0) as u64, 0x8000_0000_u64);
-        assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
+        assert_eq!(vsock.driver_features(0) as u64, 0x8000_0000_u64);
+        assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config
         let mut buf: [u8; 8] = [0; 8];

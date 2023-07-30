@@ -10,17 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
-use std::cmp;
-use std::io::Write;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::config::BlkDevConfig;
 use util::byte_code::ByteCode;
-use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
@@ -30,33 +25,36 @@ use crate::VhostUser::client::{
 };
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
-    virtio_has_feature, BlockState, VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE,
-    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    check_config_space_rw, read_config_default, virtio_has_feature, VirtioBase, VirtioBlkConfig,
+    VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX,
+    VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 pub struct Block {
+    /// Virtio device base property.
+    base: VirtioBase,
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
+    /// Config space of the block device.
+    config_space: VirtioBlkConfig,
     /// System address space.
     mem_space: Arc<AddressSpace>,
-    /// Status of block device.
-    state: BlockState,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl Block {
     pub fn new(cfg: &BlkDevConfig, mem_space: &Arc<AddressSpace>) -> Self {
+        let queue_num = cfg.queues as usize;
+        let queue_size = cfg.queue_size;
+
         Block {
+            base: VirtioBase::new(VIRTIO_TYPE_BLOCK, queue_num, queue_size),
             blk_cfg: cfg.clone(),
-            state: BlockState::default(),
+            config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
-            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -93,9 +91,24 @@ impl Block {
         self.client = Some(client);
         Ok(())
     }
+}
 
-    /// Negotiate features with spdk.
-    fn negotiate_features(&mut self) -> Result<()> {
+impl VirtioDevice for Block {
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
+    fn realize(&mut self) -> Result<()> {
+        self.init_client()?;
+        self.init_config_features()?;
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
         let locked_client = self.client.as_ref().unwrap().lock().unwrap();
         let features = locked_client
             .get_features()
@@ -115,7 +128,7 @@ impl Block {
                 let config = locked_client
                     .get_virtio_blk_config()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
-                self.state.config_space = config;
+                self.config_space = config;
             } else {
                 bail!(
                     "Failed to get config, spdk doesn't support, spdk protocol features: {:#b}",
@@ -135,7 +148,7 @@ impl Block {
                 }
 
                 if self.blk_cfg.queues > 1 {
-                    self.state.config_space.num_queues = self.blk_cfg.queues;
+                    self.config_space.num_queues = self.blk_cfg.queues;
                 }
             } else if self.blk_cfg.queues > 1 {
                 bail!(
@@ -148,7 +161,7 @@ impl Block {
         }
         drop(locked_client);
 
-        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_BLK_F_SIZE_MAX
             | 1_u64 << VIRTIO_BLK_F_TOPOLOGY
             | 1_u64 << VIRTIO_BLK_F_BLK_SIZE
@@ -157,124 +170,56 @@ impl Block {
             | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
             | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         if self.blk_cfg.read_only {
-            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         if self.blk_cfg.queues > 1 {
-            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
+            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
-        self.state.device_features &= features;
-
-        Ok(())
-    }
-}
-
-impl VirtioDevice for Block {
-    /// Realize vhost user blk pci device.
-    fn realize(&mut self) -> Result<()> {
-        self.init_client()?;
-        self.negotiate_features()?;
+        self.base.device_features &= features;
 
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BLOCK
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
-    /// Get the count of virtio device queues.
-    fn queue_num(&self) -> usize {
-        self.blk_cfg.queues as usize
-    }
-
-    /// Get the queue size of virtio device.
-    fn queue_size(&self) -> u16 {
-        self.blk_cfg.queue_size
-    }
-
-    /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
-    }
-
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
-    }
-
-    /// Read data of config from guest.
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let offset = offset as usize;
-        let config_slice = self.state.config_space.as_bytes();
-        let config_len = config_slice.len();
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset as u64,
-                config_len as u64
-            )));
-        }
-        if let Some(end) = offset.checked_add(data.len()) {
-            data.write_all(&config_slice[offset..cmp::min(end, config_len)])?;
-        } else {
-            bail!("Failed to read config from guest for vhost user blk pci, config space address overflow.")
-        }
-
-        Ok(())
-    }
-
-    /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+        check_config_space_rw(self.config_space.as_bytes(), offset, data)?;
+
         let offset = offset as usize;
-        let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if let Some(end) = offset.checked_add(data.len()) {
-            if end > config_len {
-                return Err(anyhow!(VirtioError::DevConfigOverflow(
-                    offset as u64,
-                    config_len as u64
-                )));
-            }
-            config_slice[offset..end].copy_from_slice(data);
-        } else {
-            bail!("Failed to write config to guest for vhost user blk pci, config space address overflow.")
-        }
+        let end = offset + data.len();
+        let config_slice = self.config_space.as_mut_bytes();
+        config_slice[offset..end].copy_from_slice(data);
 
         self.client
             .as_ref()
             .with_context(|| "Failed to get client when writing config")?
             .lock()
             .unwrap()
-            .set_virtio_blk_config(self.state.config_space)
+            .set_virtio_blk_config(self.config_space)
             .with_context(|| "Failed to set config for vhost-user blk")?;
 
         Ok(())
     }
 
-    /// Activate device.
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
         _interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<crate::Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
-        client.features = self.state.driver_features;
-        client.set_queues(queues);
+        client.features = self.base.driver_features;
+        client.set_queues(&self.base.queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
         Ok(())
     }
 
-    /// Deactivate device.
     fn deactivate(&mut self) -> Result<()> {
         self.client
             .as_ref()
@@ -285,14 +230,12 @@ impl VirtioDevice for Block {
         self.delete_event()
     }
 
-    /// Unrealize device.
     fn unrealize(&mut self) -> Result<()> {
         self.delete_event()?;
         self.client = None;
         Ok(())
     }
 
-    /// Set guest notifiers for notifying the guest.
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
@@ -300,9 +243,5 @@ impl VirtioDevice for Block {
         };
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
     }
 }

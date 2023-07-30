@@ -12,7 +12,7 @@
 
 use std::cmp::{max, min};
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
@@ -27,7 +27,7 @@ use pci::config::{
     STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 
-use pci::msix::{update_dev_id, MsixState, MSIX_TABLE_ENTRY_SIZE};
+use pci::msix::{update_dev_id, MsixState};
 use pci::Result as PciResult;
 use pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
@@ -39,7 +39,7 @@ use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    virtio_has_feature, NotifyEventFds, Queue, QueueConfig, VirtioDevice, VirtioInterrupt,
+    virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType,
 };
 
@@ -150,308 +150,6 @@ fn get_virtio_class_id(device_type: u32) -> u16 {
     }
 }
 
-/// The configuration of virtio-pci device, the fields refer to Virtio Spec.
-#[derive(Default)]
-struct VirtioPciCommonConfig {
-    /// Bitmask of the features supported by the device (host)(32 bits per set)
-    features_select: u32,
-    /// Device (host) feature-setting selector.
-    acked_features_select: u32,
-    /// Interrupt status.
-    interrupt_status: Arc<AtomicU32>,
-    /// Device status.
-    device_status: Arc<AtomicU32>,
-    /// Configuration atomicity value.
-    config_generation: Arc<AtomicU8>,
-    /// Queue selector.
-    queue_select: u16,
-    /// The MSI-X vector for config change notification.
-    msix_config: Arc<AtomicU16>,
-    /// The configuration of queues.
-    queues_config: Vec<QueueConfig>,
-    /// The type of queue, split-vring or packed-vring.
-    queue_type: u16,
-}
-
-impl VirtioPciCommonConfig {
-    fn new(queue_size: u16, queue_num: usize) -> Self {
-        VirtioPciCommonConfig {
-            msix_config: Arc::new(AtomicU16::new(INVALID_VECTOR_NUM)),
-            queues_config: vec![QueueConfig::new(queue_size); queue_num],
-            queue_type: QUEUE_TYPE_SPLIT_VRING,
-            ..Default::default()
-        }
-    }
-
-    fn reset(&mut self) {
-        self.features_select = 0;
-        self.acked_features_select = 0;
-        self.interrupt_status.store(0, Ordering::SeqCst);
-        self.device_status.store(0, Ordering::SeqCst);
-        self.config_generation.store(0, Ordering::SeqCst);
-        self.queue_select = 0;
-        self.msix_config.store(INVALID_VECTOR_NUM, Ordering::SeqCst);
-        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
-        self.queues_config.iter_mut().for_each(|q| q.reset());
-    }
-
-    fn check_device_status(&self, set: u32, clr: u32) -> bool {
-        self.device_status.load(Ordering::Acquire) & (set | clr) == set
-    }
-
-    fn get_mut_queue_config(&mut self, need_check: bool) -> PciResult<&mut QueueConfig> {
-        if !need_check {
-            return self
-                .queues_config
-                .get_mut(self.queue_select as usize)
-                .with_context(|| "pci-reg queue_select overflows");
-        }
-        if self.check_device_status(
-            CONFIG_STATUS_FEATURES_OK,
-            CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
-        ) {
-            self.queues_config
-                .get_mut(self.queue_select as usize)
-                .with_context(|| "pci-reg queue_select overflows")
-        } else {
-            Err(anyhow!(PciError::DeviceStatus(
-                self.device_status.load(Ordering::Acquire)
-            )))
-        }
-    }
-
-    fn get_queue_config(&self) -> PciResult<&QueueConfig> {
-        self.queues_config
-            .get(self.queue_select as usize)
-            .with_context(|| "pci-reg queue_select overflows")
-    }
-
-    fn revise_queue_vector(&self, vector_nr: u32, virtio_pci_dev: &VirtioPciDevice) -> u32 {
-        let msix = &virtio_pci_dev.config.msix;
-        if msix.is_none() {
-            return INVALID_VECTOR_NUM as u32;
-        }
-        let max_vector =
-            msix.as_ref().unwrap().lock().unwrap().table.len() / MSIX_TABLE_ENTRY_SIZE as usize;
-        if vector_nr >= max_vector as u32 {
-            INVALID_VECTOR_NUM as u32
-        } else {
-            vector_nr
-        }
-    }
-
-    /// Read data from the common config of virtio device.
-    /// Return the config value in u32.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - Virtio device entity.
-    /// * `offset` - The offset of common config.
-    fn read_common_config(
-        &self,
-        device: &Arc<Mutex<dyn VirtioDevice>>,
-        offset: u64,
-    ) -> PciResult<u32> {
-        let value = match offset {
-            COMMON_DFSELECT_REG => self.features_select,
-            COMMON_DF_REG => {
-                if self.features_select < MAX_FEATURES_SELECT_NUM {
-                    device
-                        .lock()
-                        .unwrap()
-                        .get_device_features(self.features_select)
-                } else {
-                    0
-                }
-            }
-            COMMON_GFSELECT_REG => self.acked_features_select,
-            COMMON_GF_REG => {
-                if self.acked_features_select < MAX_FEATURES_SELECT_NUM {
-                    device
-                        .lock()
-                        .unwrap()
-                        .get_driver_features(self.acked_features_select)
-                } else {
-                    0
-                }
-            }
-            COMMON_MSIX_REG => self.msix_config.load(Ordering::Acquire) as u32,
-            COMMON_NUMQ_REG => self.queues_config.len() as u32,
-            COMMON_STATUS_REG => self.device_status.load(Ordering::Acquire),
-            COMMON_CFGGENERATION_REG => self.config_generation.load(Ordering::Acquire) as u32,
-            COMMON_Q_SELECT_REG => self.queue_select as u32,
-            COMMON_Q_SIZE_REG => self
-                .get_queue_config()
-                .map(|config| u32::from(config.size))?,
-            COMMON_Q_MSIX_REG => self
-                .get_queue_config()
-                .map(|config| u32::from(config.vector))?,
-            COMMON_Q_ENABLE_REG => self
-                .get_queue_config()
-                .map(|config| u32::from(config.ready))?,
-            COMMON_Q_NOFF_REG => self.queue_select as u32,
-            COMMON_Q_DESCLO_REG => self
-                .get_queue_config()
-                .map(|config| config.desc_table.0 as u32)?,
-            COMMON_Q_DESCHI_REG => self
-                .get_queue_config()
-                .map(|config| (config.desc_table.0 >> 32) as u32)?,
-            COMMON_Q_AVAILLO_REG => self
-                .get_queue_config()
-                .map(|config| config.avail_ring.0 as u32)?,
-            COMMON_Q_AVAILHI_REG => self
-                .get_queue_config()
-                .map(|config| (config.avail_ring.0 >> 32) as u32)?,
-            COMMON_Q_USEDLO_REG => self
-                .get_queue_config()
-                .map(|config| config.used_ring.0 as u32)?,
-            COMMON_Q_USEDHI_REG => self
-                .get_queue_config()
-                .map(|config| (config.used_ring.0 >> 32) as u32)?,
-            _ => 0,
-        };
-
-        Ok(value)
-    }
-
-    /// Write data to the common config of virtio device.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - Virtio device entity.
-    /// * `offset` - The offset of common config.
-    /// * `value` - The value to write.
-    ///
-    /// # Errors
-    ///
-    /// Returns Error if the offset is out of bound.
-    fn write_common_config(
-        &mut self,
-        virtio_pci_dev: &VirtioPciDevice,
-        offset: u64,
-        value: u32,
-    ) -> PciResult<()> {
-        let device = virtio_pci_dev.device.clone();
-        match offset {
-            COMMON_DFSELECT_REG => {
-                self.features_select = value;
-            }
-            COMMON_GFSELECT_REG => {
-                self.acked_features_select = value;
-            }
-            COMMON_GF_REG => {
-                if self.device_status.load(Ordering::Acquire) & CONFIG_STATUS_FEATURES_OK != 0 {
-                    error!("it's not allowed to set features after having been negoiated");
-                    return Ok(());
-                }
-                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
-                    return Err(anyhow!(PciError::FeaturesSelect(
-                        self.acked_features_select
-                    )));
-                }
-                device
-                    .lock()
-                    .unwrap()
-                    .set_driver_features(self.acked_features_select, value);
-
-                if self.acked_features_select == 1 {
-                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
-                    if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
-                        self.queue_type = QUEUE_TYPE_PACKED_VRING;
-                    } else {
-                        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
-                    }
-                }
-            }
-            COMMON_MSIX_REG => {
-                let val = self.revise_queue_vector(value, virtio_pci_dev);
-                self.msix_config.store(val as u16, Ordering::SeqCst);
-                self.interrupt_status.store(0, Ordering::SeqCst);
-            }
-            COMMON_STATUS_REG => {
-                if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
-                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
-                    if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
-                        error!(
-                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
-                        );
-                        return Ok(());
-                    }
-                }
-                if value != 0 && (self.device_status.load(Ordering::Acquire) & !value) != 0 {
-                    error!("Driver must not clear a device status bit");
-                    return Ok(());
-                }
-
-                let old_status = self.device_status.load(Ordering::Acquire);
-                self.device_status.store(value, Ordering::SeqCst);
-                if self.check_device_status(
-                    CONFIG_STATUS_ACKNOWLEDGE
-                        | CONFIG_STATUS_DRIVER
-                        | CONFIG_STATUS_DRIVER_OK
-                        | CONFIG_STATUS_FEATURES_OK,
-                    CONFIG_STATUS_FAILED,
-                ) {
-                    virtio_pci_dev.activate_device(self);
-                } else if old_status != 0 && self.device_status.load(Ordering::Acquire) == 0 {
-                    self.reset();
-                    virtio_pci_dev.deactivate_device();
-                }
-            }
-            COMMON_Q_SELECT_REG => {
-                if value < VIRTIO_QUEUE_MAX {
-                    self.queue_select = value as u16;
-                }
-            }
-            COMMON_Q_SIZE_REG => self
-                .get_mut_queue_config(true)
-                .map(|config| config.size = value as u16)?,
-            COMMON_Q_ENABLE_REG => {
-                if value != 1 {
-                    error!("Driver set illegal value for queue_enable {}", value);
-                    return Err(anyhow!(PciError::QueueEnable(value)));
-                }
-                self.get_mut_queue_config(true)
-                    .map(|config| config.ready = true)?;
-            }
-            COMMON_Q_MSIX_REG => {
-                let val = self.revise_queue_vector(value, virtio_pci_dev);
-                // It should not check device status when detaching device which
-                // will set vector to INVALID_VECTOR_NUM.
-                let mut need_check = true;
-                if self.device_status.load(Ordering::Acquire) == 0 {
-                    need_check = false;
-                }
-                self.get_mut_queue_config(need_check)
-                    .map(|config| config.vector = val as u16)?;
-            }
-            COMMON_Q_DESCLO_REG => self.get_mut_queue_config(true).map(|config| {
-                config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
-            })?,
-            COMMON_Q_DESCHI_REG => self.get_mut_queue_config(true).map(|config| {
-                config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
-            })?,
-            COMMON_Q_AVAILLO_REG => self.get_mut_queue_config(true).map(|config| {
-                config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
-            })?,
-            COMMON_Q_AVAILHI_REG => self.get_mut_queue_config(true).map(|config| {
-                config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
-            })?,
-            COMMON_Q_USEDLO_REG => self.get_mut_queue_config(true).map(|config| {
-                config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
-            })?,
-            COMMON_Q_USEDHI_REG => self.get_mut_queue_config(true).map(|config| {
-                config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
-            })?,
-            _ => {
-                return Err(anyhow!(PciError::PciRegister(offset)));
-            }
-        };
-
-        Ok(())
-    }
-}
-
 #[allow(clippy::upper_case_acronyms)]
 #[repr(u8)]
 enum VirtioPciCapType {
@@ -549,7 +247,6 @@ impl VirtioPciNotifyCap {
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct VirtioPciState {
-    activated: bool,
     dev_id: u16,
     /// Max length of config_space is 4096.
     config_space: [u8; 4096],
@@ -558,17 +255,7 @@ pub struct VirtioPciState {
     last_cap_end: u16,
     last_ext_cap_offset: u16,
     last_ext_cap_end: u16,
-    features_select: u32,
-    acked_features_select: u32,
-    interrupt_status: u32,
-    device_status: u32,
-    config_generation: u8,
-    queue_select: u16,
-    msix_config: u16,
-    /// The configuration of queues. Max number of queues is 32(equals to MAX_VIRTIO_QUEUE).
-    queues_config: [QueueConfig; 32],
-    /// The number of queues.
-    queue_num: usize,
+    virtio_base: VirtioBaseState,
 }
 
 /// Virtio-PCI device structure
@@ -582,24 +269,18 @@ pub struct VirtioPciDevice {
     dev_id: Arc<AtomicU16>,
     /// Devfn
     devfn: u8,
-    /// If this device is activated or not.
-    device_activated: Arc<AtomicBool>,
     /// Memory AddressSpace
     sys_mem: Arc<AddressSpace>,
     /// Pci config space.
     config: PciConfig,
     /// Offset of VirtioPciCfgAccessCap in Pci config space.
     cfg_cap_offset: usize,
-    /// Virtio common config refer to Virtio Spec.
-    common_config: Arc<Mutex<VirtioPciCommonConfig>>,
     /// Primary Bus
     parent_bus: Weak<Mutex<PciBus>>,
     /// Eventfds used for guest notify the Device.
     notify_eventfds: Arc<NotifyEventFds>,
     /// The function for interrupt triggering
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    /// Virtio queues. The vector and Queue will be shared acrossing thread, so all with Arc<Mutex<..>> wrapper.
-    queues: Arc<Mutex<Vec<Arc<Mutex<Queue>>>>>,
     /// Multi-Function flag.
     multi_func: bool,
     /// If the device need to register irqfd to kvm.
@@ -616,24 +297,17 @@ impl VirtioPciDevice {
         multi_func: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
-        let queue_size = device.lock().unwrap().queue_size();
-
         VirtioPciDevice {
             name,
             device,
             dev_id: Arc::new(AtomicU16::new(0)),
             devfn,
-            device_activated: Arc::new(AtomicBool::new(false)),
             sys_mem,
             config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
             cfg_cap_offset: 0,
-            common_config: Arc::new(Mutex::new(VirtioPciCommonConfig::new(
-                queue_size, queue_num,
-            ))),
             parent_bus,
             notify_eventfds: Arc::new(NotifyEventFds::new(queue_num)),
             interrupt_cb: None,
-            queues: Arc::new(Mutex::new(Vec::with_capacity(queue_num))),
             multi_func,
             need_irqfd: false,
         }
@@ -644,14 +318,17 @@ impl VirtioPciDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let common_cfg = self.common_config.lock().unwrap();
-        let device_status = common_cfg.device_status.clone();
-        let interrupt_status = common_cfg.interrupt_status.clone();
-        let msix_config = common_cfg.msix_config.clone();
-        let config_generation = common_cfg.config_generation.clone();
+        let locked_dev = self.device.lock().unwrap();
+        let virtio_base = locked_dev.virtio_base();
+        let device_status = virtio_base.device_status.clone();
+        let interrupt_status = virtio_base.interrupt_status.clone();
+        let msix_config = virtio_base.config_vector.clone();
+        let config_generation = virtio_base.config_generation.clone();
+
         let cloned_msix = self.config.msix.as_ref().unwrap().clone();
         let cloned_intx = self.config.intx.as_ref().unwrap().clone();
         let dev_id = self.dev_id.clone();
+
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>, needs_reset: bool| {
                 let vector = match int_type {
@@ -721,18 +398,18 @@ impl VirtioPciDevice {
         Ok(write_start)
     }
 
-    fn activate_device(&self, common_cfg_lock: &mut VirtioPciCommonConfig) -> bool {
-        if self.device_activated.load(Ordering::Acquire) {
+    fn activate_device(&self) -> bool {
+        let mut locked_dev = self.device.lock().unwrap();
+        if locked_dev.device_activated() {
             return true;
         }
 
-        let queue_type = common_cfg_lock.queue_type;
-        let queues_config = &mut common_cfg_lock.queues_config;
-        let mut locked_queues = self.queues.lock().unwrap();
-        let dev_lock = self.device.lock().unwrap();
-        let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
+        let queue_type = locked_dev.queue_type();
+        let features = locked_dev.virtio_base().driver_features;
+        let broken = locked_dev.virtio_base().broken.clone();
+
+        let mut queues = Vec::new();
+        let queues_config = &mut locked_dev.virtio_base_mut().queues_config;
         for q_config in queues_config.iter_mut() {
             if !q_config.ready {
                 debug!("queue is not ready, please check your init process");
@@ -741,7 +418,7 @@ impl VirtioPciDevice {
                     self.sys_mem.clone(),
                     self.interrupt_cb.clone().unwrap(),
                     features,
-                    broken,
+                    &broken,
                 );
             }
             let queue = Queue::new(*q_config, queue_type).unwrap();
@@ -750,47 +427,42 @@ impl VirtioPciDevice {
                 return false;
             }
             let arc_queue = Arc::new(Mutex::new(queue));
-            locked_queues.push(arc_queue.clone());
+            queues.push(arc_queue.clone());
         }
-        drop(dev_lock);
-        drop(locked_queues);
+        locked_dev.virtio_base_mut().queues = queues;
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
         if self.need_irqfd {
-            let mut queue_num = self.device.lock().unwrap().queue_num();
+            let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
             // It will be polled in StratoVirt when activating the device.
-            if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
+            if locked_dev.has_control_queue() && queue_num % 2 != 0 {
                 queue_num -= 1;
             }
             let call_evts = NotifyEventFds::new(queue_num);
-            if let Err(e) = self
-                .device
-                .lock()
-                .unwrap()
-                .set_guest_notifiers(&call_evts.events)
-            {
+            if let Err(e) = locked_dev.set_guest_notifiers(&call_evts.events) {
                 error!("Failed to set guest notifiers, error is {:?}", e);
                 return false;
             }
+            drop(locked_dev);
             if !self.queues_register_irqfd(&call_evts.events) {
                 error!("Failed to register queues irqfd.");
                 return false;
             }
+            locked_dev = self.device.lock().unwrap();
         }
 
         let queue_evts = (*self.notify_eventfds).clone().events;
-        if let Err(e) = self.device.lock().unwrap().activate(
+        if let Err(e) = locked_dev.activate(
             self.sys_mem.clone(),
             self.interrupt_cb.clone().unwrap(),
-            &self.queues.lock().unwrap(),
             queue_evts,
         ) {
             error!("Failed to activate device, error is {:?}", e);
             return false;
         }
 
-        self.device_activated.store(true, Ordering::Release);
+        locked_dev.set_device_activated(true);
         true
     }
 
@@ -802,26 +474,221 @@ impl VirtioPciDevice {
             }
         }
 
-        self.queues.lock().unwrap().clear();
-        if self.device_activated.load(Ordering::Acquire) {
-            self.device_activated.store(false, Ordering::Release);
-            if let Err(e) = self.device.lock().unwrap().deactivate() {
+        let mut locked_dev = self.device.lock().unwrap();
+        if locked_dev.device_activated() {
+            if let Err(e) = locked_dev.deactivate() {
                 error!("Failed to deactivate virtio device, error is {:?}", e);
                 return false;
             }
+            locked_dev.virtio_base_mut().reset();
         }
         true
     }
 
-    fn build_common_cfg_ops(&mut self) -> RegionOps {
-        let cloned_virtio_dev = self.device.clone();
-        let cloned_common_cfg = self.common_config.clone();
+    /// Read data from the common config of virtio device.
+    /// Return the config value in u32.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The offset of common config.
+    fn read_common_config(&self, offset: u64) -> PciResult<u32> {
+        let locked_device = self.device.lock().unwrap();
+        let value = match offset {
+            COMMON_DFSELECT_REG => locked_device.hfeatures_sel(),
+            COMMON_DF_REG => {
+                let dfeatures_sel = locked_device.hfeatures_sel();
+                if dfeatures_sel < MAX_FEATURES_SELECT_NUM {
+                    locked_device.device_features(dfeatures_sel)
+                } else {
+                    0
+                }
+            }
+            COMMON_GFSELECT_REG => locked_device.gfeatures_sel(),
+            COMMON_GF_REG => {
+                let gfeatures_sel = locked_device.gfeatures_sel();
+                if gfeatures_sel < MAX_FEATURES_SELECT_NUM {
+                    locked_device.driver_features(gfeatures_sel)
+                } else {
+                    0
+                }
+            }
+            COMMON_MSIX_REG => locked_device.config_vector() as u32,
+            COMMON_NUMQ_REG => locked_device.virtio_base().queues_config.len() as u32,
+            COMMON_STATUS_REG => locked_device.device_status(),
+            COMMON_CFGGENERATION_REG => locked_device.config_generation() as u32,
+            COMMON_Q_SELECT_REG => locked_device.queue_select() as u32,
+            COMMON_Q_SIZE_REG => locked_device
+                .queue_config()
+                .map(|config| u32::from(config.size))?,
+            COMMON_Q_MSIX_REG => locked_device
+                .queue_config()
+                .map(|config| u32::from(config.vector))?,
+            COMMON_Q_ENABLE_REG => locked_device
+                .queue_config()
+                .map(|config| u32::from(config.ready))?,
+            COMMON_Q_NOFF_REG => locked_device.queue_select() as u32,
+            COMMON_Q_DESCLO_REG => locked_device
+                .queue_config()
+                .map(|config| config.desc_table.0 as u32)?,
+            COMMON_Q_DESCHI_REG => locked_device
+                .queue_config()
+                .map(|config| (config.desc_table.0 >> 32) as u32)?,
+            COMMON_Q_AVAILLO_REG => locked_device
+                .queue_config()
+                .map(|config| config.avail_ring.0 as u32)?,
+            COMMON_Q_AVAILHI_REG => locked_device
+                .queue_config()
+                .map(|config| (config.avail_ring.0 >> 32) as u32)?,
+            COMMON_Q_USEDLO_REG => locked_device
+                .queue_config()
+                .map(|config| config.used_ring.0 as u32)?,
+            COMMON_Q_USEDHI_REG => locked_device
+                .queue_config()
+                .map(|config| (config.used_ring.0 >> 32) as u32)?,
+            _ => 0,
+        };
+
+        Ok(value)
+    }
+
+    /// Write data to the common config of virtio device.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The offset of common config.
+    /// * `value` - The value to write.
+    ///
+    /// # Errors
+    ///
+    /// Returns Error if the offset is out of bound.
+    fn write_common_config(&mut self, offset: u64, value: u32) -> PciResult<()> {
+        let mut locked_device = self.device.lock().unwrap();
+        match offset {
+            COMMON_DFSELECT_REG => {
+                locked_device.set_hfeatures_sel(value);
+            }
+            COMMON_GFSELECT_REG => {
+                locked_device.set_gfeatures_sel(value);
+            }
+            COMMON_GF_REG => {
+                if locked_device.device_status() & CONFIG_STATUS_FEATURES_OK != 0 {
+                    error!("it's not allowed to set features after having been negoiated");
+                    return Ok(());
+                }
+                let gfeatures_sel = locked_device.gfeatures_sel();
+                if gfeatures_sel >= MAX_FEATURES_SELECT_NUM {
+                    return Err(anyhow!(PciError::FeaturesSelect(gfeatures_sel)));
+                }
+                locked_device.set_driver_features(gfeatures_sel, value);
+
+                if gfeatures_sel == 1 {
+                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
+                        locked_device.set_queue_type(QUEUE_TYPE_PACKED_VRING);
+                    } else {
+                        locked_device.set_queue_type(QUEUE_TYPE_SPLIT_VRING);
+                    }
+                }
+            }
+            COMMON_MSIX_REG => {
+                if self.config.revise_msix_vector(value) {
+                    locked_device.set_config_vector(value as u16);
+                } else {
+                    locked_device.set_config_vector(INVALID_VECTOR_NUM);
+                }
+                locked_device.set_interrupt_status(0);
+            }
+            COMMON_STATUS_REG => {
+                if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
+                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
+                        error!(
+                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
+                        );
+                        return Ok(());
+                    }
+                }
+                if value != 0 && (locked_device.device_status() & !value) != 0 {
+                    error!("Driver must not clear a device status bit");
+                    return Ok(());
+                }
+
+                let old_status = locked_device.device_status();
+                locked_device.set_device_status(value);
+                if locked_device.check_device_status(
+                    CONFIG_STATUS_ACKNOWLEDGE
+                        | CONFIG_STATUS_DRIVER
+                        | CONFIG_STATUS_DRIVER_OK
+                        | CONFIG_STATUS_FEATURES_OK,
+                    CONFIG_STATUS_FAILED,
+                ) {
+                    drop(locked_device);
+                    self.activate_device();
+                } else if old_status != 0 && locked_device.device_status() == 0 {
+                    drop(locked_device);
+                    self.deactivate_device();
+                }
+            }
+            COMMON_Q_SELECT_REG => {
+                if value < VIRTIO_QUEUE_MAX {
+                    locked_device.set_queue_select(value as u16);
+                }
+            }
+            COMMON_Q_SIZE_REG => locked_device
+                .queue_config_mut(true)
+                .map(|config| config.size = value as u16)?,
+            COMMON_Q_ENABLE_REG => {
+                if value != 1 {
+                    error!("Driver set illegal value for queue_enable {}", value);
+                    return Err(anyhow!(PciError::QueueEnable(value)));
+                }
+                locked_device
+                    .queue_config_mut(true)
+                    .map(|config| config.ready = true)?;
+            }
+            COMMON_Q_MSIX_REG => {
+                let val = if self.config.revise_msix_vector(value) {
+                    value as u16
+                } else {
+                    INVALID_VECTOR_NUM
+                };
+                // It should not check device status when detaching device which
+                // will set vector to INVALID_VECTOR_NUM.
+                let need_check = locked_device.device_status() != 0;
+                locked_device
+                    .queue_config_mut(need_check)
+                    .map(|config| config.vector = val)?;
+            }
+            COMMON_Q_DESCLO_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
+            })?,
+            COMMON_Q_DESCHI_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
+            })?,
+            COMMON_Q_AVAILLO_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
+            })?,
+            COMMON_Q_AVAILHI_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
+            })?,
+            COMMON_Q_USEDLO_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
+            })?,
+            COMMON_Q_USEDHI_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
+            })?,
+            _ => {
+                return Err(anyhow!(PciError::PciRegister(offset)));
+            }
+        };
+
+        Ok(())
+    }
+
+    fn build_common_cfg_ops(virtio_pci: Arc<Mutex<VirtioPciDevice>>) -> RegionOps {
+        let cloned_virtio_pci = virtio_pci.clone();
         let common_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
-            let value = match cloned_common_cfg
-                .lock()
-                .unwrap()
-                .read_common_config(&cloned_virtio_dev, offset)
-            {
+            let value = match cloned_virtio_pci.lock().unwrap().read_common_config(offset) {
                 Ok(v) => v,
                 Err(e) => {
                     error!(
@@ -835,18 +702,16 @@ impl VirtioPciDevice {
             write_data_u32(data, value)
         };
 
-        let cloned_pci_device = self.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             let mut value = 0;
             if !read_data_u32(data, &mut value) {
                 return false;
             }
 
-            if let Err(e) = cloned_pci_device
-                .common_config
+            if let Err(e) = virtio_pci
                 .lock()
                 .unwrap()
-                .write_common_config(&cloned_pci_device, offset, value)
+                .write_common_config(offset, value)
             {
                 error!(
                     "Failed to write common config of virtio-pci device, error is {:?}",
@@ -863,9 +728,12 @@ impl VirtioPciDevice {
         }
     }
 
-    fn modern_mem_region_init(&mut self, modern_mem_region: &Region) -> PciResult<()> {
+    fn modern_mem_region_init(
+        virtio_pci: Arc<Mutex<VirtioPciDevice>>,
+        modern_mem_region: &Region,
+    ) -> PciResult<()> {
         // 1. PCI common cap sub-region.
-        let common_region_ops = self.build_common_cfg_ops();
+        let common_region_ops = Self::build_common_cfg_ops(virtio_pci.clone());
         let common_region = Region::init_io_region(
             u64::from(VIRTIO_PCI_CAP_COMMON_LENGTH),
             common_region_ops,
@@ -876,12 +744,15 @@ impl VirtioPciDevice {
             .with_context(|| "Failed to register pci-common-cap region.")?;
 
         // 2. PCI ISR cap sub-region.
-        let cloned_common_cfg = self.common_config.clone();
-        let cloned_intx = self.config.intx.as_ref().unwrap().clone();
+        let cloned_device = virtio_pci.lock().unwrap().device.clone();
+        let cloned_intx = virtio_pci.lock().unwrap().config.intx.clone().unwrap();
         let isr_read = move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
             if let Some(val) = data.get_mut(0) {
-                let common_cfg_lock = cloned_common_cfg.lock().unwrap();
-                *val = common_cfg_lock.interrupt_status.swap(0, Ordering::SeqCst) as u8;
+                let device_lock = cloned_device.lock().unwrap();
+                *val = device_lock
+                    .virtio_base()
+                    .interrupt_status
+                    .swap(0, Ordering::SeqCst) as u8;
                 cloned_intx.lock().unwrap().notify(0);
             }
             true
@@ -901,7 +772,7 @@ impl VirtioPciDevice {
             .with_context(|| "Failed to register pci-isr-cap region.")?;
 
         // 3. PCI dev cap sub-region.
-        let cloned_virtio_dev = self.device.clone();
+        let cloned_virtio_dev = virtio_pci.lock().unwrap().device.clone();
         let device_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
             if let Err(e) = cloned_virtio_dev.lock().unwrap().read_config(offset, data) {
                 error!("Failed to read virtio-dev config space, error is {:?}", e);
@@ -910,7 +781,7 @@ impl VirtioPciDevice {
             true
         };
 
-        let cloned_virtio_dev = self.device.clone();
+        let cloned_virtio_dev = virtio_pci.lock().unwrap().device.clone();
         let device_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             if let Err(e) = cloned_virtio_dev.lock().unwrap().write_config(offset, data) {
                 error!("Failed to write virtio-dev config space, error is {:?}", e);
@@ -943,7 +814,8 @@ impl VirtioPciDevice {
             notify_region_ops,
             "VirtioNotify",
         );
-        notify_region.set_ioeventfds(&self.ioeventfds());
+        notify_region.set_ioeventfds(&virtio_pci.lock().unwrap().ioeventfds());
+
         modern_mem_region
             .add_subregion(notify_region, u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET))
             .with_context(|| "Failed to register pci-notify-cap region.")?;
@@ -1016,18 +888,19 @@ impl VirtioPciDevice {
     }
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
-        let mut locked_msix = if let Some(msix) = &self.config.msix {
-            msix.lock().unwrap()
-        } else {
+        if self.config.msix.is_none() {
             error!("Failed to get msix in virtio pci device configure");
             return false;
-        };
+        }
 
-        let locked_queues = self.queues.lock().unwrap();
-        for (queue_index, queue_mutex) in locked_queues.iter().enumerate() {
-            if self.device.lock().unwrap().has_control_queue()
-                && queue_index + 1 == locked_queues.len()
-                && locked_queues.len() % 2 != 0
+        let locked_dev = self.device.lock().unwrap();
+        let mut locked_msix = self.config.msix.as_ref().unwrap().lock().unwrap();
+
+        let queues = &locked_dev.virtio_base().queues;
+        for (queue_index, queue_mutex) in queues.iter().enumerate() {
+            if locked_dev.has_control_queue()
+                && queue_index + 1 == queues.len()
+                && queues.len() % 2 != 0
             {
                 break;
             }
@@ -1177,22 +1050,6 @@ impl PciDevOps for VirtioPciDevice {
 
         self.assign_interrupt_cb();
 
-        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
-            as u64)
-            .next_power_of_two();
-        mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
-        let modern_mem_region =
-            Region::init_container_region(mem_region_size, "VirtioPciModernMem");
-        self.modern_mem_region_init(&modern_mem_region)?;
-
-        self.config.register_bar(
-            VIRTIO_PCI_MEM_BAR_IDX as usize,
-            modern_mem_region,
-            RegionType::Mem64Bit,
-            false,
-            mem_region_size,
-        )?;
-
         self.device
             .lock()
             .unwrap()
@@ -1202,6 +1059,24 @@ impl PciDevOps for VirtioPciDevice {
         let name = self.name.clone();
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
+
+        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+            as u64)
+            .next_power_of_two();
+        mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
+        let modern_mem_region =
+            Region::init_container_region(mem_region_size, "VirtioPciModernMem");
+        Self::modern_mem_region_init(dev.clone(), &modern_mem_region)?;
+
+        dev.lock().unwrap().config.register_bar(
+            VIRTIO_PCI_MEM_BAR_IDX as usize,
+            modern_mem_region,
+            RegionType::Mem64Bit,
+            false,
+            mem_region_size,
+        )?;
+
+        // Register device to pci bus.
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
@@ -1214,6 +1089,7 @@ impl PciDevOps for VirtioPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
+
         MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
 
         Ok(())
@@ -1279,10 +1155,7 @@ impl PciDevOps for VirtioPciDevice {
             .unwrap()
             .reset()
             .with_context(|| "Failed to reset virtio device")?;
-        self.common_config.lock().unwrap().reset();
-
         self.config.reset()?;
-
         Ok(())
     }
 
@@ -1313,7 +1186,10 @@ impl PciDevOps for VirtioPciDevice {
 
 impl StateTransfer for VirtioPciDevice {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        let mut state = VirtioPciState::default();
+        let mut state = VirtioPciState {
+            dev_id: self.dev_id.load(Ordering::Acquire),
+            ..Default::default()
+        };
 
         // Save virtio pci config state.
         for idx in 0..self.config.config.len() {
@@ -1331,36 +1207,17 @@ impl StateTransfer for VirtioPciDevice {
         state.last_ext_cap_end = self.config.last_ext_cap_end;
 
         // Save virtio pci common config state.
-        {
-            let common_config = self.common_config.lock().unwrap();
-            state.interrupt_status = common_config.interrupt_status.load(Ordering::Acquire);
-            state.msix_config = common_config.msix_config.load(Ordering::Acquire);
-            state.features_select = common_config.features_select;
-            state.acked_features_select = common_config.acked_features_select;
-            state.device_status = common_config.device_status.load(Ordering::Acquire);
-            state.config_generation = common_config.config_generation.load(Ordering::Acquire);
-            state.queue_select = common_config.queue_select;
-        }
-
-        // Save virtio pci state.
-        state.activated = self.device_activated.load(Ordering::Relaxed);
-        state.dev_id = self.dev_id.load(Ordering::Acquire);
-        {
-            let locked_queues = self.queues.lock().unwrap();
-            for (index, queue) in locked_queues.iter().enumerate() {
-                state.queues_config[index] = queue.lock().unwrap().vring.get_queue_config();
-                state.queue_num += 1;
-            }
-        }
+        state.virtio_base = self.device.lock().unwrap().virtio_base().get_state();
 
         Ok(state.as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        let mut pci_state = *VirtioPciState::from_bytes(state)
+        let pci_state = VirtioPciState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
         // Set virtio pci config state.
+        self.dev_id.store(pci_state.dev_id, Ordering::Release);
         let config_length = self.config.config.len();
         self.config.config = pci_state.config_space[..config_length].to_vec();
         self.config.write_mask = pci_state.write_mask[..config_length].to_vec();
@@ -1370,48 +1227,12 @@ impl StateTransfer for VirtioPciDevice {
         self.config.last_ext_cap_offset = pci_state.last_ext_cap_offset;
 
         // Set virtio pci common config state.
-        {
-            let mut common_config = self.common_config.lock().unwrap();
-            common_config
-                .interrupt_status
-                .store(pci_state.interrupt_status, Ordering::SeqCst);
-            common_config
-                .msix_config
-                .store(pci_state.msix_config, Ordering::SeqCst);
-            common_config.features_select = pci_state.features_select;
-            common_config.acked_features_select = pci_state.acked_features_select;
-            common_config
-                .device_status
-                .store(pci_state.device_status, Ordering::SeqCst);
-            common_config
-                .config_generation
-                .store(pci_state.config_generation, Ordering::SeqCst);
-            common_config.queue_select = pci_state.queue_select;
-        }
-
-        // Set virtio pci state.
-        self.device_activated
-            .store(pci_state.activated, Ordering::Relaxed);
-        self.dev_id.store(pci_state.dev_id, Ordering::Release);
-        {
-            let queue_type = self.common_config.lock().unwrap().queue_type;
-            let mut locked_queues = self.queues.lock().unwrap();
-            let dev_lock = self.device.lock().unwrap();
-            let features = (dev_lock.get_driver_features(1) as u64) << 32
-                | dev_lock.get_driver_features(0) as u64;
-            let broken = dev_lock.get_device_broken();
-            for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter_mut() {
-                queue_state.set_addr_cache(
-                    self.sys_mem.clone(),
-                    self.interrupt_cb.clone().unwrap(),
-                    features,
-                    broken,
-                );
-                locked_queues.push(Arc::new(Mutex::new(
-                    Queue::new(*queue_state, queue_type).unwrap(),
-                )))
-            }
-        }
+        let mut locked_device = self.device.lock().unwrap();
+        locked_device.virtio_base_mut().set_state(
+            &pci_state.virtio_base,
+            self.sys_mem.clone(),
+            self.interrupt_cb.clone().unwrap(),
+        );
 
         Ok(())
     }
@@ -1423,31 +1244,33 @@ impl StateTransfer for VirtioPciDevice {
 
 impl MigrationHook for VirtioPciDevice {
     fn resume(&mut self) -> migration::Result<()> {
-        if self.device_activated.load(Ordering::Relaxed) {
-            // Reregister ioevents for notifies.
-            let parent_bus = self.parent_bus.upgrade().unwrap();
-            let locked_parent_bus = parent_bus.lock().unwrap();
-            if let Err(e) = self.config.update_bar_mapping(
-                #[cfg(target_arch = "x86_64")]
-                Some(&locked_parent_bus.io_region),
-                Some(&locked_parent_bus.mem_region),
-            ) {
-                bail!("Failed to update bar, error is {:?}", e);
-            }
+        if !self.device.lock().unwrap().device_activated() {
+            return Ok(());
+        }
 
-            let queue_evts = (*self.notify_eventfds).clone().events;
-            if let Some(cb) = self.interrupt_cb.clone() {
-                if let Err(e) = self.device.lock().unwrap().activate(
-                    self.sys_mem.clone(),
-                    cb,
-                    &self.queues.lock().unwrap(),
-                    queue_evts,
-                ) {
-                    error!("Failed to resume device, error is {:?}", e);
-                }
-            } else {
-                error!("Failed to resume device: No interrupt callback");
+        // Reregister ioevents for notifies.
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let locked_parent_bus = parent_bus.lock().unwrap();
+        if let Err(e) = self.config.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            Some(&locked_parent_bus.io_region),
+            Some(&locked_parent_bus.mem_region),
+        ) {
+            bail!("Failed to update bar, error is {:?}", e);
+        }
+
+        let queue_evts = (*self.notify_eventfds).clone().events;
+        if let Some(cb) = self.interrupt_cb.clone() {
+            if let Err(e) =
+                self.device
+                    .lock()
+                    .unwrap()
+                    .activate(self.sys_mem.clone(), cb, queue_evts)
+            {
+                error!("Failed to resume device, error is {:?}", e);
             }
+        } else {
+            error!("Failed to resume device: No interrupt callback");
         }
 
         Ok(())
@@ -1463,61 +1286,51 @@ mod tests {
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
     };
-    use util::num_ops::read_u32;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::Result as VirtioResult;
+    use crate::{Result as VirtioResult, VirtioBase};
 
     const VIRTIO_DEVICE_TEST_TYPE: u32 = 1;
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
     const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
 
     pub struct VirtioDeviceTest {
-        pub device_features: u64,
-        pub driver_features: u64,
+        base: VirtioBase,
         pub is_activated: bool,
-        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
         pub fn new() -> Self {
+            let mut base = VirtioBase::new(
+                VIRTIO_DEVICE_TEST_TYPE,
+                VIRTIO_DEVICE_QUEUE_NUM,
+                VIRTIO_DEVICE_QUEUE_SIZE,
+            );
+            base.device_features = 0xFFFF_FFF0;
             VirtioDeviceTest {
-                device_features: 0xFFFF_FFF0,
-                driver_features: 0,
+                base,
                 is_activated: false,
-                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
 
     impl VirtioDevice for VirtioDeviceTest {
+        fn virtio_base(&self) -> &VirtioBase {
+            &self.base
+        }
+
+        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+            &mut self.base
+        }
+
         fn realize(&mut self) -> VirtioResult<()> {
+            self.init_config_features()?;
             Ok(())
         }
 
-        fn device_type(&self) -> u32 {
-            VIRTIO_DEVICE_TEST_TYPE
-        }
-
-        fn queue_num(&self) -> usize {
-            VIRTIO_DEVICE_QUEUE_NUM
-        }
-
-        fn queue_size(&self) -> u16 {
-            VIRTIO_DEVICE_QUEUE_SIZE
-        }
-
-        fn get_device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.device_features, features_select)
-        }
-
-        fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.driver_features = self.checked_driver_features(page, value);
-        }
-
-        fn get_driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.driver_features, features_select)
+        fn init_config_features(&mut self) -> VirtioResult<()> {
+            Ok(())
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
@@ -1532,33 +1345,31 @@ mod tests {
             &mut self,
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
-            _queues: &[Arc<Mutex<Queue>>],
             _queue_evts: Vec<Arc<EventFd>>,
         ) -> VirtioResult<()> {
             self.is_activated = true;
             Ok(())
         }
 
-        fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.broken
+        fn deactivate(&mut self) -> VirtioResult<()> {
+            Ok(())
         }
     }
 
     macro_rules! com_cfg_read_test {
-        ($cfg: ident, $dev: ident, $reg: ident, $expect: expr) => {
-            assert_eq!($cfg.read_common_config(&$dev, $reg).unwrap(), $expect)
+        ($pci_dev: ident, $reg: ident, $expect: expr) => {
+            assert_eq!($pci_dev.read_common_config($reg).unwrap(), $expect)
         };
     }
     macro_rules! com_cfg_write_test {
-        ($cfg: ident, $dev: ident, $reg: ident, $val: expr) => {
-            assert!($cfg.write_common_config(&$dev, $reg, $val).is_ok())
+        ($pci_dev: ident, $reg: ident, $val: expr) => {
+            assert!($pci_dev.write_common_config($reg, $val).is_ok())
         };
     }
 
     #[test]
     fn test_common_config_dev_feature() {
-        let dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_dev = dev.clone() as Arc<Mutex<dyn VirtioDevice>>;
+        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
@@ -1570,86 +1381,100 @@ mod tests {
             Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
-        let cloned_virtio_dev = virtio_dev.clone();
-        let virtio_pci = VirtioPciDevice::new(
+        let mut virtio_pci = VirtioPciDevice::new(
             String::from("test device"),
             0,
             sys_mem,
-            cloned_virtio_dev,
+            virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
         );
 
-        let queue_size = dev.lock().unwrap().queue_size();
-        let queue_num = dev.lock().unwrap().queue_num();
-
-        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
-
         // Read virtio device features
-        cmn_cfg.features_select = 0_u32;
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_DF_REG, 0xFFFF_FFF0_u32);
-        cmn_cfg.features_select = 1_u32;
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_DF_REG, 0_u32);
+        virtio_dev.lock().unwrap().set_hfeatures_sel(0_u32);
+        com_cfg_read_test!(virtio_pci, COMMON_DF_REG, 0xFFFF_FFF0_u32);
+        virtio_dev.lock().unwrap().set_hfeatures_sel(1_u32);
+        com_cfg_read_test!(virtio_pci, COMMON_DF_REG, 0_u32);
 
         // Write virtio device features
-        cmn_cfg.acked_features_select = 1_u32;
-        com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, 0xFF);
+        virtio_dev.lock().unwrap().set_gfeatures_sel(1_u32);
+        com_cfg_write_test!(virtio_pci, COMMON_GF_REG, 0xFF);
         // The feature is not supported by this virtio device, and is masked
-        assert_eq!(dev.lock().unwrap().driver_features, 0_u64);
+        assert_eq!(virtio_dev.lock().unwrap().base.driver_features, 0_u64);
 
-        cmn_cfg.acked_features_select = 0_u32;
-        com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, 0xCF);
+        virtio_dev.lock().unwrap().set_gfeatures_sel(0_u32);
+        com_cfg_write_test!(virtio_pci, COMMON_GF_REG, 0xCF);
         // The feature is partially supported by this virtio device, and is partially masked
-        assert_eq!(dev.lock().unwrap().driver_features, 0xC0_u64);
+        assert_eq!(virtio_dev.lock().unwrap().base.driver_features, 0xC0_u64);
 
         // Set the feature of the Queue type
-        cmn_cfg.acked_features_select = 1_u32;
-        dev.lock().unwrap().driver_features = 0_u64;
-        dev.lock().unwrap().device_features = 0xFFFF_FFFF_0000_0000_u64;
+        virtio_dev.lock().unwrap().set_gfeatures_sel(1_u32);
+        virtio_dev.lock().unwrap().base.driver_features = 0_u64;
+        virtio_dev.lock().unwrap().base.device_features = 0xFFFF_FFFF_0000_0000_u64;
         let driver_features = 1_u32 << (VIRTIO_F_RING_PACKED - 32);
-        com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_GF_REG, driver_features);
-        assert_eq!(cmn_cfg.queue_type, QUEUE_TYPE_PACKED_VRING);
+        com_cfg_write_test!(virtio_pci, COMMON_GF_REG, driver_features);
         assert_eq!(
-            dev.lock().unwrap().driver_features,
+            virtio_dev.lock().unwrap().queue_type(),
+            QUEUE_TYPE_PACKED_VRING
+        );
+        assert_eq!(
+            virtio_dev.lock().unwrap().base.driver_features,
             1_u64 << VIRTIO_F_RING_PACKED
         );
     }
 
     #[test]
     fn test_common_config_queue() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let queue_size = virtio_dev.lock().unwrap().queue_size();
-        let queue_num = virtio_dev.lock().unwrap().queue_num();
-        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
+        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16, "parent_bus"),
+            sys_mem.root().clone(),
+        )));
+        let virtio_pci = VirtioPciDevice::new(
+            String::from("test device"),
+            0,
+            sys_mem,
+            virtio_dev.clone(),
+            Arc::downgrade(&parent_bus),
+            false,
+        );
 
         // Read Queue's Descriptor Table address
-        cmn_cfg.queue_select = VIRTIO_DEVICE_QUEUE_NUM as u16 - 1;
-        cmn_cfg.queues_config[cmn_cfg.queue_select as usize].desc_table =
-            GuestAddress(0xAABBCCDD_FFEEDDAA);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_DESCLO_REG, 0xFFEEDDAA_u32);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_DESCHI_REG, 0xAABBCCDD_u32);
+        virtio_dev
+            .lock()
+            .unwrap()
+            .set_queue_select(VIRTIO_DEVICE_QUEUE_NUM as u16 - 1);
+        let queue_select = virtio_dev.lock().unwrap().queue_select();
+        virtio_dev.lock().unwrap().virtio_base_mut().queues_config[queue_select as usize]
+            .desc_table = GuestAddress(0xAABBCCDD_FFEEDDAA);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_DESCLO_REG, 0xFFEEDDAA_u32);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_DESCHI_REG, 0xAABBCCDD_u32);
 
         // Read Queue's Available Ring address
-        cmn_cfg.queue_select = 0;
-        cmn_cfg.queues_config[0].avail_ring = GuestAddress(0x11223344_55667788);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_AVAILLO_REG, 0x55667788_u32);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_AVAILHI_REG, 0x11223344_u32);
+        virtio_dev.lock().unwrap().set_queue_select(0);
+        virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].avail_ring =
+            GuestAddress(0x11223344_55667788);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILLO_REG, 0x55667788_u32);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILHI_REG, 0x11223344_u32);
 
         // Read Queue's Used Ring address
-        cmn_cfg.queue_select = 0;
-        cmn_cfg.queues_config[0].used_ring = GuestAddress(0x55667788_99AABBCC);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_USEDLO_REG, 0x99AABBCC_u32);
-        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_USEDHI_REG, 0x55667788_u32);
+        virtio_dev.lock().unwrap().set_queue_select(0);
+        virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].used_ring =
+            GuestAddress(0x55667788_99AABBCC);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_USEDLO_REG, 0x99AABBCC_u32);
+        com_cfg_read_test!(virtio_pci, COMMON_Q_USEDHI_REG, 0x55667788_u32);
     }
 
     #[test]
     fn test_common_config_queue_error() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let queue_size = virtio_dev.lock().unwrap().queue_size();
-        let queue_num = virtio_dev.lock().unwrap().queue_num();
-        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
+        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
@@ -1673,7 +1498,7 @@ mod tests {
 
         assert!(init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
-            (queue_num + 1) as u32,
+            (virtio_dev.lock().unwrap().queue_num() + 1) as u32,
             &mut virtio_pci.config,
             virtio_pci.dev_id.clone(),
             &virtio_pci.name,
@@ -1683,31 +1508,41 @@ mod tests {
         .is_ok());
 
         // Error occurs when queue selector exceeds queue num
-        cmn_cfg.queue_select = VIRTIO_DEVICE_QUEUE_NUM as u16;
-        assert!(cmn_cfg
-            .read_common_config(&virtio_dev, COMMON_Q_SIZE_REG)
-            .is_err());
-        assert!(cmn_cfg
-            .write_common_config(&virtio_pci, COMMON_Q_SIZE_REG, 128)
+        virtio_dev
+            .lock()
+            .unwrap()
+            .set_queue_select(VIRTIO_DEVICE_QUEUE_NUM as u16);
+        assert!(virtio_pci.read_common_config(COMMON_Q_SIZE_REG).is_err());
+        assert!(virtio_pci
+            .write_common_config(COMMON_Q_SIZE_REG, 128)
             .is_err());
 
         // Test Queue ready register
-        cmn_cfg.device_status.store(
-            CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER,
-            Ordering::SeqCst,
+        virtio_dev
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER);
+        virtio_dev.lock().unwrap().set_queue_select(0);
+        com_cfg_write_test!(virtio_pci, COMMON_Q_ENABLE_REG, 0x1_u32);
+        assert!(
+            virtio_dev
+                .lock()
+                .unwrap()
+                .virtio_base()
+                .queues_config
+                .get(0)
+                .unwrap()
+                .ready
         );
-        cmn_cfg.queue_select = 0;
-        com_cfg_write_test!(cmn_cfg, virtio_pci, COMMON_Q_ENABLE_REG, 0x1_u32);
-        assert!(cmn_cfg.queues_config.get(0).unwrap().ready);
 
         // Failed to set Queue relevant register if device is no ready
-        cmn_cfg.device_status.store(
-            CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER_OK,
-            Ordering::SeqCst,
-        );
-        cmn_cfg.queue_select = 1;
-        assert!(cmn_cfg
-            .write_common_config(&virtio_pci, COMMON_Q_MSIX_REG, 0x4_u32)
+        virtio_dev
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER_OK);
+        virtio_dev.lock().unwrap().set_queue_select(1);
+        assert!(virtio_pci
+            .write_common_config(COMMON_Q_MSIX_REG, 0x4_u32)
             .is_err());
     }
 
@@ -1796,8 +1631,7 @@ mod tests {
             )
             .unwrap();
 
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
@@ -1808,7 +1642,7 @@ mod tests {
             String::from("test device"),
             0,
             sys_mem,
-            virtio_dev,
+            virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
         );
@@ -1837,10 +1671,10 @@ mod tests {
         virtio_pci.assign_interrupt_cb();
 
         // Prepare valid queue config
-        for queue_cfg in virtio_pci
-            .common_config
+        for queue_cfg in virtio_dev
             .lock()
             .unwrap()
+            .virtio_base_mut()
             .queues_config
             .iter_mut()
         {
@@ -1850,13 +1684,14 @@ mod tests {
             queue_cfg.ready = true;
             queue_cfg.size = VIRTIO_DEVICE_QUEUE_SIZE;
         }
-        let common_cfg_ops = virtio_pci.build_common_cfg_ops();
+        let common_cfg_ops =
+            VirtioPciDevice::build_common_cfg_ops(Arc::new(Mutex::new(virtio_pci)));
 
         // Device status is not ok, failed to activate virtio device
         let status = (CONFIG_STATUS_ACKNOWLEDGE | CONFIG_STATUS_DRIVER | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
         // Device status is not ok, failed to activate virtio device
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1864,7 +1699,7 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
         // Status is ok, virtio device is activated.
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1872,11 +1707,11 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), true);
+        assert_eq!(virtio_dev.lock().unwrap().device_activated(), true);
 
         // If device status(not zero) is set to zero, reset the device
         (common_cfg_ops.write)(0_u32.as_bytes(), GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
     }
 
     #[test]

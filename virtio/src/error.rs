@@ -48,8 +48,8 @@ pub enum VirtioError {
     QueueDescInvalid,
     #[error("Address overflows for {0}, address: 0x{1:x}, offset: {2}")]
     AddressOverflow(&'static str, u64, u64),
-    #[error("Failed to r/w dev config space: overflows, offset {0}, space size {1}")]
-    DevConfigOverflow(u64, u64),
+    #[error("Failed to r/w dev config space: overflows, offset {0}, len {1}, space size {2}")]
+    DevConfigOverflow(u64, u64, u64),
     #[error("Failed to trigger interrupt for {0}, int-type {1:#?}")]
     InterruptTrigger(&'static str, super::VirtioInterruptType),
     #[error("Vhost ioctl failed: {0}")]

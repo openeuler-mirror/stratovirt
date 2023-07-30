@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -25,9 +24,10 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, report_virtio_error, Element, Queue,
-    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default, report_virtio_error,
+    Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use devices::legacy::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
@@ -43,7 +43,6 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
 // Buffer size for chardev backend.
 const BUF_SIZE: usize = 4096;
@@ -128,17 +127,16 @@ pub struct VirtioSerialState {
 }
 
 /// Virtio serial device structure.
+#[derive(Default)]
 pub struct Serial {
-    /// Status of virtio serial device.
-    state: VirtioSerialState,
-    /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
+    /// Virtio device base property.
+    base: VirtioBase,
+    /// Virtio serial config space.
+    config_space: VirtioConsoleConfig,
     /// Max serial ports number.
     pub max_nr_ports: u32,
     /// Serial port vector for serialport.
     pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
-    /// Device is broken or not.
-    device_broken: Arc<AtomicBool>,
 }
 
 impl Serial {
@@ -148,16 +146,16 @@ impl Serial {
     ///
     /// * `serial_cfg` - Device configuration set by user.
     pub fn new(serial_cfg: VirtioSerialInfo) -> Self {
+        // Each port has 2 queues(receiveq/transmitq).
+        // And there exist 2 control queues(control receiveq/control transmitq).
+        let queue_num = serial_cfg.max_ports as usize * 2 + 2;
+        let queue_size = DEFAULT_VIRTQUEUE_SIZE;
+
         Serial {
-            state: VirtioSerialState {
-                device_features: 0_u64,
-                driver_features: 0_u64,
-                config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
-            },
-            deactivate_evts: Vec::new(),
+            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
+            config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
-            ports: Arc::new(Mutex::new(Vec::new())),
-            device_broken: Arc::new(AtomicBool::new(false)),
+            ..Default::default()
         }
     }
 
@@ -177,7 +175,7 @@ impl Serial {
             output_queue_evt: queue_evts[3].clone(),
             mem_space,
             interrupt_cb,
-            driver_features: self.state.driver_features,
+            driver_features: self.base.driver_features,
             device_broken,
             ports: self.ports.clone(),
         };
@@ -187,7 +185,7 @@ impl Serial {
             port.lock().unwrap().ctrl_handler = Some(Arc::downgrade(&handler_h.clone()));
         }
         let notifiers = EventNotifierHelper::internal_notifiers(handler_h);
-        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
     }
@@ -217,76 +215,41 @@ pub fn find_port_by_nr(
 }
 
 impl VirtioDevice for Serial {
-    /// Realize virtio serial device.
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
-        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        self.init_config_features()?;
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
-
         Ok(())
     }
 
-    /// Get the virtio device type, refer to Virtio Spec.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_CONSOLE
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
-    /// Get the count of virtio device queues.
-    fn queue_num(&self) -> usize {
-        // Each port has 2 queues(receiveq/transmitq).
-        // And there exist 2 control queues(control receiveq/control transmitq).
-        self.max_nr_ports as usize * 2 + 2
-    }
-
-    /// Get the queue size of virtio device.
-    fn queue_size(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    /// Get device features from host.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
-    }
-
-    /// Set driver features by guest.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
-    }
-
-    /// Read data of config from guest.
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
-
-        Ok(())
-    }
-
-    /// Write data to config from guest.
     fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
         bail!("Writing device config space for virtio serial is not supported.")
     }
 
-    /// Activate the virtio device, this function is called by vcpu thread when frontend
-    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = self.base.queues.clone();
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
                 self.queue_num(),
@@ -309,13 +272,13 @@ impl VirtioDevice for Serial {
                 output_queue_evt: queue_evts[queue_id * 2 + 1].clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
-                device_broken: self.device_broken.clone(),
+                driver_features: self.base.driver_features,
+                device_broken: self.base.broken.clone(),
                 port: port.clone(),
             };
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
-            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+            register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
             if let Some(port_h) = port {
                 port_h.lock().unwrap().activate(&handler_h);
@@ -325,9 +288,9 @@ impl VirtioDevice for Serial {
         self.control_queues_activate(
             mem_space,
             interrupt_cb,
-            queues,
+            &queues,
             queue_evts,
-            self.device_broken.clone(),
+            self.base.broken.clone(),
         )?;
 
         Ok(())
@@ -337,25 +300,28 @@ impl VirtioDevice for Serial {
         for port in self.ports.lock().unwrap().iter_mut() {
             port.lock().unwrap().deactivate();
         }
-        unregister_event_helper(None, &mut self.deactivate_evts)?;
+        unregister_event_helper(None, &mut self.base.deactivate_evts)?;
 
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.device_broken
     }
 }
 
 impl StateTransfer for Serial {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        let state = VirtioSerialState {
+            device_features: self.base.device_features,
+            driver_features: self.base.driver_features,
+            config_space: self.config_space,
+        };
+        Ok(state.as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = *VirtioSerialState::from_bytes(state)
+        let state = VirtioSerialState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
-
+        self.base.device_features = state.device_features;
+        self.base.driver_features = state.driver_features;
+        self.config_space = state.config_space;
         Ok(())
     }
 
@@ -950,57 +916,57 @@ mod tests {
         });
 
         // If the device feature is 0, all driver features are not supported.
-        serial.state.device_features = 0;
+        serial.base.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0_u64);
-        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+        assert_eq!(serial.base.driver_features, 0_u64);
+        assert_eq!(serial.driver_features(page) as u64, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0_u64);
-        assert_eq!(serial.get_driver_features(page) as u64, 0_u64);
+        assert_eq!(serial.base.driver_features, 0_u64);
+        assert_eq!(serial.driver_features(page) as u64, 0_u64);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         assert_eq!(
-            serial.get_driver_features(page) as u64,
+            serial.driver_features(page) as u64,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
-        serial.state.driver_features = 0;
+        serial.base.driver_features = 0;
 
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
-        assert_eq!(serial.state.driver_features, 0);
-        serial.state.driver_features = 0;
+        assert_eq!(serial.base.driver_features, 0);
+        serial.base.driver_features = 0;
 
-        serial.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+        serial.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_CONSOLE_F_SIZE
             | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT) as u32;
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
         );
         let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(
-            serial.state.driver_features,
+            serial.base.driver_features,
             (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT)
         );
     }

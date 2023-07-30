@@ -17,14 +17,11 @@ const VIRTIO_FS_REQ_QUEUES_NUM: usize = 1;
 // The size of queue for virtio fs
 const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 
-use crate::VirtioError;
-use std::cmp;
-use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, Context, Result};
 use log::error;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -35,13 +32,11 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
 
-use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
+use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackendType, VhostUserClient};
-use crate::{VirtioInterrupt, VirtioInterruptType};
-use anyhow::{anyhow, Context, Result};
+use crate::{read_config_default, VirtioBase, VirtioInterrupt, VirtioInterruptType};
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
@@ -102,18 +97,14 @@ impl EventNotifierHelper for VhostUserFsHandler {
 }
 
 pub struct Fs {
+    base: VirtioBase,
     fs_cfg: FsConfig,
-    config: VirtioFsConfig,
+    config_space: VirtioFsConfig,
     client: Option<Arc<Mutex<VhostUserClient>>>,
-    avail_features: u64,
-    acked_features: u64,
     mem_space: Arc<AddressSpace>,
     /// The notifier events from host.
     call_events: Vec<Arc<EventFd>>,
-    deactivate_evts: Vec<RawFd>,
     enable_irqfd: bool,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
 }
 
 impl Fs {
@@ -125,27 +116,31 @@ impl Fs {
     /// `mem_space` - The address space of this Fs device.
     /// `enable_irqfd` - Whether irqfd is enabled on this Fs device.
     pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>, enable_irqfd: bool) -> Self {
+        let queue_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
+        let queue_size = VIRTIO_FS_QUEUE_SIZE;
+
         Fs {
+            base: VirtioBase::new(VIRTIO_TYPE_FS, queue_num, queue_size),
             fs_cfg,
-            config: VirtioFsConfig::default(),
+            config_space: VirtioFsConfig::default(),
             client: None,
-            avail_features: 0_u64,
-            acked_features: 0_u64,
             mem_space,
             call_events: Vec::<Arc<EventFd>>::new(),
-            deactivate_evts: Vec::new(),
             enable_irqfd,
-            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl VirtioDevice for Fs {
-    fn realize(&mut self) -> Result<()> {
-        let tag_bytes_vec = self.fs_cfg.tag.clone().into_bytes();
-        self.config.tag[..tag_bytes_vec.len()].copy_from_slice(tag_bytes_vec.as_slice());
-        self.config.num_request_queues = VIRTIO_FS_REQ_QUEUES_NUM as u32;
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
 
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
+    fn realize(&mut self) -> Result<()> {
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
         let client = VhostUserClient::new(
             &self.mem_space,
@@ -158,52 +153,30 @@ impl VirtioDevice for Fs {
         })?;
         let client = Arc::new(Mutex::new(client));
         VhostUserClient::add_event(&client)?;
-        self.avail_features = client
+        self.client = Some(client);
+
+        self.init_config_features()?;
+
+        Ok(())
+    }
+
+    fn init_config_features(&mut self) -> Result<()> {
+        let tag_bytes_vec = self.fs_cfg.tag.clone().into_bytes();
+        self.config_space.tag[..tag_bytes_vec.len()].copy_from_slice(tag_bytes_vec.as_slice());
+        self.config_space.num_request_queues = VIRTIO_FS_REQ_QUEUES_NUM as u32;
+
+        let client = self.client.as_ref().unwrap();
+        self.base.device_features = client
             .lock()
             .unwrap()
             .get_features()
             .with_context(|| "Failed to get features for virtio fs")?;
-        self.client = Some(client);
 
         Ok(())
     }
 
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_FS
-    }
-
-    fn queue_num(&self) -> usize {
-        VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM
-    }
-
-    fn queue_size(&self) -> u16 {
-        VIRTIO_FS_QUEUE_SIZE
-    }
-
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.avail_features, features_select)
-    }
-
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.acked_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.acked_features, features_select)
-    }
-
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.config.as_bytes();
-        let config_size = config_slice.len() as u64;
-        if offset >= config_size {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
-        }
-
-        Ok(())
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+        read_config_default(self.config_space.as_bytes(), offset, data)
     }
 
     fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
@@ -214,15 +187,15 @@ impl VirtioDevice for Fs {
         &mut self,
         _mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         let mut host_notifies = Vec::new();
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
             None => return Err(anyhow!("Failed to get client for virtio fs")),
         };
-        client.features = self.acked_features;
+        client.features = self.base.driver_features;
         client.set_queues(queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
@@ -242,13 +215,12 @@ impl VirtioDevice for Fs {
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+            register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
         }
 
         Ok(())
     }
 
-    /// Set guest notifiers for notifying the guest.
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
             let cloned_evt_fd = fd.clone();
@@ -262,15 +234,15 @@ impl VirtioDevice for Fs {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(None, &mut self.deactivate_evts)?;
+        unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         self.call_events.clear();
         Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.avail_features = 0_u64;
-        self.acked_features = 0_u64;
-        self.config = VirtioFsConfig::default();
+        self.base.device_features = 0_u64;
+        self.base.driver_features = 0_u64;
+        self.config_space = VirtioFsConfig::default();
 
         let client = match &self.client {
             None => return Err(anyhow!("Failed to get client when resetting virtio fs")),
@@ -284,9 +256,5 @@ impl VirtioDevice for Fs {
         self.client = None;
 
         self.realize()
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
     }
 }
