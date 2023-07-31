@@ -67,7 +67,6 @@ impl LPCBridge {
                 base: DeviceBase::new("ICH9 LPC bridge".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
-                name: "ICH9 LPC bridge".to_string(),
                 parent_bus,
             },
             sys_io,

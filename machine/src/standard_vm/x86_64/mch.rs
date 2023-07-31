@@ -58,7 +58,6 @@ impl Mch {
                 base: DeviceBase::new("Memory Controller Hub".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
-                name: "Memory Controller Hub".to_string(),
                 parent_bus,
             },
             mmconfig_region: Some(mmconfig_region),

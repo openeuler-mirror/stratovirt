@@ -163,7 +163,7 @@ impl PciBus {
         // Device is attached in pci_bus.
         let locked_bus = pci_bus.lock().unwrap();
         for dev in locked_bus.devices.values() {
-            if dev.lock().unwrap().pci_base().name == name {
+            if dev.lock().unwrap().name() == name {
                 return Some((pci_bus.clone(), dev.clone()));
             }
         }
@@ -184,18 +184,18 @@ impl PciBus {
     /// * `dev` - Device attached to the bus.
     pub fn detach_device(bus: &Arc<Mutex<Self>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
         let mut dev_locked = dev.lock().unwrap();
-        dev_locked.unrealize().with_context(|| {
-            format!("Failed to unrealize device {}", dev_locked.pci_base().name)
-        })?;
+        dev_locked
+            .unrealize()
+            .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
 
-        let devfn = dev_locked.devfn().with_context(|| {
-            format!("Failed to get devfn: device {}", dev_locked.pci_base().name)
-        })?;
+        let devfn = dev_locked
+            .devfn()
+            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
             locked_bus.devices.remove(&devfn);
         } else {
-            bail!("Device {} not found in the bus", dev_locked.pci_base().name);
+            bail!("Device {} not found in the bus", dev_locked.name());
         }
 
         Ok(())
@@ -364,7 +364,6 @@ mod tests {
                 base: DeviceBase::new("test1".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 10,
-                name: String::from("test1"),
                 parent_bus: root_bus.clone(),
             },
         };
@@ -377,7 +376,6 @@ mod tests {
                 base: DeviceBase::new("test2".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 12,
-                name: String::from("test2"),
                 parent_bus: Arc::downgrade(&bus),
             },
         };
@@ -390,13 +388,13 @@ mod tests {
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name, "pcie.0");
-        assert_eq!(dev.lock().unwrap().pci_base().name, "test1");
+        assert_eq!(dev.lock().unwrap().name(), "test1");
 
         let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test2");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name, "pcie.1");
-        assert_eq!(dev.lock().unwrap().pci_base().name, "test2");
+        assert_eq!(dev.lock().unwrap().name(), "test2");
     }
 
     #[test]
@@ -414,7 +412,6 @@ mod tests {
                 base: DeviceBase::new("test1".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
-                name: String::from("test1"),
                 parent_bus: Arc::downgrade(&bus),
             },
         };

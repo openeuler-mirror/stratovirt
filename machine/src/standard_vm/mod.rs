@@ -1355,7 +1355,7 @@ impl DeviceInterface for StdMachine {
             return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();
-                    let dev_id = &locked_dev.pci_base().name;
+                    let dev_id = &locked_dev.name();
                     drop(locked_pci_host);
                     self.del_bootindex_devices(dev_id);
                     let vm_config = self.get_vm_config();

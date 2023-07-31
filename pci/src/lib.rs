@@ -137,8 +137,6 @@ pub struct PciDevBase {
     pub config: PciConfig,
     /// Devfn.
     pub devfn: u8,
-    /// Name of this device.
-    pub name: String,
     /// Primary Bus.
     pub parent_bus: Weak<Mutex<PciBus>>,
 }
@@ -478,7 +476,6 @@ mod tests {
                 base: DeviceBase::new("PCI device".to_string()),
                 config: PciConfig::new(1, 1),
                 devfn: 0,
-                name: "PCI device".to_string(),
                 parent_bus: Arc::downgrade(&parent_bus),
             },
         };

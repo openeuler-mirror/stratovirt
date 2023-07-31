@@ -86,7 +86,6 @@ impl DemoDev {
                 base: DeviceBase::new(cfg.id.clone()),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
-                name: cfg.id.clone(),
                 parent_bus,
             },
             cmd_cfg: cfg,
@@ -192,14 +191,13 @@ impl PciDevOps for DemoDev {
     /// Realize PCI/PCIe device.
     fn realize(mut self) -> Result<()> {
         self.init_pci_config()?;
-
         if self.cmd_cfg.bar_num > 0 {
             init_msix(
                 0,
                 1,
                 &mut self.base.config,
                 self.dev_id.clone(),
-                &self.base.name,
+                &self.base.base.id,
                 None,
                 None,
             )?;

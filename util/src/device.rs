@@ -26,4 +26,9 @@ pub trait Device {
     fn device_base(&self) -> &DeviceBase;
 
     fn device_base_mut(&mut self) -> &mut DeviceBase;
+
+    /// Get device name.
+    fn name(&self) -> String {
+        self.device_base().id.clone()
+    }
 }
