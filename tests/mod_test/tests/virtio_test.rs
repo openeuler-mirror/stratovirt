@@ -2057,7 +2057,7 @@ fn virtio_io_abnormal_avail_ring() {
 /// TestStep:
 ///   1. Init device with or with not EVENT_IDX feature.
 ///   2. Do the I/O request with avail->used_event:
-///     1) without EVENT_IDX, set valud to used_event.
+///     1) without EVENT_IDX, set valid to used_event.
 ///     2) with EVENT_IDX, set u16::MAX to used_event.
 ///     3) with EVENT_IDX, do not modify used_event.
 ///   3. Send qmp to StratoVirt.

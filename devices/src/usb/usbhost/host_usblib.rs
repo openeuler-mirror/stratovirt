@@ -164,7 +164,7 @@ pub fn set_iso_packet_length(
     // SAFETY: host_transfer is guaranteed to be valid once created.
     unsafe { iso_packet_desc = (*host_transfer).iso_packet_desc.as_mut_ptr() }
     // SAFETY: iso_packet_desc is guaranteed to be valid once host_transfer is created
-    // and packet is guaranteed to be not out of boundry.
+    // and packet is guaranteed to be not out of boundary.
     unsafe { (*iso_packet_desc.offset(packet as isize)).length = max_packet_size as c_uint }
 }
 
@@ -173,7 +173,7 @@ pub fn get_iso_packet_acl_length(host_transfer: *mut libusb_transfer, packet: u3
     // SAFETY: host_transfer is guaranteed to be valid once created.
     unsafe { iso_packet_desc = (*host_transfer).iso_packet_desc.as_mut_ptr() }
     // SAFETY: iso_packet_desc is guaranteed to be valid once host_transfer is created
-    // and packet is guaranteed to be not out of boundry.
+    // and packet is guaranteed to be not out of boundary.
     unsafe { (*iso_packet_desc.offset(packet as isize)).actual_length }
 }
 

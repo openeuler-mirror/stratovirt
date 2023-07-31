@@ -370,7 +370,7 @@ impl CameraHostdevOps for V4l2CameraBackend {
                 out.height = frm.height;
                 out.fps = 10000000_u32.checked_div(frm.interval).with_context(|| {
                     format!(
-                        "Invalied interval {} for format/frame {}:{}",
+                        "Invalid interval {} for format/frame {}:{}",
                         frm.interval, format_index, frame_index
                     )
                 })?;

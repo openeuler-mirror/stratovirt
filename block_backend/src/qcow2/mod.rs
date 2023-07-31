@@ -1330,10 +1330,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let mut left = iovec.to_vec();
         let total = std::cmp::min(nbytes, self.virtual_disk_size() - offset as u64);
         let mut req_list = Vec::new();
-        let mut copyed = 0;
-        while copyed < total {
-            let pos = offset as u64 + copyed;
-            let count = self.cluster_aligned_bytes(pos, total - copyed);
+        let mut copied = 0;
+        while copied < total {
+            let pos = offset as u64 + copied;
+            let count = self.cluster_aligned_bytes(pos, total - copied);
             let (begin, end) = iovecs_split(left, count);
             left = end;
             if let HostOffset::DataAddress(host_offset) = self.host_offset_for_read(pos)? {
@@ -1346,7 +1346,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
             } else {
                 iov_from_buf_direct(&begin, &vec![0_u8; count as usize])?;
             }
-            copyed += count;
+            copied += count;
         }
 
         self.driver.read_vectored(req_list, completecb)
@@ -1360,10 +1360,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let mut left = iovec.to_vec();
         let total = std::cmp::min(nbytes, self.virtual_disk_size() - offset as u64);
         let mut req_list = Vec::new();
-        let mut copyed = 0;
-        while copyed < total {
-            let pos = offset as u64 + copyed;
-            let count = self.cluster_aligned_bytes(pos, total - copyed);
+        let mut copied = 0;
+        while copied < total {
+            let pos = offset as u64 + copied;
+            let count = self.cluster_aligned_bytes(pos, total - copied);
             let (begin, end) = iovecs_split(left, count);
             left = end;
             if let HostOffset::DataAddress(host_offset) = self.host_offset_for_write(pos)? {
@@ -1373,7 +1373,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
                     offset: host_offset,
                     nbytes,
                 });
-                copyed += count;
+                copied += count;
             }
         }
 

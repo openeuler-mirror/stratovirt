@@ -367,7 +367,7 @@ pub trait UsbDeviceOps: Send + Sync {
         usb_dev.port = port;
     }
 
-    /// Handle usb packet, used for controller to deliever packet to device.
+    /// Handle usb packet, used for controller to deliver packet to device.
     fn handle_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
         let mut locked_packet = packet.lock().unwrap();
         locked_packet.status = UsbPacketStatus::Success;
