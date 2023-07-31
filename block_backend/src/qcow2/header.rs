@@ -236,7 +236,7 @@ impl QcowHeader {
 mod test {
     use crate::qcow2::header::*;
 
-    const DEFUALT_CLUSTER_SIZE: u64 = 64 * 1024;
+    const DEFAULT_CLUSTER_SIZE: u64 = 64 * 1024;
 
     fn valid_header_v3() -> Vec<u8> {
         // 10G
@@ -302,7 +302,7 @@ mod test {
         let header = QcowHeader::from_vec(&buf).unwrap();
         assert_eq!(header.magic, QCOW_MAGIC);
         assert_eq!(header.version, 2);
-        assert_eq!(header.cluster_size(), DEFUALT_CLUSTER_SIZE);
+        assert_eq!(header.cluster_size(), DEFAULT_CLUSTER_SIZE);
         assert_eq!(header.header_length, QCOW_VERSION_2_MIN_LEN as u32);
         assert_eq!(buf, header.to_vec());
 
@@ -310,7 +310,7 @@ mod test {
         let header = QcowHeader::from_vec(&buf).unwrap();
         assert_eq!(header.magic, QCOW_MAGIC);
         assert_eq!(header.version, 3);
-        assert_eq!(header.cluster_size(), DEFUALT_CLUSTER_SIZE);
+        assert_eq!(header.cluster_size(), DEFAULT_CLUSTER_SIZE);
         assert_eq!(header.header_length, QCOW_VERSION_3_MIN_LEN as u32);
         assert_eq!(buf, header.to_vec());
 
@@ -318,7 +318,7 @@ mod test {
         let header = QcowHeader::from_vec(&buf).unwrap();
         assert_eq!(header.magic, QCOW_MAGIC);
         assert_eq!(header.version, 3);
-        assert_eq!(header.cluster_size(), DEFUALT_CLUSTER_SIZE);
+        assert_eq!(header.cluster_size(), DEFAULT_CLUSTER_SIZE);
         assert_eq!(header.header_length, 112);
         // NOTE: only care the length we supported.
         assert_eq!(buf[0..QcowHeader::len()], header.to_vec());

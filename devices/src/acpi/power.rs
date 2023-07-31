@@ -189,15 +189,15 @@ impl PowerDev {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size, "PowerDev")?;
 
-        let pdev_availiable: bool;
+        let pdev_available: bool;
         {
             let mut pdev = dev.lock().unwrap();
-            pdev_availiable = pdev.power_battery_init_info().is_ok();
-            if pdev_availiable {
+            pdev_available = pdev.power_battery_init_info().is_ok();
+            if pdev_available {
                 pdev.send_power_event(AcpiEvent::BatteryInf);
             }
         }
-        if pdev_availiable {
+        if pdev_available {
             power_status_update(&dev.clone());
         } else {
             let mut pdev = dev.lock().unwrap();

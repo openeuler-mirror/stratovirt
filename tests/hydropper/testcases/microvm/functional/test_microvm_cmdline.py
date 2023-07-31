@@ -58,7 +58,7 @@ def test_microvm_with_unsupported_param():
     1) Launch microvm with a unsupported param.
     2) Expect run with error code, but not panic.
     """
-    _cmd = "%s --unsupport" % CONFIG.stratovirt_microvm_bin
+    _cmd = "%s --unsupported" % CONFIG.stratovirt_microvm_bin
     try:
         _result = run(_cmd, shell=True, capture_output=True, check=False)
     except TypeError:

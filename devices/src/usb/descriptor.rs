@@ -464,7 +464,7 @@ pub trait UsbDescriptorOps {
     /// Set configuration descriptor with the Configuration Value.
     fn set_config_descriptor(&mut self, v: u8) -> Result<()>;
 
-    /// Set interface descriptor with the Interface and Alernate Setting.
+    /// Set interface descriptor with the Interface and Alternate Setting.
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()>;
 
     /// Init all endpoint descriptors and reset the USB endpoint.
