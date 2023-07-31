@@ -81,7 +81,6 @@ impl XhciPciDevice {
                 base: DeviceBase::new(config.id.clone().unwrap()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
-                name: config.id.clone().unwrap(),
                 parent_bus,
             },
             xhci: XhciDevice::new(mem_space, config),
@@ -254,13 +253,13 @@ impl PciDevOps for XhciPciDevice {
             intrs_num,
             &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.name,
+            &self.base.base.id,
             Some(&self.mem_region),
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
         init_intx(
-            self.base.name.clone(),
+            self.name(),
             &mut self.base.config,
             self.base.parent_bus.clone(),
             self.base.devfn,
@@ -308,7 +307,7 @@ impl PciDevOps for XhciPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().pci_base().name
+                pci_device.unwrap().lock().unwrap().name()
             );
         }
         Ok(())

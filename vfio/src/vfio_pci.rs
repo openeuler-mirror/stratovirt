@@ -113,10 +113,9 @@ impl VfioPciDevice {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
-                base: DeviceBase::new(name.clone()),
+                base: DeviceBase::new(name),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
-                name,
                 parent_bus,
             },
             config_size: 0,
@@ -889,7 +888,7 @@ impl PciDevOps for VfioPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().pci_base().name
+                pci_device.unwrap().lock().unwrap().name()
             );
         }
 

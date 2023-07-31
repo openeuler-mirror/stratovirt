@@ -51,10 +51,9 @@ impl Ivshmem {
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name.clone()),
+                base: DeviceBase::new(name),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
-                name,
                 parent_bus,
             },
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -142,7 +141,7 @@ impl PciDevOps for Ivshmem {
             Some(device) => bail!(
                 "Devfn {:?} has been used by {:?}",
                 &self.base.devfn,
-                device.lock().unwrap().pci_base().name
+                device.lock().unwrap().name()
             ),
             None => locked_pci_bus
                 .devices

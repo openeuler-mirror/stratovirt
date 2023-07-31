@@ -292,10 +292,9 @@ impl VirtioPciDevice {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
-                base: DeviceBase::new(name.clone()),
+                base: DeviceBase::new(name),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
-                name,
                 parent_bus,
             },
             device,
@@ -1040,19 +1039,18 @@ impl PciDevOps for VirtioPciDevice {
         )?;
 
         let nvectors = self.device.lock().unwrap().queue_num() + 1;
-
         init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             nvectors as u32,
             &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.name,
+            &self.base.base.id,
             None,
             None,
         )?;
 
         init_intx(
-            self.base.name.clone(),
+            self.name(),
             &mut self.base.config,
             self.base.parent_bus.clone(),
             self.base.devfn,
@@ -1066,7 +1064,7 @@ impl PciDevOps for VirtioPciDevice {
             .realize()
             .with_context(|| "Failed to realize virtio device")?;
 
-        let name = self.base.name.clone();
+        let name = self.name();
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
         let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
@@ -1095,7 +1093,7 @@ impl PciDevOps for VirtioPciDevice {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 &devfn,
-                pci_device.unwrap().lock().unwrap().pci_base().name
+                pci_device.unwrap().lock().unwrap().name()
             );
         }
 
@@ -1114,11 +1112,8 @@ impl PciDevOps for VirtioPciDevice {
         let bus = self.base.parent_bus.upgrade().unwrap();
         self.base.config.unregister_bars(&bus)?;
 
-        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.base.name);
-        MigrationManager::unregister_transport_instance(
-            VirtioPciState::descriptor(),
-            &self.base.name,
-        );
+        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
+        MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name());
 
         Ok(())
     }
@@ -1506,12 +1501,13 @@ mod tests {
             false,
         );
 
+        let id = virtio_pci.name();
         assert!(init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             (virtio_dev.lock().unwrap().queue_num() + 1) as u32,
             &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &virtio_pci.base.name,
+            &id,
             None,
             None,
         )
@@ -1659,19 +1655,20 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         virtio_pci.base.config.set_interrupt_pin();
 
+        let id = virtio_pci.name();
         init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
             &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &virtio_pci.base.name,
+            &id,
             None,
             None,
         )
         .unwrap();
 
         init_intx(
-            virtio_pci.base.name.clone(),
+            id,
             &mut virtio_pci.base.config,
             virtio_pci.base.parent_bus.clone(),
             virtio_pci.base.devfn,

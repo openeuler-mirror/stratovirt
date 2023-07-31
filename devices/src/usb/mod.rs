@@ -114,7 +114,6 @@ impl UsbEndpoint {
 /// USB device common structure.
 pub struct UsbDevice {
     pub base: DeviceBase,
-    pub id: String,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -144,8 +143,7 @@ impl Device for UsbDevice {
 impl UsbDevice {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
-            base: DeviceBase::new(id.clone()),
-            id,
+            base: DeviceBase::new(id),
             port: None,
             speed: 0,
             addr: 0,
@@ -204,7 +202,7 @@ impl UsbDevice {
     }
 
     pub fn generate_serial_number(&self, prefix: &str) -> String {
-        format!("{}-{}", prefix, self.id)
+        format!("{}-{}", prefix, self.base.id)
     }
 
     /// Handle USB control request which is for descriptor.
@@ -339,7 +337,7 @@ impl UsbDevice {
 impl Drop for UsbDevice {
     fn drop(&mut self) {
         if self.unplugged {
-            send_device_deleted_msg(&self.id);
+            send_device_deleted_msg(&self.base.id);
         }
     }
 }
@@ -404,7 +402,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Unique device id.
     fn device_id(&self) -> &str {
-        &self.get_usb_device().id
+        &self.get_usb_device().base.id
     }
 
     /// Get the UsbDevice.

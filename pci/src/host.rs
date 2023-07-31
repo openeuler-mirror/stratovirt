@@ -744,7 +744,6 @@ pub mod tests {
                 base: DeviceBase::new("PCI device".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 8,
-                name: "PCI device".to_string(),
                 parent_bus: Arc::downgrade(&bus),
             },
         };

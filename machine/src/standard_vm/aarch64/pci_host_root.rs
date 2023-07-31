@@ -35,7 +35,6 @@ impl PciHostRoot {
                 base: DeviceBase::new("PCI Host Root".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 parent_bus,
-                name: "PCI Host Root".to_string(),
                 devfn: 0,
             },
         }

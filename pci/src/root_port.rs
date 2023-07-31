@@ -105,10 +105,9 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name.clone()),
+                base: DeviceBase::new(name),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
-                name,
                 parent_bus,
             },
             port_num,
@@ -210,16 +209,12 @@ impl RootPort {
             let mut locked_dev = dev.lock().unwrap();
             if let Err(e) = locked_dev.unrealize() {
                 error!("{}", format!("{:?}", e));
-                error!("Failed to unrealize device {}.", locked_dev.pci_base().name);
+                error!("Failed to unrealize device {}.", locked_dev.name());
             }
-            info!(
-                "Device {} unplug from {}",
-                locked_dev.pci_base().name,
-                self.base.name
-            );
+            info!("Device {} unplug from {}", locked_dev.name(), self.name());
 
             // Send QMP event for successful hot unplugging.
-            send_device_deleted_msg(&locked_dev.pci_base().name);
+            send_device_deleted_msg(&locked_dev.name());
         }
         self.sec_bus.lock().unwrap().devices.clear();
     }
@@ -383,13 +378,13 @@ impl PciDevOps for RootPort {
             1,
             &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.name,
+            &self.base.base.id,
             None,
             None,
         )?;
 
         init_intx(
-            self.base.name.clone(),
+            self.name(),
             &mut self.base.config,
             self.base.parent_bus.clone(),
             self.base.devfn,
@@ -407,7 +402,7 @@ impl PciDevOps for RootPort {
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .with_context(|| "Failed to register subregion in memory space.")?;
 
-        let name = self.base.name.clone();
+        let name = self.name();
         let root_port = Arc::new(Mutex::new(self));
         #[allow(unused_mut)]
         let mut locked_root_port = root_port.lock().unwrap();
@@ -427,7 +422,7 @@ impl PciDevOps for RootPort {
             bail!(
                 "Devfn {:?} has been used by {:?}",
                 locked_root_port.base.devfn,
-                pci_device.unwrap().lock().unwrap().pci_base().name
+                pci_device.unwrap().lock().unwrap().name()
             );
         }
         // Need to drop locked_root_port in order to register root_port instance.
@@ -480,7 +475,8 @@ impl PciDevOps for RootPort {
             if let Err(e) = self.reset(true) {
                 error!(
                     "Failed to reset child devices under root port {}: {:?}",
-                    self.base.name, e
+                    self.name(),
+                    e
                 )
             }
         }
