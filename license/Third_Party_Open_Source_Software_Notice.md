@@ -377,12 +377,6 @@ Copyright (c) 2017 arc-swap developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: serial_test 2.0.0
-Copyright notice:
-Copyright (c) 2018 Tom Parker-Shemilt
-License: MIT
-Please see above.
-
 Software: syn 2.0.18
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>

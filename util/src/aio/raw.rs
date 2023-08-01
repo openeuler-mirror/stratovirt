@@ -30,7 +30,8 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -40,7 +41,7 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
             buf,
             size,
             offset,
-            errno::errno().0
+            nix::errno::errno()
         );
     }
     ret
@@ -58,7 +59,8 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -66,7 +68,7 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
         error!(
             "Failed to preadv: offset{}, errno{}.",
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -84,7 +86,8 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -94,7 +97,7 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
             buf,
             size,
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -112,7 +115,8 @@ pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -120,7 +124,7 @@ pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
         error!(
             "Failed to pwritev: offset{}, errno{}.",
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -130,7 +134,7 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
     // SAFETY: fd is valid.
     let ret = unsafe { i64::from(fdatasync(fd)) };
     if ret < 0 {
-        error!("Failed to fdatasync: errno{}.", errno::errno().0);
+        error!("Failed to fdatasync: errno{}.", nix::errno::errno());
     }
     ret
 }
@@ -147,7 +151,7 @@ pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
                 size as i64,
             ) as i64
         };
-        if ret == 0 || errno::errno().0 != libc::EINTR {
+        if ret == 0 || nix::errno::errno() != libc::EINTR {
             break;
         }
     }
@@ -155,7 +159,7 @@ pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
         error!(
             "Failed to fallocate for {}, errno {}.",
             fd,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -173,7 +177,7 @@ pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
                 size as i64,
             ) as i64
         };
-        if ret == 0 || errno::errno().0 != libc::EINTR {
+        if ret == 0 || nix::errno::errno() != libc::EINTR {
             break;
         }
     }
@@ -181,7 +185,7 @@ pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
         error!(
             "Failed to fallocate zero range for fd {}, errno {}.",
             fd,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret

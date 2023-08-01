@@ -160,7 +160,7 @@ impl<T: Clone> AioContext<T> for LibaioContext {
         if ret >= 0 {
             return Ok(ret as usize);
         }
-        if errno::errno().0 != libc::EAGAIN {
+        if nix::errno::errno() != libc::EAGAIN {
             bail!("Failed to submit aio, return {}.", ret);
         }
         Ok(0)
