@@ -235,7 +235,7 @@ impl IsoTransfer {
         }
         let buffer =
             // SAFETY: host_transfer is guaranteed to be valid once created
-            // and packet is guaranteed to be not out of boundry.
+            // and packet is guaranteed to be not out of boundary.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
         // SAFETY: buffer is already allocated and size will not be exceed
@@ -888,7 +888,7 @@ impl UsbHost {
 
     pub fn handle_iso_data_out(&mut self, _packet: Arc<Mutex<UsbPacket>>) {
         // TODO
-        error!("USBHost device Unsupport Isochronous Transfer from guest to device.");
+        error!("USBHost device Unsupported Isochronous Transfer from guest to device.");
     }
 
     fn submit_host_transfer(

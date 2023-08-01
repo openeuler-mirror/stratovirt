@@ -1,0 +1,32 @@
+[files]
+extend-exclude = ["docs/kernel_config/*", "_typos.toml"]
+
+[default.extend-identifiers]
+APIC_MODE_EXTINT = "APIC_MODE_EXTINT"
+baInterfaceNr = "baInterfaceNr"
+BARs = "BARs"
+DESCRIPTION_HEADERs = "DESCRIPTION_HEADERs"
+E6GgSyMd0oQtUGFyNf5pRHlYqlx3s7PMPVUtRJP0bBnNd5eDwWAotInu33h6UI0zfKgckAxeVdEROKAExx5xWK = "E6GgSyMd0oQtUGFyNf5pRHlYqlx3s7PMPVUtRJP0bBnNd5eDwWAotInu33h6UI0zfKgckAxeVdEROKAExx5xWK"
+fldXlNNdCeqMvoIfEFogBxlL = "fldXlNNdCeqMvoIfEFogBxlL"
+INTERRUPT_TYPE_EXTINT = "INTERRUPT_TYPE_EXTINT"
+ist_info = "ist_info"
+KVM_CPUID_FLAG_SIGNIFCANT_INDEX = "KVM_CPUID_FLAG_SIGNIFCANT_INDEX"
+MODE_PAGE_ALLS = "MODE_PAGE_ALLS"
+n_subtiles = "n_subtiles"
+O_WRONLY = "O_WRONLY"
+RTC_MIS = "RTC_MIS"
+SECCOMP_FILETER_FLAG_TSYNC = "SECCOMP_FILETER_FLAG_TSYNC"
+test_ths = "test_ths"
+UART_LSR_THRE = "UART_LSR_THRE"
+
+[default.extend-words]
+ba = "ba"
+deactive = "deactive"
+Deactive = "Deactive"
+fpr = "fpr"
+fullfill = "fullfill"
+hda = "hda"
+inout = "inout"
+IST = "IST"
+NCE = "NCE"
+parm = "parm"

@@ -148,6 +148,6 @@ mod tests {
         );
 
         let mut vm_config_case2 = VmConfig::default();
-        assert!(vm_config_case2.add_incoming("unkonw:/tmp/").is_err());
+        assert!(vm_config_case2.add_incoming("unknown:/tmp/").is_err());
     }
 }

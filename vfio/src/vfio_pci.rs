@@ -59,8 +59,8 @@ struct MsixTable {
 struct VfioMsixInfo {
     // Table bar, table offset and table size info.
     table: MsixTable,
-    // Msix enteries.
-    enteries: u16,
+    // Msix entries.
+    entries: u16,
     // Vfio device irq info
     #[allow(dead_code)]
     vfio_irq: HashMap<u32, VfioIrq>,
@@ -248,12 +248,12 @@ impl VfioPciDevice {
             &self.pci_config.config,
             cap_offset + MSIX_CAP_CONTROL as usize,
         )?;
-        let enteries = (ctrl & MSIX_TABLE_SIZE_MAX) + 1;
-        // Make sure that if enteries less than 1 or greater than (0x7ff + 1) is error value.
-        if !(1..=(MSIX_TABLE_SIZE_MAX + 1)).contains(&enteries) {
+        let entries = (ctrl & MSIX_TABLE_SIZE_MAX) + 1;
+        // Make sure that if entries less than 1 or greater than (0x7ff + 1) is error value.
+        if !(1..=(MSIX_TABLE_SIZE_MAX + 1)).contains(&entries) {
             bail!(
                 "The number of MSI-X vectors is invalid, MSI-X vectors are {}",
-                enteries,
+                entries,
             );
         }
 
@@ -261,9 +261,9 @@ impl VfioPciDevice {
             table: MsixTable {
                 table_bar: (table as u16 & MSIX_TABLE_BIR) as u8,
                 table_offset: (table & MSIX_TABLE_OFFSET) as u64,
-                table_size: (enteries * MSIX_TABLE_ENTRY_SIZE) as u64,
+                table_size: (entries * MSIX_TABLE_ENTRY_SIZE) as u64,
             },
-            enteries,
+            entries,
             vfio_irq,
         })
     }
@@ -729,7 +729,7 @@ impl VfioPciDevice {
             };
             gsi_routes.push(gsi_route);
 
-            let entries = self.msix_info.as_ref().unwrap().enteries;
+            let entries = self.msix_info.as_ref().unwrap().entries;
             for i in 1..entries {
                 let gsi_route = GsiMsiRoute {
                     irq_fd: None,

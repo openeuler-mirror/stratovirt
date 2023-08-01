@@ -84,7 +84,7 @@ fn fork() -> Result<()> {
 /// process also becomes the process group leader or a new process group in the
 /// session.
 /// The calling process will be the only process in the new process group and in
-/// the new session. New session has no controlling termimal.
+/// the new session. New session has no controlling terminal.
 ///
 /// # Errors
 ///

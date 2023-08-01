@@ -1759,7 +1759,7 @@ impl DeviceInterface for StdMachine {
         let cmd_args: Vec<&str> = args.command_line.split(' ').collect();
         match cmd_args[0] {
             "drive_add" => {
-                // The drive_add command has three arguments splited by space:
+                // The drive_add command has three arguments split by space:
                 // "drive_add dummy file=/path/to/file,format=raw,if=none,id=drive-id..."
                 // The 'dummy' here is a placeholder for pci address which is not needed for drive.
                 if cmd_args.len() != 3 {
@@ -1798,7 +1798,7 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "drive_del" => {
-                // The drive_del command has two arguments splited by space:
+                // The drive_del command has two arguments split by space:
                 // "drive_del drive-id"
                 if cmd_args.len() != 2 {
                     return Response::create_error_response(
