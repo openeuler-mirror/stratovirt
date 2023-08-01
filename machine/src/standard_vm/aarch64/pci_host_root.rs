@@ -19,6 +19,7 @@ use pci::{
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
+use util::device::{Device, DeviceBase};
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
 
@@ -31,12 +32,23 @@ impl PciHostRoot {
     pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
         Self {
             base: PciDevBase {
+                base: DeviceBase::new("PCI Host Root".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 parent_bus,
                 name: "PCI Host Root".to_string(),
                 devfn: 0,
             },
         }
+    }
+}
+
+impl Device for PciHostRoot {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

@@ -54,6 +54,7 @@ use crate::{
 };
 use crate::{demo_device::base_device::BaseDevice, PciDevBase};
 pub use anyhow::{bail, Result};
+use util::device::{Device, DeviceBase};
 
 pub struct DemoDev {
     base: PciDevBase,
@@ -82,6 +83,7 @@ impl DemoDev {
         };
         DemoDev {
             base: PciDevBase {
+                base: DeviceBase::new(cfg.id.clone()),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
                 name: cfg.id.clone(),
@@ -167,6 +169,16 @@ const VENDOR_ID_DEMO: u16 = 0xDEAD;
 const DEVICE_ID_DEMO: u16 = 0xBEEF;
 // reference to https://pci-ids.ucw.cz/read/PD/
 const CLASS_CODE_DEMO: u16 = 0xEE;
+
+impl Device for DemoDev {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
 
 impl PciDevOps for DemoDev {
     fn pci_base(&self) -> &PciDevBase {

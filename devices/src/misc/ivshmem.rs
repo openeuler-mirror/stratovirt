@@ -25,6 +25,7 @@ use pci::{
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
+use util::device::{Device, DeviceBase};
 
 const PCI_VENDOR_ID_IVSHMEM: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const PCI_DEVICE_ID_IVSHMEM: u16 = 0x1110;
@@ -50,6 +51,7 @@ impl Ivshmem {
     ) -> Self {
         Self {
             base: PciDevBase {
+                base: DeviceBase::new(name.clone()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
                 name,
@@ -87,6 +89,16 @@ impl Ivshmem {
             true,
             self.ram_mem_region.size(),
         )
+    }
+}
+
+impl Device for Ivshmem {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

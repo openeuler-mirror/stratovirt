@@ -26,6 +26,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::num_ops::write_data_u32;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -128,6 +129,16 @@ impl PL031 {
             return;
         }
         error!("pl031: failed to get interrupt event fd.");
+    }
+}
+
+impl Device for PL031 {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

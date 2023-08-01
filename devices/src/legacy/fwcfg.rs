@@ -28,6 +28,7 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::num_ops::extract_u64;
 use util::offset_of;
 #[cfg(target_arch = "x86_64")]
@@ -921,6 +922,17 @@ impl FwCfgOps for FwCfgMem {
 }
 
 #[cfg(target_arch = "aarch64")]
+impl Device for FwCfgMem {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
     fn sysbusdev_base(&self) -> &SysBusDevBase {
         &self.base
@@ -1003,6 +1015,7 @@ impl FwCfgIO {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgIO {
             base: SysBusDevBase {
+                base: DeviceBase::default(),
                 dev_type: SysBusDevType::FwCfg,
                 res: SysRes {
                     region_base: FW_CFG_IO_BASE,
@@ -1087,6 +1100,17 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
 impl FwCfgOps for FwCfgIO {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
         &mut self.fwcfg
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl Device for FwCfgIO {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

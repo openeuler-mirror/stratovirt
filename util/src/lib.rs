@@ -17,6 +17,7 @@ pub mod byte_code;
 pub mod checksum;
 pub mod clock;
 pub mod daemonize;
+pub mod device;
 #[cfg(target_arch = "aarch64")]
 pub mod device_tree;
 pub mod edid;

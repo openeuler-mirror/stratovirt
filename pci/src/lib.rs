@@ -29,7 +29,10 @@ pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, is_msix_enabled};
 pub use root_port::RootPort;
-use util::AsAny;
+use util::{
+    device::{Device, DeviceBase},
+    AsAny,
+};
 
 use std::{
     mem::size_of,
@@ -129,6 +132,7 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
 
 #[derive(Clone)]
 pub struct PciDevBase {
+    pub base: DeviceBase,
     /// Pci config space.
     pub config: PciConfig,
     /// Devfn.
@@ -139,7 +143,17 @@ pub struct PciDevBase {
     pub parent_bus: Weak<Mutex<PciBus>>,
 }
 
-pub trait PciDevOps: Send + AsAny {
+impl Device for PciDevBase {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
+pub trait PciDevOps: Device + Send + AsAny {
     /// Get base property of pci device.
     fn pci_base(&self) -> &PciDevBase;
 
@@ -360,6 +374,7 @@ pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size:
 #[cfg(test)]
 mod tests {
     use address_space::{AddressSpace, Region};
+    use util::device::DeviceBase;
 
     use super::*;
 
@@ -418,6 +433,16 @@ mod tests {
             base: PciDevBase,
         }
 
+        impl Device for PciDev {
+            fn device_base(&self) -> &DeviceBase {
+                &self.base.base
+            }
+
+            fn device_base_mut(&mut self) -> &mut DeviceBase {
+                &mut self.base.base
+            }
+        }
+
         impl PciDevOps for PciDev {
             fn pci_base(&self) -> &PciDevBase {
                 &self.base
@@ -450,6 +475,7 @@ mod tests {
 
         let dev = PciDev {
             base: PciDevBase {
+                base: DeviceBase::new("PCI device".to_string()),
                 config: PciConfig::new(1, 1),
                 devfn: 0,
                 name: "PCI device".to_string(),

@@ -23,6 +23,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
@@ -104,6 +105,7 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
+                base: DeviceBase::new(name.clone()),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
                 name,
@@ -325,6 +327,16 @@ impl RootPort {
         if let Err(v) = FAST_UNPLUG_FEATURE.set(v) {
             error!("Failed to set fast unplug feature: {}", v);
         }
+    }
+}
+
+impl Device for RootPort {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

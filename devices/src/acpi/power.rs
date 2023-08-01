@@ -17,6 +17,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use log::info;
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::num_ops::write_data_u32;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
@@ -226,6 +227,16 @@ impl MigrationHook for PowerDev {
         self.send_power_event(AcpiEvent::AcadSt);
         self.send_power_event(AcpiEvent::BatterySt);
         Ok(())
+    }
+}
+
+impl Device for PowerDev {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

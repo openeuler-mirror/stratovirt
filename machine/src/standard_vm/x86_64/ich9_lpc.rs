@@ -29,6 +29,7 @@ use pci::{
     le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
@@ -63,6 +64,7 @@ impl LPCBridge {
     ) -> Result<Self> {
         Ok(Self {
             base: PciDevBase {
+                base: DeviceBase::new("ICH9 LPC bridge".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
                 name: "ICH9 LPC bridge".to_string(),
@@ -225,6 +227,16 @@ impl LPCBridge {
             .add_subregion(pm_ctrl_region, PM_CTRL_OFFSET as u64)?;
 
         Ok(())
+    }
+}
+
+impl Device for LPCBridge {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

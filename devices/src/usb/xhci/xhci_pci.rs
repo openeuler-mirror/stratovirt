@@ -25,6 +25,7 @@ use pci::config::{
 };
 use pci::msix::update_dev_id;
 use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
+use util::device::{Device, DeviceBase};
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
@@ -77,6 +78,7 @@ impl XhciPciDevice {
     ) -> Self {
         Self {
             base: PciDevBase {
+                base: DeviceBase::new(config.id.clone().unwrap()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
                 name: config.id.clone().unwrap(),
@@ -192,6 +194,16 @@ impl XhciPciDevice {
         locked_xhci.discharge_usb_port(&mut locked_port);
 
         Ok(())
+    }
+}
+
+impl Device for XhciPciDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

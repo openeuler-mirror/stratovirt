@@ -14,6 +14,7 @@ pub mod error;
 
 pub use anyhow::{bail, Context, Result};
 pub use error::SysBusError;
+use util::device::{Device, DeviceBase};
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -216,6 +217,7 @@ pub enum SysBusDevType {
 
 #[derive(Clone)]
 pub struct SysBusDevBase {
+    pub base: DeviceBase,
     /// System bus device type.
     pub dev_type: SysBusDevType,
     /// System resource.
@@ -224,9 +226,20 @@ pub struct SysBusDevBase {
     pub interrupt_evt: Option<Arc<EventFd>>,
 }
 
+impl Device for SysBusDevBase {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
 impl Default for SysBusDevBase {
     fn default() -> Self {
         SysBusDevBase {
+            base: DeviceBase::default(),
             dev_type: SysBusDevType::Others,
             res: SysRes::default(),
             interrupt_evt: None,
@@ -237,6 +250,7 @@ impl Default for SysBusDevBase {
 impl SysBusDevBase {
     pub fn new(dev_type: SysBusDevType) -> SysBusDevBase {
         Self {
+            base: DeviceBase::default(),
             dev_type,
             res: SysRes::default(),
             interrupt_evt: None,
@@ -267,7 +281,7 @@ impl SysBusDevBase {
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Send + AmlBuilder + AsAny {
+pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
     fn sysbusdev_base(&self) -> &SysBusDevBase;
 
     fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase;

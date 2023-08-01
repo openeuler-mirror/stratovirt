@@ -14,6 +14,7 @@ pub mod error;
 pub use anyhow::Result;
 pub use error::UsbError;
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
@@ -112,6 +113,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
+    pub base: DeviceBase,
     pub id: String,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
@@ -129,9 +131,20 @@ pub struct UsbDevice {
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
+impl Device for UsbDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
 impl UsbDevice {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
+            base: DeviceBase::new(id.clone()),
             id,
             port: None,
             speed: 0,
