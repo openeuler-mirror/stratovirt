@@ -120,7 +120,6 @@ const DESC_STRINGS: [&str; 5] = [
 
 /// USB keyboard device.
 pub struct UsbKeyboard {
-    id: String,
     usb_device: UsbDevice,
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
@@ -165,8 +164,7 @@ impl KeyboardOpts for UsbKeyboardAdapter {
 impl UsbKeyboard {
     pub fn new(id: String) -> Self {
         Self {
-            id,
-            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
+            usb_device: UsbDevice::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Keyboard),
             cntlr: None,
         }
@@ -177,10 +175,12 @@ impl UsbDeviceOps for UsbKeyboard {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_FULL;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_KEYBOARD_INDEX as usize];
+        s[STR_SERIAL_KEYBOARD_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
         self.usb_device
             .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
-        let id = self.id.clone();
+        let id = self.device_id().to_string();
         let kbd = Arc::new(Mutex::new(self));
         let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
             usb_kbd: kbd.clone(),
@@ -191,7 +191,7 @@ impl UsbDeviceOps for UsbKeyboard {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        unregister_keyboard(&self.id.clone());
+        unregister_keyboard(self.device_id());
         Ok(())
     }
 
@@ -231,10 +231,6 @@ impl UsbDeviceOps for UsbKeyboard {
     fn handle_data(&mut self, p: &Arc<Mutex<UsbPacket>>) {
         let mut locked_p = p.lock().unwrap();
         self.hid.handle_data_packet(&mut locked_p);
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn get_usb_device(&self) -> &UsbDevice {

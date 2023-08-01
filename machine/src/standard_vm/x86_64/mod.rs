@@ -519,8 +519,23 @@ impl MachineOps for StdMachine {
                 locked_vm
                     .build_acpi_tables(&fw_cfg)
                     .with_context(|| "Failed to create ACPI tables")?;
+                let mut mem_array = Vec::new();
+                let mem_size = vm_config.machine_config.mem_config.mem_size;
+                let below_size =
+                    std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+                mem_array.push((
+                    MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+                    below_size,
+                ));
+                if mem_size > below_size {
+                    mem_array.push((
+                        MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                        mem_size - below_size,
+                    ));
+                }
+
                 locked_vm
-                    .build_smbios(&fw_cfg)
+                    .build_smbios(&fw_cfg, mem_array)
                     .with_context(|| "Failed to create smbios tables")?;
             }
         }

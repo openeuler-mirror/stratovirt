@@ -235,7 +235,7 @@ impl IsoTransfer {
         }
         let buffer =
             // SAFETY: host_transfer is guaranteed to be valid once created
-            // and packet is guaranteed to be not out of boundry.
+            // and packet is guaranteed to be not out of boundary.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
         // SAFETY: buffer is already allocated and size will not be exceed
@@ -335,7 +335,6 @@ impl IsoQueue {
 
 /// Abstract object of the host USB device.
 pub struct UsbHost {
-    id: String,
     config: UsbHostConfig,
     /// Libusb context.
     context: Context,
@@ -368,8 +367,8 @@ impl UsbHost {
         context.set_log_level(rusb::LogLevel::Warning);
         let iso_urb_frames = config.iso_urb_frames;
         let iso_urb_count = config.iso_urb_count;
+        let id = config.id.clone().unwrap();
         Ok(Self {
-            id: config.id.clone().unwrap(),
             config,
             context,
             libdev: None,
@@ -378,7 +377,7 @@ impl UsbHost {
             libevt: Vec::new(),
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
-            usb_device: UsbDevice::new(USB_HOST_BUFFER_LEN),
+            usb_device: UsbDevice::new(id, USB_HOST_BUFFER_LEN),
             exit: None,
             requests: Arc::new(Mutex::new(LinkedList::new())),
             completed: Arc::new(Mutex::new(0)),
@@ -596,7 +595,7 @@ impl UsbHost {
             usb_host.release_dev_to_host();
         }) as Arc<ExitNotifier>;
         self.exit = Some(exit_notifier.clone());
-        TempCleaner::add_exit_notifier(self.id.clone(), exit_notifier);
+        TempCleaner::add_exit_notifier(self.device_id().to_string(), exit_notifier);
     }
 
     fn release_interfaces(&mut self) {
@@ -721,14 +720,14 @@ impl UsbHost {
         self.handle.as_mut().unwrap().reset().unwrap_or_else(|e| {
             error!(
                 "Failed to reset the handle of UsbHost device {}: {:?}",
-                self.id, e
+                self.device_id(),
+                e
             )
         });
         self.attach_kernel();
     }
 
     pub fn clear_succ_requests(&mut self) {
-        let mut updated_requests: LinkedList<Arc<Mutex<UsbHostRequest>>> = LinkedList::new();
         let mut locked_request = self.requests.lock().unwrap();
         let mut completed = self.completed.lock().unwrap();
 
@@ -747,6 +746,7 @@ impl UsbHost {
         }
 
         if *completed > COMPLETE_LIMIT {
+            let mut updated_requests: LinkedList<Arc<Mutex<UsbHostRequest>>> = LinkedList::new();
             loop {
                 let request = locked_request.pop_front();
                 if let Some(request) = request {
@@ -758,8 +758,8 @@ impl UsbHost {
                     break;
                 }
             }
+            *locked_request = updated_requests;
         }
-        *locked_request = updated_requests;
         *completed = 0;
     }
 
@@ -814,8 +814,9 @@ impl UsbHost {
             let ep = self
                 .usb_device
                 .get_endpoint(in_direction, locked_packet.ep_number);
+            let id = self.device_id().to_string();
             match iso_queue.lock().unwrap().realize(
-                &self.id,
+                &id,
                 self.handle.as_mut().unwrap(),
                 self.iso_urb_count,
                 self.iso_urb_frames,
@@ -887,7 +888,7 @@ impl UsbHost {
 
     pub fn handle_iso_data_out(&mut self, _packet: Arc<Mutex<UsbPacket>>) {
         // TODO
-        error!("USBHost device Unsupport Isochronous Transfer from guest to device.");
+        error!("USBHost device Unsupported Isochronous Transfer from guest to device.");
     }
 
     fn submit_host_transfer(
@@ -955,15 +956,15 @@ impl UsbDeviceOps for UsbHost {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        TempCleaner::remove_exit_notifier(&self.id);
+        TempCleaner::remove_exit_notifier(self.device_id());
         self.release_dev_to_host();
         unregister_event_helper(None, &mut self.libevt)?;
-        info!("Usb Host device {} is unrealized", self.id);
+        info!("Usb Host device {} is unrealized", self.device_id());
         Ok(())
     }
 
     fn reset(&mut self) {
-        info!("Usb Host device {} reset", self.id);
+        info!("Usb Host device {} reset", self.device_id());
         if self.handle.is_none() {
             return;
         }
@@ -1032,6 +1033,7 @@ impl UsbDeviceOps for UsbHost {
             &self.usb_device.data_buf[..device_req.length as usize],
             device_req,
         );
+        self.requests.lock().unwrap().push_back(request.clone());
         fill_transfer_by_type(
             host_transfer,
             self.handle.as_mut(),
@@ -1126,10 +1128,6 @@ impl UsbDeviceOps for UsbHost {
             }
         };
         self.submit_host_transfer(host_transfer, packet);
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn get_usb_device(&self) -> &UsbDevice {

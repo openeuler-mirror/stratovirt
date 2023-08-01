@@ -10,15 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Context};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::sync::Arc;
+
+use anyhow::{anyhow, bail, Context, Result};
+use log::error;
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
 
-use anyhow::Result;
+const IFF_ATTACH_QUEUE: u16 = 0x0200;
+const IFF_DETACH_QUEUE: u16 = 0x0400;
 
 pub const TUN_F_CSUM: u32 = 1;
 pub const TUN_F_TSO4: u32 = 2;
@@ -38,6 +42,7 @@ ioctl_iow_nr!(TUNSETIFF, 84, 202, ::std::os::raw::c_int);
 ioctl_ior_nr!(TUNGETFEATURES, 84, 207, ::std::os::raw::c_uint);
 ioctl_iow_nr!(TUNSETOFFLOAD, 84, 208, ::std::os::raw::c_int);
 ioctl_iow_nr!(TUNSETVNETHDRSZ, 84, 216, ::std::os::raw::c_int);
+ioctl_iow_nr!(TUNSETQUEUE, 84, 217, ::std::os::raw::c_int);
 
 #[repr(C)]
 pub struct IfReq {
@@ -45,8 +50,10 @@ pub struct IfReq {
     ifr_flags: u16,
 }
 
+#[derive(Clone)]
 pub struct Tap {
-    pub file: File,
+    pub file: Arc<File>,
+    pub enabled: bool,
 }
 
 impl Tap {
@@ -112,11 +119,15 @@ impl Tap {
             bail!("Needs multiqueue, but no kernel support for IFF_MULTI_QUEUE available");
         }
 
-        Ok(Tap { file })
+        Ok(Tap {
+            file: Arc::new(file),
+            enabled: true,
+        })
     }
 
     pub fn set_offload(&self, flags: u32) -> Result<()> {
-        let ret = unsafe { ioctl_with_val(&self.file, TUNSETOFFLOAD(), flags as libc::c_ulong) };
+        let ret =
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETOFFLOAD failed.".to_string()));
         }
@@ -125,7 +136,7 @@ impl Tap {
     }
 
     pub fn set_hdr_size(&self, len: u32) -> Result<()> {
-        let ret = unsafe { ioctl_with_ref(&self.file, TUNSETVNETHDRSZ(), &len) };
+        let ret = unsafe { ioctl_with_ref(self.file.as_ref(), TUNSETVNETHDRSZ(), &len) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETVNETHDRSZ failed.".to_string()));
         }
@@ -135,26 +146,46 @@ impl Tap {
 
     pub fn has_ufo(&self) -> bool {
         let flags = TUN_F_CSUM | TUN_F_UFO;
-        (unsafe { ioctl_with_val(&self.file, TUNSETOFFLOAD(), flags as libc::c_ulong) }) >= 0
+        (unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) })
+            >= 0
+    }
+
+    pub fn set_queue(&mut self, enable: bool) -> i32 {
+        if enable == self.enabled {
+            return 0;
+        }
+        let ifr_flags = if enable {
+            IFF_ATTACH_QUEUE
+        } else {
+            IFF_DETACH_QUEUE
+        };
+        let mut if_req = IfReq {
+            ifr_name: [0_u8; IFNAME_SIZE],
+            ifr_flags,
+        };
+
+        let ret = unsafe { ioctl_with_mut_ref(self.file.as_ref(), TUNSETQUEUE(), &mut if_req) };
+        if ret == 0 {
+            self.enabled = enable;
+        } else {
+            error!(
+                "Failed to set queue, flags is {}, error is {}",
+                ifr_flags,
+                std::io::Error::last_os_error()
+            );
+        }
+        ret
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        self.file.read(buf)
+        self.file.as_ref().read(buf)
     }
 
     pub fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        self.file.write(buf)
+        self.file.as_ref().write(buf)
     }
 
     pub fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
-    }
-}
-
-impl Clone for Tap {
-    fn clone(&self) -> Self {
-        Tap {
-            file: self.file.try_clone().unwrap(),
-        }
     }
 }

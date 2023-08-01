@@ -191,8 +191,8 @@ impl AmlBuilder for Ged {
             AmlFieldUpdateRule::WriteAsZeros,
         );
 
-        let elemt = AmlFieldUnit::new(Some(AML_GED_EVT_SEL), 32);
-        field.append_child(elemt);
+        let element = AmlFieldUnit::new(Some(AML_GED_EVT_SEL), 32);
+        field.append_child(element);
         acpi_dev.append_child(field);
 
         let mut method = AmlMethod::new("_EVT", 1, true);

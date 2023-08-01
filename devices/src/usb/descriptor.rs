@@ -22,6 +22,9 @@ use super::UsbDevice;
 pub const USB_MAX_INTERFACES: u32 = 16;
 const USB_DESCRIPTOR_TYPE_SHIFT: u32 = 8;
 const USB_DESCRIPTOR_INDEX_MASK: u32 = 0xff;
+// The max length of the string descriptor is 255.
+// And the header occupies 2 bytes, and each character occupies 2 bytes.
+const USB_STRING_MAX_LEN: usize = 126;
 
 /// USB device descriptor for transfer
 #[allow(non_snake_case)]
@@ -361,13 +364,14 @@ impl UsbDescriptor {
             .strings
             .get(index as usize)
             .with_context(|| format!("String descriptor index {} is invalid", index))?;
-        let len = found_str.len() as u8 * 2 + 2;
+        let str_max_len = std::cmp::min(USB_STRING_MAX_LEN, found_str.len());
+        let len = str_max_len as u8 * 2 + 2;
         let mut vec = vec![0_u8; len as usize];
         vec[0] = len;
         vec[1] = USB_DT_STRING;
 
         let mut pos = 2;
-        for i in 0..found_str.len() {
+        for i in 0..str_max_len {
             vec[pos] = found_str.as_bytes()[i];
             vec[pos + 1] = 0;
             pos += 2;
@@ -460,7 +464,7 @@ pub trait UsbDescriptorOps {
     /// Set configuration descriptor with the Configuration Value.
     fn set_config_descriptor(&mut self, v: u8) -> Result<()>;
 
-    /// Set interface descriptor with the Interface and Alernate Setting.
+    /// Set interface descriptor with the Interface and Alternate Setting.
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()>;
 
     /// Init all endpoint descriptors and reset the USB endpoint.

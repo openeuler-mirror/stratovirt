@@ -187,7 +187,7 @@ impl XhciPciDevice {
         let mut locked_port = usb_port.lock().unwrap();
         let dev = locked_port.dev.as_ref().unwrap();
         let mut locked_dev = dev.lock().unwrap();
-        locked_dev.get_mut_usb_device().unplugged_id = Some(id);
+        locked_dev.get_mut_usb_device().unplugged = true;
         locked_dev.unrealize()?;
         drop(locked_dev);
         locked_xhci.discharge_usb_port(&mut locked_port);

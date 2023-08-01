@@ -12,7 +12,7 @@
 
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
+use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
 use virtio::VhostKern::*;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/futex.h
@@ -160,6 +160,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETQUEUE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32);

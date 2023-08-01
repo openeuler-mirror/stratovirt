@@ -56,7 +56,7 @@ pub const INTERFACE_ID_STREAMING: u8 = 1;
 const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
 const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 2;
 
-pub const ENDPOINT_ID_STREAMING: u8 = 0x1;
+const ENDPOINT_ID_STREAMING: u8 = 0x1;
 const VS_INTERFACE_NUM: u8 = 1;
 
 // According to UVC specification 1.5
@@ -96,15 +96,14 @@ const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 pub struct UsbCamera {
-    id: String,                                                 // uniq device id
-    usb_device: UsbDevice,                                      // general usb device object
-    vs_control: VideoStreamingControl,                          // video stream control info
-    camera_fd: Arc<EventFd>,                                    // camera io fd
-    camera_dev: Arc<Mutex<dyn CameraHostdevOps>>,               // backend device
+    usb_device: UsbDevice,                        // general usb device object
+    vs_control: VideoStreamingControl,            // video stream control info
+    camera_fd: Arc<EventFd>,                      // camera io fd
+    camera_dev: Arc<Mutex<dyn CameraHostdevOps>>, // backend device
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>, // packet to be processed
-    payload: Arc<Mutex<UvcPayload>>,                            // uvc payload
-    listening: bool,                                            // if the camera is listening or not
-    broken: Arc<AtomicBool>,                                    // if the device broken or not
+    payload: Arc<Mutex<UvcPayload>>,              // uvc payload
+    listening: bool,                              // if the camera is listening or not
+    broken: Arc<AtomicBool>,                      // if the device broken or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
 }
@@ -129,9 +128,9 @@ const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
     "",
     "StratoVirt",
     "USB Camera",
-    "1",
+    "4",
     "USB Camera Configuration",
-    "StratoVirt Camera",
+    "STRATO CAM",
     "Video Control",
     "Input Terminal",
     "Output Terminal",
@@ -191,122 +190,6 @@ struct OutputTerminalDescriptor {
 }
 
 impl ByteCode for OutputTerminalDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct VSInputHeaderDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bNumFormats: u8,
-    pub wTotalLength: u16,
-    pub bEndpointAddress: u8,
-    pub bmInfo: u8,
-    pub bTerminalLink: u8,
-    pub bStillCaptureMethod: u8,
-    pub bTriggerSupport: u8,
-    pub bTriggerUsage: u8,
-    pub bControlSize: u8,
-    pub bmaControls: [u8; 2],
-}
-
-impl ByteCode for VSInputHeaderDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub bmFlags: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for MjpgFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct MjpgFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for MjpgFrameDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct ColorMatchingDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bColorPrimaries: u8,
-    pub bTransferCharacteristics: u8,
-    pub bMatrixCoefficients: u8,
-}
-
-impl ByteCode for ColorMatchingDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFormatDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFormatIndex: u8,
-    pub bNumFrameDescriptors: u8,
-    pub guidFormat: [u8; 16],
-    pub bBitsPerPixel: u8,
-    pub bDefaultFrameIndex: u8,
-    pub bAspectRatioX: u8,
-    pub bAspectRatioY: u8,
-    pub bmInterfaceFlags: u8,
-    pub bCopyProtect: u8,
-}
-
-impl ByteCode for UncompressedFormatDescriptor {}
-
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UncompressedFrameDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bDescriptorSubType: u8,
-    pub bFrameIndex: u8,
-    pub bmCapabilities: u8,
-    pub wWidth: u16,
-    pub wHeight: u16,
-    pub dwMinBitRate: u32,
-    pub dwMaxBitRate: u32,
-    pub dwMaxVideoFrameBufferSize: u32,
-    pub dwDefaultFrameInterval: u32,
-    pub bFrameIntervalType: u8,
-    pub dwFrameInterval: u32,
-}
-
-impl ByteCode for UncompressedFrameDescriptor {}
 
 fn gen_desc_interface_camera_vc() -> Result<Arc<UsbDescIface>> {
     // VideoControl Interface Descriptor
@@ -610,8 +493,7 @@ impl UsbCamera {
     pub fn new(config: UsbCameraConfig) -> Result<Self> {
         let camera = camera_ops(config.clone())?;
         Ok(Self {
-            id: config.id.unwrap(),
-            usb_device: UsbDevice::new(USB_CAMERA_BUFFER_LEN),
+            usb_device: UsbDevice::new(config.id.unwrap(), USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
             camera_dev: camera,
@@ -636,10 +518,15 @@ impl UsbCamera {
             }
         });
         let clone_broken = self.broken.clone();
-        let clone_id = self.id.clone();
+        let clone_id = self.device_id().to_string();
+        let clone_fd = self.camera_fd.clone();
         let broken_cb: CameraBrokenCallback = Arc::new(move || {
             clone_broken.store(true, Ordering::SeqCst);
             error!("USB Camera {} device broken", clone_id);
+            // Notify the camera to process the packet.
+            if let Err(e) = clone_fd.write(1) {
+                error!("Failed to notify camera fd {:?}", e);
+            }
         });
         let mut locked_camera = self.camera_dev.lock().unwrap();
         locked_camera.register_notify_cb(notify_cb);
@@ -647,7 +534,7 @@ impl UsbCamera {
     }
 
     fn activate(&mut self, fmt: &CamBasicFmt) -> Result<()> {
-        info!("USB Camera {} activate", self.id);
+        info!("USB Camera {} activate", self.device_id());
         self.camera_dev.lock().unwrap().reset();
         self.payload.lock().unwrap().reset();
         let mut locked_camera = self.camera_dev.lock().unwrap();
@@ -667,6 +554,7 @@ impl UsbCamera {
             &self.packet_list,
             &self.camera_dev,
             &self.payload,
+            &self.broken,
         )));
         register_event_helper(
             EventNotifierHelper::internal_notifiers(cam_handler),
@@ -678,9 +566,12 @@ impl UsbCamera {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        info!("USB Camera {} deactivate", self.id);
+        info!("USB Camera {} deactivate", self.device_id());
         if self.broken.load(Ordering::Acquire) {
-            info!("USB Camera {} broken when deactivate, reset it.", self.id);
+            info!(
+                "USB Camera {} broken when deactivate, reset it.",
+                self.device_id()
+            );
             self.camera_dev.lock().unwrap().reset();
             self.broken.store(false, Ordering::SeqCst);
         } else {
@@ -840,16 +731,23 @@ impl UsbCamera {
             .unwrap_or_default();
         self.vs_control.reset(&default_fmt);
     }
+
+    fn generate_iad(&self, prefix: &str) -> String {
+        format!("{} ({})", prefix, self.device_id())
+    }
 }
 
 impl UsbDeviceOps for UsbCamera {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        self.camera_dev.lock().unwrap().list_format()?;
-        let fmt_list = self.camera_dev.lock().unwrap().get_fmt()?;
-
+        let fmt_list = self.camera_dev.lock().unwrap().list_format()?;
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_SUPER;
-        let s = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[UsbCameraStringIDs::SerialNumber as usize];
+        s[UsbCameraStringIDs::SerialNumber as usize] =
+            self.usb_device.generate_serial_number(prefix);
+        let iad = &s[UsbCameraStringIDs::Iad as usize];
+        s[UsbCameraStringIDs::Iad as usize] = self.generate_iad(iad);
         let device_desc = gen_desc_device_camera(fmt_list)?;
         self.usb_device.init_descriptor(device_desc, s)?;
         self.register_cb();
@@ -859,13 +757,13 @@ impl UsbDeviceOps for UsbCamera {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        info!("Camera {} unrealize", self.id);
+        info!("Camera {} unrealize", self.device_id());
         self.camera_dev.lock().unwrap().reset();
         Ok(())
     }
 
     fn reset(&mut self) {
-        info!("Camera {} device reset", self.id);
+        info!("Camera {} device reset", self.device_id());
         self.usb_device.addr = 0;
         if let Err(e) = self.unregister_camera_fd() {
             error!("Failed to unregister fd when reset {:?}", e);
@@ -911,7 +809,8 @@ impl UsbDeviceOps for UsbCamera {
             if let Err(e) = self.camera_fd.write(1) {
                 error!(
                     "Failed to write fd when handle data for {} {:?}",
-                    self.id, e
+                    self.device_id(),
+                    e
                 );
                 // SAFETY: packet is push before, and no other thread modify the list.
                 let p = locked_list.pop_back().unwrap();
@@ -924,10 +823,6 @@ impl UsbDeviceOps for UsbCamera {
             error!("Invalid ep number {}", packet.lock().unwrap().ep_number);
             packet.lock().unwrap().status = UsbPacketStatus::Stall;
         }
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn set_controller(&mut self, _cntlr: Weak<Mutex<XhciDevice>>) {}
@@ -1020,6 +915,7 @@ struct CameraIoHandler {
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
+    broken: Arc<AtomicBool>,
 }
 
 impl CameraIoHandler {
@@ -1028,12 +924,14 @@ impl CameraIoHandler {
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
         camera: &Arc<Mutex<dyn CameraHostdevOps>>,
         payload: &Arc<Mutex<UvcPayload>>,
+        broken: &Arc<AtomicBool>,
     ) -> Self {
         CameraIoHandler {
             camera: camera.clone(),
             fd: fd.clone(),
             packet_list: list.clone(),
             payload: payload.clone(),
+            broken: broken.clone(),
         }
     }
 
@@ -1117,7 +1015,22 @@ impl EventNotifierHelper for CameraIoHandler {
         let cloned_io_handler = io_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
             read_fd(fd);
-            cloned_io_handler.lock().unwrap().handle_io();
+            let mut locked_handler = cloned_io_handler.lock().unwrap();
+            if locked_handler.broken.load(Ordering::Acquire) {
+                let mut locked_list = locked_handler.packet_list.lock().unwrap();
+                while let Some(p) = locked_list.pop_front() {
+                    let mut locked_p = p.lock().unwrap();
+                    locked_p.status = UsbPacketStatus::IoError;
+                    if let Some(transfer) = locked_p.xfer_ops.as_ref() {
+                        if let Some(ops) = transfer.clone().upgrade() {
+                            drop(locked_p);
+                            ops.lock().unwrap().submit_transfer();
+                        }
+                    }
+                }
+                return None;
+            }
+            locked_handler.handle_io();
             None
         });
         vec![EventNotifier::new(

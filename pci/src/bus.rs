@@ -34,7 +34,7 @@ pub struct PciBus {
     pub devices: HashMap<u8, Arc<Mutex<dyn PciDevOps>>>,
     /// Child buses of the bus.
     pub child_buses: Vec<Arc<Mutex<PciBus>>>,
-    /// Pci bridge which the bus orignates from.
+    /// Pci bridge which the bus originates from.
     pub parent_bridge: Option<Weak<Mutex<dyn PciDevOps>>>,
     /// IO region which the parent bridge manages.
     #[cfg(target_arch = "x86_64")]

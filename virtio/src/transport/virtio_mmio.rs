@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::error::VirtioError;
@@ -26,11 +26,10 @@ use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    virtio_has_feature, Queue, VirtioBaseState, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, NOTIFY_REG_OFFSET,
-    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG,
-    VIRTIO_MMIO_INT_VRING,
+    QUEUE_TYPE_PACKED_VRING, VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -84,9 +83,6 @@ const VENDOR_ID: u32 = 0;
 const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
 
-/// The maximum of virtio queue within a virtio device.
-const MAXIMUM_NR_QUEUES: usize = 8;
-
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
 pub struct HostNotifyInfo {
     /// Eventfds which notify backend to use the avail ring.
@@ -109,217 +105,7 @@ impl HostNotifyInfo {
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct VirtioMmioState {
-    /// Identify if this device is activated by frontend driver.
-    activated: bool,
-    /// Config space of virtio mmio device.
-    config_space: VirtioMmioCommonConfig,
-}
-
-/// The configuration of virtio-mmio device, the fields refer to Virtio Spec.
-#[derive(Copy, Clone, Default)]
-pub struct VirtioMmioCommonConfig {
-    /// Bitmask of the features supported by the device (host)(32 bits per set).
-    features_select: u32,
-    /// Device (host) feature-setting selector.
-    acked_features_select: u32,
-    /// Interrupt status value.
-    interrupt_status: u32,
-    /// Device status.
-    device_status: u32,
-    /// Configuration atomicity value.
-    config_generation: u32,
-    /// Queue selector.
-    queue_select: u32,
-    /// The configuration of queues.
-    queues_config: [QueueConfig; MAXIMUM_NR_QUEUES],
-    /// The number of queues.
-    queue_num: usize,
-    /// The type of queue, either be split ring or packed ring.
-    queue_type: u16,
-}
-
-impl VirtioMmioCommonConfig {
-    pub fn new(device: &Arc<Mutex<dyn VirtioDevice>>) -> Self {
-        let locked_device = device.lock().unwrap();
-        let mut queues_config = [QueueConfig::default(); 8];
-        let queue_size = locked_device.queue_size();
-        let queue_num = locked_device.queue_num();
-        for queue_config in queues_config.iter_mut().take(queue_num) {
-            *queue_config = QueueConfig::new(queue_size);
-        }
-
-        VirtioMmioCommonConfig {
-            queues_config,
-            queue_num,
-            queue_type: QUEUE_TYPE_SPLIT_VRING,
-            ..Default::default()
-        }
-    }
-
-    /// Check whether virtio device status is as expected.
-    fn check_device_status(&self, set: u32, clr: u32) -> bool {
-        self.device_status & (set | clr) == set
-    }
-
-    /// Get the status of virtio device
-    fn get_device_status(&self) -> u32 {
-        self.device_status
-    }
-
-    /// Get mutable QueueConfig structure of virtio device.
-    fn get_mut_queue_config(&mut self) -> Result<&mut QueueConfig> {
-        if self.check_device_status(
-            CONFIG_STATUS_FEATURES_OK,
-            CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
-        ) {
-            let queue_select = self.queue_select;
-            self.queues_config
-                .get_mut(queue_select as usize)
-                .with_context(|| {
-                    format!(
-                        "Mmio-reg queue_select {} overflows for mutable queue config",
-                        queue_select,
-                    )
-                })
-        } else {
-            Err(anyhow!(VirtioError::DevStatErr(self.device_status)))
-        }
-    }
-
-    /// Get immutable QueueConfig structure of virtio device.
-    fn get_queue_config(&self) -> Result<&QueueConfig> {
-        let queue_select = self.queue_select;
-        self.queues_config
-            .get(queue_select as usize)
-            .with_context(|| {
-                format!(
-                    "Mmio-reg queue_select overflows {} for immutable queue config",
-                    queue_select,
-                )
-            })
-    }
-
-    /// Read data from the common config of virtio device.
-    /// Return the config value in u32.
-    /// # Arguments
-    ///
-    /// * `device` - Virtio device entity.
-    /// * `offset` - The offset of common config.
-    fn read_common_config(
-        &mut self,
-        device: &Arc<Mutex<dyn VirtioDevice>>,
-        interrupt_status: &Arc<AtomicU32>,
-        offset: u64,
-    ) -> Result<u32> {
-        let value = match offset {
-            MAGIC_VALUE_REG => MMIO_MAGIC_VALUE,
-            VERSION_REG => MMIO_VERSION,
-            DEVICE_ID_REG => device.lock().unwrap().device_type(),
-            VENDOR_ID_REG => VENDOR_ID,
-            DEVICE_FEATURES_REG => {
-                let mut features = device
-                    .lock()
-                    .unwrap()
-                    .get_device_features(self.features_select);
-                if self.features_select == 1 {
-                    features |= 0x1; // enable support of VirtIO Version 1
-                }
-                features
-            }
-            QUEUE_NUM_MAX_REG => self
-                .get_queue_config()
-                .map(|config| u32::from(config.max_size))?,
-            QUEUE_READY_REG => self.get_queue_config().map(|config| config.ready as u32)?,
-            INTERRUPT_STATUS_REG => {
-                self.interrupt_status = interrupt_status.load(Ordering::SeqCst);
-                self.interrupt_status
-            }
-            STATUS_REG => self.device_status,
-            CONFIG_GENERATION_REG => self.config_generation,
-            _ => {
-                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
-            }
-        };
-
-        Ok(value)
-    }
-
-    /// Write data to the common config of virtio device.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - Virtio device entity.
-    /// * `offset` - The offset of common config.
-    /// * `value` - The value to write.
-    ///
-    /// # Errors
-    ///
-    /// Returns Error if the offset is out of bound.
-    fn write_common_config(
-        &mut self,
-        device: &Arc<Mutex<dyn VirtioDevice>>,
-        interrupt_status: &Arc<AtomicU32>,
-        offset: u64,
-        value: u32,
-    ) -> Result<()> {
-        match offset {
-            DEVICE_FEATURES_SEL_REG => self.features_select = value,
-            DRIVER_FEATURES_REG => {
-                if self.check_device_status(
-                    CONFIG_STATUS_DRIVER,
-                    CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_FAILED,
-                ) {
-                    device
-                        .lock()
-                        .unwrap()
-                        .set_driver_features(self.acked_features_select, value);
-                    if self.acked_features_select == 1
-                        && virtio_has_feature(u64::from(value) << 32, VIRTIO_F_RING_PACKED)
-                    {
-                        self.queue_type = QUEUE_TYPE_PACKED_VRING;
-                    }
-                } else {
-                    return Err(anyhow!(VirtioError::DevStatErr(self.device_status)));
-                }
-            }
-            DRIVER_FEATURES_SEL_REG => self.acked_features_select = value,
-            QUEUE_SEL_REG => self.queue_select = value,
-            QUEUE_NUM_REG => self
-                .get_mut_queue_config()
-                .map(|config| config.size = value as u16)?,
-            QUEUE_READY_REG => self
-                .get_mut_queue_config()
-                .map(|config| config.ready = value == 1)?,
-            INTERRUPT_ACK_REG => {
-                if self.check_device_status(CONFIG_STATUS_DRIVER_OK, 0) {
-                    self.interrupt_status = interrupt_status.fetch_and(!value, Ordering::SeqCst);
-                }
-            }
-            STATUS_REG => self.device_status = value,
-            QUEUE_DESC_LOW_REG => self.get_mut_queue_config().map(|config| {
-                config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
-            })?,
-            QUEUE_DESC_HIGH_REG => self.get_mut_queue_config().map(|config| {
-                config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
-            })?,
-            QUEUE_AVAIL_LOW_REG => self.get_mut_queue_config().map(|config| {
-                config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
-            })?,
-            QUEUE_AVAIL_HIGH_REG => self.get_mut_queue_config().map(|config| {
-                config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
-            })?,
-            QUEUE_USED_LOW_REG => self.get_mut_queue_config().map(|config| {
-                config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
-            })?,
-            QUEUE_USED_HIGH_REG => self.get_mut_queue_config().map(|config| {
-                config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
-            })?,
-            _ => {
-                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
-            }
-        };
-        Ok(())
-    }
+    virtio_base: VirtioBaseState,
 }
 
 /// virtio-mmio device structure.
@@ -328,16 +114,10 @@ pub struct VirtioMmioDevice {
     pub device: Arc<Mutex<dyn VirtioDevice>>,
     // EventFd used to send interrupt to VM
     interrupt_evt: Arc<EventFd>,
-    // Interrupt status.
-    interrupt_status: Arc<AtomicU32>,
     // HostNotifyInfo used for guest notifier
     host_notify_info: HostNotifyInfo,
-    // The state of virtio mmio device.
-    state: Arc<Mutex<VirtioMmioState>>,
     // System address space.
     mem_space: Arc<AddressSpace>,
-    // Virtio queues.
-    queues: Vec<Arc<Mutex<Queue>>>,
     // System Resource of device.
     res: SysRes,
     /// The function for interrupt triggering.
@@ -352,14 +132,8 @@ impl VirtioMmioDevice {
         VirtioMmioDevice {
             device,
             interrupt_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
-            interrupt_status: Arc::new(AtomicU32::new(0)),
             host_notify_info: HostNotifyInfo::new(queue_num),
-            state: Arc::new(Mutex::new(VirtioMmioState {
-                activated: false,
-                config_space: VirtioMmioCommonConfig::new(&device_clone),
-            })),
             mem_space: mem_space.clone(),
-            queues: Vec::new(),
             res: SysRes::default(),
             interrupt_cb: None,
         }
@@ -402,31 +176,29 @@ impl VirtioMmioDevice {
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
-        let mut locked_state = self.state.lock().unwrap();
-        let queue_num = locked_state.config_space.queue_num;
-        let queue_type = locked_state.config_space.queue_type;
-        let queues_config = &mut locked_state.config_space.queues_config[0..queue_num];
-        let dev_lock = self.device.lock().unwrap();
-        let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
+        let mut locked_dev = self.device.lock().unwrap();
+        let queue_num = locked_dev.queue_num();
+        let queue_type = locked_dev.queue_type();
+        let features = locked_dev.virtio_base().driver_features;
+        let broken = locked_dev.virtio_base().broken.clone();
+        let queues_config = &mut locked_dev.virtio_base_mut().queues_config;
 
+        let mut queues = Vec::with_capacity(queue_num);
         for q_config in queues_config.iter_mut() {
             q_config.set_addr_cache(
                 self.mem_space.clone(),
                 self.interrupt_cb.clone().unwrap(),
                 features,
-                broken,
+                &broken,
             );
 
             let queue = Queue::new(*q_config, queue_type)?;
             if !queue.is_valid(&self.mem_space) {
                 bail!("Invalid queue");
             }
-            self.queues.push(Arc::new(Mutex::new(queue)));
+            queues.push(Arc::new(Mutex::new(queue)));
         }
-        drop(dev_lock);
-        drop(locked_state);
+        locked_dev.virtio_base_mut().queues = queues;
 
         let mut queue_evts = Vec::<Arc<EventFd>>::new();
         for fd in self.host_notify_info.events.iter() {
@@ -434,19 +206,14 @@ impl VirtioMmioDevice {
         }
 
         let mut events = Vec::new();
-        for _i in 0..self.device.lock().unwrap().queue_num() {
+        for _i in 0..locked_dev.queue_num() {
             events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
         }
 
-        self.device.lock().unwrap().set_guest_notifiers(&events)?;
+        locked_dev.set_guest_notifiers(&events)?;
 
         if let Some(cb) = self.interrupt_cb.clone() {
-            self.device.lock().unwrap().activate(
-                self.mem_space.clone(),
-                cb,
-                &self.queues,
-                queue_evts,
-            )?;
+            locked_dev.activate(self.mem_space.clone(), cb, queue_evts)?;
         } else {
             bail!("Failed to activate device: No interrupt callback");
         }
@@ -455,23 +222,25 @@ impl VirtioMmioDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let interrupt_status = self.interrupt_status.clone();
         let interrupt_evt = self.interrupt_evt.clone();
-        let cloned_state = self.state.clone();
+
+        let locked_dev = self.device.lock().unwrap();
+        let virtio_base = locked_dev.virtio_base();
+        let device_status = virtio_base.device_status.clone();
+        let config_generation = virtio_base.config_generation.clone();
+        let interrupt_status = virtio_base.interrupt_status.clone();
+
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => {
-                        let mut locked_state = cloned_state.lock().unwrap();
                         if needs_reset {
-                            locked_state.config_space.device_status |= CONFIG_STATUS_NEEDS_RESET;
-                            if locked_state.config_space.device_status & CONFIG_STATUS_DRIVER_OK
-                                == 0
-                            {
-                                return Ok(());
-                            }
+                            device_status.fetch_or(CONFIG_STATUS_NEEDS_RESET, Ordering::SeqCst);
                         }
-                        locked_state.config_space.config_generation += 1;
+                        if device_status.load(Ordering::Acquire) & CONFIG_STATUS_DRIVER_OK == 0 {
+                            return Ok(());
+                        }
+                        config_generation.fetch_add(1, Ordering::SeqCst);
                         // Use (CONFIG | VRING) instead of CONFIG, it can be used to solve the
                         // IO stuck problem by change the device configure.
                         VIRTIO_MMIO_INT_CONFIG | VIRTIO_MMIO_INT_VRING
@@ -489,6 +258,115 @@ impl VirtioMmioDevice {
 
         self.interrupt_cb = Some(cb);
     }
+
+    /// Read data from the common config of virtio device.
+    /// Return the config value in u32.
+    /// # Arguments
+    ///
+    /// * `offset` - The offset of common config.
+    fn read_common_config(&mut self, offset: u64) -> Result<u32> {
+        let locked_device = self.device.lock().unwrap();
+        let value = match offset {
+            MAGIC_VALUE_REG => MMIO_MAGIC_VALUE,
+            VERSION_REG => MMIO_VERSION,
+            DEVICE_ID_REG => locked_device.device_type(),
+            VENDOR_ID_REG => VENDOR_ID,
+            DEVICE_FEATURES_REG => {
+                let hfeatures_sel = locked_device.hfeatures_sel();
+                let mut features = locked_device.device_features(hfeatures_sel);
+                if hfeatures_sel == 1 {
+                    features |= 0x1; // enable support of VirtIO Version 1
+                }
+                features
+            }
+            QUEUE_NUM_MAX_REG => locked_device
+                .queue_config()
+                .map(|config| u32::from(config.max_size))?,
+            QUEUE_READY_REG => locked_device
+                .queue_config()
+                .map(|config| config.ready as u32)?,
+            INTERRUPT_STATUS_REG => locked_device.interrupt_status(),
+            STATUS_REG => locked_device.device_status(),
+            CONFIG_GENERATION_REG => locked_device.config_generation() as u32,
+            _ => {
+                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
+            }
+        };
+
+        Ok(value)
+    }
+
+    /// Write data to the common config of virtio device.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The offset of common config.
+    /// * `value` - The value to write.
+    ///
+    /// # Errors
+    ///
+    /// Returns Error if the offset is out of bound.
+    fn write_common_config(&mut self, offset: u64, value: u32) -> Result<()> {
+        let mut locked_device = self.device.lock().unwrap();
+        match offset {
+            DEVICE_FEATURES_SEL_REG => locked_device.set_hfeatures_sel(value),
+            DRIVER_FEATURES_REG => {
+                if locked_device.check_device_status(
+                    CONFIG_STATUS_DRIVER,
+                    CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_FAILED,
+                ) {
+                    let gfeatures_sel = locked_device.gfeatures_sel();
+                    locked_device.set_driver_features(gfeatures_sel, value);
+                    if gfeatures_sel == 1
+                        && virtio_has_feature(u64::from(value) << 32, VIRTIO_F_RING_PACKED)
+                    {
+                        locked_device.set_queue_type(QUEUE_TYPE_PACKED_VRING);
+                    }
+                } else {
+                    return Err(anyhow!(VirtioError::DevStatErr(
+                        locked_device.device_status()
+                    )));
+                }
+            }
+            DRIVER_FEATURES_SEL_REG => locked_device.set_gfeatures_sel(value),
+            QUEUE_SEL_REG => locked_device.set_queue_select(value as u16),
+            QUEUE_NUM_REG => locked_device
+                .queue_config_mut(true)
+                .map(|config| config.size = value as u16)?,
+            QUEUE_READY_REG => locked_device
+                .queue_config_mut(true)
+                .map(|config| config.ready = value == 1)?,
+            INTERRUPT_ACK_REG => {
+                if locked_device.check_device_status(CONFIG_STATUS_DRIVER_OK, 0) {
+                    let isr = &locked_device.virtio_base_mut().interrupt_status;
+                    isr.fetch_and(!value, Ordering::SeqCst);
+                }
+            }
+            STATUS_REG => locked_device.set_device_status(value),
+            QUEUE_DESC_LOW_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
+            })?,
+            QUEUE_DESC_HIGH_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
+            })?,
+            QUEUE_AVAIL_LOW_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
+            })?,
+            QUEUE_AVAIL_HIGH_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
+            })?,
+            QUEUE_USED_LOW_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
+            })?,
+            QUEUE_USED_HIGH_REG => locked_device.queue_config_mut(true).map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
+            })?,
+            _ => {
+                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
+            }
+        };
+        Ok(())
+    }
 }
 
 impl SysBusDevOps for VirtioMmioDevice {
@@ -496,11 +374,7 @@ impl SysBusDevOps for VirtioMmioDevice {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
             0x00..=0xff if data.len() == 4 => {
-                let value = match self.state.lock().unwrap().config_space.read_common_config(
-                    &self.device,
-                    &self.interrupt_status,
-                    offset,
-                ) {
+                let value = match self.read_common_config(offset) {
                     Ok(v) => v,
                     Err(ref e) => {
                         error!(
@@ -543,16 +417,10 @@ impl SysBusDevOps for VirtioMmioDevice {
 
     /// Write data by virtio driver from VM.
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let mut locked_state = self.state.lock().unwrap();
         match offset {
             0x00..=0xff if data.len() == 4 => {
                 let value = LittleEndian::read_u32(data);
-                if let Err(ref e) = locked_state.config_space.write_common_config(
-                    &self.device,
-                    &self.interrupt_status,
-                    offset,
-                    value,
-                ) {
+                if let Err(ref e) = self.write_common_config(offset, value) {
                     error!(
                         "Failed to write mmio register {}, type: {}, {:?}",
                         offset,
@@ -562,15 +430,16 @@ impl SysBusDevOps for VirtioMmioDevice {
                     return false;
                 }
 
-                if locked_state.config_space.check_device_status(
+                let locked_dev = self.device.lock().unwrap();
+                if locked_dev.check_device_status(
                     CONFIG_STATUS_ACKNOWLEDGE
                         | CONFIG_STATUS_DRIVER
                         | CONFIG_STATUS_DRIVER_OK
                         | CONFIG_STATUS_FEATURES_OK,
                     CONFIG_STATUS_FAILED,
-                ) && !locked_state.activated
+                ) && !locked_dev.device_activated()
                 {
-                    drop(locked_state);
+                    drop(locked_dev);
                     if let Err(ref e) = self.activate() {
                         error!(
                             "Failed to activate dev, type: {}, {:?}",
@@ -579,32 +448,25 @@ impl SysBusDevOps for VirtioMmioDevice {
                         );
                         return false;
                     }
-                    self.state.lock().unwrap().activated = true;
+                    self.device.lock().unwrap().set_device_activated(true);
                 }
             }
             0x100..=0xfff => {
-                if locked_state
-                    .config_space
-                    .check_device_status(CONFIG_STATUS_DRIVER, CONFIG_STATUS_FAILED)
-                {
-                    if let Err(ref e) = self
-                        .device
-                        .lock()
-                        .unwrap()
-                        .write_config(offset - 0x100, data)
-                    {
+                let mut locked_device = self.device.lock().unwrap();
+                if locked_device.check_device_status(CONFIG_STATUS_DRIVER, CONFIG_STATUS_FAILED) {
+                    if let Err(ref e) = locked_device.write_config(offset - 0x100, data) {
                         error!(
                             "Failed to write virtio-dev config space {}, type: {}, {:?}",
                             offset - 0x100,
-                            self.device.lock().unwrap().device_type(),
+                            locked_device.device_type(),
                             e,
                         );
                         return false;
                     }
                 } else {
                     error!("Failed to write virtio-dev config space: driver is not ready 0x{:X}, type: {}",
-                        locked_state.config_space.get_device_status(),
-                        self.device.lock().unwrap().device_type(),
+                        locked_device.device_status(),
+                        locked_device.device_type(),
                     );
                     return false;
                 }
@@ -656,14 +518,9 @@ impl acpi::AmlBuilder for VirtioMmioDevice {
 
 impl StateTransfer for VirtioMmioDevice {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        let mut state = self.state.lock().unwrap();
-
-        for (index, queue) in self.queues.iter().enumerate() {
-            state.config_space.queues_config[index] =
-                queue.lock().unwrap().vring.get_queue_config();
-        }
-        state.config_space.interrupt_status = self.interrupt_status.load(Ordering::Relaxed);
-
+        let state = VirtioMmioState {
+            virtio_base: self.device.lock().unwrap().virtio_base().get_state(),
+        };
         Ok(state.as_bytes().to_vec())
     }
 
@@ -672,32 +529,16 @@ impl StateTransfer for VirtioMmioDevice {
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);
         }
-        let mut locked_state = self.state.lock().unwrap();
-        locked_state.as_mut_bytes().copy_from_slice(state);
-        let mut queue_states = locked_state.config_space.queues_config
-            [0..locked_state.config_space.queue_num]
-            .to_vec();
-        let dev_lock = self.device.lock().unwrap();
-        let features =
-            (dev_lock.get_driver_features(1) as u64) << 32 | dev_lock.get_driver_features(0) as u64;
-        let broken = dev_lock.get_device_broken();
-        self.queues = queue_states
-            .iter_mut()
-            .map(|queue_state| {
-                queue_state.set_addr_cache(
-                    self.mem_space.clone(),
-                    self.interrupt_cb.clone().unwrap(),
-                    features,
-                    broken,
-                );
-                Arc::new(Mutex::new(
-                    Queue::new(*queue_state, locked_state.config_space.queue_type).unwrap(),
-                ))
-            })
-            .collect();
-        self.interrupt_status
-            .store(locked_state.config_space.interrupt_status, Ordering::SeqCst);
 
+        let mut mmio_state = VirtioMmioState::default();
+        mmio_state.as_mut_bytes().copy_from_slice(state);
+
+        let mut locked_dev = self.device.lock().unwrap();
+        locked_dev.virtio_base_mut().set_state(
+            &mmio_state.virtio_base,
+            self.mem_space.clone(),
+            self.interrupt_cb.clone().unwrap(),
+        );
         Ok(())
     }
 
@@ -708,24 +549,22 @@ impl StateTransfer for VirtioMmioDevice {
 
 impl MigrationHook for VirtioMmioDevice {
     fn resume(&mut self) -> migration::Result<()> {
-        if self.state.lock().unwrap().activated {
-            let mut queue_evts = Vec::<Arc<EventFd>>::new();
-            for fd in self.host_notify_info.events.iter() {
-                queue_evts.push(fd.clone());
-            }
+        let mut locked_dev = self.device.lock().unwrap();
+        if !locked_dev.device_activated() {
+            return Ok(());
+        }
 
-            if let Some(cb) = self.interrupt_cb.clone() {
-                if let Err(e) = self.device.lock().unwrap().activate(
-                    self.mem_space.clone(),
-                    cb,
-                    &self.queues,
-                    queue_evts,
-                ) {
-                    bail!("Failed to resume virtio mmio device: {}", e);
-                }
-            } else {
-                bail!("Failed to resume device: No interrupt callback");
+        let mut queue_evts = Vec::<Arc<EventFd>>::new();
+        for fd in self.host_notify_info.events.iter() {
+            queue_evts.push(fd.clone());
+        }
+
+        if let Some(cb) = self.interrupt_cb.clone() {
+            if let Err(e) = locked_dev.activate(self.mem_space.clone(), cb, queue_evts) {
+                bail!("Failed to resume virtio mmio device: {}", e);
             }
+        } else {
+            bail!("Failed to resume device: No interrupt callback");
         }
 
         Ok(())
@@ -734,13 +573,13 @@ impl MigrationHook for VirtioMmioDevice {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
     use super::*;
-    use crate::VIRTIO_TYPE_BLOCK;
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use std::sync::atomic::AtomicBool;
-    use util::num_ops::read_u32;
+    use crate::{
+        check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
+        VIRTIO_TYPE_BLOCK,
+    };
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
@@ -773,12 +612,10 @@ mod tests {
     const QUEUE_SIZE: u16 = 256;
 
     pub struct VirtioDeviceTest {
-        pub device_features: u64,
-        pub driver_features: u64,
+        base: VirtioBase,
         pub config_space: Vec<u8>,
         pub b_active: bool,
         pub b_realized: bool,
-        pub broken: Arc<AtomicBool>,
     }
 
     impl VirtioDeviceTest {
@@ -789,79 +626,42 @@ mod tests {
             }
 
             VirtioDeviceTest {
-                device_features: 0,
-                driver_features: 0,
+                base: VirtioBase::new(VIRTIO_TYPE_BLOCK, QUEUE_NUM, QUEUE_SIZE),
                 b_active: false,
                 b_realized: false,
                 config_space,
-                broken: Arc::new(AtomicBool::new(false)),
             }
         }
     }
 
     impl VirtioDevice for VirtioDeviceTest {
+        fn virtio_base(&self) -> &VirtioBase {
+            &self.base
+        }
+
+        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+            &mut self.base
+        }
+
         fn realize(&mut self) -> Result<()> {
             self.b_realized = true;
+            self.init_config_features()?;
             Ok(())
         }
 
-        fn device_type(&self) -> u32 {
-            VIRTIO_TYPE_BLOCK
-        }
-
-        fn queue_num(&self) -> usize {
-            QUEUE_NUM
-        }
-
-        fn queue_size(&self) -> u16 {
-            QUEUE_SIZE
-        }
-
-        fn get_device_features(&self, features_select: u32) -> u32 {
-            read_u32(self.device_features, features_select)
-        }
-
-        fn set_driver_features(&mut self, page: u32, value: u32) {
-            self.driver_features = self.checked_driver_features(page, value);
-        }
-
-        fn get_driver_features(&self, features_select: u32) -> u32 {
-            read_u32(self.driver_features, features_select)
-        }
-
-        fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-            let config_len = self.config_space.len() as u64;
-            if offset >= config_len {
-                bail!(
-                    "The offset{} for reading is more than the length{} of configuration",
-                    offset,
-                    config_len
-                );
-            }
-            if let Some(end) = offset.checked_add(data.len() as u64) {
-                data.write_all(
-                    &self.config_space[offset as usize..std::cmp::min(end, config_len) as usize],
-                )?;
-            }
-
+        fn init_config_features(&mut self) -> Result<()> {
             Ok(())
+        }
+
+        fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
+            read_config_default(&self.config_space, offset, data)
         }
 
         fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
+            check_config_space_rw(&self.config_space, offset, data)?;
             let data_len = data.len();
-            let config_len = self.config_space.len();
-            if offset as usize + data_len > config_len {
-                bail!(
-                    "The offset{} {}for writing is more than the length{} of configuration",
-                    offset,
-                    data_len,
-                    config_len
-                );
-            }
-
             self.config_space[(offset as usize)..(offset as usize + data_len)]
                 .copy_from_slice(&data[..]);
-
             Ok(())
         }
 
@@ -869,49 +669,38 @@ mod tests {
             &mut self,
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
-            _queues: &[Arc<Mutex<Queue>>],
             mut _queue_evts: Vec<Arc<EventFd>>,
         ) -> Result<()> {
             self.b_active = true;
             Ok(())
-        }
-
-        fn get_device_broken(&self) -> &Arc<AtomicBool> {
-            &self.broken
         }
     }
 
     #[test]
     fn test_virtio_mmio_device_new() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_device_clone = virtio_device.clone();
         let sys_space = address_space_init();
+        let virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
 
-        let virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
-        assert_eq!(virtio_mmio_device.state.lock().unwrap().activated, false);
+        let locked_device = virtio_device.lock().unwrap();
+        assert_eq!(locked_device.device_activated(), false);
         assert_eq!(
             virtio_mmio_device.host_notify_info.events.len(),
-            virtio_device_clone.lock().unwrap().queue_num()
+            locked_device.queue_num()
         );
-        let config_space = virtio_mmio_device.state.lock().unwrap().config_space;
-        assert_eq!(config_space.features_select, 0);
-        assert_eq!(config_space.acked_features_select, 0);
-        assert_eq!(config_space.device_status, 0);
-        assert_eq!(config_space.config_generation, 0);
-        assert_eq!(config_space.queue_select, 0);
-        assert_eq!(
-            config_space.queue_num,
-            virtio_device_clone.lock().unwrap().queue_num()
-        );
-        assert_eq!(config_space.queue_type, QUEUE_TYPE_SPLIT_VRING);
+        assert_eq!(locked_device.hfeatures_sel(), 0);
+        assert_eq!(locked_device.gfeatures_sel(), 0);
+        assert_eq!(locked_device.device_status(), 0);
+        assert_eq!(locked_device.config_generation(), 0);
+        assert_eq!(locked_device.queue_select(), 0);
+        assert_eq!(locked_device.queue_type(), QUEUE_TYPE_SPLIT_VRING);
     }
 
     #[test]
     fn test_virtio_mmio_device_read_01() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_device_clone = virtio_device.clone();
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // read the register of magic value
@@ -949,13 +738,8 @@ mod tests {
         // read the register of the features
         // get low 32bit of the features
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .features_select = 0;
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00f8_0000_00fe;
+        virtio_device.lock().unwrap().set_hfeatures_sel(0);
+        virtio_device.lock().unwrap().base.device_features = 0x0000_00f8_0000_00fe;
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG),
             true
@@ -963,12 +747,7 @@ mod tests {
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0x0000_00fe);
         // get high 32bit of the features for device which supports VirtIO Version 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .features_select = 1;
+        virtio_device.lock().unwrap().set_hfeatures_sel(1);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG),
             true
@@ -980,18 +759,13 @@ mod tests {
     fn test_virtio_mmio_device_read_02() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // read the register representing max size of the queue
         // for queue_select as 0
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .queue_select = 0;
+        virtio_device.lock().unwrap().set_queue_select(0);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
             true
@@ -999,12 +773,7 @@ mod tests {
         assert_eq!(LittleEndian::read_u32(&buf[..]), QUEUE_SIZE as u32);
         // for queue_select as 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .queue_select = 1;
+        virtio_device.lock().unwrap().set_queue_select(1);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
             true
@@ -1014,10 +783,11 @@ mod tests {
         // read the register representing the status of queue
         // for queue_select as 0
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 1);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
@@ -1031,10 +801,11 @@ mod tests {
         assert_eq!(LittleEndian::read_u32(&data[..]), 1);
         // for queue_select as 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 1;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(1);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, QUEUE_READY_REG),
             true
@@ -1049,9 +820,10 @@ mod tests {
         );
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .interrupt_status
-            .store(0b10_1111, Ordering::Relaxed);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_interrupt_status(0b10_1111);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, INTERRUPT_STATUS_REG),
             true
@@ -1060,24 +832,14 @@ mod tests {
 
         // read the register representing the status of device
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .device_status = 0;
+        virtio_device.lock().unwrap().set_device_status(0);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG),
             true
         );
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .device_status = 5;
+        virtio_device.lock().unwrap().set_device_status(5);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG),
             true
@@ -1088,9 +850,8 @@ mod tests {
     #[test]
     fn test_virtio_mmio_device_read_03() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_device_clone = virtio_device.clone();
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // read the configuration atomic value
@@ -1101,12 +862,7 @@ mod tests {
         );
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .config_generation = 10;
+        virtio_device.lock().unwrap().set_config_generation(10);
         assert_eq!(
             virtio_mmio_device.read(&mut buf[..], addr, CONFIG_GENERATION_REG),
             true
@@ -1122,12 +878,12 @@ mod tests {
         // read the configuration space of virtio device
         // write something
         let result: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        virtio_device_clone
+        virtio_device
             .lock()
             .unwrap()
             .config_space
             .as_mut_slice()
-            .copy_from_slice(&result[..]);
+            .copy_from_slice(&result);
 
         let mut data: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(virtio_mmio_device.read(&mut data[..], addr, 0x100), true);
@@ -1142,9 +898,8 @@ mod tests {
     #[test]
     fn test_virtio_mmio_device_write_01() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_device_clone = virtio_device.clone();
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // write the selector for device features
@@ -1154,90 +909,65 @@ mod tests {
             virtio_mmio_device.write(&buf[..], addr, DEVICE_FEATURES_SEL_REG),
             true
         );
-        assert_eq!(
-            virtio_mmio_device
-                .state
-                .lock()
-                .unwrap()
-                .config_space
-                .features_select,
-            2
-        );
+        assert_eq!(virtio_device.lock().unwrap().hfeatures_sel(), 2);
 
         // write the device features
         // false when the device status is CONFIG_STATUS_FEATURES_OK or CONFIG_STATUS_FAILED isn't CONFIG_STATUS_DRIVER
-        virtio_mmio_device
-            .state
+        virtio_device
             .lock()
             .unwrap()
-            .config_space
-            .device_status = CONFIG_STATUS_FEATURES_OK;
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             false
         );
-        virtio_mmio_device
-            .state
+        virtio_device
             .lock()
             .unwrap()
-            .config_space
-            .device_status = CONFIG_STATUS_FAILED;
+            .set_device_status(CONFIG_STATUS_FAILED);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             false
         );
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .device_status =
-            CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_FAILED | CONFIG_STATUS_DRIVER;
+        virtio_device.lock().unwrap().set_device_status(
+            CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_FAILED | CONFIG_STATUS_DRIVER,
+        );
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             false
         );
         // it is ok to write the low 32bit of device features
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.device_status = CONFIG_STATUS_DRIVER;
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_DRIVER);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        locked_state.config_space.acked_features_select = 0;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_gfeatures_sel(0);
         LittleEndian::write_u32(&mut buf[..], 0x0000_00fe);
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00fe;
+        virtio_device.lock().unwrap().base.device_features = 0x0000_00fe;
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             true
         );
         assert_eq!(
-            virtio_device_clone.lock().unwrap().driver_features as u32,
+            virtio_device.lock().unwrap().base.driver_features as u32,
             0x0000_00fe
         );
         // it is ok to write the high 32bit of device features
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .acked_features_select = 1;
+        virtio_device.lock().unwrap().set_gfeatures_sel(1);
         LittleEndian::write_u32(&mut buf[..], 0x0000_00ff);
-        virtio_device_clone.lock().unwrap().device_features = 0x0000_00ff_0000_0000;
+        virtio_device.lock().unwrap().base.device_features = 0x0000_00ff_0000_0000;
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
             true
         );
         assert_eq!(
-            virtio_mmio_device
-                .state
-                .lock()
-                .unwrap()
-                .config_space
-                .queue_type,
+            virtio_device.lock().unwrap().queue_type(),
             QUEUE_TYPE_PACKED_VRING
         );
         assert_eq!(
-            virtio_device_clone.lock().unwrap().driver_features >> 32 as u32,
+            virtio_device.lock().unwrap().base.driver_features >> 32 as u32,
             0x0000_00ff
         );
 
@@ -1248,15 +978,7 @@ mod tests {
             virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_SEL_REG),
             true
         );
-        assert_eq!(
-            virtio_mmio_device
-                .state
-                .lock()
-                .unwrap()
-                .config_space
-                .acked_features_select,
-            0x00ff_0000
-        );
+        assert_eq!(virtio_device.lock().unwrap().gfeatures_sel(), 0x00ff_0000);
 
         // write the selector of queue
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
@@ -1265,48 +987,41 @@ mod tests {
             virtio_mmio_device.write(&buf[..], addr, QUEUE_SEL_REG),
             true
         );
-        assert_eq!(
-            virtio_mmio_device
-                .state
-                .lock()
-                .unwrap()
-                .config_space
-                .queue_select,
-            0x0000_ff00
-        );
+        assert_eq!(virtio_device.lock().unwrap().queue_select(), 0x0000_ff00);
 
         // write the size of queue
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 128);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_NUM_REG),
             true
         );
-        let locked_state = virtio_mmio_device.state.lock().unwrap();
-        if let Ok(config) = locked_state.config_space.get_queue_config() {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.size, 128);
         } else {
             assert!(false);
-        }
+        };
     }
 
     #[test]
     fn test_virtio_mmio_device_write_02() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // write the ready status of queue
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 1);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
@@ -1320,10 +1035,11 @@ mod tests {
         assert_eq!(LittleEndian::read_u32(&data[..]), 1);
 
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 2);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
@@ -1338,15 +1054,14 @@ mod tests {
 
         // write the interrupt status
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        virtio_mmio_device
-            .state
+        virtio_device
             .lock()
             .unwrap()
-            .config_space
-            .device_status = CONFIG_STATUS_DRIVER_OK;
-        virtio_mmio_device
-            .interrupt_status
-            .store(0b10_1111, Ordering::Relaxed);
+            .set_device_status(CONFIG_STATUS_DRIVER_OK);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_interrupt_status(0b10_1111);
         LittleEndian::write_u32(&mut buf[..], 0b111);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, INTERRUPT_ACK_REG),
@@ -1364,141 +1079,116 @@ mod tests {
     fn test_virtio_mmio_device_write_03() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         // write the low 32bit of queue's descriptor table address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xffff_fefe);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_LOW_REG),
             true
         );
-        if let Ok(config) = virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .get_queue_config()
-        {
+        if let Ok(config) = virtio_mmio_device.device.lock().unwrap().queue_config() {
             assert_eq!(config.desc_table.0 as u32, 0xffff_fefe)
         } else {
             assert!(false);
         }
 
         // write the high 32bit of queue's descriptor table address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xfcfc_ffff);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_HIGH_REG),
             true
         );
-        if let Ok(config) = virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .get_queue_config()
-        {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.desc_table.0 >> 32) as u32, 0xfcfc_ffff)
         } else {
             assert!(false);
         }
 
         // write the low 32bit of queue's available ring address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xfcfc_fafa);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_LOW_REG),
             true
         );
-        if let Ok(config) = virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .get_queue_config()
-        {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.avail_ring.0 as u32, 0xfcfc_fafa)
         } else {
             assert!(false);
         }
 
         // write the high 32bit of queue's available ring address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xecec_fafa);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_HIGH_REG),
             true
         );
-        if let Ok(config) = virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .get_queue_config()
-        {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.avail_ring.0 >> 32) as u32, 0xecec_fafa)
         } else {
             assert!(false);
         }
 
         // write the low 32bit of queue's used ring address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xacac_fafa);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_LOW_REG),
             true
         );
-        if let Ok(config) = virtio_mmio_device
-            .state
-            .lock()
-            .unwrap()
-            .config_space
-            .get_queue_config()
-        {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.used_ring.0 as u32, 0xacac_fafa)
         } else {
             assert!(false);
         }
 
         // write the high 32bit of queue's used ring address
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        drop(locked_state);
+        virtio_device.lock().unwrap().set_queue_select(0);
+        virtio_device
+            .lock()
+            .unwrap()
+            .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xcccc_fafa);
         assert_eq!(
             virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_HIGH_REG),
             true
         );
-        let locked_state = virtio_mmio_device.state.lock().unwrap();
-        if let Ok(config) = locked_state.config_space.get_queue_config() {
+        if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.used_ring.0 >> 32) as u32, 0xcccc_fafa)
         } else {
             assert!(false);
-        }
+        };
     }
 
     fn align(size: u64, alignment: u64) -> u64 {
@@ -1513,16 +1203,15 @@ mod tests {
     #[test]
     fn test_virtio_mmio_device_write_04() {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let virtio_device_clone = virtio_device.clone();
         let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device);
+        let mut virtio_mmio_device = VirtioMmioDevice::new(&sys_space, virtio_device.clone());
         let addr = GuestAddress(0);
 
         virtio_mmio_device.assign_interrupt_cb();
-        let mut locked_state = virtio_mmio_device.state.lock().unwrap();
-        locked_state.config_space.queue_select = 0;
-        locked_state.config_space.device_status = CONFIG_STATUS_FEATURES_OK;
-        if let Ok(config) = locked_state.config_space.get_mut_queue_config() {
+        let mut locked_device = virtio_device.lock().unwrap();
+        locked_device.set_queue_select(0);
+        locked_device.set_device_status(CONFIG_STATUS_FEATURES_OK);
+        if let Ok(config) = locked_device.queue_config_mut(true) {
             config.desc_table = GuestAddress(0);
             config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * 16);
             config.used_ring = GuestAddress(align(
@@ -1532,8 +1221,8 @@ mod tests {
             config.size = QUEUE_SIZE;
             config.ready = true;
         }
-        locked_state.config_space.queue_select = 1;
-        if let Ok(config) = locked_state.config_space.get_mut_queue_config() {
+        locked_device.set_queue_select(1);
+        if let Ok(config) = locked_device.queue_config_mut(true) {
             config.desc_table = GuestAddress(0);
             config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * 16);
             config.used_ring = GuestAddress(align(
@@ -1543,13 +1232,13 @@ mod tests {
             config.size = QUEUE_SIZE / 2;
             config.ready = true;
         }
-        drop(locked_state);
+        drop(locked_device);
 
         // write the device status
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], CONFIG_STATUS_ACKNOWLEDGE);
         assert_eq!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG), true);
-        assert_eq!(virtio_mmio_device.state.lock().unwrap().activated, false);
+        assert_eq!(virtio_device.lock().unwrap().device_activated(), false);
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         assert_eq!(
             virtio_mmio_device.read(&mut data[..], addr, STATUS_REG),
@@ -1565,10 +1254,10 @@ mod tests {
                 | CONFIG_STATUS_DRIVER_OK
                 | CONFIG_STATUS_FEATURES_OK,
         );
-        assert_eq!(virtio_device_clone.lock().unwrap().b_active, false);
+        assert_eq!(virtio_device.lock().unwrap().b_active, false);
         assert_eq!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG), true);
-        assert_eq!(virtio_mmio_device.state.lock().unwrap().activated, true);
-        assert_eq!(virtio_device_clone.lock().unwrap().b_active, true);
+        assert_eq!(virtio_device.lock().unwrap().device_activated(), true);
+        assert_eq!(virtio_device.lock().unwrap().b_active, true);
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         assert_eq!(
             virtio_mmio_device.read(&mut data[..], addr, STATUS_REG),

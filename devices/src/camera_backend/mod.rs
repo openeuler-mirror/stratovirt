@@ -139,12 +139,6 @@ pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
 pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
 
 pub trait CameraHostdevOps: Send + Sync {
-    fn init(&self) -> Result<()>;
-    fn is_camera(&self) -> Result<bool>;
-
-    /// Get format list.
-    fn get_fmt(&self) -> Result<Vec<CameraFormatList>>;
-
     /// Set a specific format.
     fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
 

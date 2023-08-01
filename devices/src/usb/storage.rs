@@ -129,7 +129,7 @@ const DESC_STRINGS: [&str; 7] = [
     "",
     "StratoVirt",
     "StratoVirt USB Storage",
-    "1",
+    "3",
     "Full speed config (usb 1.1)",
     "High speed config (usb 2.0)",
     "Super speed config (usb 3.0)",
@@ -224,7 +224,6 @@ impl UsbStorageState {
 
 /// USB storage device.
 pub struct UsbStorage {
-    id: String,
     usb_device: UsbDevice,
     state: UsbStorageState,
     /// USB controller used to notify controller to transfer data.
@@ -315,8 +314,7 @@ impl UsbStorage {
         };
 
         Self {
-            id: config.id.clone().unwrap(),
-            usb_device: UsbDevice::new(USB_DEVICE_BUFFER_DEFAULT_LEN),
+            usb_device: UsbDevice::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
             config: config.clone(),
@@ -515,7 +513,9 @@ impl UsbDeviceOps for UsbStorage {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
         self.usb_device.reset_usb_endpoint();
         self.usb_device.speed = USB_SPEED_HIGH;
-        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
+        s[STR_SERIAL_STORAGE_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
@@ -575,13 +575,13 @@ impl UsbDeviceOps for UsbStorage {
         };
 
         if let Err(e) = result {
-            warn!("USB-storage {}: handle data error: {:?}", self.id, e);
+            warn!(
+                "USB-storage {}: handle data error: {:?}",
+                self.device_id(),
+                e
+            );
             locked_packet.status = UsbPacketStatus::Stall;
         }
-    }
-
-    fn device_id(&self) -> String {
-        self.id.clone()
     }
 
     fn get_usb_device(&self) -> &UsbDevice {

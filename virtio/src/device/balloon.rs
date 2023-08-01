@@ -9,7 +9,7 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use std::io::Write;
+
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -38,7 +38,7 @@ use util::{
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    num_ops::{read_u32, round_down},
+    num_ops::round_down,
     offset_of,
     seccomp::BpfRule,
     unix::host_page_size,
@@ -46,8 +46,9 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
-    error::*, report_virtio_error, virtio_has_feature, Element, Queue, VirtioDevice,
-    VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -874,10 +875,10 @@ impl EventNotifierHelper for BalloonIoHandler {
 
 /// A balloon device with some necessary information.
 pub struct Balloon {
-    /// Balloon device features.
-    device_features: u64,
-    /// Driver features.
-    driver_features: u64,
+    /// Virtio device base property.
+    base: VirtioBase,
+    /// Configuration of the balloon device.
+    bln_cfg: BalloonConfig,
     /// Actual memory pages of balloon device.
     actual: Arc<AtomicU32>,
     /// Target memory pages of balloon device.
@@ -890,13 +891,6 @@ pub struct Balloon {
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
-    /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
-    /// Device is broken or not.
-    broken: Arc<AtomicBool>,
-    /// For auto balloon
-    membuf_percent: u32,
-    monitor_interval: u32,
 }
 
 impl Balloon {
@@ -906,30 +900,23 @@ impl Balloon {
     ///
     /// * `bln_cfg` - Balloon configuration.
     pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
-        let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
-        if bln_cfg.deflate_on_oom {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
-        }
+        let mut queue_num = QUEUE_NUM_BALLOON;
         if bln_cfg.free_page_reporting {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_REPORTING;
+            queue_num += 1;
         }
         if bln_cfg.auto_balloon {
-            device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
+            queue_num += 1;
         }
 
         Balloon {
-            device_features,
-            driver_features: 0u64,
+            base: VirtioBase::new(VIRTIO_TYPE_BALLOON, queue_num, DEFAULT_VIRTQUEUE_SIZE),
+            bln_cfg: bln_cfg.clone(),
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
             mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
-            deactivate_evts: Vec::new(),
-            broken: Arc::new(AtomicBool::new(false)),
-            membuf_percent: bln_cfg.membuf_percent,
-            monitor_interval: bln_cfg.monitor_interval,
         }
     }
 
@@ -998,97 +985,57 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    /// Realize a balloon device.
+    fn virtio_base(&self) -> &VirtioBase {
+        &self.base
+    }
+
+    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
+        &mut self.base
+    }
+
     fn realize(&mut self) -> Result<()> {
         self.mem_space
             .register_listener(self.mem_info.clone())
             .with_context(|| "Failed to register memory listener defined by balloon device.")?;
+        self.init_config_features()?;
         Ok(())
     }
 
-    /// Get the type of balloon.
-    fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BALLOON
-    }
-
-    /// Get the number of balloon-device queues.
-    fn queue_num(&self) -> usize {
-        let mut queue_num = QUEUE_NUM_BALLOON;
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
-            queue_num += 1;
+    fn init_config_features(&mut self) -> Result<()> {
+        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1;
+        if self.bln_cfg.deflate_on_oom {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
         }
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
-            queue_num += 1;
+        if self.bln_cfg.free_page_reporting {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_REPORTING;
         }
-        queue_num
+        if self.bln_cfg.auto_balloon {
+            self.base.device_features |= 1u64 << VIRTIO_BALLOON_F_MESSAGE_VQ;
+        }
+        Ok(())
     }
 
-    /// Get the zise of balloon queue.
-    fn queue_size(&self) -> u16 {
-        DEFAULT_VIRTQUEUE_SIZE
-    }
-
-    /// Get the feature of `balloon` device.
-    fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
-    }
-
-    /// Set feature for device.
-    ///
-    /// # Arguments
-    ///
-    /// * `page` - Selector of feature.
-    /// * `value` - Value to be set.
-    fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.driver_features = self.checked_driver_features(page, value);
-    }
-
-    /// Get driver features by guest.
-    fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.driver_features, features_select)
-    }
-
-    /// Read configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Offset from base address.
-    /// * `data` - Read data to `data`.
-    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+    fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
             num_pages: self.num_pages,
             actual: self.actual.load(Ordering::Acquire),
             _reserved: 0_u32,
             _reserved1: 0_u32,
-            membuf_percent: self.membuf_percent,
-            monitor_interval: self.monitor_interval,
+            membuf_percent: self.bln_cfg.membuf_percent,
+            monitor_interval: self.bln_cfg.monitor_interval,
         };
 
-        let config_len = if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
-            size_of::<VirtioBalloonConfig>() as u64
-        } else {
-            offset_of!(VirtioBalloonConfig, _reserved) as u64
-        };
+        let config_len =
+            if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
+                size_of::<VirtioBalloonConfig>()
+            } else {
+                offset_of!(VirtioBalloonConfig, _reserved)
+            };
 
-        let data_len = data.len() as u64;
-        if offset >= config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
-        }
-
-        if let Some(end) = offset.checked_add(data_len) {
-            data.write_all(
-                &new_config.as_bytes()[offset as usize..cmp::min(end, config_len) as usize],
-            )?;
-        }
-
-        Ok(())
+        let config = &new_config.as_bytes()[..config_len];
+        read_config_default(config, offset, data)
     }
 
-    /// Write configuration.
-    ///
-    /// # Argument
-    ///
-    /// * `_offset` - Offset from base address.
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
         // Guest update actual balloon size
         // Safe, because the results will be checked.
@@ -1114,22 +1061,13 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    /// Active balloon device.
-    ///
-    /// # Arguments
-    ///
-    /// * `mem_space` - Address space.
-    /// * `interrupt_evt` - Interrupt EventFd.
-    /// * `interrupt_stats` - Statistics interrupt.
-    /// * `queues` - Different virtio queues.
-    /// * `queue_evts` Different EventFd.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let queues = &self.base.queues;
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
                 self.queue_num(),
@@ -1146,7 +1084,7 @@ impl VirtioDevice for Balloon {
         let mut queue_index = 2;
         let mut report_queue = None;
         let mut report_evt = None;
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
+        if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_REPORTING) {
             report_queue = Some(queues[queue_index].clone());
             report_evt = Some(queue_evts[queue_index].clone());
             queue_index += 1;
@@ -1155,14 +1093,14 @@ impl VirtioDevice for Balloon {
         // Get msg queue and eventfd.
         let mut msg_queue = None;
         let mut msg_evt = None;
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
+        if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
             msg_queue = Some(queues[queue_index].clone());
             msg_evt = Some(queue_evts[queue_index].clone());
         }
 
         self.interrupt_cb = Some(interrupt_cb.clone());
         let handler = BalloonIoHandler {
-            driver_features: self.driver_features,
+            driver_features: self.base.driver_features,
             mem_space,
             inf_queue,
             inf_evt,
@@ -1172,7 +1110,7 @@ impl VirtioDevice for Balloon {
             report_evt,
             msg_queue,
             msg_evt,
-            device_broken: self.broken.clone(),
+            device_broken: self.base.broken.clone(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
@@ -1180,26 +1118,22 @@ impl VirtioDevice for Balloon {
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-        register_event_helper(notifiers, None, &mut self.deactivate_evts)
+        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)
             .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
-        self.broken.store(false, Ordering::SeqCst);
+        self.base.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(None, &mut self.deactivate_evts)
+        unregister_event_helper(None, &mut self.base.deactivate_evts)
     }
 
     fn reset(&mut self) -> Result<()> {
-        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
+        if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
             self.num_pages = 0;
         }
         Ok(())
-    }
-
-    fn get_device_broken(&self) -> &Arc<AtomicBool> {
-        &self.broken
     }
 }
 
@@ -1305,35 +1239,37 @@ mod tests {
 
         let mem_space = address_space_init();
         let mut bln = Balloon::new(&bln_cfg, mem_space);
-        assert_eq!(bln.driver_features, 0);
-        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
-        assert_eq!(bln.num_pages, 0);
-        assert!(bln.interrupt_cb.is_none());
-        let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
-        assert_eq!(bln.device_features, feature);
-
-        let fts = bln.get_device_features(0);
-        assert_eq!(fts, feature as u32);
-        let fts = bln.get_device_features(1);
-        assert_eq!(fts, (feature >> 32) as u32);
-        bln.driver_features = 0;
-        bln.device_features = 1 | 1 << 32;
-        bln.set_driver_features(0, 1);
-        assert_eq!(bln.driver_features, 1);
-        assert_eq!(bln.driver_features, bln.get_driver_features(0) as u64);
-        bln.driver_features = 1 << 32;
-        bln.set_driver_features(1, 1);
-        assert_eq!(bln.driver_features, 1 << 32);
-        assert_eq!(
-            bln.driver_features,
-            (bln.get_driver_features(1) as u64) << 32
-        );
 
         // Test realize function.
         bln.realize().unwrap();
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 2);
-        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
+
+        assert_eq!(bln.base.driver_features, 0);
+        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
+        assert_eq!(bln.num_pages, 0);
+        assert!(bln.interrupt_cb.is_none());
+        let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
+        assert_eq!(bln.base.device_features, feature);
+
+        let fts = bln.device_features(0);
+        assert_eq!(fts, feature as u32);
+        let fts = bln.device_features(1);
+        assert_eq!(fts, (feature >> 32) as u32);
+        bln.base.driver_features = 0;
+        bln.base.device_features = 1 | 1 << 32;
+        bln.set_driver_features(0, 1);
+        assert_eq!(bln.base.driver_features, 1);
+        assert_eq!(bln.base.driver_features, bln.driver_features(0) as u64);
+        bln.base.driver_features = 1 << 32;
+        bln.set_driver_features(1, 1);
+        assert_eq!(bln.base.driver_features, 1 << 32);
+        assert_eq!(
+            bln.base.driver_features,
+            (bln.driver_features(1) as u64) << 32
+        );
+
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
@@ -1381,8 +1317,8 @@ mod tests {
         let addr = 0x4;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.actual.store(1, Ordering::Release);
-        balloon.read_config(addr, &mut read_data).unwrap();
-        assert_eq!(read_data, ret_data);
+        assert!(balloon.read_config(addr, &mut read_data).is_err());
+        assert_ne!(read_data, ret_data);
     }
 
     #[test]
@@ -1503,7 +1439,7 @@ mod tests {
         let event_def = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
 
         let mut handler = BalloonIoHandler {
-            driver_features: bln.driver_features,
+            driver_features: bln.base.driver_features,
             mem_space: mem_space.clone(),
             inf_queue: queue1,
             inf_evt: event_inf.clone(),
@@ -1513,7 +1449,7 @@ mod tests {
             report_evt: None,
             msg_queue: None,
             msg_evt: None,
-            device_broken: bln.broken.clone(),
+            device_broken: bln.base.broken.clone(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),
@@ -1622,9 +1558,8 @@ mod tests {
             monitor_interval: 0,
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
-        assert!(bln
-            .activate(mem_space, interrupt_cb, &queues, queue_evts)
-            .is_err());
+        bln.base.queues = queues;
+        assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_err());
     }
 
     #[test]
@@ -1693,24 +1628,26 @@ mod tests {
         };
         let mem_space = address_space_init();
         let mut bln = Balloon::new(&bln_cfg, mem_space);
-        assert_eq!(bln.driver_features, 0);
-        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
-        assert_eq!(bln.num_pages, 0);
-        assert!(bln.interrupt_cb.is_none());
-        let feature = (1u64 << VIRTIO_F_VERSION_1)
-            | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM | 1u64 << VIRTIO_BALLOON_F_REPORTING);
-        assert_eq!(bln.device_features, feature);
-
-        let fts = bln.get_device_features(0);
-        assert_eq!(fts, feature as u32);
-        let fts = bln.get_device_features(1);
-        assert_eq!(fts, (feature >> 32) as u32);
 
         // Test realize function.
         bln.realize().unwrap();
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 3);
-        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        assert_eq!(bln.queue_size_max(), QUEUE_SIZE);
+
+        assert_eq!(bln.base.driver_features, 0);
+        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
+        assert_eq!(bln.num_pages, 0);
+        assert!(bln.interrupt_cb.is_none());
+        let feature = (1u64 << VIRTIO_F_VERSION_1)
+            | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM | 1u64 << VIRTIO_BALLOON_F_REPORTING);
+        assert_eq!(bln.base.device_features, feature);
+
+        let fts = bln.device_features(0);
+        assert_eq!(fts, feature as u32);
+        let fts = bln.device_features(1);
+        assert_eq!(fts, (feature >> 32) as u32);
+
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);

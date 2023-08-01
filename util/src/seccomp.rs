@@ -287,8 +287,12 @@ fn handle_process(opt: SeccompOpt) -> Vec<SockFilter> {
 /// A wrapper structure of a list of bpf_filters for a syscall's rule.
 #[derive(Debug)]
 pub struct BpfRule {
+    /// The staged rules to avoid jump offset overflow.
+    staged_rules: Vec<SockFilter>,
     /// The first bpf_filter to compare syscall number.
     header_rule: SockFilter,
+    /// The last args index.
+    args_idx_last: Option<u32>,
     /// The inner rules to limit the arguments of syscall.
     inner_rules: Vec<SockFilter>,
     /// The last bpf_filter to allow syscall.
@@ -302,7 +306,9 @@ impl BpfRule {
     /// * `syscall_num` - the number of system call.
     pub fn new(syscall_num: i64) -> BpfRule {
         BpfRule {
+            staged_rules: Vec::new(),
             header_rule: bpf_jump(BPF_JMP + BPF_JEQ + BPF_K, syscall_num as u32, 0, 1),
+            args_idx_last: None,
             inner_rules: Vec::new(),
             tail_rule: bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
         }
@@ -312,16 +318,23 @@ impl BpfRule {
     ///
     /// # Arguments
     /// * `cmp` - Compare operator for given args_value and the raw args_value.
-    /// * `args_num` - The index number of system call's arguments.
+    /// * `args_idx` - The index number of system call's arguments.
     /// * `args_value` - The value of args_num you want to limit. This value
     ///                  used with `cmp` together.
-    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_num: u32, args_value: u32) -> BpfRule {
+    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_idx: u32, args_value: u32) -> BpfRule {
         if self.inner_rules.is_empty() {
             self.tail_rule = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::nr());
         }
 
-        // Create a bpf_filter to get args in `SeccompData`.
-        let args_filter = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::args(args_num));
+        let mut inner_append = Vec::new();
+
+        // Reload new args if idx changes.
+        if self.args_idx_last.ne(&Some(args_idx)) {
+            // Create a bpf_filter to get args in `SeccompData`.
+            let args_filter = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::args(args_idx));
+            inner_append.push(args_filter);
+            self.args_idx_last = Some(args_idx);
+        }
 
         // Create a bpf_filter to limit args in syscall.
         let constraint_filter = match cmp {
@@ -332,30 +345,50 @@ impl BpfRule {
             SeccompCmpOpt::Le => bpf_jump(BPF_JMP + BPF_JGE + BPF_K, args_value, 1, 0),
             SeccompCmpOpt::Lt => bpf_jump(BPF_JMP + BPF_JGT + BPF_K, args_value, 1, 0),
         };
+        inner_append.push(constraint_filter);
+        inner_append.push(bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW));
 
-        self.append(&mut vec![
-            args_filter,
-            constraint_filter,
-            bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
-        ]);
-        self
+        if !self.append(&mut inner_append) {
+            self.start_new_session();
+            self.add_constraint(cmp, args_idx, args_value)
+        } else {
+            self
+        }
     }
 
     /// Change `BpfRules` to a list of `SockFilter`. It will be used when
     /// seccomp taking effect.
-    fn as_vec(&mut self) -> Vec<SockFilter> {
-        let mut bpf_filters = vec![self.header_rule];
-        bpf_filters.append(&mut self.inner_rules);
+    fn as_vec(&self) -> Vec<SockFilter> {
+        let mut bpf_filters = self.staged_rules.clone();
+        bpf_filters.push(self.header_rule);
+        bpf_filters.append(&mut self.inner_rules.clone());
         bpf_filters.push(self.tail_rule);
         bpf_filters
     }
 
+    /// Stage current rules and start new session. Used when header rule jump
+    /// is about to overflow.
+    fn start_new_session(&mut self) {
+        // Save current rules to staged.
+        self.staged_rules.push(self.header_rule);
+        self.staged_rules.append(&mut self.inner_rules);
+        self.staged_rules.push(self.tail_rule);
+
+        self.header_rule.jf = 1;
+        self.args_idx_last = None;
+    }
+
     /// Add bpf_filters to `inner_rules`.
-    fn append(&mut self, bpf_filters: &mut Vec<SockFilter>) {
+    fn append(&mut self, bpf_filters: &mut Vec<SockFilter>) -> bool {
         let offset = bpf_filters.len() as u8;
 
-        self.header_rule.jf += offset;
-        self.inner_rules.append(bpf_filters);
+        if let Some(jf_added) = self.header_rule.jf.checked_add(offset) {
+            self.header_rule.jf = jf_added;
+            self.inner_rules.append(bpf_filters);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -443,52 +476,48 @@ mod tests {
         // a list of bpf_filter to allow `read` syscall and forbidden others
         // in x86_64.
         let bpf_vec = vec![
+            // Load arch
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 4,
             },
-            #[cfg(target_arch = "x86_64")]
+            // Verify arch
             SockFilter {
                 code: 0x15,
                 jt: 1,
                 jf: 0,
+                #[cfg(target_arch = "x86_64")]
                 k: 0xC000_003E,
-            },
-            #[cfg(target_arch = "aarch64")]
-            SockFilter {
-                code: 0x15,
-                jt: 1,
-                jf: 0,
+                #[cfg(target_arch = "aarch64")]
                 k: 0xC000_00B7,
             },
+            // Ret kill
             SockFilter {
                 code: 0x06,
                 jt: 0,
                 jf: 0,
                 k: 0,
             },
+            // Load syscall nr
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 0,
             },
-            #[cfg(target_arch = "x86_64")]
+            // Verify syscall nr
             SockFilter {
                 code: 0x15,
                 jt: 0,
                 jf: 1,
+                #[cfg(target_arch = "x86_64")]
                 k: 0,
-            },
-            #[cfg(target_arch = "aarch64")]
-            SockFilter {
-                code: 0x15,
-                jt: 0,
-                jf: 1,
+                #[cfg(target_arch = "aarch64")]
                 k: 63,
             },
+            // Ret allow
             SockFilter {
                 code: 0x06,
                 jt: 0,
@@ -507,85 +536,139 @@ mod tests {
     fn test_enable_syscall_extra() {
         // a list of bpf_filter to allow read `1024` bytes in x86_64 and
         // forbidden others
-        let bpf_vec = vec![
+        let mut bpf_vec = vec![
+            // Load arch
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 4,
             },
-            #[cfg(target_arch = "x86_64")]
+            // Verify arch
             SockFilter {
                 code: 0x15,
                 jt: 1,
                 jf: 0,
+                #[cfg(target_arch = "x86_64")]
                 k: 0xC000_003E,
-            },
-            #[cfg(target_arch = "aarch64")]
-            SockFilter {
-                code: 0x15,
-                jt: 1,
-                jf: 0,
+                #[cfg(target_arch = "aarch64")]
                 k: 0xC000_00B7,
             },
+            // Ret kill
             SockFilter {
                 code: 0x06,
                 jt: 0,
                 jf: 0,
                 k: 0,
             },
+            // Load syscall nr
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 0,
             },
-            #[cfg(target_arch = "x86_64")]
+            // Verify syscall nr
             SockFilter {
                 code: 0x15,
                 jt: 0,
-                jf: 4,
+                jf: 254,
+                #[cfg(target_arch = "x86_64")]
                 k: 0,
-            },
-            #[cfg(target_arch = "aarch64")]
-            SockFilter {
-                code: 0x15,
-                jt: 0,
-                jf: 4,
+                #[cfg(target_arch = "aarch64")]
                 k: 63,
             },
+            // Load arg
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 0x20,
             },
-            SockFilter {
-                code: 0x15,
-                jt: 0,
-                jf: 1,
-                k: 1024,
-            },
-            SockFilter {
-                code: 0x06,
-                jt: 0,
-                jf: 0,
-                k: 0x7fff_0000,
-            },
+        ];
+        for _ in 0..126 {
+            bpf_vec.append(&mut vec![
+                // Verify arg
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 1,
+                    k: 1024,
+                },
+                // Ret allow
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x7fff_0000,
+                },
+            ]);
+        }
+        bpf_vec.push(
+            // Load syscall nr
             SockFilter {
                 code: 0x20,
                 jt: 0,
                 jf: 0,
                 k: 0,
             },
-        ];
+        );
+
+        // Start new session.
+        bpf_vec.append(&mut vec![
+            // Verify syscall nr
+            SockFilter {
+                code: 0x15,
+                jt: 0,
+                jf: 150,
+                #[cfg(target_arch = "x86_64")]
+                k: 0,
+                #[cfg(target_arch = "aarch64")]
+                k: 63,
+            },
+            // Load arg
+            SockFilter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 0x20,
+            },
+        ]);
+        for _ in 126..200 {
+            bpf_vec.append(&mut vec![
+                // Verify arg
+                SockFilter {
+                    code: 0x15,
+                    jt: 0,
+                    jf: 1,
+                    k: 1024,
+                },
+                // Ret allow
+                SockFilter {
+                    code: 0x06,
+                    jt: 0,
+                    jf: 0,
+                    k: 0x7fff_0000,
+                },
+            ]);
+        }
+        bpf_vec.push(
+            // Load syscall nr
+            SockFilter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+        );
 
         let mut seccomp_filter = SyscallFilter::new(SeccompOpt::Trap);
-        seccomp_filter.push(&mut BpfRule::new(libc::SYS_read).add_constraint(
-            SeccompCmpOpt::Eq,
-            2,
-            1024,
-        ));
+        let mut read_rules = BpfRule::new(libc::SYS_read);
+        // Add enough constraint to verify that jump does not overflow.
+        for _ in 0..200 {
+            read_rules = read_rules.add_constraint(SeccompCmpOpt::Eq, 2, 1024);
+        }
+        seccomp_filter.push(&mut read_rules);
 
         assert_eq!(seccomp_filter.sock_filters, bpf_vec);
     }

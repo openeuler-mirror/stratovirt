@@ -267,6 +267,7 @@ pub fn parse_virtserialport(
     vm_config: &mut VmConfig,
     config_args: &str,
     is_console: bool,
+    free_nr: u32,
 ) -> Result<VirtioSerialPort> {
     let mut cmd_parser = CmdParser::new("virtserialport");
     cmd_parser.push("").push("id").push("chardev").push("nr");
@@ -280,9 +281,10 @@ pub fn parse_virtserialport(
     let id = cmd_parser.get_value::<String>("id")?.with_context(|| {
         ConfigError::FieldIsMissing("id".to_string(), "virtserialport".to_string())
     })?;
-    let nr = cmd_parser.get_value::<u32>("nr")?.with_context(|| {
-        ConfigError::FieldIsMissing("nr".to_string(), "virtserialport".to_string())
-    })?;
+    let nr = cmd_parser.get_value::<u32>("nr")?.unwrap_or(free_nr);
+    if nr == 0 && !is_console {
+        bail!("Port number 0 on virtio-serial devices reserved for virtconsole device.");
+    }
 
     if let Some(chardev) = vm_config.chardev.remove(&chardev_name) {
         let port_cfg = VirtioSerialPort {
@@ -536,6 +538,7 @@ mod tests {
             &mut vm_config,
             "virtconsole,chardev=test_console,id=console1,nr=1",
             true,
+            0,
         );
         assert!(virt_console.is_ok());
         let console_cfg = virt_console.unwrap();
@@ -567,6 +570,7 @@ mod tests {
             &mut vm_config,
             "virtconsole,chardev=test_console1,id=console1,nr=1",
             true,
+            0,
         );
         // test_console1 does not exist.
         assert!(virt_console.is_err());
@@ -586,6 +590,7 @@ mod tests {
             &mut vm_config,
             "virtconsole,chardev=test_console,id=console1,nr=1",
             true,
+            0,
         );
         assert!(virt_console.is_ok());
         let console_cfg = virt_console.unwrap();

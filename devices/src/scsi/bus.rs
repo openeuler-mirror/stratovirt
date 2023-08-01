@@ -278,7 +278,7 @@ const TYPE_INACTIVE: u8 = 0x20;
 const TYPE_NO_LUN: u8 = 0x7f;
 
 /// Notification Classes for GET EVENT STATUS NOTIFICATION.
-/// 000b: No requested Event Clases are supported.
+/// 000b: No requested Event Classes are supported.
 pub const GESN_NO_REQUESTED_EVENT: u8 = 0;
 /// 001b: Operational Change Request/Notification.
 pub const GESN_OPERATIONAL_CHANGE: u8 = 1;

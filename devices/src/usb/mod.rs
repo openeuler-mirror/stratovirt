@@ -112,6 +112,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
+    pub id: String,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -122,15 +123,16 @@ pub struct UsbDevice {
     pub ep_out: Vec<UsbEndpoint>,
     /// USB descriptor
     pub descriptor: UsbDescriptor,
-    /// The usb device id which is hot unplugged.
-    pub unplugged_id: Option<String>,
+    /// Check whether the usb device is hot unplugged.
+    pub unplugged: bool,
     /// The index of the interfaces.
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
 impl UsbDevice {
-    pub fn new(data_buf_len: usize) -> Self {
+    pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
+            id,
             port: None,
             speed: 0,
             addr: 0,
@@ -140,7 +142,7 @@ impl UsbDevice {
             data_buf: vec![0_u8; data_buf_len],
             remote_wakeup: 0,
             descriptor: UsbDescriptor::new(),
-            unplugged_id: None,
+            unplugged: false,
             altsetting: [0_u32; USB_MAX_INTERFACES as usize],
         };
 
@@ -186,6 +188,10 @@ impl UsbDevice {
             self.ep_out[i as usize].in_direction = false;
             self.ep_out[i as usize].ep_type = USB_ENDPOINT_ATTR_INVALID;
         }
+    }
+
+    pub fn generate_serial_number(&self, prefix: &str) -> String {
+        format!("{}-{}", prefix, self.id)
     }
 
     /// Handle USB control request which is for descriptor.
@@ -319,8 +325,8 @@ impl UsbDevice {
 
 impl Drop for UsbDevice {
     fn drop(&mut self) {
-        if let Some(id) = &self.unplugged_id {
-            send_device_deleted_msg(id);
+        if self.unplugged {
+            send_device_deleted_msg(&self.id);
         }
     }
 }
@@ -361,7 +367,7 @@ pub trait UsbDeviceOps: Send + Sync {
         usb_dev.port = port;
     }
 
-    /// Handle usb packet, used for controller to deliever packet to device.
+    /// Handle usb packet, used for controller to deliver packet to device.
     fn handle_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
         let mut locked_packet = packet.lock().unwrap();
         locked_packet.status = UsbPacketStatus::Success;
@@ -384,7 +390,9 @@ pub trait UsbDeviceOps: Send + Sync {
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
-    fn device_id(&self) -> String;
+    fn device_id(&self) -> &str {
+        &self.get_usb_device().id
+    }
 
     /// Get the UsbDevice.
     fn get_usb_device(&self) -> &UsbDevice;

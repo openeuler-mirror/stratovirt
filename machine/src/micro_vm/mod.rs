@@ -298,7 +298,7 @@ impl LightMachine {
             );
         }
         for id in 0..MMIO_REPLACEABLE_NET_NR {
-            let net = Arc::new(Mutex::new(Net::default()));
+            let net = Arc::new(Mutex::new(Net::new(NetworkInterfaceConfig::default())));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
 

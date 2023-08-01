@@ -627,7 +627,7 @@ fn virtserialport_socket_basic() {
 fn virtserialport_pty_basic() {
     let port = PortConfig {
         chardev_type: ChardevType::Pty,
-        nr: 0,
+        nr: 1,
         is_console: false,
     };
     let pci_slot = 0x04;

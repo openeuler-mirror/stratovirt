@@ -92,18 +92,28 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, vhost, Balloon, Block, BlockState, Rng, RngState,
+    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
+    RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 
 pub trait MachineOps {
-    fn build_smbios(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
-        let smbioscfg = self.get_vm_config().lock().unwrap().smbios.clone();
+    fn build_smbios(
+        &self,
+        fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
+        mem_array: Vec<(u64, u64)>,
+    ) -> Result<()> {
+        let vm_config = self.get_vm_config();
+        let vmcfg_lock = vm_config.lock().unwrap();
 
         let mut smbios = SmbiosTable::new();
-        let table = smbios.build_smbios_tables(smbioscfg);
+        let table = smbios.build_smbios_tables(
+            vmcfg_lock.smbios.clone(),
+            &vmcfg_lock.machine_config,
+            mem_array,
+        );
         let ep = build_smbios_ep30(table.len() as u32);
 
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
@@ -448,7 +458,6 @@ pub trait MachineOps {
         cfg_args: &str,
         is_console: bool,
     ) -> Result<()> {
-        let serialport_cfg = parse_virtserialport(vm_config, cfg_args, is_console)?;
         let serial_cfg = vm_config
             .virtio_serial
             .as_ref()
@@ -492,6 +501,9 @@ pub trait MachineOps {
         let mut virtio_dev_h = virtio_dev.lock().unwrap();
         let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
 
+        // Note: port 0 is reserved for a virtconsole. "nr=0" should be specified to configure.
+        let free_nr = get_max_nr(&serial.ports) + 1;
+        let serialport_cfg = parse_virtserialport(vm_config, cfg_args, is_console, free_nr)?;
         if serialport_cfg.nr >= serial.max_nr_ports {
             bail!(
                 "virtio serial port nr {} should be less than virtio serial's max_nr_ports {}",

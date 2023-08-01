@@ -233,17 +233,6 @@ impl V4l2CameraBackend {
 }
 
 impl CameraHostdevOps for V4l2CameraBackend {
-    fn init(&self) -> Result<()> {
-        Ok(())
-    }
-    fn is_camera(&self) -> Result<bool> {
-        Ok(true)
-    }
-
-    fn get_fmt(&self) -> Result<Vec<CameraFormatList>> {
-        Ok(self.fmt_list.clone())
-    }
-
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
         info!("Camera {} set format {:?}", self.id, cam_fmt);
         if self.listening {
@@ -381,7 +370,7 @@ impl CameraHostdevOps for V4l2CameraBackend {
                 out.height = frm.height;
                 out.fps = 10000000_u32.checked_div(frm.interval).with_context(|| {
                     format!(
-                        "Invalied interval {} for format/frame {}:{}",
+                        "Invalid interval {} for format/frame {}:{}",
                         frm.interval, format_index, frame_index
                     )
                 })?;
