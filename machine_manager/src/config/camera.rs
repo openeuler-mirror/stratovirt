@@ -15,8 +15,6 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use strum::{EnumCount, IntoEnumIterator};
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use super::error::ConfigError;
 use crate::{
@@ -31,7 +29,7 @@ pub struct CameraDevConfig {
     pub backend: CamBackendType,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, EnumCountMacro, EnumIter, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CamBackendType {
     V4l2,
     Demo,
@@ -41,17 +39,13 @@ impl FromStr for CamBackendType {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        for i in CamBackendType::iter() {
-            if s == CAM_OPT_STR_BACKEND_TYPES[i as usize] {
-                return Ok(i);
-            }
+        match s {
+            "v4l2" => Ok(CamBackendType::V4l2),
+            "demo" => Ok(CamBackendType::Demo),
+            _ => Err(anyhow!("Unknown camera backend type")),
         }
-
-        Err(anyhow!("Unknown camera backend type"))
     }
 }
-
-pub const CAM_OPT_STR_BACKEND_TYPES: [&str; CamBackendType::COUNT] = ["v4l2", "demo"];
 
 impl CameraDevConfig {
     pub fn new() -> CameraDevConfig {

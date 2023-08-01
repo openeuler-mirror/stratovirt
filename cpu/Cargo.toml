@@ -20,9 +20,6 @@ migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 
-[dev-dependencies]
-serial_test = "2.0.0"
-
 [features]
 default = []
 boot_time = []

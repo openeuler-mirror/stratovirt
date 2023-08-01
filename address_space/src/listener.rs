@@ -617,7 +617,6 @@ impl Listener for KvmIoListener {
 mod test {
     use hypervisor::kvm::KVMFds;
     use libc::EFD_NONBLOCK;
-    use serial_test::serial;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
@@ -649,7 +648,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_alloc_slot() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -675,7 +673,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_add_del_ram_region() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -703,7 +700,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_add_region_align() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -727,7 +723,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_add_del_ioeventfd() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -774,7 +769,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_ioeventfd_with_data_match() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -829,7 +823,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
         let kvm_fds = KVMFds::new();

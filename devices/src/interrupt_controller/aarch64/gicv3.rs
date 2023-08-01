@@ -578,7 +578,6 @@ impl GICv3Its {
 #[cfg(test)]
 mod tests {
     use hypervisor::kvm::KVMFds;
-    use serial_test::serial;
 
     use super::super::GICVersion;
     use super::super::GICv3Config;
@@ -587,7 +586,6 @@ mod tests {
     use crate::GIC_IRQ_MAX;
 
     #[test]
-    #[serial]
     fn test_create_gicv3() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -611,7 +609,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_create_gic_device() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -637,7 +634,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_gic_redist_regions() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {

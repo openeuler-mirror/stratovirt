@@ -47,7 +47,7 @@ fn is_io_aligned(file: &File, buf: u64, size: usize) -> bool {
             0,
         )
     };
-    ret >= 0 || errno::errno().0 != libc::EINVAL
+    ret >= 0 || nix::errno::errno() != libc::EINVAL
 }
 
 pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {

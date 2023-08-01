@@ -1627,7 +1627,7 @@ mod test {
             .unwrap()
             .split('\t')
             .collect::<Vec<&str>>();
-        serde_json::from_str::<u64>(str_out[0]).unwrap()
+        str_out[0].parse::<u64>().unwrap()
     }
 
     fn vec_is_zero(vec: &[u8]) -> bool {

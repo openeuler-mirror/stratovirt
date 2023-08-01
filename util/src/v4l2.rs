@@ -212,7 +212,7 @@ impl V4l2Backend {
     pub fn dequeue_buffer(&self, buf: &v4l2_buffer) -> Result<bool> {
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_DQBUF(), buf) };
         if ret < 0 {
-            if errno::errno().0 == libc::EAGAIN {
+            if nix::errno::errno() == libc::EAGAIN {
                 return Ok(false);
             }
             bail!(
