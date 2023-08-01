@@ -39,6 +39,7 @@ use pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
     pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevBase, PciDevOps,
 };
+use util::device::{Device, DeviceBase};
 use util::unix::host_page_size;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
@@ -112,6 +113,7 @@ impl VfioPciDevice {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
+                base: DeviceBase::new(name.clone()),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
                 name,
@@ -809,6 +811,16 @@ impl VfioPciDevice {
             }
         }
         Ok(())
+    }
+}
+
+impl Device for VfioPciDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

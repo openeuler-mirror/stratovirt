@@ -21,6 +21,7 @@ use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use util::device::{Device, DeviceBase};
 use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
 use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
 use vmm_sys_util::epoll::EventSet;
@@ -128,6 +129,16 @@ impl Ged {
                 .write(1)
                 .unwrap_or_else(|e| error!("ged: failed to write interrupt eventfd ({:?}).", e));
         }
+    }
+}
+
+impl Device for Ged {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

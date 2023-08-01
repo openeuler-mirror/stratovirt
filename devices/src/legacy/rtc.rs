@@ -21,6 +21,7 @@ use address_space::GuestAddress;
 use anyhow::Result;
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
@@ -119,6 +120,7 @@ impl RTC {
     pub fn new() -> Result<RTC> {
         let mut rtc = RTC {
             base: SysBusDevBase {
+                base: DeviceBase::default(),
                 dev_type: SysBusDevType::Rtc,
                 res: SysRes {
                     region_base: RTC_PORT_INDEX,
@@ -352,6 +354,16 @@ impl RTC {
 
     fn update_in_progress(&self) -> bool {
         self.base_time.elapsed().subsec_nanos() >= (NANOSECONDS_PER_SECOND - UIP_HOLD_LENGTH) as u32
+    }
+}
+
+impl Device for RTC {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

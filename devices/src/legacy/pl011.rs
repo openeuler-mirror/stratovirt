@@ -33,6 +33,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_data_u32;
 use vmm_sys_util::eventfd::EventFd;
@@ -130,6 +131,7 @@ impl PL011 {
     pub fn new(cfg: SerialConfig) -> Result<Self> {
         Ok(PL011 {
             base: SysBusDevBase {
+                base: DeviceBase::default(),
                 dev_type: SysBusDevType::PL011,
                 res: SysRes::default(),
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
@@ -217,6 +219,16 @@ impl InputReceiver for PL011 {
 
     fn get_remain_space_size(&mut self) -> usize {
         PL011_FIFO_SIZE - self.state.read_count as usize
+    }
+}
+
+impl Device for PL011 {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

@@ -30,6 +30,7 @@ use ui::console::{
     DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::input::{key_event, KEYCODE_RET};
+use util::device::{Device, DeviceBase};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;
@@ -241,6 +242,16 @@ impl Ramfb {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_dynamic_device(&dev)?;
         Ok(())
+    }
+}
+
+impl Device for Ramfb {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

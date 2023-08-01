@@ -20,7 +20,9 @@ use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use util::device::{Device, DeviceBase};
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
+
 pub struct PFlash {
     base: SysBusDevBase,
     /// Has backend file or not.
@@ -642,6 +644,16 @@ impl PFlash {
             }
         }
         true
+    }
+}
+
+impl Device for PFlash {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

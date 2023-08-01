@@ -23,6 +23,7 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -128,6 +129,7 @@ impl VirtioMmioDevice {
 
         VirtioMmioDevice {
             base: SysBusDevBase {
+                base: DeviceBase::default(),
                 dev_type: SysBusDevType::VirtioMmio,
                 res: SysRes::default(),
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
@@ -366,6 +368,16 @@ impl VirtioMmioDevice {
             }
         };
         Ok(())
+    }
+}
+
+impl Device for VirtioMmioDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

@@ -27,6 +27,7 @@ use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use anyhow::Context;
 use sysbus::{SysBusDevBase, SysBusDevOps};
+use util::device::{Device, DeviceBase};
 
 #[cfg(target_arch = "aarch64")]
 use crate::PCI_INTR_BASE;
@@ -227,6 +228,16 @@ impl PciHost {
             read: Arc::new(read),
             write: Arc::new(write),
         }
+    }
+}
+
+impl Device for PciHost {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 
@@ -536,9 +547,20 @@ pub mod tests {
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
     use crate::root_port::RootPort;
     use crate::{PciDevBase, Result};
+    use util::device::{Device, DeviceBase};
 
     struct PciDevice {
         base: PciDevBase,
+    }
+
+    impl Device for PciDevice {
+        fn device_base(&self) -> &DeviceBase {
+            &self.base.base
+        }
+
+        fn device_base_mut(&mut self) -> &mut DeviceBase {
+            &mut self.base.base
+        }
     }
 
     impl PciDevOps for PciDevice {
@@ -719,6 +741,7 @@ pub mod tests {
         let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
+                base: DeviceBase::new("PCI device".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 8,
                 name: "PCI device".to_string(),

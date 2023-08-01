@@ -22,6 +22,7 @@ use pci::{
     },
     le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
+use util::device::{Device, DeviceBase};
 
 use super::VENDOR_ID_INTEL;
 
@@ -54,6 +55,7 @@ impl Mch {
     ) -> Self {
         Self {
             base: PciDevBase {
+                base: DeviceBase::new("Memory Controller Hub".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
                 name: "Memory Controller Hub".to_string(),
@@ -115,6 +117,16 @@ impl Mch {
             return false;
         }
         true
+    }
+}
+
+impl Device for Mch {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

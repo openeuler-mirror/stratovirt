@@ -31,6 +31,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::loop_context::EventNotifierHelper;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -359,6 +360,16 @@ impl InputReceiver for Serial {
 
     fn get_remain_space_size(&mut self) -> usize {
         RECEIVER_BUFF_SIZE
+    }
+}
+
+impl Device for Serial {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

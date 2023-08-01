@@ -256,10 +256,21 @@ mod tests {
     use crate::root_port::RootPort;
     use crate::{PciDevBase, PciHost};
     use anyhow::Result;
+    use util::device::{Device, DeviceBase};
 
     #[derive(Clone)]
     struct PciDevice {
         base: PciDevBase,
+    }
+
+    impl Device for PciDevice {
+        fn device_base(&self) -> &DeviceBase {
+            &self.base.base
+        }
+
+        fn device_base_mut(&mut self) -> &mut DeviceBase {
+            &mut self.base.base
+        }
     }
 
     impl PciDevOps for PciDevice {
@@ -350,6 +361,7 @@ mod tests {
         // Test device is attached to the root bus.
         let pci_dev = PciDevice {
             base: PciDevBase {
+                base: DeviceBase::new("test1".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 10,
                 name: String::from("test1"),
@@ -362,6 +374,7 @@ mod tests {
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
+                base: DeviceBase::new("test2".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 12,
                 name: String::from("test2"),
@@ -398,6 +411,7 @@ mod tests {
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
+                base: DeviceBase::new("test1".to_string()),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
                 name: String::from("test1"),

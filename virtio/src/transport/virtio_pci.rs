@@ -33,6 +33,7 @@ use pci::{
     ranges_overlap, PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
 };
 use util::byte_code::ByteCode;
+use util::device::{Device, DeviceBase};
 use util::num_ops::{read_data_u32, write_data_u32};
 use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
@@ -291,6 +292,7 @@ impl VirtioPciDevice {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
+                base: DeviceBase::new(name.clone()),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
                 name,
@@ -917,6 +919,16 @@ impl VirtioPciDevice {
 
     pub fn get_virtio_device(&self) -> &Arc<Mutex<dyn VirtioDevice>> {
         &self.device
+    }
+}
+
+impl Device for VirtioPciDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
     }
 }
 

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
+use util::device::{Device, DeviceBase};
 
 use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
@@ -84,7 +85,18 @@ impl ScsiDevState {
     }
 }
 
+impl Device for ScsiDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
 pub struct ScsiDevice {
+    pub base: DeviceBase,
     /// Configuration of the scsi device.
     pub config: ScsiDevConfig,
     /// State of the scsi device.
@@ -120,6 +132,7 @@ impl ScsiDevice {
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> ScsiDevice {
         ScsiDevice {
+            base: DeviceBase::new(config.id.clone()),
             config,
             state: ScsiDevState::new(),
             block_backend: None,
