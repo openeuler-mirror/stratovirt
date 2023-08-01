@@ -72,23 +72,23 @@ impl AmlBuilder for AcpiGenericAddress {
 #[derive(Default, Copy, Clone)]
 pub struct AcpiTableHeader {
     /// Signature of this table.
-    pub signature: [u8; 4],
+    signature: [u8; 4],
     /// The total length of this table, including this header.
-    pub length: u32,
+    length: u32,
     /// The revision of this table.
-    pub revision: u8,
+    revision: u8,
     /// The checksum of this table, including this header.
-    pub checksum: u8,
+    checksum: u8,
     /// OEM ID.
-    pub oem_id: [u8; 6],
+    oem_id: [u8; 6],
     /// OEM table ID.
-    pub oem_table_id: [u8; 8],
+    oem_table_id: [u8; 8],
     /// OEM revision of this table.
-    pub oem_revision: u32,
+    oem_revision: u32,
     /// Vendor ID for the ASL Compiler, default zero.
-    pub asl_compiler_id: [u8; 4],
+    asl_compiler_id: [u8; 4],
     /// Revision number of the ASL Compiler, default zero.
-    pub asl_compiler_revision: u32,
+    asl_compiler_revision: u32,
 }
 
 impl ByteCode for AcpiTableHeader {}

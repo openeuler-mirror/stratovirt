@@ -204,7 +204,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
-pub fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
@@ -342,10 +342,7 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
 ///
 /// * `mem_mappings` - The host virtual address of mapped memory information.
 /// * `zone` - Memory zone config info.
-pub fn set_host_memory_policy(
-    mem_mappings: &Arc<HostMemMapping>,
-    zone: &MemZoneConfig,
-) -> Result<()> {
+fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConfig) -> Result<()> {
     if zone.host_numa_nodes.is_none() {
         return Ok(());
     }

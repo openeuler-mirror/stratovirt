@@ -22,7 +22,7 @@ use util::{
 
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;
-pub const ACPI_BITMASK_SLEEP_ENABLE: u16 = 0x2000;
+const ACPI_BITMASK_SLEEP_ENABLE: u16 = 0x2000;
 
 /// ACPI Power Management Timer
 #[allow(clippy::upper_case_acronyms)]
