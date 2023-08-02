@@ -453,7 +453,7 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
     Ok(fmt)
 }
 
-pub struct V4l2IoHandler {
+struct V4l2IoHandler {
     sample: Arc<Mutex<Sample>>,
     backend: Arc<V4l2Backend>,
     notify_cb: Option<CameraNotifyCallback>,
@@ -461,7 +461,7 @@ pub struct V4l2IoHandler {
 }
 
 impl V4l2IoHandler {
-    pub fn new(
+    fn new(
         sample: &Arc<Mutex<Sample>>,
         backend: &Arc<V4l2Backend>,
         cb: Option<CameraNotifyCallback>,

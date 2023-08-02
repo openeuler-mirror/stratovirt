@@ -54,7 +54,7 @@ const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0x
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PL031State {
+struct PL031State {
     /// Match register value.
     mr: u32,
     /// Load register value.

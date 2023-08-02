@@ -98,7 +98,7 @@ impl UsbEndpoint {
         }
     }
 
-    fn set_max_packet_size(&mut self, raw: u16) {
+    pub fn set_max_packet_size(&mut self, raw: u16) {
         let size = raw & 0x7ff;
         let micro_frames: u32 = match (raw >> 11) & 3 {
             1 => 2,

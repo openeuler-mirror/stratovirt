@@ -56,17 +56,17 @@ type ReceFn = Option<Arc<dyn Fn(&[u8]) + Send + Sync>>;
 /// Character device structure.
 pub struct Chardev {
     /// Id of chardev.
-    pub id: String,
+    id: String,
     /// Type of backend device.
-    pub backend: ChardevType,
+    backend: ChardevType,
     /// UnixListener for socket-type chardev.
-    pub listener: Option<UnixListener>,
+    listener: Option<UnixListener>,
     /// Chardev input.
-    pub input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
+    input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
     /// Fd of socket stream.
-    pub stream_fd: Option<i32>,
+    stream_fd: Option<i32>,
     /// Device is deactivated or not.
     pub deactivated: bool,
     /// Handle the input data and trigger interrupt if necessary.

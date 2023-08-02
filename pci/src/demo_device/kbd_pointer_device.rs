@@ -34,7 +34,7 @@ pub struct MemSpace {
 }
 
 impl MemSpace {
-    pub fn send_kbdmouse_message(&mut self, msg: &PointerMessage) -> Result<()> {
+    fn send_kbdmouse_message(&mut self, msg: &PointerMessage) -> Result<()> {
         let sys_mem = match &self.sys_mem {
             Some(m) => m,
             None => {
