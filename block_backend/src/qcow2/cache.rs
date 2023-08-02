@@ -116,7 +116,7 @@ impl CacheTable {
             _ => bail!("Unsupported entry size {}", self.entry_size),
         }
 
-        let mut dirty_info = &mut self.dirty_info;
+        let dirty_info = &mut self.dirty_info;
         dirty_info.start = std::cmp::min(dirty_info.start, start as u64);
         dirty_info.end = std::cmp::max(dirty_info.end, end as u64);
         dirty_info.is_dirty = true;

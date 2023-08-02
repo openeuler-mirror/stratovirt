@@ -832,7 +832,7 @@ impl SysBusDevOps for PFlash {
         region_base: u64,
         region_size: u64,
     ) -> sysbus::Result<()> {
-        let mut res = self.get_sys_resource().unwrap();
+        let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         res.irq = 0;
