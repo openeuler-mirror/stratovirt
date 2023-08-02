@@ -21,7 +21,6 @@ use machine_manager::config::ShutdownAction;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::UiContext;
 use machine_manager::event_loop::EventLoop;
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
@@ -212,7 +211,7 @@ impl StdMachine {
         Ok(StdMachine {
             cpu_topo,
             cpus: Vec::new(),
-            cpu_features: vm_config.machine_config.cpu_config.borrow().into(),
+            cpu_features: (&vm_config.machine_config.cpu_config).into(),
             irq_chip: None,
             sys_mem: sys_mem.clone(),
             sysbus,

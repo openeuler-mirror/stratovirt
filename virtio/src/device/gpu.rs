@@ -589,7 +589,7 @@ impl GpuIoHandler {
         resp: &mut T,
     ) -> Result<()> {
         if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            let mut header = resp.mut_ctrl_hdr();
+            let header = resp.mut_ctrl_hdr();
             header.flags |= VIRTIO_GPU_FLAG_FENCE;
             header.fence_id = req.header.fence_id;
             header.ctx_id = req.header.ctx_id;

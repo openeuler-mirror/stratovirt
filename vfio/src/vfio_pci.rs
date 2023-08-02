@@ -509,7 +509,7 @@ impl VfioPciDevice {
             };
 
             let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
-            let mut gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
+            let gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
             if gsi_route.irq_fd.is_none() {
                 let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
                 gsi_route.irq_fd = Some(Arc::new(irq_fd));
