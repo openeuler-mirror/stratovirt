@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use libc::{c_void, read, EFD_NONBLOCK};
-use log::warn;
+use log::{error, warn};
 use nix::errno::Errno;
 use nix::{
     poll::{ppoll, PollFd, PollFlags},
@@ -339,8 +339,13 @@ impl EventLoopContext {
                         EpollEvent::default(),
                     ) {
                         let error_num = error.raw_os_error().unwrap();
-                        if error_num != libc::EBADF && error_num != libc::ENOENT {
+                        if error_num != libc::EBADF
+                            && error_num != libc::ENOENT
+                            && error_num != libc::EPERM
+                        {
                             return Err(anyhow!(UtilError::BadSyscall(error)));
+                        } else {
+                            warn!("epoll ctl failed: {}", error);
                         }
                     }
                 }
@@ -624,7 +629,9 @@ impl EventLoopContext {
                 }
             }
             drop(status_locked);
-            self.update_events(notifiers)?;
+            if let Err(e) = self.update_events(notifiers) {
+                error!("update event failed: {}", e);
+            }
         }
 
         self.run_timers();
