@@ -27,25 +27,6 @@ use self::{demo::DemoCamera, v4l2::V4l2CameraBackend};
 /// Frame interval in 100ns units.
 pub const INTERVALS_PER_SEC: u32 = 10_000_000;
 
-#[allow(dead_code)]
-#[derive(Default, Clone)]
-pub struct CamFmt {
-    // Basic 3 configurations: frame size, format, frame frequency.
-    basic_fmt: CamBasicFmt,
-    // Processing Unit Configuration: brightness, hue, etc.
-    pu_fmt: CamPUFmt,
-    // Camera Terminal Configuration: focus, exposure time, iris, etc.
-    lens_fmt: CamLensFmt,
-}
-
-impl CamFmt {
-    pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
-    }
-}
-
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CamBasicFmt {
     pub width: u32,
@@ -61,24 +42,6 @@ impl CamBasicFmt {
         }
         Ok(INTERVALS_PER_SEC / self.fps)
     }
-}
-
-#[allow(dead_code)]
-#[derive(Default, Clone)]
-pub struct CamPUFmt {
-    bright: u64,
-    contrast: u64,
-    hue: u64,
-    saturatio: u64,
-    // TODO: to be extended.
-}
-
-#[allow(dead_code)]
-#[derive(Default, Clone)]
-pub struct CamLensFmt {
-    focus: u64,
-    zoom: u64,
-    // TODO: to be extended.
 }
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Default)]

@@ -43,14 +43,6 @@ pub enum KvmVmState {
     Shutdown = 6,
 }
 
-/// Event over StratoVirt lifetime.
-pub enum VmEvent {
-    ShutdownCauseGuestReset,
-    ShutdownCauseGuestCrash,
-    ShutdownCauseFailEntry,
-    ShutdownCauseInternalError,
-}
-
 /// Trait to handle virtual machine lifecycle.
 ///
 /// # Notes
