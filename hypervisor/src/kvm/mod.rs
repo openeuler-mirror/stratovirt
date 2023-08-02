@@ -141,7 +141,7 @@ impl KVMFds {
 
         // Safe because data in `routes` is reliable.
         unsafe {
-            let mut irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
             if irq_routing.is_null() {
                 bail!("Failed to alloc irq routing");
             }

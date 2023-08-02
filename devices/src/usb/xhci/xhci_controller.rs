@@ -1388,7 +1388,7 @@ impl XhciDevice {
             ep_ctx.as_mut_dwords(),
         )?;
         self.disable_endpoint(slot_id, ep_id)?;
-        let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+        let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         epctx.epid = ep_id;
         epctx.enabled = true;
         // It is safe to use plus here becuase we previously verify the address on the outer layer.
@@ -1616,7 +1616,7 @@ impl XhciDevice {
             let mut locked_xfer = xfer.lock().unwrap();
             locked_xfer.packet = packet;
             self.endpoint_do_transfer(&mut locked_xfer)?;
-            let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+            let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             if locked_xfer.complete {
                 epctx.update_dequeue(&self.mem_space, None)?;
             } else {
