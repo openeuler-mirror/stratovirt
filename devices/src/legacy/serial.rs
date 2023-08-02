@@ -68,7 +68,7 @@ const RECEIVER_BUFF_SIZE: usize = 1024;
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct SerialState {
+struct SerialState {
     /// Receiver buffer state.
     rbr_value: [u8; 1024],
     /// Length of rbr.

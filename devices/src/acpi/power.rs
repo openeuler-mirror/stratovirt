@@ -65,7 +65,7 @@ const BAT_SYSFS_DIR: &str = "/sys/class/power_supply/Battery";
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PowerDevState {
+struct PowerDevState {
     last_acad_st: u32,
     last_bat_st: u32,
     last_bat_lvl: u32,
@@ -135,7 +135,7 @@ impl PowerDev {
         Ok(())
     }
 
-    pub fn power_status_read(&mut self) -> Result<()> {
+    fn power_status_read(&mut self) -> Result<()> {
         let acad_props = vec!["online"];
         let bat_sysfs_props = vec!["online", "current_now", "energy_now", "voltage_now"];
         let mut props: Vec<u32> = vec![0; bat_sysfs_props.len()];
@@ -159,7 +159,7 @@ impl PowerDev {
         Ok(())
     }
 
-    pub fn power_load_static_status(&mut self) {
+    fn power_load_static_status(&mut self) {
         info!("Load static power devices status");
         self.regs[REG_IDX_ACAD_ON] = 1;
         self.regs[REG_IDX_BAT_DCAP] = 0xffffffff;
@@ -384,7 +384,7 @@ impl AmlBuilder for PowerDev {
     }
 }
 
-pub fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
+fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
     let cdev = dev.clone();
     let update_func = Box::new(move || {
         power_status_update(&cdev);

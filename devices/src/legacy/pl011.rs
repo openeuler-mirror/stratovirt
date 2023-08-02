@@ -60,7 +60,7 @@ const PL011_FIFO_SIZE: usize = 16;
 #[repr(C)]
 #[derive(Clone, Copy, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PL011State {
+struct PL011State {
     /// Read FIFO. PL011_FIFO_SIZE is 16.
     rfifo: [u32; 16],
     /// Flag Register.
