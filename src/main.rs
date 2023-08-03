@@ -34,7 +34,7 @@ use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum MainError {
+enum MainError {
     #[error("Manager")]
     Manager {
         #[from]
@@ -57,7 +57,7 @@ pub enum MainError {
     },
 }
 
-pub trait ExitCode {
+trait ExitCode {
     /// Returns the value to use as the exit status.
     fn code(self) -> i32;
 }

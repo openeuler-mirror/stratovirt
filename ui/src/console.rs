@@ -70,9 +70,9 @@ pub enum VmRunningStage {
 }
 
 #[derive(Default)]
-pub struct UiInfo {
-    pub last_width: u32,
-    pub last_height: u32,
+struct UiInfo {
+    last_width: u32,
+    last_height: u32,
 }
 
 /// Image data defined in display.
@@ -195,7 +195,7 @@ pub struct DisplayConsole {
     pub con_type: ConsoleType,
     pub width: i32,
     pub height: i32,
-    pub ui_info: UiInfo,
+    ui_info: UiInfo,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
     pub dev_opts: Arc<dyn HardWareOperations>,
@@ -228,11 +228,11 @@ impl DisplayConsole {
 }
 
 /// The state of console layer.
-pub struct DisplayState {
+struct DisplayState {
     /// Running stage.
-    pub run_stage: VmRunningStage,
+    run_stage: VmRunningStage,
     /// Refresh interval, which can be dynamic changed.
-    pub interval: u64,
+    interval: u64,
     /// Whether there is a refresh task.
     is_refresh: bool,
     /// A list of DisplayChangeListeners.
@@ -339,7 +339,7 @@ pub fn get_run_stage() -> VmRunningStage {
 }
 
 /// Refresh display image.
-pub fn display_refresh() {
+fn display_refresh() {
     let mut dcl_interval: u64;
     let mut interval: u64 = DISPLAY_UPDATE_INTERVAL_MAX;
 
@@ -378,7 +378,7 @@ pub fn display_refresh() {
 
 /// Register the timer to execute the scheduled
 /// refresh task.
-pub fn setup_refresh(update_interval: u64) {
+fn setup_refresh(update_interval: u64) {
     let func = Box::new(move || {
         display_refresh();
     });

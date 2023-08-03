@@ -60,7 +60,7 @@ const CLIENT_REQUIRE_AUTH: bool = true;
 const MAXIMUM_SESSION_STORAGE: usize = 256;
 
 /// Cipher suites supported by server.
-pub static TLS_CIPHER_SUITES: &[SupportedCipherSuite] = &[
+static TLS_CIPHER_SUITES: &[SupportedCipherSuite] = &[
     TLS13_AES_128_GCM_SHA256,
     TLS13_AES_256_GCM_SHA384,
     TLS13_CHACHA20_POLY1305_SHA256,
@@ -69,9 +69,9 @@ pub static TLS_CIPHER_SUITES: &[SupportedCipherSuite] = &[
     TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 ];
 /// Tls version supported by server.
-pub static TLS_VERSIONS: &[&SupportedProtocolVersion] = &[&TLS13, &TLS12];
+static TLS_VERSIONS: &[&SupportedProtocolVersion] = &[&TLS13, &TLS12];
 /// Key exchange groups supported by server.
-pub static TLS_KX_GROUPS: [&SupportedKxGroup; 3] = [&X25519, &SECP256R1, &SECP384R1];
+static TLS_KX_GROUPS: [&SupportedKxGroup; 3] = [&X25519, &SECP256R1, &SECP384R1];
 
 /// Configuration for tls.
 #[derive(Debug, Clone, Default)]
@@ -204,7 +204,7 @@ impl ClientIoHandler {
         Ok(())
     }
 
-    pub fn tls_handshake_done(&mut self) -> Result<()> {
+    fn tls_handshake_done(&mut self) -> Result<()> {
         let handler = self.handlers.get("vnc_client_io").unwrap().clone();
         let handlers = vec![handler];
         EventLoop::update_event(
@@ -352,19 +352,19 @@ fn load_certs(filepath: &str) -> Result<Vec<Certificate>> {
     Ok(certs)
 }
 
-pub struct TlsIoChannel {
+struct TlsIoChannel {
     /// TcpStream connected with client.
-    pub stream: TcpStream,
+    stream: TcpStream,
     /// Tls server connection.
-    pub tls_conn: ServerConnection,
+    tls_conn: ServerConnection,
 }
 
 impl TlsIoChannel {
-    pub fn new(stream: TcpStream, tls_conn: ServerConnection) -> Self {
+    fn new(stream: TcpStream, tls_conn: ServerConnection) -> Self {
         Self { stream, tls_conn }
     }
 
-    pub fn tls_handshake(&mut self) -> Result<()> {
+    fn tls_handshake(&mut self) -> Result<()> {
         if self.tls_conn.read_tls(&mut self.stream)? == 0 {
             bail!("Tls hand shake failed: EOF");
         }

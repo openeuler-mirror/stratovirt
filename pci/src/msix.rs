@@ -52,7 +52,7 @@ pub const MSIX_CAP_FUNC_MASK: u16 = 0x4000;
 pub const MSIX_CAP_SIZE: u8 = 12;
 pub const MSIX_CAP_ID: u8 = 0x11;
 pub const MSIX_CAP_TABLE: u8 = 0x04;
-pub const MSIX_CAP_PBA: u8 = 0x08;
+const MSIX_CAP_PBA: u8 = 0x08;
 
 /// MSI-X message structure.
 #[derive(Copy, Clone)]
