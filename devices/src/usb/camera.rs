@@ -20,8 +20,6 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error, info};
-use strum::EnumCount;
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -108,8 +106,9 @@ pub struct UsbCamera {
     delete_evts: Vec<RawFd>,
 }
 
-#[derive(Debug, EnumCountMacro, EnumIter)]
+#[derive(Debug)]
 enum UsbCameraStringIDs {
+    #[allow(unused)]
     Invalid = 0,
     Manufacture,
     Product,
@@ -119,12 +118,14 @@ enum UsbCameraStringIDs {
     VideoControl,
     InputTerminal,
     OutputTerminal,
+    #[allow(unused)]
     SelectUnit,
+    #[allow(unused)]
     ProcessingUnit,
     VideoStreaming,
 }
 
-const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
+const UVC_CAMERA_STRINGS: [&str; 12] = [
     "",
     "StratoVirt",
     "USB Camera",

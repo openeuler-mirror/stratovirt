@@ -5,7 +5,7 @@ Warranty Disclaimer
 THE OPEN SOURCE SOFTWARE IN THIS SOFTWARE IS DISTRIBUTED IN THE HOPE THAT IT WILL BE USEFUL, BUT WITHOUT ANY WARRANTY, WITHOUT EVEN THE IMPLIED WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. SEE THE APPLICABLE LICENSES FOR MORE DETAILS.
 
 Copyright Notice and License Texts
-Software: libc 0.2.133
+Software: libc 0.2.146
 Copyright notice:
 Copyright (c) 2014-2020 The Rust Project Developers
 License: MIT or Apache License Version 2.0
@@ -282,7 +282,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org/>
 
-Software: serde 1.0.145
+Software: serde 1.0.163
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
@@ -296,7 +296,7 @@ Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: anyhow 1.0
+Software: anyhow 1.0.71
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
@@ -321,7 +321,7 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause
 Please see above.
 
-Software: libusb1_sys 0.6.4
+Software: libusb1-sys 0.6.4
 Copyright notice:
 Copyright (c) 2015 David Cuddeback
 License: MIT
@@ -356,7 +356,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Software: kvm-ioctls kvm-ioctls
+Software: kvm-ioctls 0.13.0
 Copyright notice:
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Portions Copyright 2017 The Chromium OS Authors. All rights reserved.
@@ -375,12 +375,6 @@ Software: arc-swap 1.6.0
 Copyright notice:
 Copyright (c) 2017 arc-swap developers
 License: MIT or Apache License Version 2.0
-Please see above.
-
-Software: serial_test 2.0.0
-Copyright notice:
-Copyright (c) 2018 Tom Parker-Shemilt
-License: MIT
 Please see above.
 
 Software: syn 2.0.18
@@ -420,7 +414,7 @@ Copyright (c) 2019 Intel Corporation. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause License
 Please see above.
 
-Software: once_cell 1.17.2
+Software: once_cell 1.18.0
 Copyright notice:
 Copyright (c) Aleksey Kladov <aleksey.kladov@gmail.com>
 License: MIT OR Apache-2.0

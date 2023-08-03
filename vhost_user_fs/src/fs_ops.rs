@@ -34,9 +34,9 @@ pub type DirentPtr = *mut libc::dirent;
 pub fn fstat_at(file: &File, name: CString, flags: i32) -> (libc::stat, i32) {
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::fstatat(file.as_raw_fd(), name.as_ptr(), &mut stat, flags) } < 0 {
-        return (stat, errno::errno().0);
+        return (stat, nix::errno::errno());
     }
 
     (stat, FUSE_OK)
@@ -49,10 +49,10 @@ pub fn fstat_at(file: &File, name: CString, flags: i32) -> (libc::stat, i32) {
 /// * `name` - The path name in the host filesystem.
 /// * `flags` - The flags used to open a file.
 pub fn open(name: CString, flags: i32) -> (Option<File>, i32) {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let fd = unsafe { libc::open(name.as_ptr(), flags) };
     if fd < 0 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     let file = unsafe { File::from_raw_fd(fd) };
@@ -68,11 +68,11 @@ pub fn open(name: CString, flags: i32) -> (Option<File>, i32) {
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode used to open a file.
 pub fn open_at(file: &File, name: CString, flags: i32, mode: u32) -> (Option<File>, i32) {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags, mode) };
     if fd < 0 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     let file = unsafe { File::from_raw_fd(fd) };
@@ -87,9 +87,9 @@ pub fn open_at(file: &File, name: CString, flags: i32, mode: u32) -> (Option<Fil
 /// * `file` - The file handler saves the open file descriptor.
 /// * `mode` - The mode indicates the permissions of the file will be set.
 pub fn fchmod(file: &File, mode: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::fchmod(file.as_raw_fd(), mode) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -104,9 +104,9 @@ pub fn fchmod(file: &File, mode: u32) -> i32 {
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode indicates the permissions of the file will be set.
 pub fn fchmod_at(file: &File, name: CString, mode: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::fchmodat(file.as_raw_fd(), name.as_ptr(), mode, 0) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -123,9 +123,9 @@ pub fn fchmod_at(file: &File, name: CString, mode: u32) -> i32 {
 /// * `gid` - The group id will be set.
 /// * `flags` - The flags indicates the action of file will be set.
 pub fn fchown_at(file: &File, name: CString, uid: u32, gid: u32, flags: i32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::fchownat(file.as_raw_fd(), name.as_ptr(), uid, gid, flags) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -138,9 +138,9 @@ pub fn fchown_at(file: &File, name: CString, uid: u32, gid: u32, flags: i32) -> 
 /// * `file` - The file handler saves the open file descriptor.
 /// * `size` - The size of truncating file.
 pub fn ftruncate(file: &File, size: u64) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::ftruncate(file.as_raw_fd(), size as i64) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -167,9 +167,9 @@ pub fn futimens(file: &File, a_sec: u64, a_nsec: i64, m_sec: u64, m_nsec: i64) -
         },
     ];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::futimens(file.as_raw_fd(), tv.as_ptr()) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -206,9 +206,9 @@ pub fn utimensat(
         },
     ];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::utimensat(file.as_raw_fd(), name.as_ptr(), tv.as_ptr(), flags) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -224,7 +224,7 @@ pub fn utimensat(
 pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; MAX_PATH_LEN + 1];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::readlinkat(
             file.as_raw_fd(),
@@ -235,7 +235,7 @@ pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
     };
 
     if ret == -1 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     buf.resize(ret as usize, 0);
@@ -252,12 +252,12 @@ pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `link_name` - The link name is new path name for the target path name.
 pub fn symlinkat(file: &File, name: CString, link_name: CString) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = unsafe { libc::symlinkat(link_name.as_ptr(), file.as_raw_fd(), name.as_ptr()) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -275,18 +275,18 @@ pub fn change_uid_gid(new_uid: u32, new_gid: u32, old_uid: &mut u32, old_gid: &m
     let current_uid = unsafe { libc::geteuid() };
     let current_gid = unsafe { libc::getegid() };
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::syscall(libc::SYS_setresgid, -1, new_gid, -1) };
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::syscall(libc::SYS_setresuid, -1, new_uid, -1) };
     if ret == -1 {
         unsafe { libc::syscall(libc::SYS_setresgid, -1, current_gid, -1) };
 
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     *old_uid = current_uid;
@@ -324,12 +324,12 @@ pub fn recover_uid_gid(old_uid: u32, old_gid: u32) -> i32 {
 /// * `mode` - The mode indicates both the file mode to use and the type of node to be created.
 /// * `rdev` - The rdev indicates the major and minor numbers of the special file.
 pub fn mknodat(file: &File, name: CString, mode: u32, rdev: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = unsafe { libc::mknodat(file.as_raw_fd(), name.as_ptr(), mode, rdev as u64) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -344,9 +344,9 @@ pub fn mknodat(file: &File, name: CString, mode: u32, rdev: u32) -> i32 {
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode indicates the permissions of the new directory.
 pub fn mkdir_at(file: &File, name: CString, mode: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::mkdirat(file.as_raw_fd(), name.as_ptr(), mode) } < 0 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -361,12 +361,12 @@ pub fn mkdir_at(file: &File, name: CString, mode: u32) -> i32 {
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `flags` - The flags indicates the operation of deleting a name.
 pub fn unlinkat(file: &File, name: CString, flags: i32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = unsafe { libc::unlinkat(file.as_raw_fd(), name.as_ptr(), flags) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -383,7 +383,7 @@ pub fn unlinkat(file: &File, name: CString, flags: i32) -> i32 {
 /// new file.
 /// * `newname` - The name indicates the file path is relative to the starting of new directory.
 pub fn rename(olddir: &File, name: CString, newdir: &File, newname: CString) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = unsafe {
         libc::renameat(
@@ -395,7 +395,7 @@ pub fn rename(olddir: &File, name: CString, newdir: &File, newname: CString) -> 
     };
 
     if ret != FUSE_OK {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -419,7 +419,7 @@ pub fn linkat(
     new_name: CString,
     flags: i32,
 ) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = unsafe {
         libc::linkat(
@@ -432,7 +432,7 @@ pub fn linkat(
     };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -446,9 +446,9 @@ pub fn linkat(
 pub fn fstat_vfs(file: &File) -> (libc::statvfs, i32) {
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     if unsafe { libc::fstatvfs(file.as_raw_fd(), &mut stat) } < 0 {
-        return (stat, errno::errno().0);
+        return (stat, nix::errno::errno());
     }
 
     (stat, FUSE_OK)
@@ -462,7 +462,7 @@ pub fn fstat_vfs(file: &File) -> (libc::statvfs, i32) {
 /// * `datasync` - The datasync indicates whether to use the fdatasync
 /// or fsync interface.
 pub fn fsync(file: &File, datasync: bool) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret = if datasync {
         unsafe { libc::fdatasync(file.as_raw_fd()) }
@@ -471,7 +471,7 @@ pub fn fsync(file: &File, datasync: bool) -> i32 {
     };
 
     if ret != FUSE_OK {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -483,10 +483,10 @@ pub fn fsync(file: &File, datasync: bool) -> i32 {
 ///
 /// * `file` - The file handler saves the open directory descriptor.
 pub fn fchdir(file: &File) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::fchdir(file.as_raw_fd()) };
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -502,7 +502,7 @@ pub fn fchdir(file: &File) -> i32 {
 /// * `size` - The size of the string of value.
 /// * `flags` - The flags indicates the attribute will be set.
 pub fn set_xattr(path: CString, name: CString, value: CString, size: u32, flags: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::setxattr(
             path.as_ptr(),
@@ -514,7 +514,7 @@ pub fn set_xattr(path: CString, name: CString, value: CString, size: u32, flags:
     };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -530,7 +530,7 @@ pub fn set_xattr(path: CString, name: CString, value: CString, size: u32, flags:
 /// * `size` - The size of the string of value.
 /// * `flags` - The flags indicates the attribute will be set.
 pub fn fset_xattr(file: &File, name: CString, value: CString, size: u32, flags: u32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::fsetxattr(
             file.as_raw_fd(),
@@ -542,7 +542,7 @@ pub fn fset_xattr(file: &File, name: CString, value: CString, size: u32, flags: 
     };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -558,7 +558,7 @@ pub fn fset_xattr(file: &File, name: CString, value: CString, size: u32, flags: 
 pub fn get_xattr(path: CString, name: CString, size: usize) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; size];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::getxattr(
             path.as_ptr(),
@@ -568,7 +568,7 @@ pub fn get_xattr(path: CString, name: CString, size: usize) -> (Option<Vec<u8>>,
         )
     };
     if ret == -1 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     buf.resize(ret as usize, 0);
@@ -586,7 +586,7 @@ pub fn get_xattr(path: CString, name: CString, size: usize) -> (Option<Vec<u8>>,
 pub fn fget_xattr(file: &File, name: CString, size: usize) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; size];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::fgetxattr(
             file.as_raw_fd(),
@@ -596,7 +596,7 @@ pub fn fget_xattr(file: &File, name: CString, size: usize) -> (Option<Vec<u8>>, 
         )
     };
     if ret == -1 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     buf.resize(ret as usize, 0);
@@ -613,11 +613,11 @@ pub fn fget_xattr(file: &File, name: CString, size: usize) -> (Option<Vec<u8>>, 
 pub fn list_xattr(path: CString, size: usize) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; size];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret =
         unsafe { libc::listxattr(path.as_ptr(), buf.as_mut_ptr() as *mut libc::c_char, size) };
     if ret == -1 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     buf.resize(ret as usize, 0);
@@ -634,7 +634,7 @@ pub fn list_xattr(path: CString, size: usize) -> (Option<Vec<u8>>, i32) {
 pub fn flist_xattr(file: &File, size: usize) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; size];
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe {
         libc::flistxattr(
             file.as_raw_fd(),
@@ -643,7 +643,7 @@ pub fn flist_xattr(file: &File, size: usize) -> (Option<Vec<u8>>, i32) {
         )
     };
     if ret == -1 {
-        return (None, errno::errno().0);
+        return (None, nix::errno::errno());
     }
 
     buf.resize(ret as usize, 0);
@@ -658,10 +658,10 @@ pub fn flist_xattr(file: &File, size: usize) -> (Option<Vec<u8>>, i32) {
 /// * `path` - The path in the host filesystem.
 /// * `name` - The name of the extended attribute value.
 pub fn remove_xattr(path: CString, name: CString) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::removexattr(path.as_ptr(), name.as_ptr()) };
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -674,10 +674,10 @@ pub fn remove_xattr(path: CString, name: CString) -> i32 {
 /// * `file` - The file handler saves the open file descriptor.
 /// * `name` - The name of the extended attribute value.
 pub fn fremove_xattr(file: &File, name: CString) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr()) };
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -698,11 +698,11 @@ pub fn umask(umask: u32) {
 ///
 /// * `fd` - The open file descriptor used to open a directory stream.
 pub fn fdopen_dir(fd: RawFd) -> (Option<DirPtr>, i32) {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let dirp = unsafe { libc::fdopendir(fd) };
-    if errno::errno().0 != 0 {
-        return (None, errno::errno().0);
+    if nix::errno::errno() != 0 {
+        return (None, nix::errno::errno());
     }
 
     (Some(dirp), FUSE_OK)
@@ -726,11 +726,11 @@ pub fn seek_dir(dirp: &mut DirPtr, offset: u64) {
 ///
 /// * `dirp` - The pointer to open a directory.
 pub fn read_dir(dirp: &mut DirPtr) -> (Option<DirentPtr>, i32) {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let direntp = unsafe { libc::readdir(*dirp) };
-    if errno::errno().0 != 0 {
-        return (None, errno::errno().0);
+    if nix::errno::errno() != 0 {
+        return (None, nix::errno::errno());
     }
 
     (Some(direntp), FUSE_OK)
@@ -743,10 +743,10 @@ pub fn read_dir(dirp: &mut DirPtr) -> (Option<DirentPtr>, i32) {
 /// * `file` - The file handler saves the open file descriptor.
 /// * `operation` - The operation of lock type.
 pub fn flock(file: &File, operation: i32) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::flock(file.as_raw_fd(), operation) };
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -779,11 +779,11 @@ pub fn fcntl_flock(
         flock.l_len = file_lock.end as i64 - file_lock.start as i64 + 1;
     }
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::fcntl(file.as_raw_fd(), cmd, &mut flock) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     file_lock_out.lock_type = flock.l_type as u32;
@@ -810,13 +810,13 @@ pub fn fcntl_flock(
 /// * `offset` - The offset in the file.
 /// * `length` - The length that needs to be allocated.
 pub fn fallocate(file: &File, mode: u32, offset: u64, length: u64) -> i32 {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
 
     let ret =
         unsafe { libc::fallocate(file.as_raw_fd(), mode as i32, offset as i64, length as i64) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK
@@ -830,11 +830,11 @@ pub fn fallocate(file: &File, mode: u32, offset: u64, length: u64) -> i32 {
 /// * `offset` - The offset in the file used together with the whence.
 /// * `whence` - The length that needs to be allocated.
 pub fn lseek(file: &File, offset: u64, whence: u32) -> (u64, i32) {
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::lseek(file.as_raw_fd(), offset as i64, whence as i32) };
 
     if ret == -1 {
-        return (0, errno::errno().0);
+        return (0, nix::errno::errno());
     }
 
     (ret as u64, FUSE_OK)
@@ -849,11 +849,11 @@ pub fn lseek(file: &File, offset: u64, whence: u32) -> (u64, i32) {
 pub fn set_rlimit(rlim_cur: u64, rlim_max: u64) -> i32 {
     let limit = libc::rlimit { rlim_cur, rlim_max };
 
-    errno::set_errno(errno::Errno(0));
+    nix::errno::Errno::clear();
     let ret = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
 
     if ret == -1 {
-        return errno::errno().0;
+        return nix::errno::errno();
     }
 
     FUSE_OK

@@ -866,7 +866,6 @@ mod tests {
     use machine_manager::machine::{
         KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
     };
-    use serial_test::serial;
 
     use super::*;
 
@@ -932,7 +931,6 @@ mod tests {
     impl MachineInterface for TestVm {}
 
     #[test]
-    #[serial]
     #[allow(unused)]
     fn test_cpu_lifecycle() {
         let kvm_fds = KVMFds::new();

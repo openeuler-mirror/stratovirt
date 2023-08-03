@@ -296,7 +296,6 @@ impl GICDevice for GICv2 {
 #[cfg(test)]
 mod tests {
     use hypervisor::kvm::KVMFds;
-    use serial_test::serial;
 
     use super::super::GICVersion;
     use super::super::GICv2Config;
@@ -305,7 +304,6 @@ mod tests {
     use crate::GIC_IRQ_MAX;
 
     #[test]
-    #[serial]
     fn test_create_gicv2() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {

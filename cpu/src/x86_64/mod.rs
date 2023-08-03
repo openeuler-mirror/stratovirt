@@ -612,11 +612,9 @@ mod test {
     use super::*;
     use hypervisor::kvm::{KVMFds, KVM_FDS};
     use kvm_bindings::kvm_segment;
-    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
-    #[serial]
     fn test_x86_64_cpu() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
