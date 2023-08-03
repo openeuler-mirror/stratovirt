@@ -60,11 +60,11 @@ const ENCODING_TIGHT: i32 = 7;
 const ENCODING_ZRLE: i32 = 16;
 const ENCODING_ZYWRLE: i32 = 17;
 const ENCODING_DESKTOPRESIZE: i32 = -223;
-pub const ENCODING_RICH_CURSOR: i32 = -239;
+const ENCODING_RICH_CURSOR: i32 = -239;
 const ENCODING_POINTER_TYPE_CHANGE: i32 = -257;
 const ENCODING_LED_STATE: i32 = -261;
 const ENCODING_DESKTOP_RESIZE_EXT: i32 = -308;
-pub const ENCODING_ALPHA_CURSOR: i32 = -314;
+const ENCODING_ALPHA_CURSOR: i32 = -314;
 const ENCODING_WMVI: i32 = 1464686185;
 
 /// This trait is used to send bytes,
@@ -75,7 +75,7 @@ pub trait IoOperations {
 }
 
 /// Image display feature.
-pub enum VncFeatures {
+enum VncFeatures {
     VncFeatureResize,
     VncFeatureResizeExt,
     VncFeatureHextile,
@@ -85,16 +85,16 @@ pub enum VncFeatures {
     VncFeatureZlib,
     VncFeatureRichCursor,
     VncFeatureAlphaCursor,
-    VncFeatureTightPng,
+    _VncFeatureTightPng,
     VncFeatureZrle,
     VncFeatureZywrle,
     VncFeatureLedState,
-    VncFeatureXvp,
-    VncFeatureClipboardExt,
+    _VncFeatureXvp,
+    _VncFeatureClipboardExt,
 }
 
 /// Client to server message in Remote Framebuffer Protocol.
-pub enum ClientMsg {
+enum ClientMsg {
     SetPixelFormat = 0,
     SetEncodings = 2,
     FramebufferUpdateRequest = 3,
@@ -132,7 +132,7 @@ pub struct VncVersion {
 }
 
 impl VncVersion {
-    pub fn new(major: u16, minor: u16) -> Self {
+    fn new(major: u16, minor: u16) -> Self {
         VncVersion { major, minor }
     }
 }
@@ -197,7 +197,7 @@ impl DisplayMode {
         }
     }
 
-    pub fn has_feature(&self, feature: VncFeatures) -> bool {
+    fn has_feature(&self, feature: VncFeatures) -> bool {
         self.feature & (1 << feature as usize) != 0
     }
 }
@@ -325,12 +325,12 @@ impl Default for ConnState {
 }
 
 impl ConnState {
-    pub fn is_disconnect(&mut self) -> bool {
+    fn is_disconnect(&mut self) -> bool {
         self.dis_conn
     }
 
     /// Whether the client's image data needs to be updated.
-    pub fn is_need_update(&mut self) -> bool {
+    fn is_need_update(&mut self) -> bool {
         if self.is_disconnect() {
             return false;
         }
@@ -342,7 +342,7 @@ impl ConnState {
         }
     }
 
-    pub fn clear_update_state(&mut self) {
+    fn clear_update_state(&mut self) {
         self.dirty_num = 0;
         self.update_state = UpdateState::No;
     }
@@ -909,7 +909,7 @@ impl ClientIoHandler {
     }
 
     /// Keyboard event.
-    pub fn key_envent(&mut self) -> Result<()> {
+    fn key_envent(&mut self) -> Result<()> {
         if self.expect == 1 {
             self.expect = 8;
             return Ok(());
@@ -982,7 +982,7 @@ impl ClientIoHandler {
     }
 
     /// Client cut text.
-    pub fn client_cut_event(&mut self) {
+    fn client_cut_event(&mut self) {
         let buf = self.read_incoming_msg();
         if self.expect == 1 {
             self.expect = 8;
