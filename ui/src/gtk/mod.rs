@@ -121,7 +121,7 @@ impl Default for DisplayEventType {
 }
 
 #[derive(Default)]
-pub struct DisplayChangeEvent {
+struct DisplayChangeEvent {
     dev_name: String,
     event_type: DisplayEventType,
     x: i32,
@@ -141,13 +141,13 @@ impl DisplayChangeEvent {
     }
 }
 
-pub struct GtkInterface {
+struct GtkInterface {
     dev_name: String,
     dce_sender: SyncSender<DisplayChangeEvent>,
 }
 
 impl GtkInterface {
-    pub fn new(dev_name: String, dce_sender: SyncSender<DisplayChangeEvent>) -> Self {
+    fn new(dev_name: String, dce_sender: SyncSender<DisplayChangeEvent>) -> Self {
         Self {
             dev_name,
             dce_sender,

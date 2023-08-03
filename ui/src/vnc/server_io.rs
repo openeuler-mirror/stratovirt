@@ -147,7 +147,7 @@ impl EventNotifierHelper for VncConnHandler {
 
 /// Info of image.
 /// stride is not always equal to stride because of memory alignment.
-pub struct ImageInfo {
+struct ImageInfo {
     /// The start pointer to image.
     data: *mut u8,
     /// The memory size of each line for image.

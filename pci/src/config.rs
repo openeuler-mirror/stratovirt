@@ -63,8 +63,8 @@ pub const MEMORY_BASE: u8 = 0x20;
 pub const PREF_MEMORY_BASE: u8 = 0x24;
 /// Prefetchable memory limit register.
 pub const PREF_MEMORY_LIMIT: u8 = 0x26;
-pub const ROM_ADDRESS_ENDPOINT: usize = 0x30;
-pub const ROM_ADDRESS_BRIDGE: usize = 0x38;
+const ROM_ADDRESS_ENDPOINT: usize = 0x30;
+const ROM_ADDRESS_BRIDGE: usize = 0x38;
 
 /// 64-bit prefetchable memory addresses.
 pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
@@ -102,9 +102,9 @@ pub const STATUS: u8 = 0x06;
 /// PCI Interrupt Status.
 pub const STATUS_INTERRUPT: u8 = 0x08;
 const CACHE_LINE_SIZE: u8 = 0x0c;
-pub const PRIMARY_BUS_NUM: u8 = 0x18;
-pub const IO_LIMIT: u8 = 0x1d;
-pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
+const PRIMARY_BUS_NUM: u8 = 0x18;
+const IO_LIMIT: u8 = 0x1d;
+const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
 pub const INTERRUPT_PIN: u8 = 0x3d;
@@ -142,13 +142,13 @@ pub const BAR_MEM_64BIT: u8 = 0x04;
 const BAR_PREFETCH: u8 = 0x08;
 pub const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
 /// The maximum Bar ID numbers of a Type 0 device
-pub const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
+const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
 /// The maximum Bar ID numbers of a Type 1 device
-pub const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
+const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
 /// mmio bar's minimum size shall be 4KB
 pub const MINIMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
 /// pio bar's minimum size shall be 4B
-pub const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
+const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
 /// PCI Express capability registers, same as kernel defines
 
@@ -246,9 +246,9 @@ pub const PCI_EXP_SLTSTA: u16 = 26;
 /// Attention Button Pressed
 pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
 /// Power Fault Detected
-pub const PCI_EXP_SLTSTA_PFD: u16 = 0x0002;
+const PCI_EXP_SLTSTA_PFD: u16 = 0x0002;
 /// MRL Sensor Changed
-pub const PCI_EXP_SLTSTA_MRLSC: u16 = 0x0004;
+const PCI_EXP_SLTSTA_MRLSC: u16 = 0x0004;
 /// Presence Detect Changed
 pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
 /// Command Completed

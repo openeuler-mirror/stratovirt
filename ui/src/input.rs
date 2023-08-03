@@ -54,8 +54,8 @@ const KEYPAD_DECIMAL: u16 = 0xffae;
 const KEYCODE_KP_7: u16 = 0x47;
 const KEYCODE_KP_DECIMAL: u16 = 0x53;
 // Led (HID)
-pub const NUM_LOCK_LED: u8 = 0x1;
-pub const CAPS_LOCK_LED: u8 = 0x2;
+const NUM_LOCK_LED: u8 = 0x1;
+const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
 /// Input button state.
 pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;

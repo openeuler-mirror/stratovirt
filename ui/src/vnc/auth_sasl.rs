@@ -78,17 +78,17 @@ impl SaslAuth {
 #[derive(Debug, Clone)]
 pub struct SaslConfig {
     /// State of sasl connection .
-    pub sasl_conn: *mut sasl_conn_t,
+    sasl_conn: *mut sasl_conn_t,
     /// Mech list server support.
-    pub mech_list: String,
+    mech_list: String,
     /// Authentication mechanism currently in use.
-    pub mech_name: String,
+    mech_name: String,
     /// State of auth.
-    pub sasl_stage: SaslStage,
+    sasl_stage: SaslStage,
     /// Security layer in sasl.
-    pub want_ssf: bool,
+    want_ssf: bool,
     /// Strength of ssf.
-    pub run_ssf: u32,
+    run_ssf: u32,
 }
 
 impl Default for SaslConfig {
@@ -168,7 +168,7 @@ impl ClientIoHandler {
     }
 
     /// Length of client authentication message.
-    pub fn get_authmessage_length(&mut self) -> Result<()> {
+    fn get_authmessage_length(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let len = u32::from_be_bytes(buf);
@@ -188,7 +188,7 @@ impl ClientIoHandler {
     }
 
     /// Receive the authentication information from client and return the result.
-    pub fn client_sasl_auth(&mut self) -> Result<()> {
+    fn client_sasl_auth(&mut self) -> Result<()> {
         info!("Sasl Authentication");
         let buf = self.read_incoming_msg();
 

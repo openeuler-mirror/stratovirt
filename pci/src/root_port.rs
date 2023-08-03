@@ -54,7 +54,7 @@ static FAST_UNPLUG_FEATURE: OnceCell<bool> = OnceCell::new();
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct RootPortState {
+struct RootPortState {
     /// Max length of config_space is 4096.
     config_space: [u8; 4096],
     write_mask: [u8; 4096],
