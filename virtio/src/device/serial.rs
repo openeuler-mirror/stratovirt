@@ -103,7 +103,7 @@ impl ByteCode for VirtioConsoleConfig {}
 
 impl VirtioConsoleConfig {
     /// Create configuration of virtio-serial devices.
-    pub fn new(max_nr_ports: u32) -> Self {
+    fn new(max_nr_ports: u32) -> Self {
         VirtioConsoleConfig {
             cols: 0_u16,
             rows: 0_u16,
