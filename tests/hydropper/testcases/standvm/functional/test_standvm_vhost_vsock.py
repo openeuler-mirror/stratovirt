@@ -37,7 +37,7 @@ def _check_vsock_enable(standvm):
             return False
 
     status, _ = standvm.serial_cmd(_cmd)
-    assert  status == 0
+    assert status == 0
     return True
 
 

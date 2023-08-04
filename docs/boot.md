@@ -45,7 +45,7 @@ and copy it to `kernel` path as `.config`. You can also modify config options by
 
 ### 2. Build rootfs
 
-Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can
+Rootfs image is a file system image. An EXT4-format image with `/sbin/init` can
 be mounted at boot time in StratoVirt. You can check [Appendix](#2Appendix).
 
 ### 3. Boot command line sample
@@ -202,10 +202,9 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 
 Now the available raw image is obtained.
 
-### 4. Boot with kernel directly 
+### 4. Boot with kernel directly
 
-It can directly boot from kernel. In this mode, UEFI and ACPI will not be used. And VM will skip the UEFI, directly start the kernel to reduce boot 
-up time.
+It can directly boot from kernel. In this mode, UEFI and ACPI will not be used. And VM will skip the UEFI, directly start the kernel to reduce boot up time.
 
 Run the following commands to direct boot VM from kernel:
 
@@ -325,7 +324,7 @@ Below is a simple way to make a EXT4 rootfs image:
 
    **Notice: alpine is an example. You can use any open rootfs filesystem with init/systemd as rootfs image.**
 
-5.  Unmount rootfs image:
+5. Unmount rootfs image:
 
     ```shell
     $ cd ~ && umount /mnt/rootfs
@@ -333,6 +332,6 @@ Below is a simple way to make a EXT4 rootfs image:
 
 ## Links
 
-- [EDK II  wiki](https://github.com/tianocore/tianocore.github.io/wiki/EDK-II)
+- [EDK II wiki](https://github.com/tianocore/tianocore.github.io/wiki/EDK-II)
 - [OVMF wiki](https://github.com/tianocore/tianocore.github.io/wiki/OVMF)
 

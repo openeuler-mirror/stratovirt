@@ -1851,7 +1851,7 @@ pub trait MachineOps {
     }
 }
 
-/// Normal run or resume virtual machine from migration/snapshot  .
+/// Normal run or resume virtual machine from migration/snapshot.
 ///
 /// # Arguments
 ///

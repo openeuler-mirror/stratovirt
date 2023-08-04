@@ -821,7 +821,7 @@ mod test {
         mainloop.run().unwrap();
 
         // Firstly, event1 with handler1 would be added. Then, event1's handlers would append
-        // handler1_update, which would register fd1_related_update in  mainloop.
+        // handler1_update, which would register fd1_related_update in mainloop.
         assert!(mainloop.check_existence(fd1_related.as_raw_fd()).unwrap());
         assert!(mainloop
             .check_existence(fd1_related_update.as_raw_fd())

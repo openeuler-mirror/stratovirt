@@ -119,7 +119,7 @@ def test_microvm_virtio_blk_md5(test_session_root_path, microvm):
     """
     Test data consistency by md5sum:
 
-    1) Generate a temp disk for test_vm and  launch.
+    1) Generate a temp disk for test_vm and launch.
     2) Mount the temp disk
     3) Touch a file and compute it md5sum.
     4) Umount the temp disk
