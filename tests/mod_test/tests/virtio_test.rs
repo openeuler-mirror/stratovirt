@@ -428,7 +428,7 @@ fn virtio_feature_vertion_1() {
 /// and succeed to do the I/O request.
 /// TestStep:
 ///   1. Init device.
-///   2. Do the I/O request(indirect and  indirect + normal).
+///   2. Do the I/O request(indirect and indirect + normal).
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
@@ -561,7 +561,7 @@ fn virtio_feature_event_idx() {
 /// and succeed to do the I/O request(normal + indirect) which has opened the event idx.
 /// TestStep:
 ///   1. Init device.
-///   2. Do the I/O request(indirect and  indirect + normal).
+///   2. Do the I/O request(indirect and indirect + normal).
 ///     1) create 5 request(with indirect), and modify avail->used_event to 5.
 ///     2) If the event idx works, we will not get the interrupt from device.
 ///     3) create 5 request, and use the right avail->used_event.

@@ -552,7 +552,7 @@ pub fn write_pixel(
     }
 }
 
-/// Convert the sent information to a format supported  
+/// Convert the sent information to a format supported
 /// by the client depend on byte arrangement
 ///
 /// # Arguments

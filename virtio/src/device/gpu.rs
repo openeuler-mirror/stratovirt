@@ -600,7 +600,7 @@ impl GpuIoHandler {
             error!(
                 "GuestError: An incomplete response will be used instead of the expected: expected \
                  length is {}, actual length is {}. \
-                 Also, be aware that the virtual machine may suspended if response is too short to  \
+                 Also, be aware that the virtual machine may suspended if response is too short to \
                  carry the necessary information.",
                  size_of::<T>(), len,
             );

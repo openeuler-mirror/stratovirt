@@ -1207,7 +1207,7 @@ impl TestXhciPciDevice {
         self.queue_trb(slot_id, ep_id, &mut trb);
     }
 
-    // Queue multi-TD  with IDT=1
+    // Queue multi-TD with IDT=1
     pub fn queue_multi_direct_td(&mut self, slot_id: u32, ep_id: u32, sz: u64, num: usize) {
         for _ in 0..num {
             self.queue_direct_td(slot_id, ep_id, sz);

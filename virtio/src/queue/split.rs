@@ -613,7 +613,7 @@ impl SplitVring {
         let new = match self.get_used_idx(sys_mem) {
             Ok(used_idx) => Wrapping(used_idx),
             Err(ref e) => {
-                error!("Failed to get the status for notifying used vring  {:?}", e);
+                error!("Failed to get the status for notifying used vring: {:?}", e);
                 return false;
             }
         };
@@ -621,7 +621,7 @@ impl SplitVring {
         let used_event_idx = match self.get_used_event(sys_mem) {
             Ok(idx) => Wrapping(idx),
             Err(ref e) => {
-                error!("Failed to get the status for notifying used vring  {:?}", e);
+                error!("Failed to get the status for notifying used vring: {:?}", e);
                 return false;
             }
         };
@@ -1948,7 +1948,7 @@ mod tests {
         let mut vring = SplitVring::new(queue_config);
         assert_eq!(vring.is_valid(&sys_space), true);
 
-        // it's true when the feature of event idx and no interrupt for the avail ring  is closed
+        // it's true when the feature of event idx and no interrupt for the avail ring is closed
         let features = 0 as u64;
         assert!(vring.set_avail_ring_flags(&sys_space, 0).is_ok());
         assert_eq!(vring.should_notify(&sys_space, features), true);

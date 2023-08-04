@@ -175,7 +175,7 @@ fn compress_each_tile<'a>(
 /// * `data_ptr` - pointer to the data of image.
 /// * `bg` - background of current tile.
 /// * `fg` - foreground of current tile.
-/// * `stride` -  stride of image.
+/// * `stride` - stride of image.
 /// * `buf` - send buffer.
 fn subrectangle_of_foreground(
     sub_rect: &Rectangle,
@@ -213,10 +213,10 @@ fn subrectangle_of_foreground(
 /// # Arguments
 ///
 /// * `sub_rect` - area of tile.
-/// * `data_ptr` -  pointer to the data of image.
+/// * `data_ptr` - pointer to the data of image.
 /// * `bg` - background of current tile.
 /// * `stride` - stride of image.
-/// * `client_dpm` -  Output mode information of client display.
+/// * `client_dpm` - Output mode information of client display.
 /// * `buf` - send buffer.
 fn subrectangle_with_pixel_value(
     sub_rect: &Rectangle,

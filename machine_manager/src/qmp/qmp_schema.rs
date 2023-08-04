@@ -462,7 +462,7 @@ impl Command for qmp_capabilities {
 ///
 /// This command will cause the StratoVirt process to exit gracefully. While every
 /// attempt is made to send the QMP response before terminating, this is not
-/// guaranteed.  When using this interface, a premature EOF would not be
+/// guaranteed. When using this interface, a premature EOF would not be
 /// unexpected.
 ///
 /// # Examples
@@ -2353,7 +2353,7 @@ pub struct SnapshotInfo {
 
 /// query-mem
 ///
-/// This command  
+/// This command
 ///
 /// # Examples
 ///

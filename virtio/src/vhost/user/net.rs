@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+// Copyright (c) 2022 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan

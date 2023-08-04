@@ -351,7 +351,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```
 
-StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it. 
+StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it.
 
 You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
 
@@ -546,7 +546,7 @@ $ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 ### 2.4 Virtio-console
 
 Virtio console device is a simple device for data transfer between the guest and host. A console device may have
-one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux 
+one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux
 guest will be created once setting a port (Whether it is a console port or not). Character devices at /dev/hvc0 to
 /dev/hvc7 in linux guest will be created once setting console port. To set the virtio console, chardev for
 redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
@@ -1016,7 +1016,7 @@ Seven properties are supported for vhost_user_fs.
   - **chroot**: The program invokes `chroot(2)` to make the shared directory tree its root when it does not have permission to create namespaces itself.
   - **namespace**: The program invodes `pivot_root(2)` to make the shared directory tree its root.
 * modcaps: Add/delete capabilities, For example, `--modcaps=-LEASE,+KILL` stands for delete CAP_LEASE, add CAP_KILL. Capabilityes list do not need prefix `CAP_`.
-  
+
 *How to start vhost_user_fs process?*
 
 ```shell
@@ -1034,12 +1034,12 @@ host# stratovirt \
         -device virtio-blk-pci,drive=drive_id,bug=pcie.0,addr=1,id=blk -serial stdio -disable-seccomp \
         -chardev socket,id=virtio_fs,path=/tmp/shared/virtio_fs.sock,server,nowait \
         -device vhost-user-fs-pci,id=device_id,chardev=virtio_fs,tag=myfs,bus=pcie.0,addr=0x7
-        
+
 guest# mount -t virtiofs myfs /mnt
 ```
 
 ### 2.18 virtio-gpu
-virtio-gpu is an virtualized graphics card that lets virtual machines can display with it. 
+virtio-gpu is an virtualized graphics card that lets virtual machines can display with it.
 Usually used in conjunction with VNC, the final images is rendered to the VNC client.
 
 Sample Configuration：
@@ -1245,7 +1245,7 @@ and 'bootindex' for virtio-blk; 'chassis' for pcie-root-port; 'sockets',
 'cores' and 'threads' for smp; 'accel' and 'usb' for machine; "format" for pflash device.
 
 ## 8. Debug boot time
-Currently, measurement of guest boot up time is supported. The guest kernel writes different 
+Currently, measurement of guest boot up time is supported. The guest kernel writes different
 values to specific IO/MMIO regions, and it will trap to `stratovirt`, we can record the timestamp
 of kernel start or kernel boot complete.
 
