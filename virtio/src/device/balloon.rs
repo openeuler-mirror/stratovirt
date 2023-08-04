@@ -88,19 +88,19 @@ struct BalloonStat {
 #[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
-    pub num_pages: u32,
+    num_pages: u32,
     /// Number of pages we've actually got in balloon device.
-    pub actual: u32,
-    pub _reserved: u32,
-    pub _reserved1: u32,
+    actual: u32,
+    _reserved: u32,
+    _reserved1: u32,
     /// Buffer percent is a percentage of memory actually needed by
     /// the applications and services running inside the virtual machine.
     /// This parameter takes effect only when VIRTIO_BALLOON_F_MESSAGE_VQ is supported.
     /// Recommended value range: [20, 80] and default is 50.
-    pub membuf_percent: u32,
+    membuf_percent: u32,
     /// Monitor interval(second) host wants to adjust VM memory size.
     /// Recommended value range: [5, 300] and default is 10.
-    pub monitor_interval: u32,
+    monitor_interval: u32,
 }
 
 impl ByteCode for BalloonStat {}
@@ -950,7 +950,7 @@ impl Balloon {
     /// # Argument
     ///
     /// * `size` - Target memory size.
-    pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
+    fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
         let host_page_size = host_page_size();
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
@@ -976,10 +976,11 @@ impl Balloon {
     }
 
     /// Get the actual memory size of guest.
-    pub fn get_guest_memory_size(&self) -> u64 {
+    fn get_guest_memory_size(&self) -> u64 {
         self.mem_info.lock().unwrap().get_ram_size() - self.get_balloon_memory_size()
     }
-    pub fn set_num_pages(&mut self, target: u32) {
+
+    fn set_num_pages(&mut self, target: u32) {
         self.num_pages = target;
     }
 }

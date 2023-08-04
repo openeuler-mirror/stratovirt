@@ -84,13 +84,13 @@ const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
 
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
-pub struct HostNotifyInfo {
+struct HostNotifyInfo {
     /// Eventfds which notify backend to use the avail ring.
     events: Vec<Arc<EventFd>>,
 }
 
 impl HostNotifyInfo {
-    pub fn new(queue_num: usize) -> Self {
+    fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
             events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));

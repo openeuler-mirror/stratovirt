@@ -280,7 +280,7 @@ struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
-pub struct GpuOpts {
+struct GpuOpts {
     /// Status of the emulated physical outputs.
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Config space of the GPU device.
@@ -488,15 +488,15 @@ fn create_surface(
 }
 
 // simple formats for fbcon/X use
-pub const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
-pub const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
-pub const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
-pub const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
-pub const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
-pub const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
-pub const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
-pub const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
-pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
+const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
+const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
+const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
+const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
+const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
+const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
+const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
+const _VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
 
 pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     match format {
@@ -1416,7 +1416,7 @@ impl EventNotifierHelper for GpuIoHandler {
 }
 
 #[derive(Clone, Copy, Debug, ByteCode)]
-pub struct VirtioGpuConfig {
+struct VirtioGpuConfig {
     events_read: u32,
     events_clear: u32,
     num_scanouts: u32,

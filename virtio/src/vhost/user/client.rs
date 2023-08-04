@@ -46,7 +46,7 @@ pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
-pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
+const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -336,12 +336,12 @@ pub struct VhostUserInflight {
 /// Struct for saving inflight info, create this struct to save inflight info when
 /// vhost client start, use this struct to set inflight fd when vhost client reconnect.
 #[derive(Debug)]
-pub struct VhostInflight {
+struct VhostInflight {
     // The inflight file.
-    pub file: Arc<File>,
+    file: Arc<File>,
     // Fd mmap addr, used for migration.
-    pub addr: u64,
-    pub inner: VhostUserInflight,
+    _addr: u64,
+    inner: VhostUserInflight,
 }
 
 #[derive(PartialEq, Eq)]
@@ -451,7 +451,7 @@ impl VhostUserClient {
                 )?;
                 let inflight = VhostInflight {
                     file,
-                    addr: hva,
+                    _addr: hva,
                     inner: vhost_user_inflight,
                 };
                 self.inflight = Some(inflight);
