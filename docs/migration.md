@@ -15,7 +15,7 @@ The migration stream can be passed over any transport as following:
 - TCP mode migration: using tcp sockets to do the migration.
 - UNIX mode migration: using unix sockets to do the migration.
 
-Note: UNIX mode only supports migrate two VMs on the same host OS. TCP mode supports migrate both on the same or 
+Note: UNIX mode only supports migrate two VMs on the same host OS. TCP mode supports migrate both on the same or
    different host OS.
 
 ## Migration
@@ -45,7 +45,7 @@ Launch the destination VM:
     -incoming tcp:192.168.0.1:4446 \
 ```
 
-Note: 
+Note:
 - The destination VM command line parameter needs to be consistent with the source VM.
 - If it is necessary to change the data transmission from tcp network protocol to unix socket,
   the parameter `-incoming tcp:192.168.0.1:4446` needs to be replaced with `-incoming unix:/tmp/stratovirt-migrate.socket`.

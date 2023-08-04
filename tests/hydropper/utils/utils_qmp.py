@@ -48,7 +48,7 @@ def assert_qmp_absent(dictionary, path):
 def assert_qmp(dictionary, path, value):
     """
     Assert that the value for a specific path in a QMP dict
-    matches.  When given a list of values, assert that any of
+    matches. When given a list of values, assert that any of
     them matches.
     """
     result = dictpath(dictionary, path)

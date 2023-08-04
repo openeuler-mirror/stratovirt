@@ -1434,7 +1434,7 @@ mod tests {
 
     // Test `get_device_features` and `set_driver_features`. The main contests include: If the
     // device feature is 0, all driver features are not supported; If both the device feature bit
-    // and the front-end driver feature bit are supported at the same time,  this driver feature
+    // and the front-end driver feature bit are supported at the same time, this driver feature
     // bit is supported.
     #[test]
     fn test_block_features() {
@@ -1457,7 +1457,7 @@ mod tests {
         assert_eq!(block.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
-        // supported at the same time,  this driver feature bit is supported.
+        // supported at the same time, this driver feature bit is supported.
         block.base.device_features =
             1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;

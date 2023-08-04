@@ -263,7 +263,7 @@ pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 /// Detach backing pages from a resource.
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
-//// Retrieve the EDID data for a given scanout.
+/// Retrieve the EDID data for a given scanout.
 pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
 /// update cursor
 pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;

@@ -168,7 +168,7 @@ Add a camera backend.
 #### Example
 
 ```json
-<- {"execute":"cameradev_add", "arguments":{"id":"cam-0",  "driver": "v4l2", "path":"/dev/video0"}}
+<- {"execute":"cameradev_add", "arguments":{"id":"cam-0", "driver": "v4l2", "path":"/dev/video0"}}
 -> {"return": {}}
 ```
 

@@ -341,7 +341,7 @@ pub struct UsbHost {
     handle: Option<DeviceHandle<Context>>,
     /// Describes a device.
     ddesc: Option<DeviceDescriptor>,
-    /// /// EventFd for libusb.
+    /// EventFd for libusb.
     libevt: Vec<RawFd>,
     /// Configuration interface number.
     ifs_num: u8,

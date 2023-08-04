@@ -45,8 +45,8 @@ const VHOST_NET_F_VIRTIO_NET_HDR: u32 = 27;
 trait VhostNetBackend {
     /// Attach virtio net ring to a raw socket, or tap device.
     /// The socket must be already bound to an ethernet device, this device will be
-    /// used for transmit.  Pass fd -1 to unbind from the socket and the transmit
-    /// device.  This can be used to stop the ring (e.g. for migration).
+    /// used for transmit. Pass fd -1 to unbind from the socket and the transmit
+    /// device. This can be used to stop the ring (e.g. for migration).
     ///
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.

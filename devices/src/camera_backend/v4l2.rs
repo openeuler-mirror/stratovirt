@@ -70,7 +70,7 @@ pub struct V4l2CameraBackend {
     notify_cb: Option<CameraNotifyCallback>,
     /// Callback to used to notify the broken.
     broken_cb: Option<CameraNotifyCallback>,
-    /// If the video stream is on or not.  
+    /// If the video stream is on or not.
     running: bool,
     /// If the backend fd is listening or not.
     listening: bool,

@@ -122,7 +122,7 @@ impl EventLoop {
         }
     }
 
-    /// Update event notifiers to  event loop
+    /// Update event notifiers to event loop
     ///
     /// # Arguments
     ///

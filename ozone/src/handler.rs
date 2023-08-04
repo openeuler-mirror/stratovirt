@@ -191,7 +191,7 @@ impl OzoneHandler {
         Ok(())
     }
 
-    /// Get  exec file name.
+    /// Get exec file name.
     fn exec_file_name(&self) -> Result<String> {
         if let Some(file_name) = self.exec_file_path.file_name() {
             return Ok(file_name.to_string_lossy().into());

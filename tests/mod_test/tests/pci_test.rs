@@ -2031,7 +2031,7 @@ fn test_pci_hotunplug_001() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    // Create root port whose  bdf is 0:1:0.
+    // Create root port whose bdf is 0:1:0.
     let root_port = Rc::new(RefCell::new(RootPort::new(
         machine.clone(),
         alloc.clone(),
@@ -2329,7 +2329,7 @@ fn test_pci_hotunplug_008() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    // Create root port whose  bdf is 0:1:0.
+    // Create root port whose bdf is 0:1:0.
     let root_port = Rc::new(RefCell::new(RootPort::new(
         machine.clone(),
         alloc.clone(),
