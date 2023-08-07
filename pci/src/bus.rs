@@ -188,9 +188,7 @@ impl PciBus {
             .unrealize()
             .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
 
-        let devfn = dev_locked
-            .devfn()
-            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
+        let devfn = dev_locked.pci_base().devfn;
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
             locked_bus.devices.remove(&devfn);
@@ -316,10 +314,6 @@ mod tests {
         fn unrealize(&mut self) -> Result<()> {
             Ok(())
         }
-
-        fn devfn(&self) -> Option<u8> {
-            Some(0)
-        }
     }
 
     pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
@@ -357,7 +351,7 @@ mod tests {
         // Test device is attached to the root bus.
         let pci_dev = PciDevice {
             base: PciDevBase {
-                base: DeviceBase::new("test1".to_string()),
+                base: DeviceBase::new("test1".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 10,
                 parent_bus: root_bus.clone(),
@@ -369,7 +363,7 @@ mod tests {
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
-                base: DeviceBase::new("test2".to_string()),
+                base: DeviceBase::new("test2".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 12,
                 parent_bus: Arc::downgrade(&bus),
@@ -405,7 +399,7 @@ mod tests {
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
-                base: DeviceBase::new("test1".to_string()),
+                base: DeviceBase::new("test1".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
                 parent_bus: Arc::downgrade(&bus),

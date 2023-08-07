@@ -83,7 +83,7 @@ impl DemoDev {
         };
         DemoDev {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id.clone()),
+                base: DeviceBase::new(cfg.id.clone(), false),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
                 parent_bus,
@@ -233,11 +233,6 @@ impl PciDevOps for DemoDev {
     /// Reset device
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.base.config.reset_common_regs()
-    }
-
-    /// Get device devfn
-    fn devfn(&self) -> Option<u8> {
-        Some(self.base.devfn)
     }
 }
 

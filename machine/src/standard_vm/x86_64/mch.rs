@@ -55,7 +55,7 @@ impl Mch {
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new("Memory Controller Hub".to_string()),
+                base: DeviceBase::new("Memory Controller Hub".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
                 parent_bus,

@@ -142,7 +142,7 @@ pub fn init_intx(
                 let parent_bridge = parent_bridge.upgrade().unwrap();
                 let locked_parent_bridge = parent_bridge.lock().unwrap();
                 (
-                    swizzle_map_irq(locked_parent_bridge.devfn().unwrap(), pin),
+                    swizzle_map_irq(locked_parent_bridge.pci_base().devfn, pin),
                     locked_parent_bridge.get_intx_state(),
                 )
             }

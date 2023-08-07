@@ -737,7 +737,7 @@ pub mod tests {
         let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
         let pci_dev = PciDevice {
             base: PciDevBase {
-                base: DeviceBase::new("PCI device".to_string()),
+                base: DeviceBase::new("PCI device".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 8,
                 parent_bus: Arc::downgrade(&bus),

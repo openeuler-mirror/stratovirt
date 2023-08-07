@@ -224,11 +224,6 @@ pub trait PciDevOps: Device + Send + AsAny {
         Ok(())
     }
 
-    /// Get device devfn
-    fn devfn(&self) -> Option<u8> {
-        None
-    }
-
     /// Get the path of the PCI bus where the device resides.
     fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<PciBus>>) -> String {
         let locked_parent_bus = parent_bus.lock().unwrap();
@@ -473,7 +468,7 @@ mod tests {
 
         let dev = PciDev {
             base: PciDevBase {
-                base: DeviceBase::new("PCI device".to_string()),
+                base: DeviceBase::new("PCI device".to_string(), false),
                 config: PciConfig::new(1, 1),
                 devfn: 0,
                 parent_bus: Arc::downgrade(&parent_bus),

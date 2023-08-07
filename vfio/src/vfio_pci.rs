@@ -113,7 +113,7 @@ impl VfioPciDevice {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
-                base: DeviceBase::new(name),
+                base: DeviceBase::new(name, true),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
                 parent_bus,
@@ -901,10 +901,6 @@ impl PciDevOps for VfioPciDevice {
             bail!("Failed to unrealize vfio-pci.");
         }
         Ok(())
-    }
-
-    fn devfn(&self) -> Option<u8> {
-        Some(self.base.devfn)
     }
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.

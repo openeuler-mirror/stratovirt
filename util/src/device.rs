@@ -14,11 +14,13 @@
 pub struct DeviceBase {
     /// Name of this device.
     pub id: String,
+    /// Whether it supports hot-plug/hot-unplug.
+    pub hotpluggable: bool,
 }
 
 impl DeviceBase {
-    pub fn new(id: String) -> Self {
-        DeviceBase { id }
+    pub fn new(id: String, hotpluggable: bool) -> Self {
+        DeviceBase { id, hotpluggable }
     }
 }
 
@@ -30,5 +32,10 @@ pub trait Device {
     /// Get device name.
     fn name(&self) -> String {
         self.device_base().id.clone()
+    }
+
+    /// Query whether it supports hot-plug/hot-unplug.
+    fn hotpluggable(&self) -> bool {
+        self.device_base().hotpluggable
     }
 }
