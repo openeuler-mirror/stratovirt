@@ -14,15 +14,15 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
 use anyhow::{bail, Result};
-use log::error;
-use pci::{
+use devices::pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
     le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
-use util::device::{Device, DeviceBase};
+use devices::{Device, DeviceBase};
+use log::error;
 
 use super::VENDOR_ID_INTEL;
 

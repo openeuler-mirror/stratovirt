@@ -23,7 +23,7 @@ use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
 
 use anyhow::{bail, Result};
 
-use crate::demo_dev::DeviceTypeOperation;
+use crate::pci::demo_dev::DeviceTypeOperation;
 static MEM_ADDR: Lazy<Arc<Mutex<MemSpace>>> = Lazy::new(|| {
     Arc::new(Mutex::new(MemSpace {
         sys_mem: None,

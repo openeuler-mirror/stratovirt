@@ -15,17 +15,17 @@ use std::sync::{
     Arc, Mutex, Weak,
 };
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 
-use address_space::{GuestAddress, Region, RegionOps};
-use pci::{
+use crate::pci::{
     config::{
         PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
         PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
-use util::device::{Device, DeviceBase};
+use crate::{Device, DeviceBase};
+use address_space::{GuestAddress, Region, RegionOps};
 
 const PCI_VENDOR_ID_IVSHMEM: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const PCI_DEVICE_ID_IVSHMEM: u16 = 0x1110;
@@ -61,7 +61,7 @@ impl Ivshmem {
         }
     }
 
-    fn register_bars(&mut self) -> pci::Result<()> {
+    fn register_bars(&mut self) -> Result<()> {
         // Currently, ivshmem uses only the shared memory and does not use interrupt.
         // Therefore, bar0 read and write callback is not implemented.
         let reg_read = move |_: &mut [u8], _: GuestAddress, _: u64| -> bool { true };
@@ -110,7 +110,7 @@ impl PciDevOps for Ivshmem {
         &mut self.base
     }
 
-    fn realize(mut self) -> pci::Result<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         le_write_u16(

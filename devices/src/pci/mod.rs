@@ -23,16 +23,14 @@ pub mod demo_device;
 mod host;
 mod root_port;
 
+use crate::{Device, DeviceBase};
 pub use bus::PciBus;
 pub use config::{PciConfig, INTERRUPT_PIN};
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, is_msix_enabled};
 pub use root_port::RootPort;
-use util::{
-    device::{Device, DeviceBase},
-    AsAny,
-};
+use util::AsAny;
 
 use std::{
     mem::size_of,
@@ -42,7 +40,7 @@ use std::{
 pub use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;
@@ -368,8 +366,8 @@ pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size:
 
 #[cfg(test)]
 mod tests {
+    use crate::DeviceBase;
     use address_space::{AddressSpace, Region};
-    use util::device::DeviceBase;
 
     use super::*;
 

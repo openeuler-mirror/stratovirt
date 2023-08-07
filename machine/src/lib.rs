@@ -55,6 +55,8 @@ use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 
+use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
     camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
@@ -78,12 +80,10 @@ use machine_manager::config::{
 };
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
-use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},

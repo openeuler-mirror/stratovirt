@@ -12,7 +12,7 @@
 
 /// BaseDevice is a simplest demo-pci-device. Its function is to
 /// multiply data written by two and return it when reading.
-use crate::demo_dev::DeviceTypeOperation;
+use crate::pci::demo_dev::DeviceTypeOperation;
 use address_space::GuestAddress;
 pub use anyhow::{bail, Result};
 use std::collections::HashMap;

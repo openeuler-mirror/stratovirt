@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use anyhow::{Context, Result};
@@ -24,9 +26,7 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use util::num_ops::write_data_u32;
 use vmm_sys_util::eventfd::EventFd;
 

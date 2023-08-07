@@ -13,6 +13,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::legacy::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
@@ -26,9 +28,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use util::num_ops::extract_u64;
 use util::offset_of;
 #[cfg(target_arch = "x86_64")]
@@ -990,14 +990,14 @@ impl SysBusDevOps for FwCfgMem {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
+    ) -> Result<()> {
         let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
     }
 
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
@@ -1175,14 +1175,14 @@ impl SysBusDevOps for FwCfgIO {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
+    ) -> Result<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
     }
 
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
@@ -1303,8 +1303,8 @@ impl AmlBuilder for FwCfgIO {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
     use address_space::{AddressSpace, HostMemMapping, Region};
-    use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(

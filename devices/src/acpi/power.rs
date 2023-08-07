@@ -14,13 +14,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::{Device, DeviceBase};
 use anyhow::{Context, Result};
 use log::info;
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use util::num_ops::write_data_u32;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
 use acpi::{AcpiError, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUpdateRule};
 use acpi::{
     AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldUnit, AmlIndex, AmlInteger,
@@ -31,7 +32,6 @@ use address_space::GuestAddress;
 use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
 
 const AML_ACAD_REG: &str = "ADPM";
 const AML_ACAD_ONLINE: &str = "ADPO";

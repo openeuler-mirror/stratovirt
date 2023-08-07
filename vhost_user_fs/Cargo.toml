@@ -19,9 +19,7 @@ hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
-sysbus = { path = "../sysbus" }
 util = { path = "../util" }
-pci = { path = "../pci" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
 virtio = {path = "../virtio"}

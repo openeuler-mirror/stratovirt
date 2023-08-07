@@ -12,14 +12,14 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use pci::{
+use devices::pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
-use util::device::{Device, DeviceBase};
+use devices::{Device, DeviceBase};
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
 

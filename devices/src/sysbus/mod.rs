@@ -12,9 +12,9 @@
 
 pub mod error;
 
+use crate::{Device, DeviceBase};
 pub use anyhow::{bail, Context, Result};
 pub use error::SysBusError;
-use util::device::{Device, DeviceBase};
 
 use std::fmt;
 use std::sync::{Arc, Mutex};

@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::{Device, DeviceBase};
 use anyhow::{bail, Result};
-use util::device::{Device, DeviceBase};
 
 use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};

@@ -35,6 +35,8 @@ use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
+use devices::pci::{PciDevOps, PciHost};
+use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 #[cfg(not(target_env = "musl"))]
@@ -52,8 +54,6 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
-use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
 use syscall::syscall_whitelist;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,

@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{AcpiError, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUpdateRule};
 use address_space::GuestAddress;
 use anyhow::{Context, Result};
@@ -20,8 +22,6 @@ use machine_manager::qmp::QmpChannel;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
-use util::device::{Device, DeviceBase};
 use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
 use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
 use vmm_sys_util::epoll::EventSet;

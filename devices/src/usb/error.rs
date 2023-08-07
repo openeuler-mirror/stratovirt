@@ -17,7 +17,7 @@ pub enum UsbError {
     #[error("PciErr")]
     PciErr {
         #[from]
-        source: pci::error::PciError,
+        source: crate::pci::error::PciError,
     },
     #[error("AddressSpace")]
     AddressSpace {

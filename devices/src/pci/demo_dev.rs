@@ -42,19 +42,19 @@ use log::error;
 use machine_manager::config::DemoDevConfig;
 
 #[cfg(not(target_env = "musl"))]
-use crate::demo_device::{
+use crate::pci::demo_device::{
     dpy_device::DemoDisplay, gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse,
 };
-use crate::{
+use crate::pci::{
     config::{
-        PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
-        SUB_CLASS_CODE, VENDOR_ID,
+        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT,
+        PCIE_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
     },
     init_msix, le_write_u16, PciBus, PciDevOps,
 };
-use crate::{demo_device::base_device::BaseDevice, PciDevBase};
+use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
+use crate::{Device, DeviceBase};
 pub use anyhow::{bail, Result};
-use util::device::{Device, DeviceBase};
 
 pub struct DemoDev {
     base: PciDevBase,
@@ -153,7 +153,7 @@ impl DemoDev {
         self.base.config.register_bar(
             0,
             self.mem_region.clone(),
-            crate::config::RegionType::Mem64Bit,
+            RegionType::Mem64Bit,
             false,
             (self.cmd_cfg.bar_size * self.cmd_cfg.bar_num as u64).next_power_of_two(),
         )?;
