@@ -45,3 +45,16 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 ```
 
 Now you can find StratoVirt static binary file in `target/${arch}-unknown-linux-musl/release/stratovirt`.
+
+## 4. Build with features
+
+For different scenarios, StratoVirt provides feature conditional compilation options based on the cargo `feature`.
+
+List of optional features:
+
+- scream_alsa: enable virtual sound card with `ALSA` interface
+- scream_pulseaudio: enable virtual sound card with `PulseAudio` interface
+
+```shell
+$ cargo build --release --features "scream_alsa"
+```

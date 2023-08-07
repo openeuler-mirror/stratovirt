@@ -44,3 +44,16 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 ```
 
 现在你可找到StratoVirt静态链接二进制的路径在 `target/${arch}-unknown-linux-musl/release/stratovirt`.
+
+## 4. 特性编译选项
+
+对于不同的场景，StratoVirt提供基于cargo `feature`的特性条件编译选项。
+
+可选特性清单如下:
+
+- scream_alsa：使能虚拟声卡，使用`ALSA`后端
+- scream_pulseaudio：使能虚拟声卡，使用`PulseAudio`后端
+
+```shell
+$ cargo build --release --features "scream_alsa"
+```

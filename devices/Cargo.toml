@@ -30,14 +30,17 @@ util = { path = "../util" }
 acpi = { path = "../acpi" }
 block_backend = { path = "../block_backend"}
 ui = { path = "../ui" }
+pulse = { version = "2.27", package = "libpulse-binding", optional = true }
+psimple = { version = "2.27", package = "libpulse-simple-binding", optional = true }
+alsa = { version = "0.7.0", optional = true }
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
-pulse = { version = "2.27", package = "libpulse-binding" }
-psimple = { version = "2.27", package = "libpulse-simple-binding" }
 rusb = "0.9"
 libusb1-sys = "0.6.4"
 cairo-rs = "0.17.10"
-alsa = "0.7.0"
 
 [features]
 default = []
+scream = ["machine_manager/scream"]
+scream_alsa = ["scream", "dep:alsa", "machine_manager/scream_alsa"]
+scream_pulseaudio = ["scream", "dep:pulse", "dep:psimple", "machine_manager/scream_pulseaudio"]

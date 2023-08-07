@@ -32,6 +32,7 @@ mod pci;
 mod ramfb;
 mod rng;
 mod sasl_auth;
+#[cfg(feature = "scream")]
 pub mod scream;
 mod scsi;
 mod smbios;
