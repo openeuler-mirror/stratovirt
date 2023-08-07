@@ -215,11 +215,6 @@ impl PciDevOps for DemoDev {
         self.device.lock().unwrap().unrealize()
     }
 
-    /// read the pci configuration space
-    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.base.config.read(offset, data);
-    }
-
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let parent_bus = self.base.parent_bus.upgrade().unwrap();

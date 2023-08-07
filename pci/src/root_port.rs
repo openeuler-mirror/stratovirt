@@ -432,10 +432,6 @@ impl PciDevOps for RootPort {
         Ok(())
     }
 
-    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.base.config.read(offset, data);
-    }
-
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();
         let end = offset + size;

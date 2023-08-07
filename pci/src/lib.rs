@@ -192,7 +192,9 @@ pub trait PciDevOps: Device + Send + AsAny {
     ///
     /// * `offset` - Offset in configuration space.
     /// * `data` - Data buffer for reading.
-    fn read_config(&mut self, offset: usize, data: &mut [u8]);
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
+        self.pci_base_mut().config.read(offset, data);
+    }
 
     /// Configuration space write.
     ///
@@ -449,8 +451,6 @@ mod tests {
             fn pci_base_mut(&mut self) -> &mut PciDevBase {
                 &mut self.base
             }
-
-            fn read_config(&mut self, _offset: usize, _data: &mut [u8]) {}
 
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
 
