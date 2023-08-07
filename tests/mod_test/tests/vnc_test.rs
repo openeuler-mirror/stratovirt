@@ -799,7 +799,7 @@ fn test_client_cut_event(test_state: Rc<RefCell<TestState>>, port: u16) -> Resul
         pad0: 0,
         pad1: 0,
         length: text.len() as u32,
-        text: text,
+        text,
     };
     assert!(vnc_client.test_send_client_cut(client_cut).is_ok());
     // Send a qmp to query vnc client state.

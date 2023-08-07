@@ -1982,7 +1982,7 @@ impl TestXhciPciDevice {
             request_type: USB_INTERFACE_IN_REQUEST,
             request: USB_REQUEST_GET_INTERFACE,
             value: 0,
-            index: index,
+            index,
             length: buf_len,
         };
         self.queue_device_request(slot_id, &device_req);
@@ -1994,7 +1994,7 @@ impl TestXhciPciDevice {
             request_type: USB_INTERFACE_OUT_REQUEST,
             request: USB_REQUEST_SET_INTERFACE,
             value: v,
-            index: index,
+            index,
             length: buf_len,
         };
         self.queue_device_request(slot_id, &device_req);

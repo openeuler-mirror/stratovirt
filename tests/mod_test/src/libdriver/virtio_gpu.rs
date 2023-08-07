@@ -399,7 +399,7 @@ impl TestVirtioGpu {
         Self {
             device: Rc::new(RefCell::new(TestVirtioPciDev::new(pci_bus))),
             allocator,
-            state: state,
+            state,
             ctrl_q: Rc::new(RefCell::new(TestVirtQueue::new())),
             cursor_q: Rc::new(RefCell::new(TestVirtQueue::new())),
         }
