@@ -78,7 +78,7 @@ impl MemoryTest {
 
         MemoryTest {
             state: test_state,
-            allocator: allocator,
+            allocator,
         }
     }
 }

@@ -499,7 +499,7 @@ impl TestVirtQueue {
 
         let desc_elem = VringDesc {
             addr: data,
-            len: len,
+            len,
             flags,
             next: 0,
         };

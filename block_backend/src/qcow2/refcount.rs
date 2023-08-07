@@ -624,7 +624,7 @@ mod test {
             version: 3,
             backing_file_offset: 0,
             backing_file_size: 0,
-            cluster_bits: cluster_bits,
+            cluster_bits,
             size: 1 << img_bits,
             crypt_method: 0,
             l1_size: 1 << (img_bits - (cluster_bits * 2 - 3)),
