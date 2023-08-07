@@ -168,6 +168,7 @@ impl Qcow2Cache {
             return;
         }
         warn!("refcount reaches the max limit and is reset to 0");
+        self.lru_count = 0;
         for (_, entry) in self.cache_map.iter() {
             entry.borrow_mut().lru_count = 0;
         }
