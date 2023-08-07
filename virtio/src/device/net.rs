@@ -113,7 +113,7 @@ pub struct VirtioNetConfig {
 impl ByteCode for VirtioNetConfig {}
 
 /// The control mode used for packet receive filtering.
-pub struct CtrlRxMode {
+struct CtrlRxMode {
     /// If the device should receive all incoming packets.
     promisc: bool,
     /// If the device should allow all incoming multicast packets.
@@ -145,7 +145,7 @@ impl Default for CtrlRxMode {
 
 #[derive(Default, Clone)]
 struct MacAddress {
-    pub address: [u8; MAC_ADDR_LEN],
+    address: [u8; MAC_ADDR_LEN],
 }
 
 /// The Mac information used to filter incoming packet.

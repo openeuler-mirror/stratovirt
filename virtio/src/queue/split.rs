@@ -116,11 +116,11 @@ impl QueueConfig {
         }
     }
 
-    pub fn get_desc_size(&self) -> u64 {
+    fn get_desc_size(&self) -> u64 {
         min(self.size, self.max_size) as u64 * DESCRIPTOR_LEN
     }
 
-    pub fn get_used_size(&self, features: u64) -> u64 {
+    fn get_used_size(&self, features: u64) -> u64 {
         let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             2_u64
         } else {
@@ -130,7 +130,7 @@ impl QueueConfig {
         size + VRING_FLAGS_AND_IDX_LEN + (min(self.size, self.max_size) as u64) * USEDELEM_LEN
     }
 
-    pub fn get_avail_size(&self, features: u64) -> u64 {
+    fn get_avail_size(&self, features: u64) -> u64 {
         let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             2_u64
         } else {

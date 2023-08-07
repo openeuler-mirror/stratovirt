@@ -475,9 +475,9 @@ struct BlockIoHandler {
     /// The block backend opened by the block device.
     block_backend: Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
     /// The align requirement of request(offset/len).
-    pub req_align: u32,
+    req_align: u32,
     /// The align requirement of buffer(iova_base).
-    pub buf_align: u32,
+    buf_align: u32,
     /// The number of sectors of the disk image.
     disk_sectors: u64,
     /// Serial number of the block device.

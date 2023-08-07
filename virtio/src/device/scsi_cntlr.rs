@@ -353,7 +353,7 @@ impl ByteCode for VirtioScsiCtrlAnResp {}
 
 #[repr(C, packed)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioScsiCmdReq {
+struct VirtioScsiCmdReq {
     /// Logical Unit Number.
     lun: [u8; 8],
     /// Command identifier.
@@ -370,7 +370,7 @@ impl ByteCode for VirtioScsiCmdReq {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct VirtioScsiCmdResp {
+struct VirtioScsiCmdResp {
     /// Sense data length.
     sense_len: u32,
     /// Resudual bytes in data buffer.
@@ -566,7 +566,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
     }
 }
 
-pub struct ScsiCtrlQueueHandler {
+struct ScsiCtrlQueueHandler {
     /// The ctrl virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the ctrl virtqueue.
@@ -675,7 +675,7 @@ impl EventNotifierHelper for ScsiCtrlQueueHandler {
     }
 }
 
-pub struct ScsiEventQueueHandler {
+struct ScsiEventQueueHandler {
     /// The Event virtqueue.
     _queue: Arc<Mutex<Queue>>,
     /// EventFd for the Event virtqueue.
@@ -739,7 +739,7 @@ fn virtio_scsi_get_lun_id(lun: [u8; 8]) -> u16 {
     (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
 }
 
-pub struct ScsiCmdQueueHandler {
+struct ScsiCmdQueueHandler {
     /// The scsi controller.
     scsibus: Arc<Mutex<ScsiBus>>,
     /// The Cmd virtqueue.
