@@ -20,7 +20,7 @@ pub mod hid;
 pub mod keyboard;
 pub mod storage;
 pub mod tablet;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_host")]
 pub mod usbhost;
 pub mod xhci;
 
