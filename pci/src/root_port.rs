@@ -105,7 +105,7 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name),
+                base: DeviceBase::new(name, true),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
                 parent_bus,
@@ -507,10 +507,6 @@ impl PciDevOps for RootPort {
         self.do_unplug(offset, data, old_ctl, old_status);
     }
 
-    fn devfn(&self) -> Option<u8> {
-        Some(self.base.devfn)
-    }
-
     /// Only set slot status to on, and no other device reset actions are implemented.
     fn reset(&mut self, reset_child_device: bool) -> Result<()> {
         if reset_child_device {
@@ -562,11 +558,10 @@ impl PciDevOps for RootPort {
 
 impl HotplugOps for RootPort {
     fn plug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-        let devfn = dev
-            .lock()
-            .unwrap()
-            .devfn()
-            .with_context(|| "Failed to get devfn")?;
+        if !dev.lock().unwrap().hotpluggable() {
+            bail!("Don't support hot-plug!");
+        }
+        let devfn = dev.lock().unwrap().pci_base().devfn;
         // Only if devfn is equal to 0, hot plugging is supported.
         if devfn != 0 {
             return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
@@ -600,11 +595,10 @@ impl HotplugOps for RootPort {
             bail!("Guest is still on the fly of another (un)plugging");
         }
 
-        let devfn = dev
-            .lock()
-            .unwrap()
-            .devfn()
-            .with_context(|| "Failed to get devfn")?;
+        if !dev.lock().unwrap().hotpluggable() {
+            bail!("Don't support hot-unplug request!");
+        }
+        let devfn = dev.lock().unwrap().pci_base().devfn;
         if devfn != 0 {
             return self.unplug(dev);
         }
@@ -643,11 +637,10 @@ impl HotplugOps for RootPort {
     }
 
     fn unplug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-        let devfn = dev
-            .lock()
-            .unwrap()
-            .devfn()
-            .with_context(|| "Failed to get devfn")?;
+        if !dev.lock().unwrap().hotpluggable() {
+            bail!("Don't support hot-unplug!");
+        }
+        let devfn = dev.lock().unwrap().pci_base().devfn;
         let mut locked_dev = dev.lock().unwrap();
         locked_dev.unrealize()?;
         self.sec_bus.lock().unwrap().devices.remove(&devfn);

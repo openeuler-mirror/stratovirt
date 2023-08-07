@@ -78,7 +78,7 @@ impl XhciPciDevice {
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(config.id.clone().unwrap()),
+                base: DeviceBase::new(config.id.clone().unwrap(), true),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
                 parent_bus,
@@ -315,10 +315,6 @@ impl PciDevOps for XhciPciDevice {
 
     fn unrealize(&mut self) -> pci::Result<()> {
         Ok(())
-    }
-
-    fn devfn(&self) -> Option<u8> {
-        Some(self.base.devfn)
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {

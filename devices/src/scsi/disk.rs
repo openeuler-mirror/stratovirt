@@ -132,7 +132,7 @@ impl ScsiDevice {
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> ScsiDevice {
         ScsiDevice {
-            base: DeviceBase::new(config.id.clone()),
+            base: DeviceBase::new(config.id.clone(), false),
             config,
             state: ScsiDevState::new(),
             block_backend: None,

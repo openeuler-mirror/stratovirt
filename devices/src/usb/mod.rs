@@ -143,7 +143,7 @@ impl Device for UsbDevice {
 impl UsbDevice {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
-            base: DeviceBase::new(id),
+            base: DeviceBase::new(id, false),
             port: None,
             speed: 0,
             addr: 0,

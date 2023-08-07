@@ -292,7 +292,7 @@ impl VirtioPciDevice {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
-                base: DeviceBase::new(name),
+                base: DeviceBase::new(name, true),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
                 parent_bus,
@@ -1145,10 +1145,6 @@ impl PciDevOps for VirtioPciDevice {
             Some(&locked_parent_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
-    }
-
-    fn devfn(&self) -> Option<u8> {
-        Some(self.base.devfn)
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {

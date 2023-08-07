@@ -32,7 +32,7 @@ impl PciHostRoot {
     pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new("PCI Host Root".to_string()),
+                base: DeviceBase::new("PCI Host Root".to_string(), false),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 parent_bus,
                 devfn: 0,
