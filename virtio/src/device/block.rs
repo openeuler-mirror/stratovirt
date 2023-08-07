@@ -38,7 +38,8 @@ use crate::{
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::{
-    create_block_backend, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
+    BlockProperty, BlockStatus,
 };
 use machine_manager::config::{BlkDevConfig, ConfigCheck, DriveFile, VmConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
@@ -1113,6 +1114,9 @@ impl VirtioDevice for Block {
 
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
+        let drive_files = self.drive_files.lock().unwrap();
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
+        remove_block_backend(&drive_id);
         Ok(())
     }
 
