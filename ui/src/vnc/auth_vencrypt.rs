@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    error::VncError,
-    vnc::{
-        auth_sasl::SubAuthState,
-        client_io::{vnc_flush, vnc_write, ClientIoHandler, IoOperations},
-    },
+use std::{
+    cell::RefCell,
+    fs::File,
+    io::{BufReader, ErrorKind, Read, Write},
+    net::TcpStream,
+    os::unix::prelude::{AsRawFd, RawFd},
+    rc::Rc,
+    sync::Arc,
 };
+
 use anyhow::{anyhow, bail, Result};
 use log::error;
-use machine_manager::event_loop::EventLoop;
 use rustls::{
     self,
     cipher_suite::{
@@ -36,19 +38,18 @@ use rustls::{
     Certificate, KeyLogFile, PrivateKey, RootCertStore, ServerConfig, ServerConnection,
     SupportedCipherSuite, SupportedKxGroup, SupportedProtocolVersion, Ticketer,
 };
-use std::{
-    cell::RefCell,
-    fs::File,
-    io::{BufReader, ErrorKind, Read, Write},
-    net::TcpStream,
-    os::unix::prelude::{AsRawFd, RawFd},
-    rc::Rc,
-    sync::Arc,
-};
-use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 
 use super::client_io::vnc_disconnect_start;
+use crate::{
+    error::VncError,
+    vnc::{
+        auth_sasl::SubAuthState,
+        client_io::{vnc_flush, vnc_write, ClientIoHandler, IoOperations},
+    },
+};
+use machine_manager::event_loop::EventLoop;
+use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 
 const TLS_CREDS_SERVER_CACERT: &str = "cacert.pem";
 const TLS_CREDS_SERVERCERT: &str = "servercert.pem";

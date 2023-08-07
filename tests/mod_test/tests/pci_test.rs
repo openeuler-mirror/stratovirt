@@ -10,6 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::{thread, time};
+
+use serde_json::json;
+
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::pci::*;
@@ -22,11 +28,6 @@ use mod_test::libdriver::virtio_block::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
 use mod_test::utils::{cleanup_img, create_img, read_le_u16, ImageType, TEST_IMAGE_SIZE};
-
-use serde_json::json;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::{thread, time};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1af4;
 const BLK_DEVICE_ID: u16 = 0x1042;

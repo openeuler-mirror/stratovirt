@@ -14,7 +14,6 @@ use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
-use util::aio::OpCode;
 
 use crate::{
     qcow2::{
@@ -25,6 +24,7 @@ use crate::{
     },
     BlockProperty,
 };
+use util::aio::OpCode;
 
 // The max refcount table size default is 4 clusters;
 const MAX_REFTABLE_NUM: u64 = 4;

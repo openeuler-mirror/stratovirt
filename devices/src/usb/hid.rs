@@ -14,10 +14,9 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use log::{debug, error};
 
-use ui::input::set_kbd_led_state;
-
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
+use ui::input::set_kbd_led_state;
 
 /// HID keycode
 const HID_KEYBOARD_LEFT_CONTROL: u8 = 0xe0;

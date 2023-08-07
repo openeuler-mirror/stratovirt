@@ -116,9 +116,8 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
 
 #[cfg(test)]
 mod tests {
-    use crate::config::get_pci_bdf;
-
     use super::*;
+    use crate::config::get_pci_bdf;
 
     #[test]
     fn test_balloon_config_cmdline_parser() {

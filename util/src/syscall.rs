@@ -10,10 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 use libc::{c_void, syscall, SYS_mbind};
-
-use anyhow::Result;
 
 /// This function set memory policy for host NUMA node memory range.
 ///

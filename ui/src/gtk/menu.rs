@@ -31,12 +31,11 @@ use gtk::{
 };
 use log::error;
 
+use super::ScaleMode;
 use crate::{
     console::{get_run_stage, VmRunningStage},
     gtk::{renew_image, update_window_size, GtkDisplay, ZoomOperate, GTK_SCALE_MIN, GTK_ZOOM_STEP},
 };
-
-use super::ScaleMode;
 
 #[derive(Clone)]
 pub(crate) struct GtkMenu {

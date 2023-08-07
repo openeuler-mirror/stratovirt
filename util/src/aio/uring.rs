@@ -10,11 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use libc;
 use std::os::unix::io::AsRawFd;
 
 use anyhow::{bail, Context};
 use io_uring::{opcode, squeue, types, IoUring};
+use libc;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{AioCb, AioContext, AioEvent, OpCode, Result};

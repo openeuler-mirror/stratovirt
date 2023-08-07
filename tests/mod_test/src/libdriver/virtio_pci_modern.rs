@@ -10,6 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use super::malloc::GuestAllocator;
 use super::pci::{
     PCIBarAddr, PciMsixOps, TestPciDev, PCI_CAP_ID_VNDR, PCI_DEVICE_ID, PCI_SUBSYSTEM_ID,
@@ -21,9 +25,6 @@ use super::virtio::{
     VIRTIO_CONFIG_S_FEATURES_OK, VIRTIO_F_VERSION_1,
 };
 use crate::libtest::TestState;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use util::offset_of;
 
 const VIRTIO_PCI_CAP_COMMON_CFG: u8 = 1;

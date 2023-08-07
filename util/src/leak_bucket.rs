@@ -15,13 +15,13 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::clock::get_current_time;
 use crate::loop_context::EventLoopContext;
 use crate::time::NANOSECONDS_PER_SECOND;
-use anyhow::Result;
 
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;

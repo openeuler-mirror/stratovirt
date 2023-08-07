@@ -14,6 +14,8 @@ mod libaio;
 mod raw;
 mod uring;
 
+pub use raw::*;
+
 use std::clone::Clone;
 use std::io::Write;
 use std::os::unix::io::RawFd;
@@ -21,18 +23,17 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
 
+use anyhow::{anyhow, bail, Context, Result};
 use libc::c_void;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
+use uring::IoUringContext;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
 use crate::num_ops::{round_down, round_up};
 use crate::unix::host_page_size;
-use anyhow::{anyhow, bail, Context, Result};
 use libaio::LibaioContext;
-pub use raw::*;
-use uring::IoUringContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
@@ -758,9 +759,11 @@ pub fn iovec_write_zero(iovec: &[Iovec]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::prelude::AsRawFd;
+
     use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
 
     fn perform_sync_rw(
         fsize: usize,

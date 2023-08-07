@@ -10,18 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::event_loop::EventLoop;
-use crate::machine::{MachineTestInterface, IOTHREADS};
-use crate::socket::SocketHandler;
-use hex::FromHexError;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+use hex::FromHexError;
+use vmm_sys_util::epoll::EventSet;
+
+use crate::event_loop::EventLoop;
+use crate::machine::{MachineTestInterface, IOTHREADS};
+use crate::socket::SocketHandler;
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
 use util::test_helper::{eoi_intx, get_test_clock, has_msix_msg, query_intx, set_test_clock};
-use vmm_sys_util::epoll::EventSet;
 
 pub struct TestSock {
     stream: UnixStream,

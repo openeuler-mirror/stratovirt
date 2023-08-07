@@ -10,9 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use util::byte_code::ByteCode;
-
 use super::aml_compiler::AmlBuilder;
+use util::byte_code::ByteCode;
 
 /// Offset of checksum field in ACPI table.
 pub const TABLE_CHECKSUM_OFFSET: u32 = 9;

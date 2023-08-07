@@ -11,11 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-use anyhow::{Context, Result};
-pub use error::OzoneError;
-
-use crate::args::create_args_parser;
-use crate::handler::OzoneHandler;
 
 mod args;
 mod capability;
@@ -23,6 +18,13 @@ mod cgroup;
 mod handler;
 mod namespace;
 mod syscall;
+
+pub use error::OzoneError;
+
+use anyhow::{Context, Result};
+
+use crate::args::create_args_parser;
+use crate::handler::OzoneHandler;
 
 pub trait ExitCode {
     /// Returns the value to use as the exit status.

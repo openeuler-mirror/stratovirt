@@ -28,7 +28,6 @@
 ///
 /// The example cmdline for the device is:
 ///     "-device pcie-demo-dev,addr=0x5,bus=pcie.0,id=demo0,bar_num=3,bar_size=4096"
-///
 use std::{
     sync::Mutex,
     sync::{
@@ -37,9 +36,8 @@ use std::{
     },
 };
 
-use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
+use anyhow::{bail, Result};
 use log::error;
-use machine_manager::config::DemoDevConfig;
 
 #[cfg(not(target_env = "musl"))]
 use crate::pci::demo_device::{
@@ -54,7 +52,8 @@ use crate::pci::{
 };
 use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
 use crate::{Device, DeviceBase};
-pub use anyhow::{bail, Result};
+use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
+use machine_manager::config::DemoDevConfig;
 
 pub struct DemoDev {
     base: PciDevBase,

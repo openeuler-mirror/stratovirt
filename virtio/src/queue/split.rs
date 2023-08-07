@@ -17,10 +17,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::Arc;
 
-use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
-use util::byte_code::ByteCode;
 
 use super::{
     checked_offset_mem, ElemIovec, Element, VringOps, INVALID_VECTOR_NUM, VIRTQ_DESC_F_INDIRECT,
@@ -29,6 +27,8 @@ use super::{
 use crate::{
     report_virtio_error, virtio_has_feature, VirtioError, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
 };
+use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
+use util::byte_code::ByteCode;
 
 /// When host consumes a buffer, don't interrupt the guest.
 const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;

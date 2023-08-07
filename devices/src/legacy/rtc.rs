@@ -13,6 +13,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use anyhow::Result;
+use log::{debug, error, warn};
+use vmm_sys_util::eventfd::EventFd;
+
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
 use acpi::{
@@ -20,10 +24,6 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use anyhow::Result;
-use log::{debug, error, warn};
-use vmm_sys_util::eventfd::EventFd;
-
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
@@ -432,9 +432,10 @@ impl AmlBuilder for RTC {
 
 #[cfg(test)]
 mod test {
+    use anyhow::Context;
+
     use super::*;
     use address_space::GuestAddress;
-    use anyhow::Context;
 
     const WIGGLE: u8 = 2;
 

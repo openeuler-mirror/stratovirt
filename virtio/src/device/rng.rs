@@ -18,22 +18,8 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use address_space::AddressSpace;
-use machine_manager::{
-    config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE},
-    event_loop::EventLoop,
-    event_loop::{register_event_helper, unregister_event_helper},
-};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use util::aio::raw_read;
-use util::byte_code::ByteCode;
-use util::leak_bucket::LeakBucket;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-
+use anyhow::{bail, Context, Result};
 use log::error;
-use migration_derive::{ByteCode, Desc};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -42,7 +28,20 @@ use crate::{
     ElemIovec, Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
-use anyhow::{bail, Context, Result};
+use address_space::AddressSpace;
+use machine_manager::{
+    config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE},
+    event_loop::EventLoop,
+    event_loop::{register_event_helper, unregister_event_helper},
+};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
+use util::aio::raw_read;
+use util::byte_code::ByteCode;
+use util::leak_bucket::LeakBucket;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 const QUEUE_NUM_RNG: usize = 1;
 const RNG_SIZE_MAX: u32 = 1 << 20;
@@ -353,17 +352,17 @@ impl VirtioTrace for RngHandler {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::*;
-
     use std::io::Write;
     use std::mem::size_of;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
+    use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE};
-    use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;

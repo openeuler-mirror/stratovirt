@@ -1564,13 +1564,12 @@ mod test {
         process::Command,
     };
 
+    use super::*;
     use machine_manager::config::DiskFormat;
     use util::{
         aio::{iov_to_buf_direct, Iovec, WriteZeroesState},
         file::get_file_alignment,
     };
-
-    use super::*;
 
     const CLUSTER_SIZE: u64 = 64 * 1024;
 

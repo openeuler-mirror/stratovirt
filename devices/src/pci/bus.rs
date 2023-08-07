@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::Region;
+use anyhow::{bail, Context, Result};
 use log::debug;
 
 use super::{
@@ -21,8 +21,7 @@ use super::{
     hotplug::HotplugOps,
     PciDevOps, PciIntxState,
 };
-
-use anyhow::{bail, Context, Result};
+use address_space::Region;
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
@@ -246,7 +245,7 @@ impl PciBus {
 
 #[cfg(test)]
 mod tests {
-    use address_space::{AddressSpace, Region};
+    use anyhow::Result;
 
     use super::*;
     use crate::pci::bus::PciBus;
@@ -254,7 +253,7 @@ mod tests {
     use crate::pci::root_port::RootPort;
     use crate::pci::{PciDevBase, PciHost};
     use crate::{Device, DeviceBase};
-    use anyhow::Result;
+    use address_space::{AddressSpace, Region};
 
     #[derive(Clone)]
     struct PciDevice {

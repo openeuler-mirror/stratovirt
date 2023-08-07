@@ -12,8 +12,11 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{Region, RegionOps};
 use anyhow::{bail, Result};
+use log::error;
+
+use super::VENDOR_ID_INTEL;
+use address_space::{Region, RegionOps};
 use devices::pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
@@ -22,9 +25,6 @@ use devices::pci::{
     le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
 use devices::{Device, DeviceBase};
-use log::error;
-
-use super::VENDOR_ID_INTEL;
 
 const DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
 

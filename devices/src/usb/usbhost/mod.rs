@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod host_usblib;
+
 use std::{
     collections::LinkedList,
     os::unix::io::RawFd,
@@ -52,8 +54,6 @@ use util::{
     link_list::{List, Node},
     loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback},
 };
-
-mod host_usblib;
 
 const NON_ISO_PACKETS_NUMS: c_int = 0;
 const HANDLE_TIMEOUT_MS: u64 = 2;

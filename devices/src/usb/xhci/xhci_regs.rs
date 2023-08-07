@@ -14,18 +14,16 @@ use std::sync::atomic::{fence, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
-
-use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
-use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
-
-use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use super::xhci_ring::XhciTRB;
+use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 use crate::usb::{config::*, UsbError};
+use address_space::{AddressSpace, GuestAddress, RegionOps};
+use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;

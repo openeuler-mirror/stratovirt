@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::anyhow;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -18,6 +17,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
+use anyhow::{anyhow, bail, Context, Result};
 use libc::{
     c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
     MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
@@ -25,7 +25,6 @@ use libc::{
 use log::error;
 
 use crate::UtilError;
-use anyhow::{bail, Context, Result};
 
 /// This function returns the caller's thread ID(TID).
 pub fn gettid() -> u64 {

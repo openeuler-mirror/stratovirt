@@ -12,9 +12,10 @@
 
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
+
 use crate::error::BootLoaderError;
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, Result};
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
 

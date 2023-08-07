@@ -23,7 +23,6 @@ use std::{
     thread,
 };
 
-use address_space::{GuestAddress, HostMemMapping, Region};
 use anyhow::{bail, Context, Result};
 use core::time;
 use log::{error, warn};
@@ -31,6 +30,7 @@ use log::{error, warn};
 use self::{alsa::AlsaStreamData, audio_demo::AudioDemo};
 use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
+use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::scream::ScreamConfig;
 use pulseaudio::{PulseStreamData, TARGET_LATENCY_MS};
 

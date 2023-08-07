@@ -12,15 +12,15 @@
 
 use std::sync::Arc;
 
-use address_space::AddressSpace;
-use util::byte_code::ByteCode;
+use anyhow::{anyhow, Result};
 
 use super::{
     X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
     VMLINUX_RAM_START,
 };
 use crate::error::BootLoaderError;
-use anyhow::{anyhow, Result};
+use address_space::AddressSpace;
+use util::byte_code::ByteCode;
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
@@ -226,10 +226,9 @@ mod test {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-
     use super::super::X86BootLoaderConfig;
     use super::*;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
     #[test]
     fn test_boot_param() {

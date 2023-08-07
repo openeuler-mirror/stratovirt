@@ -12,9 +12,9 @@
 
 use std::time::Instant;
 
-use address_space::GuestAddress;
 use log::error;
 
+use address_space::GuestAddress;
 use util::{
     num_ops::{read_data_u16, write_data_u16},
     time::NANOSECONDS_PER_SECOND,

@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
+
 use machine_manager::config::{
     MachineConfig, SmbiosConfig, SmbiosType0Config, SmbiosType17Config, SmbiosType1Config,
     SmbiosType2Config, SmbiosType3Config, SmbiosType4Config,
 };
-use std::mem::size_of;
 use util::byte_code::ByteCode;
 
 const TYPE0_HANDLE: u16 = 0x0;

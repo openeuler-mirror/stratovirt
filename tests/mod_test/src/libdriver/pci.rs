@@ -10,10 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::pci_bus::PciBusOps;
-use super::pci_bus::TestPciBus;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+use super::pci_bus::PciBusOps;
+use super::pci_bus::TestPciBus;
 
 const BAR_MAP: [u8; 6] = [0x10, 0x14, 0x18, 0x1c, 0x20, 0x24];
 const PCI_PIN_NUM: u8 = 4;

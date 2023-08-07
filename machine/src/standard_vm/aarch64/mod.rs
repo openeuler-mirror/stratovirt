@@ -14,23 +14,19 @@ mod pci_host_root;
 mod syscall;
 
 pub use crate::error::MachineError;
-use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
-use devices::acpi::power::PowerDev;
-use log::{error, info, warn};
-use machine_manager::config::ShutdownAction;
-#[cfg(not(target_env = "musl"))]
-use machine_manager::config::UiContext;
-use machine_manager::event_loop::EventLoop;
+
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
+
+use anyhow::{bail, Context, Result};
+use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
+use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
-
+use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
+use crate::MachineOps;
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -48,23 +44,28 @@ use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{
     CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuTopology, CPU, PMU_INTR, PPI_BASE,
 };
+use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
+use devices::acpi::power::PowerDev;
 #[cfg(not(target_env = "musl"))]
 use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
-
 use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::parse_ramfb;
+use machine_manager::config::ShutdownAction;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
     NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
@@ -73,15 +74,13 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
+#[cfg(not(target_env = "musl"))]
+use ui::{gtk::gtk_display_init, vnc::vnc_init};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
-
-use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
-use crate::MachineOps;
-use anyhow::{bail, Context, Result};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {

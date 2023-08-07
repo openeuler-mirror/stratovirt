@@ -12,17 +12,16 @@
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, Context, Result};
+use kvm_ioctls::DeviceFd;
+use log::{error, info};
+
 use super::{
     state::{GICv3ItsState, GICv3State},
     GICConfig, GICDevice, KvmDevice, UtilResult,
 };
 use crate::interrupt_controller::error::InterruptError;
-use anyhow::{anyhow, Context, Result};
-
 use hypervisor::kvm::KVM_FDS;
-use kvm_ioctls::DeviceFd;
-use log::error;
-use log::info;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::{
     snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
@@ -577,13 +576,11 @@ impl GICv3Its {
 
 #[cfg(test)]
 mod tests {
-    use hypervisor::kvm::KVMFds;
-
     use super::super::GICVersion;
     use super::super::GICv3Config;
     use super::*;
-
     use crate::GIC_IRQ_MAX;
+    use hypervisor::kvm::KVMFds;
 
     #[test]
     fn test_create_gicv3() {

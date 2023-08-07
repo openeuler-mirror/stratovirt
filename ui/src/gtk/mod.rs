@@ -38,6 +38,7 @@ use gtk::{
     Application, ApplicationWindow, DrawingArea, HeaderBar, Label, RadioMenuItem,
 };
 use log::{debug, error};
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     console::{
@@ -54,7 +55,6 @@ use crate::{
 };
 use machine_manager::config::{DisplayConfig, UiContext};
 use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
-use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
 /// Width of default window.

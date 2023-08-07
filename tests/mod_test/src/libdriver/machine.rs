@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::malloc::GuestAllocator;
 use super::pci_bus::TestPciBus;
 use crate::libtest::TestState;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 const ARM_VIRT_RAM_ADDR: u64 = 0x40000000;
 const ARM_VIRT_RAM_SIZE: u64 = 0x20000000;

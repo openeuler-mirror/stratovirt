@@ -9,12 +9,10 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
+
 use std::{
     cell::RefCell, env, mem::size_of, path::Path, process::Command, rc::Rc, slice::from_raw_parts,
 };
-
-use util::byte_code::ByteCode;
-use util::offset_of;
 
 use mod_test::libdriver::{
     machine::TestStdMachine,
@@ -28,6 +26,8 @@ use mod_test::libdriver::{
 };
 use mod_test::libtest::{test_init, TestState};
 use mod_test::utils::get_rand_str;
+use util::byte_code::ByteCode;
+use util::offset_of;
 
 const DEFAULT_FS_DESC_ELEM: usize = 4; // 4 elems: inheader/inbody/outheader/outbody.
 const TIMEOUT_US: u64 = 10 * 1000 * 1000; // 10s timeout.

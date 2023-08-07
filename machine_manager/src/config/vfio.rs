@@ -10,9 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, Result};
+
 use super::error::ConfigError;
 use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
-use anyhow::{anyhow, Result};
+
 #[derive(Default, Debug)]
 pub struct VfioConfig {
     pub sysfsdev: String,

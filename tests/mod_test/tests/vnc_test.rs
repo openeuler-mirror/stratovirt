@@ -10,7 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::Result;
+use serde_json::Value;
+use vmm_sys_util::epoll::EventSet;
+
 use mod_test::{
     libdriver::vnc::{
         create_new_client, set_up, tear_down, DemoGpuConfig, EncodingType, InputConfig,
@@ -20,9 +25,6 @@ use mod_test::{
     },
     libtest::TestState,
 };
-use serde_json::Value;
-use std::{cell::RefCell, rc::Rc};
-use vmm_sys_util::epoll::EventSet;
 
 fn qmp_query_vnc(test_state: Rc<RefCell<TestState>>) -> Value {
     let str = "{\"execute\": \"query-vnc\"}".to_string();

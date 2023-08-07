@@ -17,8 +17,9 @@ use kvm_bindings::{
     KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::VcpuFd;
-use util::offset_of;
 use vmm_sys_util::errno;
+
+use util::offset_of;
 
 pub type Result<T> = std::result::Result<T, errno::Error>;
 

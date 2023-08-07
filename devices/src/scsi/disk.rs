@@ -13,10 +13,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::{Device, DeviceBase};
 use anyhow::{bail, Result};
 
 use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
+use crate::{Device, DeviceBase};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
 use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
 use util::aio::{Aio, WriteZeroesState};

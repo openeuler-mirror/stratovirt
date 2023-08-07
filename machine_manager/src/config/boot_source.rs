@@ -13,10 +13,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use super::error::ConfigError;
-use crate::config::{check_arg_too_long, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+
+use super::error::ConfigError;
+use crate::config::{check_arg_too_long, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 
 /// Config struct for boot-source.
 /// Contains `kernel_file`, `kernel_cmdline` and `initrd`.
@@ -237,8 +238,9 @@ impl VmConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::File;
+
+    use super::*;
 
     #[test]
     fn test_kernel_params() {

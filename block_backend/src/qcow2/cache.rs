@@ -224,8 +224,9 @@ impl Qcow2Cache {
 
 #[cfg(test)]
 mod test {
-    use super::{CacheTable, Qcow2Cache, ENTRY_SIZE_U64};
     use std::{cell::RefCell, rc::Rc};
+
+    use super::{CacheTable, Qcow2Cache, ENTRY_SIZE_U64};
 
     #[test]
     fn test_cache_entry() {

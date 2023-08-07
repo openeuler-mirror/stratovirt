@@ -12,6 +12,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Context, Result};
+use log::{debug, error};
+use vmm_sys_util::eventfd::EventFd;
+
 use super::chardev::{Chardev, InputReceiver};
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -22,8 +26,6 @@ use acpi::{
     AmlScopeBuilder, AmlString, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::GuestAddress;
-use anyhow::{Context, Result};
-use log::{debug, error};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
@@ -36,7 +38,6 @@ use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_data_u32;
-use vmm_sys_util::eventfd::EventFd;
 
 const PL011_FLAG_TXFE: u8 = 0x80;
 const PL011_FLAG_RXFF: u8 = 0x40;

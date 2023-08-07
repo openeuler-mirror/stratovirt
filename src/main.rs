@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use thiserror::Error;
+
 use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
@@ -30,8 +32,6 @@ use machine_manager::{
 use util::loop_context::EventNotifierHelper;
 use util::test_helper::{is_test_enabled, set_test_enabled};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
-
-use thiserror::Error;
 
 #[derive(Error, Debug)]
 enum MainError {

@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-/// BaseDevice is a simplest demo-pci-device. Its function is to
-/// multiply data written by two and return it when reading.
-use crate::pci::demo_dev::DeviceTypeOperation;
-use address_space::GuestAddress;
-pub use anyhow::{bail, Result};
 use std::collections::HashMap;
 
+use anyhow::Result;
+
+use crate::pci::demo_dev::DeviceTypeOperation;
+use address_space::GuestAddress;
+
+/// BaseDevice is a simplest demo-pci-device. Its function is to
+/// multiply data written by two and return it when reading.
 #[derive(Default)]
 pub struct BaseDevice {
     result: HashMap<u64, u8>,

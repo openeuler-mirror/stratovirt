@@ -11,18 +11,26 @@
 // See the Mulan PSL v2 for more details.
 
 pub(crate) mod ich9_lpc;
+
 mod mch;
 mod syscall;
 
-use crate::error::MachineError;
-use log::{error, info};
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
+
+use anyhow::{bail, Context, Result};
+use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
+use self::ich9_lpc::SLEEP_CTRL_OFFSET;
+use super::error::StandardVmError;
+use super::{AcpiBuilder, StdMachineOps};
+use crate::error::MachineError;
+use crate::{vm_state, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
@@ -38,7 +46,6 @@ use devices::legacy::{
 use devices::pci::{PciDevOps, PciHost};
 use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
@@ -55,17 +62,11 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
+#[cfg(not(target_env = "musl"))]
+use ui::{gtk::gtk_display_init, vnc::vnc_init};
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
-
-use self::ich9_lpc::SLEEP_CTRL_OFFSET;
-use super::error::StandardVmError;
-use super::{AcpiBuilder, StdMachineOps};
-use crate::{vm_state, MachineOps};
-use anyhow::{bail, Context, Result};
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;

@@ -12,9 +12,10 @@
 
 use std::mem::size_of;
 
-use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
+
+use crate::UtilError;
 
 pub const CLK_PHANDLE: u32 = 1;
 pub const GIC_PHANDLE: u32 = 2;

@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::config::CmdParser;
 use anyhow::Result;
+
+use crate::config::CmdParser;
 
 pub fn parse_ramfb(cfg_args: &str) -> Result<bool> {
     let mut cmd_parser = CmdParser::new("ramfb");

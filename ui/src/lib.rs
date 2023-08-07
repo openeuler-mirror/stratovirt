@@ -11,10 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod console;
-mod data;
 pub mod error;
 pub mod gtk;
 pub mod input;
 pub mod pixman;
 pub mod utils;
 pub mod vnc;
+
+mod data;
