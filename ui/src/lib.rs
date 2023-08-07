@@ -19,7 +19,7 @@ pub mod input;
 #[cfg(not(target_env = "musl"))]
 pub mod pixman;
 pub mod utils;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "vnc")]
 pub mod vnc;
 
 mod data;
