@@ -72,7 +72,7 @@ use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::MigrationManager;
 use ui::input::{key_event, point_event};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "vnc")]
 use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
@@ -1212,7 +1212,7 @@ impl DeviceInterface for StdMachine {
     }
 
     fn query_vnc(&self) -> Response {
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "vnc")]
         if let Some(vnc_info) = qmp_query_vnc() {
             return Response::create_response(serde_json::to_value(vnc_info).unwrap(), None);
         }

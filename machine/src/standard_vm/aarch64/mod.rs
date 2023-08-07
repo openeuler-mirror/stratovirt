@@ -76,7 +76,7 @@ use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
@@ -705,7 +705,6 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        #[cfg(not(target_env = "musl"))]
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
@@ -753,7 +752,7 @@ impl MachineOps for StdMachine {
     }
 
     /// Create display.
-    #[cfg(not(target_env = "musl"))]
+    #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
         #[cfg(feature = "gtk")]
@@ -773,6 +772,7 @@ impl MachineOps for StdMachine {
         };
 
         // VNC display init.
+        #[cfg(feature = "vnc")]
         vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         Ok(())

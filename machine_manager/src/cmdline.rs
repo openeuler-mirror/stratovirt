@@ -446,14 +446,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .required(false),
         )
         .arg(
-            Arg::with_name("vnc")
-            .multiple(false)
-            .long("vnc")
-            .value_name("ip:port")
-            .help("specify the ip and port for vnc")
-            .takes_value(true),
-        )
-        .arg(
             Arg::with_name("windows_emu_pid")
             .multiple(false)
             .long("windows_emu_pid")
@@ -495,6 +487,16 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true),
     );
 
+    #[cfg(feature = "vnc")]
+    let parser = parser.arg(
+        Arg::with_name("vnc")
+            .multiple(false)
+            .long("vnc")
+            .value_name("ip:port")
+            .help("specify the ip and port for vnc")
+            .takes_value(true),
+    );
+
     parser
 }
 
@@ -529,6 +531,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
+    #[cfg(feature = "vnc")]
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
     #[cfg(feature = "gtk")]
     add_args_to_config!((args.value_of("display")), vm_cfg, add_display);

@@ -15,6 +15,7 @@ pub mod camera;
 #[cfg(feature = "gtk")]
 pub mod display;
 pub mod error;
+#[cfg(feature = "vnc")]
 pub mod vnc;
 
 mod balloon;
@@ -71,6 +72,7 @@ pub use smbios::*;
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
+#[cfg(feature = "vnc")]
 pub use vnc::*;
 
 use std::collections::HashMap;
@@ -131,6 +133,7 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
+    #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
     #[cfg(feature = "gtk")]
     pub display: Option<DisplayConfig>,
