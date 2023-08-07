@@ -90,10 +90,6 @@ impl PciDevOps for PciHostRoot {
         Ok(())
     }
 
-    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.base.config.read(offset, data);
-    }
-
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None);
     }

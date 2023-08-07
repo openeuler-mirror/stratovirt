@@ -588,10 +588,6 @@ pub mod tests {
             Ok(())
         }
 
-        fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-            self.base.config.read(offset, data);
-        }
-
         fn write_config(&mut self, offset: usize, data: &[u8]) {
             #[allow(unused_variables)]
             self.base.config.write(

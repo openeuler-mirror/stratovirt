@@ -321,10 +321,6 @@ impl PciDevOps for XhciPciDevice {
         Some(self.base.devfn)
     }
 
-    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.base.config.read(offset, data);
-    }
-
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         update_dev_id(&self.base.parent_bus, self.base.devfn, &self.dev_id);
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
