@@ -898,6 +898,8 @@ Note:
 1. The combination of vendor and product ID takes precedence over the combination of bus number and physical port number.
 2. The combination of bus and physical port takes precedence over the combination of bus number and addr number.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-host.
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 

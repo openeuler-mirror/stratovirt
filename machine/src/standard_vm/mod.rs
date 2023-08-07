@@ -1034,8 +1034,9 @@ impl StdMachine {
                 }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
-            #[cfg(not(target_env = "musl"))]
+            #[cfg(feature = "usb_host")]
             "usb-host" => {
+                let mut cfg_args = format!("id={}", args.id);
                 let default_value = "0".to_string();
                 let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
                 let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);

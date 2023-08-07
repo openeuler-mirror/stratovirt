@@ -12,13 +12,16 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::{error::ConfigError, get_cameradev_by_id, UnsignedInteger};
+#[cfg(feature = "usb_host")]
+use super::UnsignedInteger;
+use super::{error::ConfigError, get_cameradev_by_id};
 use crate::config::{
     check_arg_nonexist, check_arg_too_long, CamBackendType, CameraDevConfig, CmdParser,
     ConfigCheck, ScsiDevConfig, VmConfig,
 };
 use util::aio::AioEngine;
 
+#[cfg(feature = "usb_host")]
 const USBHOST_ADDR_MAX: u8 = 127;
 
 /// XHCI controller configuration.
@@ -299,6 +302,7 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg(feature = "usb_host")]
 pub struct UsbHostConfig {
     /// USB Host device id.
     pub id: Option<String>,
@@ -316,6 +320,7 @@ pub struct UsbHostConfig {
     pub iso_urb_count: u32,
 }
 
+#[cfg(feature = "usb_host")]
 impl UsbHostConfig {
     fn check_range(&self) -> Result<()> {
         if self.hostaddr > USBHOST_ADDR_MAX {
@@ -325,6 +330,7 @@ impl UsbHostConfig {
     }
 }
 
+#[cfg(feature = "usb_host")]
 impl ConfigCheck for UsbHostConfig {
     fn check(&self) -> Result<()> {
         check_id(self.id.clone(), "usb-host")?;
@@ -332,6 +338,7 @@ impl ConfigCheck for UsbHostConfig {
     }
 }
 
+#[cfg(feature = "usb_host")]
 pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
     let mut cmd_parser = CmdParser::new("usb-host");
     cmd_parser

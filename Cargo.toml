@@ -27,6 +27,7 @@ boot_time = ["machine/boot_time"]
 scream_alsa = ["machine/scream_alsa"]
 scream_pulseaudio = ["machine/scream_pulseaudio"]
 demo_device = ["machine/demo_device"]
+usb_host = ["machine/usb_host"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
