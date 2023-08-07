@@ -12,6 +12,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::sysbus::{SysBusDevBase, SysBusDevOps};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable,
     AmlCreateDWordField, AmlDWord, AmlDWordDesc, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlElse,
@@ -25,16 +27,14 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
-use anyhow::Context;
-use sysbus::{SysBusDevBase, SysBusDevOps};
-use util::device::{Device, DeviceBase};
+use anyhow::{Context, Result};
 
 #[cfg(target_arch = "aarch64")]
-use crate::PCI_INTR_BASE;
-use crate::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
+use crate::pci::PCI_INTR_BASE;
+use crate::pci::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
 
 #[cfg(target_arch = "x86_64")]
-use crate::{le_read_u32, le_write_u32};
+use crate::pci::{le_read_u32, le_write_u32};
 
 #[cfg(target_arch = "x86_64")]
 const CONFIG_ADDRESS_ENABLE_MASK: u32 = 0x8000_0000;
@@ -280,11 +280,13 @@ impl SysBusDevOps for PciHost {
         }
     }
 
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         for (_id, pci_dev) in self.root_bus.lock().unwrap().devices.iter_mut() {
-            sysbus::Result::with_context(pci_dev.lock().unwrap().reset(true), || {
-                "Fail to reset pci device under pci host"
-            })?;
+            pci_dev
+                .lock()
+                .unwrap()
+                .reset(true)
+                .with_context(|| "Fail to reset pci device under pci host")?;
         }
 
         Ok(())
@@ -543,11 +545,11 @@ pub mod tests {
     use byteorder::{ByteOrder, LittleEndian};
 
     use super::*;
-    use crate::bus::PciBus;
-    use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
-    use crate::root_port::RootPort;
-    use crate::{PciDevBase, Result};
-    use util::device::{Device, DeviceBase};
+    use crate::pci::bus::PciBus;
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
+    use crate::pci::root_port::RootPort;
+    use crate::pci::{PciDevBase, Result};
+    use crate::{Device, DeviceBase};
 
     struct PciDevice {
         base: PciDevBase,

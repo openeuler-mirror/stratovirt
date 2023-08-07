@@ -17,7 +17,7 @@ pub enum VfioError {
     #[error("PciErr")]
     PciErr {
         #[from]
-        source: pci::error::PciError,
+        source: devices::pci::error::PciError,
     },
     #[error("AddressSpace")]
     AddressSpace {

@@ -16,14 +16,14 @@ use std::sync::{Arc, Mutex};
 use crate::error::VirtioError;
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
+use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use devices::{Device, DeviceBase};
 use log::{error, warn};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{

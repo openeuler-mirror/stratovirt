@@ -32,7 +32,7 @@ pub enum VirtioError {
     #[error("SysBus")]
     SysBus {
         #[from]
-        source: sysbus::error::SysBusError,
+        source: devices::sysbus::error::SysBusError,
     },
     #[error("Failed to create eventfd.")]
     EventFdCreate,

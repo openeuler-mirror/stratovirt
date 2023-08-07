@@ -15,12 +15,12 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, warn};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use util::device::{Device, DeviceBase};
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 
 pub struct PFlash {
@@ -850,7 +850,7 @@ impl SysBusDevOps for PFlash {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
+    ) -> Result<()> {
         let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -858,10 +858,12 @@ impl SysBusDevOps for PFlash {
         Ok(())
     }
 
-    fn reset(&mut self) -> sysbus::Result<()> {
-        sysbus::Result::with_context(self.rom.as_ref().unwrap().set_rom_device_romd(true), || {
-            "Fail to set PFlash rom region read only"
-        })?;
+    fn reset(&mut self) -> Result<()> {
+        self.rom
+            .as_ref()
+            .unwrap()
+            .set_rom_device_romd(true)
+            .with_context(|| "Fail to set PFlash rom region read only")?;
         self.cmd = 0x00;
         self.write_cycle = 0;
         self.status = 0x80;
@@ -878,10 +880,10 @@ impl AmlBuilder for PFlash {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
     use address_space::AddressSpace;
     use std::fs;
     pub use std::fs::File;
-    use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(

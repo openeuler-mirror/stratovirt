@@ -20,26 +20,26 @@ use crate::VfioError;
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
 #[cfg(target_arch = "aarch64")]
-use pci::config::SECONDARY_BUS_NUM;
-use pci::config::{
+use devices::pci::config::SECONDARY_BUS_NUM;
+use devices::pci::config::{
     PciConfig, RegionType, BAR_0, BAR_5, BAR_IO_SPACE, BAR_MEM_64BIT, BAR_SPACE_UNMAPPED, COMMAND,
     COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
     HEADER_TYPE, IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE,
     PCI_CONFIG_SPACE_SIZE, REG_SIZE,
 };
-use pci::msix::{
+use devices::pci::msix::{
     is_msix_enabled, update_dev_id, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK,
     MSIX_CAP_ID, MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE,
     MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
-use pci::{
+use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
     pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevBase, PciDevOps,
 };
-use util::device::{Device, DeviceBase};
+use devices::{Device, DeviceBase};
+use hypervisor::kvm::{MsiVector, KVM_FDS};
+use log::error;
 use util::unix::host_page_size;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
@@ -832,20 +832,20 @@ impl PciDevOps for VfioPciDevice {
         &mut self.base
     }
 
-    fn realize(mut self) -> pci::Result<()> {
+    fn realize(mut self) -> devices::pci::Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
-        pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Failed to reset vfio device"
         })?;
 
-        pci::Result::with_context(self.get_pci_config(), || {
+        devices::pci::Result::with_context(self.get_pci_config(), || {
             "Failed to get vfio device pci config space"
         })?;
-        pci::Result::with_context(self.pci_config_reset(), || {
+        devices::pci::Result::with_context(self.pci_config_reset(), || {
             "Failed to reset vfio device pci config space"
         })?;
-        pci::Result::with_context(
+        devices::pci::Result::with_context(
             init_multifunction(
                 self.multi_func,
                 &mut self.base.config.config,
@@ -868,14 +868,15 @@ impl PciDevOps for VfioPciDevice {
             self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
-        self.msix_info = Some(pci::Result::with_context(self.get_msix_info(), || {
-            "Failed to get MSI-X info"
-        })?);
-        self.vfio_bars = Arc::new(Mutex::new(pci::Result::with_context(
+        self.msix_info = Some(devices::pci::Result::with_context(
+            self.get_msix_info(),
+            || "Failed to get MSI-X info",
+        )?);
+        self.vfio_bars = Arc::new(Mutex::new(devices::pci::Result::with_context(
             self.bar_region_info(),
             || "Failed to get bar region info",
         )?));
-        pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
+        devices::pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -895,7 +896,7 @@ impl PciDevOps for VfioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> pci::Result<()> {
+    fn unrealize(&mut self) -> devices::pci::Result<()> {
         if let Err(e) = VfioPciDevice::unrealize(self) {
             error!("{:?}", e);
             bail!("Failed to unrealize vfio-pci.");
@@ -1007,8 +1008,8 @@ impl PciDevOps for VfioPciDevice {
         }
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
-        pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+    fn reset(&mut self, _reset_child_device: bool) -> devices::pci::Result<()> {
+        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Fail to reset vfio dev"
         })
     }

@@ -13,6 +13,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
     AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
@@ -29,9 +31,7 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use util::loop_context::EventNotifierHelper;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -391,7 +391,7 @@ impl SysBusDevOps for Serial {
         self.write_internal(offset, data[0]).is_ok()
     }
 
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
+    fn set_irq(&mut self, _sysbus: &mut SysBus) -> Result<i32> {
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
             irq = UART_IRQ;

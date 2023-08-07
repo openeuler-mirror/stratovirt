@@ -17,7 +17,7 @@
 // Currently, the supported operations are:
 // Get surface size, Get cursor image size, Get Surface data, Get cursor image data.
 
-use crate::demo_dev::DeviceTypeOperation;
+use crate::pci::demo_dev::DeviceTypeOperation;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{bail, Ok, Result};
 use byteorder::{ByteOrder, LittleEndian};

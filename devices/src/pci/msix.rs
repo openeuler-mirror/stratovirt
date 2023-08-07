@@ -31,8 +31,10 @@ use util::{
     test_helper::{add_msix_msg, is_test_enabled},
 };
 
-use crate::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
-use crate::{
+use crate::pci::config::{
+    CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
+};
+use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
 };
@@ -710,7 +712,7 @@ pub fn update_dev_id(parent_bus: &Weak<Mutex<PciBus>>, devfn: u8, dev_id: &Arc<A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PCI_CONFIG_SPACE_SIZE;
+    use crate::pci::config::PCI_CONFIG_SPACE_SIZE;
 
     #[test]
     fn test_init_msix() {

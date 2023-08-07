@@ -11,10 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
+use crate::{Device, DeviceBase};
 pub use anyhow::Result;
 pub use error::UsbError;
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 
 #[cfg(not(target_env = "musl"))]
 pub mod camera;

@@ -13,6 +13,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlBuilder, AmlDevice, AmlEisaId, AmlIoDecode, AmlIoResource, AmlIrqNoFlags, AmlNameDecl,
     AmlResTemplate, AmlScopeBuilder,
@@ -20,8 +22,6 @@ use acpi::{
 use address_space::GuestAddress;
 use anyhow::Result;
 use log::{debug, error, warn};
-use sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
@@ -402,7 +402,7 @@ impl SysBusDevOps for RTC {
         Some(&mut self.base.res)
     }
 
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.cmos_data.fill(0);
         self.init_rtc_reg();
         self.set_memory(self.mem_size, self.gap_start);

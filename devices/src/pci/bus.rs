@@ -249,12 +249,12 @@ mod tests {
     use address_space::{AddressSpace, Region};
 
     use super::*;
-    use crate::bus::PciBus;
-    use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
-    use crate::root_port::RootPort;
-    use crate::{PciDevBase, PciHost};
+    use crate::pci::bus::PciBus;
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::pci::root_port::RootPort;
+    use crate::pci::{PciDevBase, PciHost};
+    use crate::{Device, DeviceBase};
     use anyhow::Result;
-    use util::device::{Device, DeviceBase};
 
     #[derive(Clone)]
     struct PciDevice {

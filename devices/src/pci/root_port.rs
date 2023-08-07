@@ -13,6 +13,7 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::{Device, DeviceBase};
 use address_space::Region;
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
@@ -23,7 +24,6 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
@@ -36,13 +36,13 @@ use super::config::{
     PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT,
     SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::bus::PciBus;
-use crate::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
-use crate::hotplug::HotplugOps;
-use crate::intx::init_intx;
-use crate::msix::init_msix;
-use crate::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRUPT_PIN};
-use crate::{
+use crate::pci::bus::PciBus;
+use crate::pci::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
+use crate::pci::hotplug::HotplugOps;
+use crate::pci::intx::init_intx;
+use crate::pci::msix::init_msix;
+use crate::pci::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRUPT_PIN};
+use crate::pci::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
 };
@@ -689,7 +689,7 @@ impl MigrationHook for RootPort {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::tests::create_pci_host;
+    use crate::pci::host::tests::create_pci_host;
 
     #[test]
     fn test_read_config() {

@@ -21,16 +21,16 @@ use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::legacy::Result;
+use crate::sysbus::{Result as SysBusResult, SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
-use sysbus::{Result as SysBusResult, SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, set_run_stage, ConsoleType,
     DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
 };
 use ui::input::{key_event, KEYCODE_RET};
-use util::device::{Device, DeviceBase};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;

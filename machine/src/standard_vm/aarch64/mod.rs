@@ -54,6 +54,8 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
+use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
+use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(not(target_env = "musl"))]
@@ -69,9 +71,7 @@ use machine_manager::machine::{
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
-use pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};

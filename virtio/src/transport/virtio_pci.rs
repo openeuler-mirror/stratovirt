@@ -18,22 +18,22 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, warn};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use pci::config::{
+use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
     STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
+use log::{debug, error, warn};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
 
-use pci::msix::{update_dev_id, MsixState};
-use pci::{
+use devices::pci::msix::{update_dev_id, MsixState};
+use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     ranges_overlap, PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
 };
+use devices::{Device, DeviceBase};
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use util::num_ops::{read_data_u32, write_data_u32};
 use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
@@ -1283,7 +1283,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
-    use pci::{
+    use devices::pci::{
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
     };

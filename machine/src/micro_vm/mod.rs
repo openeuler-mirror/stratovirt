@@ -60,6 +60,9 @@ use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
+use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+#[cfg(target_arch = "aarch64")]
+use devices::sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
@@ -81,9 +84,6 @@ use machine_manager::{
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
-use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
-#[cfg(target_arch = "aarch64")]
-use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};

@@ -20,16 +20,16 @@ use crate::standard_vm::Result;
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use anyhow::Context;
-use log::error;
-use pci::config::{
+use devices::pci::config::{
     PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::{
+use devices::pci::{
     le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevBase, PciDevOps, Result as PciResult,
 };
+use devices::{Device, DeviceBase};
+use log::error;
 use util::byte_code::ByteCode;
-use util::device::{Device, DeviceBase};
 use vmm_sys_util::eventfd::EventFd;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;

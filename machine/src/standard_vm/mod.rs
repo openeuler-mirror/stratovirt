@@ -60,6 +60,8 @@ use anyhow::{bail, Context};
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
+use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
+use devices::pci::PciBus;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
@@ -68,8 +70,6 @@ use machine_manager::config::{
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::MigrationManager;
-use pci::hotplug::{handle_plug, handle_unplug_pci_request};
-use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
     qmp_balloon, qmp_query_balloon, Block, BlockState,
