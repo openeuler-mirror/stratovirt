@@ -13,10 +13,11 @@
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{fence, Ordering};
 
-use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 use anyhow::bail;
 use kvm_bindings::__IncompleteArrayField;
 use vmm_sys_util::eventfd::EventFd;
+
+use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 
 const IOCB_FLAG_RESFD: u32 = 1;
 #[allow(dead_code)]

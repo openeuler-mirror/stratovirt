@@ -10,17 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, mem, rc::Rc};
+
+use byteorder::{ByteOrder, LittleEndian};
+
 use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicRedistributor, AcpiRsdp, AcpiSratGiccAffinity,
     AcpiSratMemoryAffinity, AcpiTableHeader, CacheHierarchyNode, ProcessorHierarchyNode,
 };
-use byteorder::{ByteOrder, LittleEndian};
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
+use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
-use std::{cell::RefCell, mem, rc::Rc};
-
-use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libtest::{test_init, TestState};
 
 // Now dsdt table data length is 3482.

@@ -12,27 +12,16 @@
 
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
+pub mod error;
+
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-pub mod error;
-pub use error::StandardVmError;
+pub use anyhow::Result;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
-use log::error;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
-use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
-#[cfg(not(target_env = "musl"))]
-use ui::{
-    input::{key_event, point_event},
-    vnc::qmp_query_vnc,
-};
-use util::aio::{AioEngine, WriteZeroesState};
-use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
-use vmm_sys_util::epoll::EventSet;
-use vmm_sys_util::eventfd::EventFd;
+pub use error::StandardVmError;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -44,8 +33,17 @@ use std::rc::Rc;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context};
+use log::error;
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
+
+#[cfg(target_arch = "x86_64")]
+use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 use super::Result as MachineResult;
 use crate::MachineOps;
+#[cfg(target_arch = "aarch64")]
+use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -55,8 +53,6 @@ use acpi::{
 use address_space::{
     AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
-pub use anyhow::Result;
-use anyhow::{bail, Context};
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
@@ -67,23 +63,27 @@ use machine_manager::config::{
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
     NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{DeviceInterface, KvmVmState};
+use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 use migration::MigrationManager;
+#[cfg(not(target_env = "musl"))]
+use ui::{
+    input::{key_event, point_event},
+    vnc::qmp_query_vnc,
+};
+use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
+use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use virtio::{
     qmp_balloon, qmp_query_balloon, Block, BlockState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     VhostKern, VhostUser, VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
-
-#[cfg(target_arch = "aarch64")]
-use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
-
-#[cfg(target_arch = "x86_64")]
-use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;

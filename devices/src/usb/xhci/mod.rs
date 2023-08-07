@@ -13,6 +13,7 @@
 pub mod xhci_controller;
 pub mod xhci_pci;
 pub mod xhci_regs;
+
 mod xhci_ring;
 
 /// Transfer Request Block

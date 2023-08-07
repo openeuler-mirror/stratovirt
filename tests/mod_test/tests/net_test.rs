@@ -10,16 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use rand::Rng;
-use serde_json::json;
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::process::Command;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time;
-use util::byte_code::ByteCode;
-use util::offset_of;
+
+use rand::Rng;
+use serde_json::json;
 
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
@@ -30,6 +29,8 @@ use mod_test::libdriver::virtio::{
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::{test_init, TestState};
+use util::byte_code::ByteCode;
+use util::offset_of;
 
 /// Device handles packets with partial checksum.
 const VIRTIO_NET_F_CSUM: u32 = 0;

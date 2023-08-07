@@ -10,12 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
+
+use serde_json::{json, Value::String as JsonString};
+
 use mod_test::{
     libdriver::{machine::TestStdMachine, malloc::GuestAllocator},
     libtest::{test_init, TestState},
 };
-use serde_json::{json, Value::String as JsonString};
-use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
 
 pub struct MemoryTest {
     pub state: Rc<RefCell<TestState>>,

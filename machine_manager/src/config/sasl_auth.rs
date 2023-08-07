@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+
 use crate::config::{
     ConfigError, {CmdParser, VmConfig},
 };
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SaslAuthObjConfig {

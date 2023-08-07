@@ -15,15 +15,16 @@
 // Users can write a rom address in the mmio configuration space of the device.
 // Then if an input event occurs, the event information will be recorded to the corresponding memory by this device.
 
-use address_space::{AddressSpace, GuestAddress};
-use byteorder::{ByteOrder, LittleEndian};
-use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
-use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
 
 use anyhow::{bail, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use once_cell::sync::Lazy;
 
 use crate::pci::demo_dev::DeviceTypeOperation;
+use address_space::{AddressSpace, GuestAddress};
+use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
+
 static MEM_ADDR: Lazy<Arc<Mutex<MemSpace>>> = Lazy::new(|| {
     Arc::new(Mutex::new(MemSpace {
         sys_mem: None,

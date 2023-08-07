@@ -13,6 +13,8 @@
 pub mod caps;
 mod core_regs;
 
+pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
+
 use std::{
     mem::forget,
     os::unix::prelude::{AsRawFd, FromRawFd},
@@ -20,7 +22,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
     kvm_device_attr, kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList,
     KVM_ARM_VCPU_PMU_V3_CTRL, KVM_ARM_VCPU_PMU_V3_INIT, KVM_ARM_VCPU_PMU_V3_IRQ,
@@ -29,10 +30,9 @@ use kvm_bindings::{
 use kvm_ioctls::{DeviceFd, VcpuFd};
 
 use self::caps::CpregListEntry;
-pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 use self::core_regs::{get_core_regs, set_core_regs};
 use crate::CPU;
-
+use hypervisor::kvm::KVM_FDS;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };

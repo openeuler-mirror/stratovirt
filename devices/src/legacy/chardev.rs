@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use libc::{cfmakeraw, tcgetattr, tcsetattr, termios};
 use log::{error, info};
+use vmm_sys_util::epoll::EventSet;
+
 use machine_manager::machine::{PathInfo, PTY_PATH};
 use machine_manager::{
     config::{ChardevConfig, ChardevType},
@@ -32,7 +34,6 @@ use util::loop_context::{
 };
 use util::set_termi_raw_mode;
 use util::unix::limit_permission;
-use vmm_sys_util::epoll::EventSet;
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {

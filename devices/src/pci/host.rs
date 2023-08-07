@@ -12,6 +12,13 @@
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Context, Result};
+
+#[cfg(target_arch = "aarch64")]
+use crate::pci::PCI_INTR_BASE;
+use crate::pci::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
+#[cfg(target_arch = "x86_64")]
+use crate::pci::{le_read_u32, le_write_u32};
 use crate::sysbus::{SysBusDevBase, SysBusDevOps};
 use crate::{Device, DeviceBase};
 use acpi::{
@@ -27,14 +34,6 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
-use anyhow::{Context, Result};
-
-#[cfg(target_arch = "aarch64")]
-use crate::pci::PCI_INTR_BASE;
-use crate::pci::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
-
-#[cfg(target_arch = "x86_64")]
-use crate::pci::{le_read_u32, le_write_u32};
 
 #[cfg(target_arch = "x86_64")]
 const CONFIG_ADDRESS_ENABLE_MASK: u32 = 0x8000_0000;
@@ -541,7 +540,6 @@ impl AmlBuilder for PciHost {
 
 #[cfg(test)]
 pub mod tests {
-    use address_space::Region;
     use byteorder::{ByteOrder, LittleEndian};
 
     use super::*;
@@ -550,6 +548,7 @@ pub mod tests {
     use crate::pci::root_port::RootPort;
     use crate::pci::{PciDevBase, Result};
     use crate::{Device, DeviceBase};
+    use address_space::Region;
 
     struct PciDevice {
         base: PciDevBase,

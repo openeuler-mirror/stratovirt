@@ -10,11 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
 use crate::config::{check_arg_too_long, CmdParser, ConfigCheck, VmConfig};
-use anyhow::{anyhow, Result};
 
 const MAX_IOTHREAD_NUM: usize = 8;
 

@@ -17,9 +17,6 @@ use std::slice::from_raw_parts;
 use std::{thread, time};
 
 use rand::Rng;
-use util::aio::{aio_probe, AioEngine};
-use util::byte_code::ByteCode;
-use util::offset_of;
 
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
@@ -30,6 +27,9 @@ use mod_test::libdriver::virtio::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
+use util::aio::{aio_probe, AioEngine};
+use util::byte_code::ByteCode;
+use util::offset_of;
 
 const TEST_VIRTIO_SCSI_CDB_SIZE: usize = 32;
 const TEST_VIRTIO_SCSI_SENSE_SIZE: usize = 96;

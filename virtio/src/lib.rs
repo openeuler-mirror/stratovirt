@@ -27,9 +27,26 @@
 
 pub mod device;
 pub mod error;
+pub mod vhost;
+
 mod queue;
 mod transport;
-pub mod vhost;
+
+pub use device::balloon::*;
+pub use device::block::{Block, BlockState, VirtioBlkConfig};
+#[cfg(not(target_env = "musl"))]
+pub use device::gpu::*;
+pub use device::net::*;
+pub use device::rng::{Rng, RngState};
+pub use device::scsi_cntlr as ScsiCntlr;
+pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
+pub use error::VirtioError;
+pub use error::*;
+pub use queue::*;
+pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
+pub use transport::virtio_pci::VirtioPciDevice;
+pub use vhost::kernel as VhostKern;
+pub use vhost::user as VhostUser;
 
 use std::cmp;
 use std::io::Write;
@@ -47,22 +64,6 @@ use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
 use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
-
-pub use device::balloon::*;
-pub use device::block::{Block, BlockState, VirtioBlkConfig};
-#[cfg(not(target_env = "musl"))]
-pub use device::gpu::*;
-pub use device::net::*;
-pub use device::rng::{Rng, RngState};
-pub use device::scsi_cntlr as ScsiCntlr;
-pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
-pub use error::VirtioError;
-pub use error::*;
-pub use queue::*;
-pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
-pub use transport::virtio_pci::VirtioPciDevice;
-pub use vhost::kernel as VhostKern;
-pub use vhost::user as VhostUser;
 
 /// Check if the bit of features is configured.
 pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {

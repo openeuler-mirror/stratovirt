@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use rand::Rng;
-use serde_json::json;
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
-use util::offset_of;
+
+use rand::Rng;
+use serde_json::json;
 
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{
@@ -32,6 +32,7 @@ use mod_test::libdriver::virtio_block::{
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::TestState;
 use mod_test::utils::{ImageType, TEST_IMAGE_SIZE};
+use util::offset_of;
 
 fn add_request(
     test_state: Rc<RefCell<TestState>>,

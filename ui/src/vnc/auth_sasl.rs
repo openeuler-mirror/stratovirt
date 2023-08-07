@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    error::VncError,
-    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
-};
+use std::ffi::{CStr, CString};
+use std::ptr;
+
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};
 use log::info;
@@ -24,8 +23,11 @@ use sasl2_sys::prelude::{
     SASL_SUCCESS_DATA,
 };
 use sasl2_sys::sasl::SASL_USERNAME;
-use std::ffi::{CStr, CString};
-use std::ptr;
+
+use crate::{
+    error::VncError,
+    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
+};
 use util::byte_code::ByteCode;
 
 /// Vnc Service.

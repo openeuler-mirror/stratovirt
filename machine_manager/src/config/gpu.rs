@@ -10,10 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::{error::ConfigError, M};
-use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 use anyhow::{anyhow, Result};
 use log::warn;
+
+use super::{error::ConfigError, M};
+use crate::config::{check_arg_too_long, CmdParser, ConfigCheck};
 
 /// The maximum number of outputs.
 pub const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;

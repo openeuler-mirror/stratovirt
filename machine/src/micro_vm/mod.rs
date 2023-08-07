@@ -29,17 +29,12 @@
 //! - `aarch64`
 
 pub mod error;
-pub use error::MicroVmError;
-use machine_manager::config::DiskFormat;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
-use util::aio::{AioEngine, WriteZeroesState};
 
 mod mem_layout;
 mod syscall;
 
-use super::Result as MachineResult;
-use log::{error, info};
+pub use error::MicroVmError;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -48,6 +43,15 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 
+use anyhow::{anyhow, bail, Context, Result};
+#[cfg(target_arch = "x86_64")]
+use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use log::{error, info};
+
+use super::Result as MachineResult;
+use super::{error::MachineError, MachineOps};
+#[cfg(target_arch = "x86_64")]
+use crate::vm_state;
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 #[cfg(target_arch = "aarch64")]
@@ -67,8 +71,9 @@ use devices::sysbus::{SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
-#[cfg(target_arch = "x86_64")]
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use machine_manager::config::DiskFormat;
+use machine_manager::event_loop::EventLoop;
+use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
 use machine_manager::{
     config::{
         parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
@@ -85,6 +90,7 @@ use machine_manager::{
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
+use util::aio::{AioEngine, WriteZeroesState};
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::{
@@ -94,11 +100,6 @@ use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
-
-use super::{error::MachineError, MachineOps};
-#[cfg(target_arch = "x86_64")]
-use crate::vm_state;
-use anyhow::{anyhow, bail, Context, Result};
 
 // The replaceable block device maximum count.
 const MMIO_REPLACEABLE_BLK_NR: usize = 4;

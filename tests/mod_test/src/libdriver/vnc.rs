@@ -10,12 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    libdriver::vnc::EncodingType::*,
-    libtest::{test_init, TestState},
-};
-use anyhow::{bail, Result};
-use core::time;
 use std::{
     cell::RefCell,
     cmp,
@@ -26,6 +20,9 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+
+use anyhow::{bail, Result};
+use core::time;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
 use super::{
@@ -33,6 +30,10 @@ use super::{
     malloc::GuestAllocator,
     pci::{PCIBarAddr, TestPciDev, PCI_VENDOR_ID},
     pci_bus::TestPciBus,
+};
+use crate::{
+    libdriver::vnc::EncodingType::*,
+    libtest::{test_init, TestState},
 };
 
 const EPOLL_DEFAULT_TIMEOUT: i32 = 1000;

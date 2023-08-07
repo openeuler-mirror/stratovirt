@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use log::warn;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -20,11 +19,12 @@ use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_bindings::{
     kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD, KVM_DEV_VFIO_GROUP_DEL,
 };
+use log::warn;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
@@ -33,7 +33,7 @@ use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
 use super::{CONTAINERS, GROUPS, KVM_DEVICE_FD};
 use crate::VfioError;
-use anyhow::{anyhow, bail, Context, Result};
+use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";

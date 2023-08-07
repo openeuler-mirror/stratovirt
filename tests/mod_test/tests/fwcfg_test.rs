@@ -10,18 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::process::Command;
+use std::rc::Rc;
+use std::{fs, mem};
+
 use byteorder::{ByteOrder, LittleEndian};
+
 use devices::legacy::FwCfgEntryType;
 use mod_test::libdriver::fwcfg::{bios_args, FW_CFG_BASE};
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libtest::test_init;
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 use mod_test::utils::{swap_u16, swap_u32};
-
-use std::cell::RefCell;
-use std::process::Command;
-use std::rc::Rc;
-use std::{fs, mem};
 
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;

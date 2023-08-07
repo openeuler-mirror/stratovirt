@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::Iovec;
+use std::os::unix::io::RawFd;
+
 use libc::{
     c_int, c_void, fallocate, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t,
     FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_ZERO_RANGE,
 };
 use log::error;
-use std::os::unix::io::RawFd;
+
+use super::Iovec;
 
 pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;

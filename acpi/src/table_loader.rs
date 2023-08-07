@@ -12,11 +12,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use util::byte_code::ByteCode;
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::AcpiError;
 use crate::AmlBuilder;
-use anyhow::{anyhow, bail, Context, Result};
+use util::byte_code::ByteCode;
 
 const TABLE_LOADER_FILE_NAME_SZ: usize = 56;
 const TABLE_LOADER_ENTRY_SZ: usize = 124;

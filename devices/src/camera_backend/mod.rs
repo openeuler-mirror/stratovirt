@@ -16,13 +16,13 @@
 pub mod demo;
 pub mod v4l2;
 
-use anyhow::{bail, Context, Result};
 use std::sync::{Arc, Mutex};
 
-use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
-use util::aio::Iovec;
+use anyhow::{bail, Context, Result};
 
 use self::{demo::DemoCamera, v4l2::V4l2CameraBackend};
+use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
+use util::aio::Iovec;
 
 /// Frame interval in 100ns units.
 pub const INTERVALS_PER_SEC: u32 = 10_000_000;

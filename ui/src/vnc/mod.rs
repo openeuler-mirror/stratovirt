@@ -16,6 +16,19 @@ pub mod client_io;
 pub mod encoding;
 pub mod server_io;
 
+use std::{
+    cmp,
+    collections::HashMap,
+    net::TcpListener,
+    ptr,
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use anyhow::{anyhow, Result};
+use core::time;
+use once_cell::sync::Lazy;
+
 use crate::{
     console::{
         graphic_hardware_update, register_display, DisplayChangeListener,
@@ -38,21 +51,10 @@ use crate::{
         server_io::{make_server_config, VncConnHandler, VncServer, VncSurface},
     },
 };
-use anyhow::{anyhow, Result};
-use core::time;
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
     qmp::qmp_schema::{VncClientInfo, VncInfo},
-};
-use once_cell::sync::Lazy;
-use std::{
-    cmp,
-    collections::HashMap,
-    net::TcpListener,
-    ptr,
-    sync::{Arc, Mutex},
-    thread,
 };
 use util::{
     bitmap::Bitmap,

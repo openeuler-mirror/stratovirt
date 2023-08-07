@@ -10,12 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Context, Result};
 use std::sync::{Arc, Mutex};
 
-use address_space::AddressSpace;
-use machine_manager::config::BlkDevConfig;
-use util::byte_code::ByteCode;
+use anyhow::{anyhow, bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
@@ -30,6 +27,9 @@ use crate::{
     VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX,
     VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
+use address_space::AddressSpace;
+use machine_manager::config::BlkDevConfig;
+use util::byte_code::ByteCode;
 
 pub struct Block {
     /// Virtio device base property.

@@ -10,10 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod acpi_device;
 pub mod acpi_table;
 pub(crate) mod aml_compiler;
 pub mod error;
+
+mod acpi_device;
 mod table_loader;
 
 pub use acpi_device::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};

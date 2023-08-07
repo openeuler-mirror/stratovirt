@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::error;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::fs::FileSystem;
 use super::fuse_req::FuseReq;
@@ -44,7 +45,6 @@ use virtio::{
     Queue, QueueConfig, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
 };
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 

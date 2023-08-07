@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::protocol::MigrationStatus;
 use thiserror::Error;
+
+use crate::protocol::MigrationStatus;
 
 #[derive(Error, Debug)]
 pub enum MigrationError {

@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use log::error;
-use util::test_helper::{is_test_enabled, trigger_intx};
 
 use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_INTR_BASE, PCI_PIN_NUM};
+use util::test_helper::{is_test_enabled, trigger_intx};
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
 

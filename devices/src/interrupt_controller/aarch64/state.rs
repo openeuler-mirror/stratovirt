@@ -10,17 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::Context;
-use libc::c_uint;
 use std::mem::size_of;
 
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use anyhow::Context;
+use libc::c_uint;
 
 use super::gicv3::{GICv3, GICv3Access, GICv3Its};
 use super::GIC_IRQ_INTERNAL;
 use crate::interrupt_controller::Result;
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
+use util::byte_code::ByteCode;
 
 /// Register data length can be get by `get_device_attr/set_device_attr` in kvm once.
 const REGISTER_SIZE: u64 = size_of::<c_uint>() as u64;

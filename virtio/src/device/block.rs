@@ -1330,13 +1330,15 @@ impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::{thread, time::Duration};
+
+    use vmm_sys_util::tempfile::TempFile;
+
     use super::*;
     use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::{thread, time::Duration};
-    use vmm_sys_util::tempfile::TempFile;
 
     const QUEUE_NUM_BLK: usize = 1;
     const CONFIG_SPACE_SIZE: usize = 60;

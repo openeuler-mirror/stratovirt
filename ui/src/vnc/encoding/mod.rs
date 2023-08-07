@@ -11,5 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod enc_hextile;
+
 #[cfg(test)]
 mod test_hextile_image_data;

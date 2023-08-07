@@ -39,12 +39,16 @@ pub mod time;
 pub mod trace;
 pub mod unix;
 pub mod v4l2;
+
 pub use anyhow::Result;
+
 pub use error::UtilError;
+
+use std::{any::Any, sync::Mutex};
+
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use log::debug;
 use once_cell::sync::Lazy;
-use std::{any::Any, sync::Mutex};
 use vmm_sys_util::terminal::Terminal;
 
 /// Read the program version in `Cargo.toml` and concat with git commit id.

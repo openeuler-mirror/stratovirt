@@ -13,6 +13,12 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context, Result};
+use log::error;
+use vmm_sys_util::eventfd::EventFd;
+
+use super::chardev::{Chardev, InputReceiver};
+use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
 use acpi::{
@@ -22,7 +28,6 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use hypervisor::kvm::KVM_FDS;
-use log::error;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
@@ -33,11 +38,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use vmm_sys_util::eventfd::EventFd;
 
-use super::chardev::{Chardev, InputReceiver};
-use super::error::LegacyError;
-use anyhow::{bail, Context, Result};
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
 const UART_IER_RDI: u8 = 0x01;

@@ -13,15 +13,17 @@
 use std::marker::{Send, Sync};
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, Context, Result};
+use kvm_ioctls::DeviceFd;
+use log::error;
+
 use super::{GICConfig, GICDevice, KvmDevice, UtilResult};
 use crate::interrupt_controller::InterruptError;
 use address_space::AddressSpace;
-use anyhow::{anyhow, Context, Result};
 use hypervisor::kvm::KVM_FDS;
-use kvm_ioctls::DeviceFd;
-use log::error;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::device_tree::{self, FdtBuilder};
+
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const KVM_VGIC_V2_DIST_SIZE: u64 = 0x1000;
 const KVM_VGIC_V2_CPU_SIZE: u64 = 0x2000;
@@ -295,13 +297,11 @@ impl GICDevice for GICv2 {
 
 #[cfg(test)]
 mod tests {
-    use hypervisor::kvm::KVMFds;
-
     use super::super::GICVersion;
     use super::super::GICv2Config;
     use super::*;
-
     use crate::GIC_IRQ_MAX;
+    use hypervisor::kvm::KVMFds;
 
     #[test]
     fn test_create_gicv2() {

@@ -10,12 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::path::Path;
+
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+
 use crate::config::{
     ConfigError, {CmdParser, VmConfig},
 };
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TlsCredObjConfig {
@@ -76,8 +78,9 @@ impl VmConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{env, fs};
+
+    use super::*;
 
     #[test]
     fn test_add_tlscred() {

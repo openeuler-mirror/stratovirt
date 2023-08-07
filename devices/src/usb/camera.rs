@@ -23,14 +23,6 @@ use log::{debug, error, info};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use machine_manager::config::UsbCameraConfig;
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::aio::{iov_discard_front_direct, Iovec};
-use util::byte_code::ByteCode;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
@@ -41,6 +33,13 @@ use crate::usb::config::*;
 use crate::usb::descriptor::*;
 use crate::usb::{
     UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
+};
+use machine_manager::config::UsbCameraConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::aio::{iov_discard_front_direct, Iovec};
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 
 // CRC16 of "STRATOVIRT"
@@ -1171,9 +1170,8 @@ fn gen_color_matching_desc() -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod test {
-    use crate::camera_backend::{CameraFormatList, CameraFrame, FmtType};
-
     use super::*;
+    use crate::camera_backend::{CameraFormatList, CameraFrame, FmtType};
 
     fn test_interface_table_data_len(interface: Arc<UsbDescIface>, size_offset: usize) {
         let descs = &interface.other_desc;

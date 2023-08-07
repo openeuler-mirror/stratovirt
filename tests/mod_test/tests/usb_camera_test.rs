@@ -14,7 +14,6 @@ use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 use std::{fs::remove_file, fs::File, io::Write};
 
-use mod_test::libtest::TestState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,6 +22,7 @@ use devices::usb::xhci::TRBCCode;
 use mod_test::libdriver::usb::{
     TestUsbBuilder, TestXhciPciDevice, CONTROL_ENDPOINT_ID, PRIMARY_INTERRUPTER_ID,
 };
+use mod_test::libtest::TestState;
 
 const UVC_FID: u8 = 1;
 const UVC_HEADER_LEN: u8 = 2;

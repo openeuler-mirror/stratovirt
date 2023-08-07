@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 
 use crate::libdriver::qcow2::create_qcow2_img;
 

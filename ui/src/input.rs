@@ -10,16 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::Result;
-use log::debug;
-use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use util::bitmap::Bitmap;
+
+use anyhow::Result;
+use log::debug;
+use once_cell::sync::Lazy;
 
 use crate::data::keycode::KEYSYM2KEYCODE;
+use util::bitmap::Bitmap;
 
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;

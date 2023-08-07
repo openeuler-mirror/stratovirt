@@ -15,12 +15,13 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::mem::size_of;
 
+use anyhow::{anyhow, Context, Result};
+
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
     DeviceStateDesc, FileFormat, MigrationHeader, MigrationStatus, VersionCheck, HEADER_LENGTH,
 };
 use crate::{MigrationError, MigrationManager};
-use anyhow::{anyhow, Context, Result};
 use util::unix::host_page_size;
 
 impl MigrationManager {

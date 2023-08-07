@@ -15,10 +15,10 @@ pub mod user;
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::Result;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{Queue, QueueConfig};
-use anyhow::Result;
 
 /// Vhost vring call notify structure.
 pub struct VhostNotify {

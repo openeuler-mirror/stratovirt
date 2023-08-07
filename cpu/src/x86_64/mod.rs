@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod caps;
+
 mod cpuid;
 
 use std::sync::{Arc, Mutex};
@@ -23,14 +24,14 @@ use kvm_bindings::{
     KVM_MP_STATE_UNINITIALIZED,
 };
 use kvm_ioctls::{Kvm, VcpuFd};
+
+use self::cpuid::host_cpuid;
+use crate::CPU;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-
-use self::cpuid::host_cpuid;
-use crate::CPU;
 
 const ECX_EPB_SHIFT: u32 = 3;
 const X86_FEATURE_HYPERVISOR: u32 = 31;

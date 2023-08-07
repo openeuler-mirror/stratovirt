@@ -25,6 +25,10 @@ use anyhow::{anyhow, Context, Result};
 use log::error;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
+use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
+use super::super::{VhostNotify, VhostOps};
+use super::{VhostBackendType, VhostUserClient};
+use crate::{read_config_default, VirtioBase, VirtioInterrupt, VirtioInterruptType};
 use address_space::AddressSpace;
 use machine_manager::config::{FsConfig, MAX_TAG_LENGTH};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -32,11 +36,6 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-
-use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
-use super::super::{VhostNotify, VhostOps};
-use super::{VhostBackendType, VhostUserClient};
-use crate::{read_config_default, VirtioBase, VirtioInterrupt, VirtioInterruptType};
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]

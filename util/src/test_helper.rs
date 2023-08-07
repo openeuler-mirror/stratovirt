@@ -10,9 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use once_cell::sync::{Lazy, OnceCell};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+
+use once_cell::sync::{Lazy, OnceCell};
 
 #[derive(Default, Clone, Copy)]
 struct MsixMsg {

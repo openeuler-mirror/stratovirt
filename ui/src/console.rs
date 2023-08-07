@@ -22,14 +22,13 @@ use anyhow::Result;
 use log::error;
 use once_cell::sync::Lazy;
 
-use machine_manager::event_loop::EventLoop;
-use util::pixman::{pixman_format_code_t, pixman_image_t};
-
 use crate::pixman::{
     create_pixman_image, get_image_data, get_image_height, get_image_stride, get_image_width,
     pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, ColorNames,
     COLOR_TABLE_RGB,
 };
+use machine_manager::event_loop::EventLoop;
+use util::pixman::{pixman_format_code_t, pixman_image_t};
 
 static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
     Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));

@@ -10,21 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, warn};
 use std::fmt;
 use std::fmt::Debug;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use migration::{migration::Migratable, MigrationManager};
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, warn};
 
 use crate::address_space::FlatView;
 use crate::{
     AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
     RegionOps,
 };
+use migration::{migration::Migratable, MigrationManager};
 
 /// Types of Region.
 #[allow(clippy::upper_case_acronyms)]

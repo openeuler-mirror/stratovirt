@@ -15,12 +15,12 @@ use std::os::unix::prelude::RawFd;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
+use anyhow::bail;
+use log::info;
+
 use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
-
-use anyhow::bail;
-use log::info;
 use util::loop_context::{
     gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
 };

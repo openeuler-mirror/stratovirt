@@ -13,14 +13,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::error;
+use vmm_sys_util::eventfd::EventFd;
+
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
-use anyhow::{Context, Result};
-use byteorder::{ByteOrder, LittleEndian};
-use log::error;
 use migration::{
     snapshot::PL031_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
     MigrationManager, StateTransfer,
@@ -28,7 +30,6 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::num_ops::write_data_u32;
-use vmm_sys_util::eventfd::EventFd;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.

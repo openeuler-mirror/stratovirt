@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
 use mod_test::libtest::{test_init, TestState};
 
-use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
 pub const GED_ADDR_BASE: u64 = MEM_LAYOUT[LayoutEntryType::Ged as usize].0;
 const ADD_ADDRESS: u64 = 1;
 

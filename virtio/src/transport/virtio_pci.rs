@@ -15,34 +15,15 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
-use devices::pci::config::{
-    RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
-    STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
-};
 use log::{debug, error, warn};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-
-use devices::pci::msix::{update_dev_id, MsixState};
-use devices::pci::{
-    config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
-    ranges_overlap, PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
-};
-use devices::{Device, DeviceBase};
-use util::byte_code::ByteCode;
-use util::num_ops::{read_data_u32, write_data_u32};
-use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType,
 };
-
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, INVALID_VECTOR_NUM,
@@ -50,6 +31,23 @@ use crate::{
     VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE,
     VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
+use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use devices::pci::config::{
+    RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
+    PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
+    STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+};
+use devices::pci::msix::{update_dev_id, MsixState};
+use devices::pci::{
+    config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
+    ranges_overlap, PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
+};
+use devices::{Device, DeviceBase};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
+use util::byte_code::ByteCode;
+use util::num_ops::{read_data_u32, write_data_u32};
+use util::offset_of;
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
@@ -1282,15 +1280,15 @@ impl MigrationHook for VirtioPciDevice {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use vmm_sys_util::eventfd::EventFd;
+
+    use super::*;
+    use crate::{Result as VirtioResult, VirtioBase};
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
     use devices::pci::{
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
     };
-    use vmm_sys_util::eventfd::EventFd;
-
-    use super::*;
-    use crate::{Result as VirtioResult, VirtioBase};
 
     const VIRTIO_DEVICE_TEST_TYPE: u32 = 1;
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;

@@ -10,10 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use mod_test::libdriver::qcow2::CLUSTER_SIZE;
-use virtio::device::block::VirtioBlkConfig;
+use std::cell::RefCell;
+use std::mem::size_of;
+use std::process::Command;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+use std::{thread, time};
 
 use mod_test::libdriver::malloc::GuestAllocator;
+use mod_test::libdriver::qcow2::CLUSTER_SIZE;
 use mod_test::libdriver::qcow2::{check_snapshot, create_snapshot, delete_snapshot};
 use mod_test::libdriver::virtio::TestVringDescEntry;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
@@ -32,17 +37,11 @@ use mod_test::libdriver::virtio_block::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::TestState;
 use mod_test::utils::{create_img, ImageType, TEST_IMAGE_SIZE};
-
-use std::cell::RefCell;
-use std::mem::size_of;
-use std::process::Command;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
-use std::{thread, time};
 use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
 use util::offset_of;
+use virtio::device::block::VirtioBlkConfig;
 
 const TEST_IMAGE_SIZE_1M: u64 = 1024 * 1024;
 

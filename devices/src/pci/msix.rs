@@ -19,6 +19,13 @@ use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::pci::config::{
+    CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
+};
+use crate::pci::{
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
+    ranges_overlap, PciBus,
+};
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{
@@ -29,14 +36,6 @@ use util::{
     byte_code::ByteCode,
     num_ops::round_up,
     test_helper::{add_msix_msg, is_test_enabled},
-};
-
-use crate::pci::config::{
-    CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
-};
-use crate::pci::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
-    ranges_overlap, PciBus,
 };
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;

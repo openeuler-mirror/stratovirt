@@ -17,14 +17,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use migration::{
     error::MigrationError, DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::unix::host_page_size;
-
-use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 
 const MIGRATION_HEADER_LENGTH: usize = 4096;
 

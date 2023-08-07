@@ -16,11 +16,10 @@ use std::io::{prelude::Write, BufRead, BufReader};
 use std::ops::Deref;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use log::error;
 use once_cell::sync::Lazy;
-
-use anyhow::{Context, Result};
 
 static TRACE_MARKER_FD: Lazy<Option<File>> = Lazy::new(open_trace_marker);
 static TRACE_EVENTS: Lazy<ArcSwap<HashSet<String>>> =
