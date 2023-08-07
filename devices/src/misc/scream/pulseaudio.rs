@@ -25,9 +25,8 @@ use pulse::{
 use super::{
     AudioInterface, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
 };
-use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData};
+use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData, TARGET_LATENCY_MS};
 
-pub const TARGET_LATENCY_MS: u32 = 50;
 const MAX_LATENCY_MS: u32 = 100;
 
 const STREAM_NAME: &str = "Audio";

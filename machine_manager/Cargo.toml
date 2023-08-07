@@ -24,4 +24,6 @@ util = { path = "../util" }
 
 [features]
 default = []
-
+scream = []
+scream_alsa = ["scream"]
+scream_pulseaudio = ["scream"]

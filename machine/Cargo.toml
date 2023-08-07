@@ -34,3 +34,6 @@ ui = { path = "../ui" }
 default = ["qmp"]
 qmp = []
 boot_time = ["cpu/boot_time"]
+scream = ["devices/scream", "machine_manager/scream"]
+scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
+scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]
