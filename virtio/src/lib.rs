@@ -320,6 +320,11 @@ pub enum VirtioInterruptType {
 pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum VirtioDeviceQuirk {
+    VirtioDeviceQuirkMax,
+}
+
 #[derive(Default)]
 pub struct VirtioBase {
     /// Device type
@@ -497,6 +502,11 @@ pub trait VirtioDevice: Send + AsAny {
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         self.virtio_base().device_type
+    }
+
+    /// Get the virtio device customized modification.
+    fn device_quirk(&self) -> Option<VirtioDeviceQuirk> {
+        None
     }
 
     /// Get the count of virtio device queues.
