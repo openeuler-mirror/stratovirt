@@ -133,7 +133,7 @@ pub fn load_elf_kernel(
     sys_mem: &Arc<AddressSpace>,
     fwcfg: &mut dyn FwCfgOps,
 ) -> Result<()> {
-    kernel_image.seek(SeekFrom::Start(0))?;
+    kernel_image.rewind()?;
     let kernel_length = kernel_image.metadata().map(|m| m.len())?;
 
     let mut elf_header = Elf64Header::default();

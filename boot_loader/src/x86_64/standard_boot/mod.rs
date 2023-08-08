@@ -66,7 +66,7 @@ fn load_kernel_image(
     setup_size = (setup_size + 1) << 9;
 
     let mut setup_data = vec![0_u8; setup_size as usize];
-    kernel_image.seek(SeekFrom::Start(0))?;
+    kernel_image.rewind()?;
     kernel_image.read_exact(setup_data.as_mut_slice())?;
 
     let kernel_size = kernel_image.metadata().unwrap().len() - setup_size;

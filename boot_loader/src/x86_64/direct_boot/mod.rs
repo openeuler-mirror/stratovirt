@@ -63,7 +63,7 @@ fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
     boot_hdr.type_of_loader = UNDEFINED_ID;
 
     if let Err(e) = boot_hdr.check_valid_kernel() {
-        kernel_image.seek(SeekFrom::Start(0))?;
+        kernel_image.rewind()?;
         return Err(e);
     }
 
