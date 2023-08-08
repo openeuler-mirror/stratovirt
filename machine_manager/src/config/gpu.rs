@@ -29,6 +29,7 @@ pub struct GpuDevConfig {
     pub xres: u32,
     pub yres: u32,
     pub max_hostmem: u64,
+    pub enable_bar0: bool,
 }
 
 impl Default for GpuDevConfig {
@@ -40,6 +41,7 @@ impl Default for GpuDevConfig {
             xres: 1024,
             yres: 768,
             max_hostmem: VIRTIO_GPU_MAX_HOSTMEM,
+            enable_bar0: false,
         }
     }
 }
@@ -89,7 +91,8 @@ pub fn parse_gpu(gpu_config: &str) -> Result<GpuDevConfig> {
         .push("yres")
         .push("max_hostmem")
         .push("bus")
-        .push("addr");
+        .push("addr")
+        .push("enable_bar0");
     cmd_parser.parse(gpu_config)?;
 
     let mut gpu_cfg: GpuDevConfig = GpuDevConfig::default();
@@ -110,6 +113,9 @@ pub fn parse_gpu(gpu_config: &str) -> Result<GpuDevConfig> {
     }
     if let Some(max_hostmem) = cmd_parser.get_value::<u64>("max_hostmem")? {
         gpu_cfg.max_hostmem = max_hostmem;
+    }
+    if let Some(enable_bar0) = cmd_parser.get_value::<bool>("enable_bar0")? {
+        gpu_cfg.enable_bar0 = enable_bar0;
     }
     gpu_cfg.check()?;
 

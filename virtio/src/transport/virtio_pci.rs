@@ -18,11 +18,12 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
+use machine_manager::config::M;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType,
+    virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioDeviceQuirk,
+    VirtioInterrupt, VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
@@ -31,7 +32,9 @@ use crate::{
     VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE,
     VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
-use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use address_space::{
+    AddressRange, AddressSpace, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
+};
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
@@ -124,6 +127,32 @@ const COMMON_Q_USEDHI_REG: u64 = 0x34;
 ///   0: select feature bits 0 to 31.
 ///   1: select feature bits 32 to 63.
 const MAX_FEATURES_SELECT_NUM: u32 = 2;
+
+/// The bar0 size of enable_bar0 features
+const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
+
+fn init_gpu_bar0(config: &mut PciConfig) -> PciResult<()> {
+    let host_mmap = Arc::new(HostMemMapping::new(
+        GuestAddress(0),
+        None,
+        VIRTIO_GPU_ENABLE_BAR0_SIZE,
+        None,
+        false,
+        false,
+        false,
+    )?);
+
+    let region = Region::init_ram_region(host_mmap, "vgpu.vram");
+    config.register_bar(
+        0,
+        region,
+        RegionType::Mem32Bit,
+        true,
+        VIRTIO_GPU_ENABLE_BAR0_SIZE,
+    )?;
+
+    Ok(())
+}
 
 /// Get class id according to device type.
 ///
@@ -942,6 +971,7 @@ impl PciDevOps for VirtioPciDevice {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
+        let device_quirk = self.device.lock().unwrap().device_quirk();
         let device_type = self.device.lock().unwrap().device_type();
         le_write_u16(
             &mut self.base.config.config,
@@ -1055,6 +1085,10 @@ impl PciDevOps for VirtioPciDevice {
         )?;
 
         self.assign_interrupt_cb();
+
+        if device_quirk == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0) {
+            init_gpu_bar0(&mut self.base.config)?;
+        }
 
         self.device
             .lock()

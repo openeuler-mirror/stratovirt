@@ -322,6 +322,7 @@ pub type VirtioInterrupt =
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum VirtioDeviceQuirk {
+    VirtioGpuEnableBar0,
     VirtioDeviceQuirkMax,
 }
 
