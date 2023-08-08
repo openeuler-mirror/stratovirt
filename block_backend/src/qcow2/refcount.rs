@@ -222,7 +222,7 @@ impl RefCount {
         let mut i = 0;
         while i < clusters {
             let rt_idx = (first_cluster + i) >> self.refcount_blk_bits;
-            if rt_idx >= self.refcount_table_size as u64 {
+            if rt_idx >= self.refcount_table_size {
                 bail!("Invalid refcount table index {}", rt_idx);
             }
             let rb_addr = self.refcount_table[rt_idx as usize];
@@ -368,7 +368,7 @@ impl RefCount {
     pub fn get_refcount(&mut self, offset: u64) -> Result<u16> {
         let cluster = offset >> self.cluster_bits;
         let rt_idx = cluster >> self.refcount_blk_bits;
-        if rt_idx >= self.refcount_table_size as u64 {
+        if rt_idx >= self.refcount_table_size {
             bail!(
                 "Invalid refcount table index {}, refcount table size {}",
                 rt_idx,
@@ -482,7 +482,7 @@ impl RefCount {
         while i < clusters {
             // Check if it needs to extend refcount table.
             let rt_idx = current_index >> self.refcount_blk_bits;
-            if rt_idx >= self.refcount_table_size as u64 {
+            if rt_idx >= self.refcount_table_size {
                 self.extend_refcount_table(header, current_index)?;
                 if current_index > self.free_cluster_index {
                     current_index = self.free_cluster_index;
@@ -497,7 +497,7 @@ impl RefCount {
             let rb_addr = self.refcount_table[rt_idx as usize];
             if rb_addr == 0 {
                 // Need to alloc refcount block.
-                self.alloc_refcount_block(rt_idx as u64, current_index)?;
+                self.alloc_refcount_block(rt_idx, current_index)?;
                 current_index += 1;
                 i = 0;
                 continue;
@@ -624,7 +624,7 @@ mod test {
             version: 3,
             backing_file_offset: 0,
             backing_file_size: 0,
-            cluster_bits: cluster_bits,
+            cluster_bits,
             size: 1 << img_bits,
             crypt_method: 0,
             l1_size: 1 << (img_bits - (cluster_bits * 2 - 3)),

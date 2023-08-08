@@ -1939,7 +1939,7 @@ impl DeviceInterface for StdMachine {
             .delete_snapshot(args.name.clone());
         match result {
             Ok(snap_info) => {
-                Response::create_response(serde_json::to_value(&snap_info).unwrap(), None)
+                Response::create_response(serde_json::to_value(snap_info).unwrap(), None)
             }
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(format!(

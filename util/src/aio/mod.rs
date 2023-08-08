@@ -735,12 +735,12 @@ pub fn iovecs_split(iovecs: Vec<Iovec>, mut size: u64) -> (Vec<Iovec>, Vec<Iovec
             end.push(iov);
             continue;
         }
-        if iov.iov_len as u64 > size {
+        if iov.iov_len > size {
             begin.push(Iovec::new(iov.iov_base, size));
             end.push(Iovec::new(iov.iov_base + size, iov.iov_len - size));
             size = 0;
         } else {
-            size -= iov.iov_len as u64;
+            size -= iov.iov_len;
             begin.push(iov);
         }
     }

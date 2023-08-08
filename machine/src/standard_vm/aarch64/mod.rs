@@ -279,7 +279,7 @@ impl StdMachine {
             .sys_mem
             .write(
                 &mut locked_vm.dtb_vec.as_slice(),
-                GuestAddress(fdt_addr as u64),
+                GuestAddress(fdt_addr),
                 locked_vm.dtb_vec.len() as u64,
             )
             .with_context(|| "Fail to write dtb into sysmem")?;
@@ -682,7 +682,7 @@ impl MachineOps for StdMachine {
                 .sys_mem
                 .write(
                     &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr as u64),
+                    GuestAddress(boot_cfg.fdt_addr),
                     fdt_vec.len() as u64,
                 )
                 .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
@@ -873,7 +873,7 @@ impl AcpiBuilder for StdMachine {
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
-        Ok(gtdt_begin as u64)
+        Ok(gtdt_begin)
     }
 
     fn build_iort_table(
@@ -916,7 +916,7 @@ impl AcpiBuilder for StdMachine {
 
         let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
             .with_context(|| "Fail to add IORT table to loader")?;
-        Ok(iort_begin as u64)
+        Ok(iort_begin)
     }
 
     fn build_spcr_table(
@@ -960,7 +960,7 @@ impl AcpiBuilder for StdMachine {
 
         let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
             .with_context(|| "Fail to add SPCR table to loader")?;
-        Ok(spcr_begin as u64)
+        Ok(spcr_begin)
     }
 
     fn build_dsdt_table(
@@ -992,7 +992,7 @@ impl AcpiBuilder for StdMachine {
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;
-        Ok(dsdt_begin as u64)
+        Ok(dsdt_begin)
     }
 
     fn build_madt_table(
@@ -1051,7 +1051,7 @@ impl AcpiBuilder for StdMachine {
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .with_context(|| "Fail to add MADT table to loader")?;
-        Ok(madt_begin as u64)
+        Ok(madt_begin)
     }
 
     fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
@@ -1112,7 +1112,7 @@ impl AcpiBuilder for StdMachine {
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
-        Ok(srat_begin as u64)
+        Ok(srat_begin)
     }
 
     fn build_pptt_table(
@@ -1125,7 +1125,7 @@ impl AcpiBuilder for StdMachine {
         self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
-        Ok(pptt_begin as u64)
+        Ok(pptt_begin)
     }
 }
 
@@ -1545,7 +1545,7 @@ impl CompileFDTHelper for StdMachine {
             if let Some(numa_nodes) = &self.numa_nodes {
                 for numa_index in 0..numa_nodes.len() {
                     let numa_node = numa_nodes.get(&(numa_index as u32));
-                    if numa_node.unwrap().cpus.contains(&(cpu_index as u8)) {
+                    if numa_node.unwrap().cpus.contains(&(cpu_index)) {
                         fdt.set_property_u32("numa-node-id", numa_index as u32)?;
                     }
                 }
@@ -1571,7 +1571,7 @@ impl CompileFDTHelper for StdMachine {
             let node = "memory";
             let memory_node_dep = fdt.begin_node(node)?;
             fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
             fdt.end_node(memory_node_dep)?;
 
             return Ok(());
@@ -1584,7 +1584,7 @@ impl CompileFDTHelper for StdMachine {
             let node = format!("memory@{:x}", mem_base);
             let memory_node_dep = fdt.begin_node(&node)?;
             fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
             fdt.set_property_u32("numa-node-id", id as u32)?;
             fdt.end_node(memory_node_dep)?;
             mem_base += mem_size;
@@ -1694,7 +1694,7 @@ impl CompileFDTHelper for StdMachine {
             let distances = &node.1.distances;
             for i in existing_nodes.iter() {
                 matrix.push(id as u32);
-                matrix.push(*i as u32);
+                matrix.push(*i);
                 let dist: u32 = if id as u32 == *i {
                     10
                 } else if let Some(distance) = distances.get(i) {

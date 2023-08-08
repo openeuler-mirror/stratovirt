@@ -141,7 +141,7 @@ impl VirtioFsTest {
         VirtioFsTest {
             device: dev,
             state: test_state,
-            allocator: allocator,
+            allocator,
             queues,
         }
     }

@@ -908,7 +908,7 @@ fn read_bytes(
         1 => data[0] = value as u8,
         2 => BigEndian::write_u16(data, value as u16),
         4 => BigEndian::write_u32(data, value as u32),
-        8 => BigEndian::write_u64(data, value as u64),
+        8 => BigEndian::write_u64(data, value),
         _ => {}
     }
     true
@@ -933,7 +933,7 @@ impl SysBusDevOps for FwCfgMem {
             1 => data[0] as u64,
             2 => BigEndian::read_u16(data) as u64,
             4 => BigEndian::read_u32(data) as u64,
-            8 => BigEndian::read_u64(data) as u64,
+            8 => BigEndian::read_u64(data),
             _ => 0,
         };
         match offset {

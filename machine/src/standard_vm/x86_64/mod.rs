@@ -601,7 +601,7 @@ impl MachineOps for StdMachine {
                 rom_region.set_priority(10);
                 self.sys_mem.root().add_subregion(rom_region, rom_base)?;
 
-                fd.seek(SeekFrom::Start(0))?;
+                fd.rewind()?
             }
 
             let sector_len: u32 = 1024 * 4;
