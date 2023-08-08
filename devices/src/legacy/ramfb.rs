@@ -27,8 +27,8 @@ use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 use ui::console::{
-    console_init, display_graphic_update, display_replace_surface, set_run_stage, ConsoleType,
-    DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
+    console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
+    DisplaySurface, HardWareOperations,
 };
 use ui::input::{key_event, KEYCODE_RET};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
@@ -70,7 +70,6 @@ impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         let ramfb_opts = Arc::new(RamfbInterface {});
         let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
-        set_run_stage(VmRunningStage::Bios);
         Self {
             surface: None,
             con,
