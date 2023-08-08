@@ -32,10 +32,10 @@ use gtk::{
     glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
-        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, MenuShellExt,
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, LabelExt, MenuShellExt,
         RadioMenuItemExt, WidgetExt,
     },
-    Application, ApplicationWindow, DrawingArea, HeaderBar, RadioMenuItem,
+    Application, ApplicationWindow, DrawingArea, HeaderBar, Label, RadioMenuItem,
 };
 use log::{debug, error};
 
@@ -553,7 +553,13 @@ fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Res
     // Set title bar.
     let header = HeaderBar::new();
     header.set_show_close_button(true);
-    header.set_title(Some(&gtk_cfg.vm_name));
+    header.set_decoration_layout(Some("menu:minimize,maximize,close"));
+
+    let label: Label = Label::new(Some(&gtk_cfg.vm_name));
+    label.set_markup(
+        &("<span font_desc='12.5' weight='normal'>".to_string() + &gtk_cfg.vm_name + "</span>"),
+    );
+    header.set_custom_title(Some(&label));
     window.set_titlebar(Some(&header));
 
     // Set default icon.
