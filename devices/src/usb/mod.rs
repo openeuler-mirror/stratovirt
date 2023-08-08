@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
+use crate::{Device, DeviceBase};
 pub use anyhow::Result;
 pub use error::UsbError;
 use util::byte_code::ByteCode;
@@ -112,7 +113,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
-    pub id: String,
+    pub base: DeviceBase,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -129,10 +130,20 @@ pub struct UsbDevice {
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
+impl Device for UsbDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
 impl UsbDevice {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
-            id,
+            base: DeviceBase::new(id, false),
             port: None,
             speed: 0,
             addr: 0,
@@ -191,7 +202,7 @@ impl UsbDevice {
     }
 
     pub fn generate_serial_number(&self, prefix: &str) -> String {
-        format!("{}-{}", prefix, self.id)
+        format!("{}-{}", prefix, self.base.id)
     }
 
     /// Handle USB control request which is for descriptor.
@@ -326,7 +337,7 @@ impl UsbDevice {
 impl Drop for UsbDevice {
     fn drop(&mut self) {
         if self.unplugged {
-            send_device_deleted_msg(&self.id);
+            send_device_deleted_msg(&self.base.id);
         }
     }
 }
@@ -391,7 +402,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Unique device id.
     fn device_id(&self) -> &str {
-        &self.get_usb_device().id
+        &self.get_usb_device().base.id
     }
 
     /// Get the UsbDevice.

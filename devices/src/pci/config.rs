@@ -16,13 +16,13 @@ use std::sync::{Arc, Mutex};
 use address_space::Region;
 use log::{error, warn};
 
-use crate::intx::Intx;
-use crate::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
-use crate::{
+use crate::pci::intx::Intx;
+use crate::pci::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
+use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
 };
-use crate::{ranges_overlap, PciError};
+use crate::pci::{ranges_overlap, PciError};
 use anyhow::{anyhow, Context, Result};
 
 /// Size in bytes of the configuration space of legacy PCI device.

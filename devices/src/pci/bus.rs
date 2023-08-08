@@ -188,10 +188,7 @@ impl PciBus {
             .unrealize()
             .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
 
-        let devfn = dev_locked
-            .devfn()
-            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
-
+        let devfn = dev_locked.pci_base().devfn;
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
             locked_bus.devices.remove(&devfn);
@@ -252,36 +249,40 @@ mod tests {
     use address_space::{AddressSpace, Region};
 
     use super::*;
-    use crate::bus::PciBus;
-    use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
-    use crate::root_port::RootPort;
-    use crate::PciHost;
+    use crate::pci::bus::PciBus;
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::pci::root_port::RootPort;
+    use crate::pci::{PciDevBase, PciHost};
+    use crate::{Device, DeviceBase};
     use anyhow::Result;
 
     #[derive(Clone)]
     struct PciDevice {
-        name: String,
-        devfn: u8,
-        config: PciConfig,
-        parent_bus: Weak<Mutex<PciBus>>,
+        base: PciDevBase,
+    }
+
+    impl Device for PciDevice {
+        fn device_base(&self) -> &DeviceBase {
+            &self.base.base
+        }
+
+        fn device_base_mut(&mut self) -> &mut DeviceBase {
+            &mut self.base.base
+        }
     }
 
     impl PciDevOps for PciDevice {
-        fn init_write_mask(&mut self) -> Result<()> {
-            Ok(())
+        fn pci_base(&self) -> &PciDevBase {
+            &self.base
         }
 
-        fn init_write_clear_mask(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-            self.config.read(offset, data);
+        fn pci_base_mut(&mut self) -> &mut PciDevBase {
+            &mut self.base
         }
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
             #[allow(unused_variables)]
-            self.config.write(
+            self.base.config.write(
                 offset,
                 data,
                 0,
@@ -291,18 +292,15 @@ mod tests {
             );
         }
 
-        fn name(&self) -> String {
-            self.name.clone()
-        }
-
         fn realize(mut self) -> Result<()> {
-            let devfn = self.devfn;
-            self.init_write_mask()?;
-            self.init_write_clear_mask()?;
+            let devfn = self.base.devfn;
+            self.init_write_mask(false)?;
+            self.init_write_clear_mask(false)?;
 
             let dev = Arc::new(Mutex::new(self));
             dev.lock()
                 .unwrap()
+                .base
                 .parent_bus
                 .upgrade()
                 .unwrap()
@@ -315,10 +313,6 @@ mod tests {
 
         fn unrealize(&mut self) -> Result<()> {
             Ok(())
-        }
-
-        fn devfn(&self) -> Option<u8> {
-            Some(0)
         }
     }
 
@@ -356,20 +350,24 @@ mod tests {
 
         // Test device is attached to the root bus.
         let pci_dev = PciDevice {
-            name: String::from("test1"),
-            devfn: 10,
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus: root_bus.clone(),
+            base: PciDevBase {
+                base: DeviceBase::new("test1".to_string(), false),
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 10,
+                parent_bus: root_bus.clone(),
+            },
         };
         pci_dev.realize().unwrap();
 
         // Test device is attached to the root port.
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
-            name: String::from("test2"),
-            devfn: 12,
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus: Arc::downgrade(&bus),
+            base: PciDevBase {
+                base: DeviceBase::new("test2".to_string(), false),
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 12,
+                parent_bus: Arc::downgrade(&bus),
+            },
         };
         pci_dev.realize().unwrap();
 
@@ -400,10 +398,12 @@ mod tests {
 
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
         let pci_dev = PciDevice {
-            name: String::from("test1"),
-            devfn: 0,
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-            parent_bus: Arc::downgrade(&bus),
+            base: PciDevBase {
+                base: DeviceBase::new("test1".to_string(), false),
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                devfn: 0,
+                parent_bus: Arc::downgrade(&bus),
+            },
         };
         let dev = Arc::new(Mutex::new(pci_dev.clone()));
         let dev_ops: Arc<Mutex<dyn PciDevOps>> = dev;

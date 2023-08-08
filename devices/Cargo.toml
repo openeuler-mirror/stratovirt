@@ -26,15 +26,12 @@ hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
-sysbus = { path = "../sysbus" }
-pci = { path = "../pci" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
 block_backend = { path = "../block_backend"}
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }
-pci = { path = "../pci" }
 pulse = { version = "2.27", package = "libpulse-binding" }
 psimple = { version = "2.27", package = "libpulse-simple-binding" }
 rusb = "0.9"

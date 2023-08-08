@@ -60,6 +60,9 @@ use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
+use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+#[cfg(target_arch = "aarch64")]
+use devices::sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
@@ -81,9 +84,6 @@ use machine_manager::{
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
-use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
-#[cfg(target_arch = "aarch64")]
-use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
@@ -1673,13 +1673,13 @@ impl CompileFDTHelper for LightMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            let dev_type = locked_dev.get_type();
-            let sys_res = locked_dev.get_sys_resource().unwrap();
+            let locked_dev = dev.lock().unwrap();
+            let dev_type = locked_dev.sysbusdev_base().dev_type;
+            let sys_res = locked_dev.sysbusdev_base().res;
             match dev_type {
-                SysBusDevType::Serial => generate_serial_device_node(fdt, sys_res)?,
-                SysBusDevType::Rtc => generate_rtc_device_node(fdt, sys_res)?,
-                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, sys_res)?,
+                SysBusDevType::Serial => generate_serial_device_node(fdt, &sys_res)?,
+                SysBusDevType::Rtc => generate_rtc_device_node(fdt, &sys_res)?,
+                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, &sys_res)?,
                 _ => (),
             }
         }

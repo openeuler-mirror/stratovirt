@@ -17,7 +17,7 @@ pub enum LegacyError {
     #[error("SysBus")]
     SysBus {
         #[from]
-        source: sysbus::error::SysBusError,
+        source: crate::sysbus::error::SysBusError,
     },
     #[error("AddressSpace")]
     AddressSpace {

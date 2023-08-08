@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{PciBus, PciDevOps};
+use crate::pci::{PciBus, PciDevOps};
 use anyhow::{bail, Context, Result};
 
 pub trait HotplugOps: Send {

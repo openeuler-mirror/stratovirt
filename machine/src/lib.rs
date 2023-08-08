@@ -55,6 +55,8 @@ use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 
+use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{
     camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
@@ -78,12 +80,10 @@ use machine_manager::config::{
 };
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
-use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
@@ -468,7 +468,7 @@ pub trait MachineOps {
             // Micro_vm.
             for dev in self.get_sys_bus().devices.iter() {
                 let locked_busdev = dev.lock().unwrap();
-                if locked_busdev.get_type() == SysBusDevType::VirtioMmio {
+                if locked_busdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
                     let virtio_mmio_dev = locked_busdev
                         .as_any()
                         .downcast_ref::<VirtioMmioDevice>()

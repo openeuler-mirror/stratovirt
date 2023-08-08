@@ -16,12 +16,13 @@ use std::sync::{Arc, Mutex};
 use crate::error::VirtioError;
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
+use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use devices::{Device, DeviceBase};
 use log::{error, warn};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -110,16 +111,13 @@ pub struct VirtioMmioState {
 
 /// virtio-mmio device structure.
 pub struct VirtioMmioDevice {
+    base: SysBusDevBase,
     // The entity of low level device.
     pub device: Arc<Mutex<dyn VirtioDevice>>,
-    // EventFd used to send interrupt to VM
-    interrupt_evt: Arc<EventFd>,
     // HostNotifyInfo used for guest notifier
     host_notify_info: HostNotifyInfo,
     // System address space.
     mem_space: Arc<AddressSpace>,
-    // System Resource of device.
-    res: SysRes,
     /// The function for interrupt triggering.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
 }
@@ -130,11 +128,15 @@ impl VirtioMmioDevice {
         let queue_num = device_clone.lock().unwrap().queue_num();
 
         VirtioMmioDevice {
+            base: SysBusDevBase {
+                base: DeviceBase::default(),
+                dev_type: SysBusDevType::VirtioMmio,
+                res: SysRes::default(),
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+            },
             device,
-            interrupt_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             host_notify_info: HostNotifyInfo::new(queue_num),
             mem_space: mem_space.clone(),
-            res: SysRes::default(),
             interrupt_cb: None,
         }
     }
@@ -167,7 +169,7 @@ impl VirtioMmioDevice {
                 "{}@0x{:08x}:{}",
                 region_size,
                 region_base,
-                dev.lock().unwrap().res.irq
+                dev.lock().unwrap().base.res.irq
             ),
         });
         Ok(dev)
@@ -222,8 +224,7 @@ impl VirtioMmioDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let interrupt_evt = self.interrupt_evt.clone();
-
+        let interrupt_evt = self.base.interrupt_evt.clone();
         let locked_dev = self.device.lock().unwrap();
         let virtio_base = locked_dev.virtio_base();
         let device_status = virtio_base.device_status.clone();
@@ -248,7 +249,8 @@ impl VirtioMmioDevice {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt
+                let interrupt = interrupt_evt.as_ref().unwrap();
+                interrupt
                     .write(1)
                     .with_context(|| VirtioError::EventFdWrite)?;
 
@@ -369,7 +371,25 @@ impl VirtioMmioDevice {
     }
 }
 
+impl Device for VirtioMmioDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for VirtioMmioDevice {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
@@ -497,16 +517,8 @@ impl SysBusDevOps for VirtioMmioDevice {
         ret
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(self.interrupt_evt.as_ref())
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::VirtioMmio
+        Some(&mut self.base.res)
     }
 }
 

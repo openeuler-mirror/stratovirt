@@ -30,8 +30,8 @@ use log::{error, warn};
 
 use self::{alsa::AlsaStreamData, audio_demo::AudioDemo};
 use super::ivshmem::Ivshmem;
+use crate::pci::{PciBus, PciDevOps};
 use machine_manager::config::scream::ScreamConfig;
-use pci::{PciBus, PciDevOps};
 use pulseaudio::{PulseStreamData, TARGET_LATENCY_MS};
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;

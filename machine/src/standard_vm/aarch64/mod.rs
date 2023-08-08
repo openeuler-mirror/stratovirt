@@ -54,6 +54,8 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
+use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
+use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(not(target_env = "musl"))]
@@ -69,9 +71,7 @@ use machine_manager::machine::{
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
-use pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
@@ -940,9 +940,9 @@ impl AcpiBuilder for StdMachine {
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            if locked_dev.get_type() == SysBusDevType::PL011 {
-                uart_irq = locked_dev.get_sys_resource().unwrap().irq as u32;
+            let locked_dev = dev.lock().unwrap();
+            if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
+                uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
                 break;
             }
         }
@@ -1626,23 +1626,23 @@ impl CompileFDTHelper for StdMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            match locked_dev.get_type() {
+            let locked_dev = dev.lock().unwrap();
+            match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::Rtc => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_rtc_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::VirtioMmio => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::FwCfg => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
+                    generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }

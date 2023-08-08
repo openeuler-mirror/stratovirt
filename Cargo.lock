@@ -341,12 +341,10 @@ dependencies = [
  "migration",
  "migration_derive",
  "once_cell",
- "pci",
  "rand",
  "rusb",
  "serde",
  "serde_json",
- "sysbus",
  "thiserror",
  "ui",
  "util",
@@ -908,10 +906,8 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
- "pci",
  "serde_json",
  "smbios",
- "sysbus",
  "thiserror",
  "ui",
  "util",
@@ -1161,30 +1157,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "pci"
-version = "2.2.0"
-dependencies = [
- "acpi",
- "address_space",
- "anyhow",
- "byteorder",
- "hypervisor",
- "kvm-bindings",
- "kvm-ioctls",
- "libc",
- "log",
- "machine_manager",
- "migration",
- "migration_derive",
- "once_cell",
- "sysbus",
- "thiserror",
- "ui",
- "util",
- "vmm-sys-util",
 ]
 
 [[package]]
@@ -1617,20 +1589,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sysbus"
-version = "2.2.0"
-dependencies = [
- "acpi",
- "address_space",
- "anyhow",
- "hypervisor",
- "kvm-ioctls",
- "thiserror",
- "util",
- "vmm-sys-util",
-]
-
-[[package]]
 name = "system-deps"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1815,13 +1773,13 @@ dependencies = [
  "address_space",
  "anyhow",
  "byteorder",
+ "devices",
  "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
  "log",
  "once_cell",
- "pci",
  "thiserror",
  "util",
  "vfio-bindings",
@@ -1850,8 +1808,6 @@ dependencies = [
  "migration",
  "migration_derive",
  "nix 0.26.2",
- "pci",
- "sysbus",
  "thiserror",
  "util",
  "virtio",
@@ -1876,9 +1832,7 @@ dependencies = [
  "migration",
  "migration_derive",
  "once_cell",
- "pci",
  "serde_json",
- "sysbus",
  "thiserror",
  "ui",
  "util",

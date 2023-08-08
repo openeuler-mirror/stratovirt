@@ -39,7 +39,7 @@ use ui::{
 };
 use util::pixman::pixman_format_code_t;
 pub const UPDATE_FACTOR: [u8; 7] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40];
-use crate::demo_dev::DeviceTypeOperation;
+use crate::pci::demo_dev::DeviceTypeOperation;
 
 #[derive(Debug)]
 pub enum GpuEvent {

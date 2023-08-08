@@ -15,13 +15,16 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, warn};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
+
 pub struct PFlash {
+    base: SysBusDevBase,
     /// Has backend file or not.
     has_backend: bool,
     /// Length of block.
@@ -52,8 +55,6 @@ pub struct PFlash {
     write_blk_size: u32,
     /// ROM region of PFlash.
     rom: Option<Region>,
-    /// System Resource of device.
-    res: SysRes,
 }
 
 impl PFlash {
@@ -173,6 +174,7 @@ impl PFlash {
         cfi_table[0x3f] = 0x01;
 
         Ok(PFlash {
+            base: SysBusDevBase::new(SysBusDevType::Flash),
             has_backend: backend.is_some(),
             block_len,
             bank_width,
@@ -188,7 +190,6 @@ impl PFlash {
             counter: 0,
             write_blk_size,
             rom: None,
-            res: SysRes::default(),
         })
     }
 
@@ -646,7 +647,25 @@ impl PFlash {
     }
 }
 
+impl Device for PFlash {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for PFlash {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let mut index: u64;
         let mut ret: u32 = 0;
@@ -823,7 +842,7 @@ impl SysBusDevOps for PFlash {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn set_sys_resource(
@@ -831,7 +850,7 @@ impl SysBusDevOps for PFlash {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
+    ) -> Result<()> {
         let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -839,14 +858,12 @@ impl SysBusDevOps for PFlash {
         Ok(())
     }
 
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Flash
-    }
-
-    fn reset(&mut self) -> sysbus::Result<()> {
-        sysbus::Result::with_context(self.rom.as_ref().unwrap().set_rom_device_romd(true), || {
-            "Fail to set PFlash rom region read only"
-        })?;
+    fn reset(&mut self) -> Result<()> {
+        self.rom
+            .as_ref()
+            .unwrap()
+            .set_rom_device_romd(true)
+            .with_context(|| "Fail to set PFlash rom region read only")?;
         self.cmd = 0x00;
         self.write_cycle = 0;
         self.status = 0x80;
@@ -863,10 +880,10 @@ impl AmlBuilder for PFlash {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
     use address_space::AddressSpace;
     use std::fs;
     pub use std::fs::File;
-    use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(

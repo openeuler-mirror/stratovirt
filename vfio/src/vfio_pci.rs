@@ -20,25 +20,26 @@ use crate::VfioError;
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
 #[cfg(target_arch = "aarch64")]
-use pci::config::SECONDARY_BUS_NUM;
-use pci::config::{
+use devices::pci::config::SECONDARY_BUS_NUM;
+use devices::pci::config::{
     PciConfig, RegionType, BAR_0, BAR_5, BAR_IO_SPACE, BAR_MEM_64BIT, BAR_SPACE_UNMAPPED, COMMAND,
     COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
     HEADER_TYPE, IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE,
     PCI_CONFIG_SPACE_SIZE, REG_SIZE,
 };
-use pci::msix::{
+use devices::pci::msix::{
     is_msix_enabled, update_dev_id, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK,
     MSIX_CAP_ID, MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE,
     MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
-use pci::{
+use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
-    pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevOps,
+    pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevBase, PciDevOps,
 };
+use devices::{Device, DeviceBase};
+use hypervisor::kvm::{MsiVector, KVM_FDS};
+use log::error;
 use util::unix::host_page_size;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
@@ -81,7 +82,7 @@ struct GsiMsiRoute {
 /// VfioPciDevice is a VFIO PCI device. It implements PciDevOps trait for a PCI device.
 /// And it is bound to a VFIO device.
 pub struct VfioPciDevice {
-    pci_config: PciConfig,
+    base: PciDevBase,
     config_size: u64,
     // Offset of pci config space region within vfio device fd.
     config_offset: u64,
@@ -93,10 +94,7 @@ pub struct VfioPciDevice {
     vfio_bars: Arc<Mutex<Vec<VfioBar>>>,
     // Maintains a list of GSI with irqfds that are registered to kvm.
     gsi_msi_routes: Arc<Mutex<Vec<GsiMsiRoute>>>,
-    devfn: u8,
     dev_id: Arc<AtomicU16>,
-    name: String,
-    parent_bus: Weak<Mutex<PciBus>>,
     // Multi-Function flag.
     multi_func: bool,
     mem_as: Arc<AddressSpace>,
@@ -114,17 +112,19 @@ impl VfioPciDevice {
     ) -> Self {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
-            pci_config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
+            base: PciDevBase {
+                base: DeviceBase::new(name, true),
+                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
+                devfn,
+                parent_bus,
+            },
             config_size: 0,
             config_offset: 0,
             vfio_device,
             msix_info: None,
             vfio_bars: Arc::new(Mutex::new(Vec::with_capacity(PCI_NUM_BARS as usize))),
             gsi_msi_routes: Arc::new(Mutex::new(Vec::new())),
-            devfn,
             dev_id: Arc::new(AtomicU16::new(0)),
-            name,
-            parent_bus,
             multi_func,
             mem_as,
         }
@@ -156,7 +156,7 @@ impl VfioPciDevice {
         self.config_offset = info.offset;
         let mut config_data = vec![0_u8; self.config_size as usize];
         locked_dev.read_region(config_data.as_mut_slice(), self.config_offset, 0)?;
-        self.pci_config.config[..PCI_CONFIG_SPACE_SIZE]
+        self.base.config.config[..PCI_CONFIG_SPACE_SIZE]
             .copy_from_slice(&config_data[..PCI_CONFIG_SPACE_SIZE]);
 
         // If guest OS can not see extended caps, just ignore them.
@@ -186,9 +186,10 @@ impl VfioPciDevice {
                 continue;
             }
             let offset = self
-                .pci_config
+                .base
+                .config
                 .add_pcie_ext_cap(cap_id, size, cap_version)?;
-            self.pci_config.config[offset..offset + size]
+            self.base.config.config[offset..offset + size]
                 .copy_from_slice(&config.config[old_next..old_next + size]);
         }
 
@@ -198,12 +199,12 @@ impl VfioPciDevice {
     /// Disable I/O, MMIO, bus master and INTx states, And clear host device bar size information.
     /// Guest OS can get residual addresses from the host if not clear bar size.
     fn pci_config_reset(&mut self) -> Result<()> {
-        let mut cmd = le_read_u16(&self.pci_config.config, COMMAND as usize)?;
+        let mut cmd = le_read_u16(&self.base.config.config, COMMAND as usize)?;
         cmd &= !(COMMAND_IO_SPACE
             | COMMAND_MEMORY_SPACE
             | COMMAND_BUS_MASTER
             | COMMAND_INTERRUPT_DISABLE);
-        le_write_u16(&mut self.pci_config.config, COMMAND as usize, cmd)?;
+        le_write_u16(&mut self.base.config.config, COMMAND as usize, cmd)?;
 
         let mut data = vec![0u8; 2];
         LittleEndian::write_u16(&mut data, cmd);
@@ -215,12 +216,12 @@ impl VfioPciDevice {
 
         for i in 0..PCI_ROM_SLOT {
             let offset = BAR_0 as usize + REG_SIZE * i as usize;
-            let v = le_read_u32(&self.pci_config.config, offset)?;
+            let v = le_read_u32(&self.base.config.config, offset)?;
             if v & BAR_IO_SPACE as u32 != 0 {
-                le_write_u32(&mut self.pci_config.config, offset, v & !IO_BASE_ADDR_MASK)?;
+                le_write_u32(&mut self.base.config.config, offset, v & !IO_BASE_ADDR_MASK)?;
             } else {
                 le_write_u32(
-                    &mut self.pci_config.config,
+                    &mut self.base.config.config,
                     offset,
                     v & !MEM_BASE_ADDR_MASK as u32,
                 )?;
@@ -238,14 +239,14 @@ impl VfioPciDevice {
             .get_irqs_info(n)
             .with_context(|| "Failed to get vfio irqs info")?;
 
-        let cap_offset = self.pci_config.find_pci_cap(MSIX_CAP_ID);
+        let cap_offset = self.base.config.find_pci_cap(MSIX_CAP_ID);
         let table = le_read_u32(
-            &self.pci_config.config,
+            &self.base.config.config,
             cap_offset + MSIX_CAP_TABLE as usize,
         )?;
 
         let ctrl = le_read_u16(
-            &self.pci_config.config,
+            &self.base.config.config,
             cap_offset + MSIX_CAP_CONTROL as usize,
         )?;
         let entries = (ctrl & MSIX_TABLE_SIZE_MAX) + 1;
@@ -426,7 +427,7 @@ impl VfioPciDevice {
                 region
             };
 
-            self.pci_config.register_bar(
+            self.base.config.register_bar(
                 i as usize,
                 bar_region,
                 vfio_bar.region_type,
@@ -439,8 +440,8 @@ impl VfioPciDevice {
     }
 
     fn unregister_bars(&mut self) -> Result<()> {
-        let bus = self.parent_bus.upgrade().unwrap();
-        self.pci_config.unregister_bars(&bus)?;
+        let bus = self.base.parent_bus.upgrade().unwrap();
+        self.base.config.unregister_bars(&bus)?;
         Ok(())
     }
 
@@ -451,11 +452,11 @@ impl VfioPciDevice {
             .as_ref()
             .with_context(|| "Failed to get MSIX info")?;
         let table_size = msix_info.table.table_size as u32;
-        let cap_offset = self.pci_config.find_pci_cap(MSIX_CAP_ID);
+        let cap_offset = self.base.config.find_pci_cap(MSIX_CAP_ID);
 
         let offset: usize = cap_offset + MSIX_CAP_CONTROL as usize;
         le_write_u16(
-            &mut self.pci_config.write_mask,
+            &mut self.base.config.write_mask,
             offset,
             MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
         )?;
@@ -465,7 +466,7 @@ impl VfioPciDevice {
             cap_offset as u16,
             self.dev_id.clone(),
         )));
-        self.pci_config.msix = Some(msix.clone());
+        self.base.config.msix = Some(msix.clone());
 
         let cloned_msix = msix.clone();
         let read = move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
@@ -485,9 +486,9 @@ impl VfioPciDevice {
 
         let cloned_dev = self.vfio_device.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
-        let parent_bus = self.parent_bus.clone();
+        let parent_bus = self.base.parent_bus.clone();
         let dev_id = self.dev_id.clone();
-        let devfn = self.devfn;
+        let devfn = self.base.devfn;
         let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
@@ -660,7 +661,7 @@ impl VfioPciDevice {
     /// the guest OS.
     fn setup_bars_mmap(&mut self) -> Result<()> {
         for i in vfio::VFIO_PCI_BAR0_REGION_INDEX..vfio::VFIO_PCI_ROM_REGION_INDEX {
-            let gpa = self.pci_config.get_bar_address(i as usize);
+            let gpa = self.base.config.get_bar_address(i as usize);
             if gpa == BAR_SPACE_UNMAPPED || gpa == 0 {
                 continue;
             }
@@ -704,7 +705,8 @@ impl VfioPciDevice {
 
                 let ram_device = Region::init_ram_device_region(Arc::new(host_mmap), "VfioRam");
                 let bar = self
-                    .pci_config
+                    .base
+                    .config
                     .bars
                     .get_mut(i as usize)
                     .with_context(|| "Failed to get pci bar info")?;
@@ -811,34 +813,44 @@ impl VfioPciDevice {
     }
 }
 
+impl Device for VfioPciDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl PciDevOps for VfioPciDevice {
-    fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
-    fn realize(mut self) -> pci::Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
-        pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+    fn realize(mut self) -> devices::pci::Result<()> {
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
+        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Failed to reset vfio device"
         })?;
 
-        pci::Result::with_context(self.get_pci_config(), || {
+        devices::pci::Result::with_context(self.get_pci_config(), || {
             "Failed to get vfio device pci config space"
         })?;
-        pci::Result::with_context(self.pci_config_reset(), || {
+        devices::pci::Result::with_context(self.pci_config_reset(), || {
             "Failed to reset vfio device pci config space"
         })?;
-        pci::Result::with_context(
+        devices::pci::Result::with_context(
             init_multifunction(
                 self.multi_func,
-                &mut self.pci_config.config,
-                self.devfn,
-                self.parent_bus.clone(),
+                &mut self.base.config.config,
+                self.base.devfn,
+                self.base.parent_bus.clone(),
             ),
             || "Failed to init vfio device multifunction.",
         )?;
@@ -846,27 +858,29 @@ impl PciDevOps for VfioPciDevice {
         #[cfg(target_arch = "aarch64")]
         {
             let bus_num = self
+                .base
                 .parent_bus
                 .upgrade()
                 .unwrap()
                 .lock()
                 .unwrap()
                 .number(SECONDARY_BUS_NUM as usize);
-            self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.devfn)));
+            self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
-        self.msix_info = Some(pci::Result::with_context(self.get_msix_info(), || {
-            "Failed to get MSI-X info"
-        })?);
-        self.vfio_bars = Arc::new(Mutex::new(pci::Result::with_context(
+        self.msix_info = Some(devices::pci::Result::with_context(
+            self.get_msix_info(),
+            || "Failed to get MSI-X info",
+        )?);
+        self.vfio_bars = Arc::new(Mutex::new(devices::pci::Result::with_context(
             self.bar_region_info(),
             || "Failed to get bar region info",
         )?));
-        pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
+        devices::pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
-        let devfn = self.devfn;
+        let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
-        let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
+        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
@@ -882,16 +896,12 @@ impl PciDevOps for VfioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> pci::Result<()> {
+    fn unrealize(&mut self) -> devices::pci::Result<()> {
         if let Err(e) = VfioPciDevice::unrealize(self) {
             error!("{:?}", e);
             bail!("Failed to unrealize vfio-pci.");
         }
         Ok(())
-    }
-
-    fn devfn(&self) -> Option<u8> {
-        Some(self.devfn)
     }
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
@@ -913,7 +923,7 @@ impl PciDevOps for VfioPciDevice {
             || ranges_overlap(offset, size, HEADER_TYPE as usize, 2)
             || ranges_overlap(offset, size, PCI_CONFIG_SPACE_SIZE, ext_cfg_size)
         {
-            self.pci_config.read(offset, data);
+            self.base.config.read(offset, data);
             return;
         }
 
@@ -958,14 +968,15 @@ impl PciDevOps for VfioPciDevice {
         }
 
         let cap_offset = self
-            .pci_config
+            .base
+            .config
             .msix
             .as_ref()
             .map_or(0, |m| m.lock().unwrap().msix_cap_offset as usize);
-        let was_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let was_enable = is_msix_enabled(cap_offset, &self.base.config.config);
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
-        self.pci_config.write(
+        self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
@@ -975,7 +986,7 @@ impl PciDevOps for VfioPciDevice {
         );
 
         if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE) {
-            if le_read_u32(&self.pci_config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
+            if le_read_u32(&self.base.config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
                 != 0
             {
                 if let Err(e) = self.setup_bars_mmap() {
@@ -983,7 +994,7 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize) {
-            let is_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
+            let is_enable = is_msix_enabled(cap_offset, &self.base.config.config);
 
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {
@@ -997,12 +1008,8 @@ impl PciDevOps for VfioPciDevice {
         }
     }
 
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
-        pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+    fn reset(&mut self, _reset_child_device: bool) -> devices::pci::Result<()> {
+        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Fail to reset vfio dev"
         })
     }
