@@ -496,7 +496,7 @@ const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
 const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
 const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
 const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
-const _VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
+pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
 
 pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     match format {
