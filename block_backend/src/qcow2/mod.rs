@@ -46,7 +46,7 @@ use crate::{
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
 use util::{
     aio::{
-        get_iov_size, iov_from_buf_direct, iovecs_split, raw_write_zeroes, Aio, AioCb, AioEngine,
+        get_iov_size, iovec_write_zero, iovecs_split, raw_write_zeroes, Aio, AioCb, AioEngine,
         Iovec, OpCode,
     },
     num_ops::{div_round_up, round_down, round_up},
@@ -88,9 +88,12 @@ type Qcow2ListType = Lazy<Arc<Mutex<HashMap<String, Arc<Mutex<dyn InternalSnapsh
 /// Record the correspondence between disk drive ID and the qcow2 struct.
 pub static QCOW2_LIST: Qcow2ListType = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-pub enum HostOffset {
-    DataNotInit,
-    DataAddress(u64),
+/// Host continuous range.
+pub enum HostRange {
+    /// Not init data size.
+    DataNotInit(u64),
+    /// Start address and size.
+    DataAddress(u64, u64),
 }
 
 pub struct SyncAioInfo {
@@ -266,42 +269,89 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
-    fn host_offset_for_read(&mut self, guest_offset: u64) -> Result<HostOffset> {
-        let l2_address = self.table.get_l1_table_entry(guest_offset) & L1_TABLE_OFFSET_MASK;
-        if l2_address == 0 {
-            return Ok(HostOffset::DataNotInit);
-        }
-
-        let cluster_addr: u64;
-        let cluster_type: Qcow2ClusterType;
+    // NOTE: L2 table must be allocated.
+    fn get_l2_entry(&mut self, guest_offset: u64) -> Result<u64> {
         let l2_index = self.table.get_l2_table_index(guest_offset);
         if let Some(entry) = self.table.get_l2_table_cache_entry(guest_offset) {
-            let l2_entry = entry.borrow_mut().get_entry_map(l2_index as usize)?;
-            cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
-            cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
+            entry.borrow_mut().get_entry_map(l2_index as usize)
         } else {
+            let l2_address = self.table.get_l1_table_entry(guest_offset) & L1_TABLE_OFFSET_MASK;
+            if l2_address == 0 {
+                bail!("L2 table is unallocated when get l2 cache");
+            }
             let l2_cluster = self.load_cluster(l2_address)?;
             let l2_table = Rc::new(RefCell::new(CacheTable::new(
                 l2_address,
                 l2_cluster,
                 ENTRY_SIZE_U64,
             )?));
-            let l2_entry = l2_table.borrow_mut().get_entry_map(l2_index as usize)?;
-            cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
-            cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
+            let res = l2_table.borrow_mut().get_entry_map(l2_index as usize)?;
             self.table.update_l2_table(l2_table)?;
-        }
-
-        if cluster_addr == 0 || cluster_type.is_read_zero() {
-            Ok(HostOffset::DataNotInit)
-        } else {
-            Ok(HostOffset::DataAddress(
-                cluster_addr + self.offset_into_cluster(guest_offset),
-            ))
+            Ok(res)
         }
     }
 
-    fn host_offset_for_write(&mut self, guest_offset: u64) -> Result<HostOffset> {
+    fn get_continuous_address(
+        &mut self,
+        guest_offset: u64,
+        expect_len: u64,
+    ) -> Result<(Qcow2ClusterType, u64, u64)> {
+        let begin = round_down(guest_offset, self.header.cluster_size())
+            .with_context(|| format!("invalid offset {}", guest_offset))?;
+        let end = round_up(guest_offset + expect_len, self.header.cluster_size())
+            .with_context(|| format!("invalid offset {} len {}", guest_offset, expect_len))?;
+        let clusters = (end - begin) / self.header.cluster_size();
+        if clusters == 0 {
+            bail!(
+                "Failed to get continuous address offset {} len {}",
+                guest_offset,
+                expect_len
+            );
+        }
+        let mut host_start = 0;
+        let mut first_cluster_type = Qcow2ClusterType::Unallocated;
+        let mut cnt = 0;
+        while cnt < clusters {
+            let offset = cnt * self.header.cluster_size();
+            let l2_entry = self.get_l2_entry(begin + offset)?;
+            let cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
+            let cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
+            if cnt == 0 {
+                host_start = cluster_addr;
+                first_cluster_type = cluster_type;
+            } else if cluster_addr != host_start + offset || cluster_type != first_cluster_type {
+                break;
+            }
+            cnt += 1;
+        }
+        let sz = cnt * self.header.cluster_size() - self.offset_into_cluster(guest_offset);
+        let actual_len = std::cmp::min(expect_len, sz);
+        Ok((
+            first_cluster_type,
+            host_start + self.offset_into_cluster(guest_offset),
+            actual_len,
+        ))
+    }
+
+    fn host_offset_for_read(&mut self, guest_offset: u64, req_len: u64) -> Result<HostRange> {
+        // Request not support cross l2 table.
+        let l2_max_len = self
+            .table
+            .get_l2_table_max_remain_size(guest_offset, self.offset_into_cluster(guest_offset));
+        let size = std::cmp::min(req_len, l2_max_len);
+        let l2_address = self.table.get_l1_table_entry(guest_offset) & L1_TABLE_OFFSET_MASK;
+        if l2_address == 0 {
+            return Ok(HostRange::DataNotInit(size));
+        }
+        let (cluster_type, host_start, bytes) = self.get_continuous_address(guest_offset, size)?;
+        if cluster_type.is_read_zero() {
+            Ok(HostRange::DataNotInit(bytes))
+        } else {
+            Ok(HostRange::DataAddress(host_start, bytes))
+        }
+    }
+
+    fn host_offset_for_write(&mut self, guest_offset: u64) -> Result<u64> {
         let l2_index = self.table.get_l2_table_index(guest_offset);
         let l2_table = self.get_table_cluster(guest_offset)?;
         let mut l2_entry = l2_table.borrow_mut().get_entry_map(l2_index as usize)?;
@@ -326,9 +376,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         l2_table
             .borrow_mut()
             .set_entry_map(l2_index as usize, l2_entry)?;
-        Ok(HostOffset::DataAddress(
-            cluster_addr + self.offset_into_cluster(guest_offset),
-        ))
+        Ok(cluster_addr + self.offset_into_cluster(guest_offset))
     }
 
     /// Obtaining the target entry for guest offset.
@@ -416,9 +464,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             bail!("Buffer size: is out of range",);
         }
         // Return if the address is not allocated.
-        if let HostOffset::DataAddress(host_offset) = self.host_offset_for_write(guest_offset)? {
-            self.sync_aio.borrow_mut().write_buffer(host_offset, buf)?;
-        }
+        let host_offset = self.host_offset_for_write(guest_offset)?;
+        self.sync_aio.borrow_mut().write_buffer(host_offset, buf)?;
         Ok(())
     }
 
@@ -1330,64 +1377,76 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
-    fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        let nbytes = get_iov_size(iovec);
+    fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)
             .with_context(|| " Invalid read request")?;
 
-        let mut left = iovec.to_vec();
-        let total = std::cmp::min(nbytes, self.virtual_disk_size() - offset as u64);
-        let mut req_list = Vec::new();
+        let mut left = iovec;
+        let mut req_list: Vec<CombineRequest> = Vec::new();
         let mut copied = 0;
-        while copied < total {
+        while copied < nbytes {
             let pos = offset as u64 + copied;
-            let count = self.cluster_aligned_bytes(pos, total - copied);
-            let (begin, end) = iovecs_split(left, count);
-            left = end;
-            if let HostOffset::DataAddress(host_offset) = self.host_offset_for_read(pos)? {
-                let nbytes = get_iov_size(&begin);
-                req_list.push(CombineRequest {
-                    iov: begin,
-                    offset: host_offset,
-                    nbytes,
-                });
-            } else {
-                iov_from_buf_direct(&begin, &vec![0_u8; count as usize])?;
+            match self.host_offset_for_read(pos, nbytes - copied)? {
+                HostRange::DataAddress(host_offset, cnt) => {
+                    let (begin, end) = iovecs_split(left, cnt);
+                    left = end;
+                    req_list.push(CombineRequest {
+                        iov: begin,
+                        offset: host_offset,
+                        nbytes: cnt,
+                    });
+                    copied += cnt;
+                }
+                HostRange::DataNotInit(cnt) => {
+                    let (begin, end) = iovecs_split(left, cnt);
+                    left = end;
+                    iovec_write_zero(&begin);
+                    copied += cnt;
+                }
             }
-            copied += count;
         }
 
         self.driver.read_vectored(req_list, completecb)
     }
 
-    fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()> {
-        let nbytes = get_iov_size(iovec);
+    fn write_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
+        let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)
             .with_context(|| " Invalid write request")?;
 
-        let mut left = iovec.to_vec();
-        let total = std::cmp::min(nbytes, self.virtual_disk_size() - offset as u64);
-        let mut req_list = Vec::new();
+        let mut req_list: Vec<CombineRequest> = Vec::new();
         let mut copied = 0;
-        while copied < total {
+        while copied < nbytes {
             let pos = offset as u64 + copied;
-            let count = self.cluster_aligned_bytes(pos, total - copied);
-            let (begin, end) = iovecs_split(left, count);
-            left = end;
-            if let HostOffset::DataAddress(host_offset) = self.host_offset_for_write(pos)? {
-                let nbytes = get_iov_size(&begin);
-                req_list.push(CombineRequest {
-                    iov: begin,
-                    offset: host_offset,
-                    nbytes,
-                });
-                copied += count;
+            let count = self.cluster_aligned_bytes(pos, nbytes - copied);
+            let host_offset = self.host_offset_for_write(pos)?;
+            if let Some(end) = req_list.last_mut() {
+                if end.offset + end.nbytes == host_offset {
+                    end.nbytes += count;
+                    copied += count;
+                    continue;
+                }
             }
+            req_list.push(CombineRequest {
+                iov: Vec::new(),
+                offset: host_offset,
+                nbytes: count,
+            });
+            copied += count;
         }
 
         if req_list.is_empty() {
             bail!("Request list is empty!");
         }
+
+        let mut left = iovec;
+        for req in req_list.iter_mut() {
+            let (begin, end) = iovecs_split(left, req.nbytes);
+            req.iov = begin;
+            left = end;
+        }
+
         self.driver.write_vectored(req_list, completecb)
     }
 
@@ -1519,7 +1578,7 @@ mod test {
 
     const CLUSTER_SIZE: u64 = 64 * 1024;
 
-    struct TestImage {
+    pub struct TestImage {
         pub img_bits: u64,
         pub cluster_bits: u64,
         pub path: String,
@@ -1686,7 +1745,7 @@ mod test {
         sz: u64,
     }
 
-    fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
+    pub fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
         let mut image = TestImage::new(path, 30, 16);
         fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
             Ok(())
@@ -1716,7 +1775,7 @@ mod test {
 
     fn qcow2_read(qcow2: &mut Qcow2Driver<()>, buf: &mut [u8], offset: usize) -> Result<()> {
         qcow2.read_vectored(
-            &[Iovec {
+            vec![Iovec {
                 iov_base: buf.as_ptr() as u64,
                 iov_len: buf.len() as u64,
             }],
@@ -1727,7 +1786,7 @@ mod test {
 
     fn qcow2_write(qcow2: &mut Qcow2Driver<()>, buf: &[u8], offset: usize) -> Result<()> {
         qcow2.write_vectored(
-            &[Iovec {
+            vec![Iovec {
                 iov_base: buf.as_ptr() as u64,
                 iov_len: buf.len() as u64,
             }],
@@ -1748,9 +1807,12 @@ mod test {
         let mut buf = vec![2_u8; 512];
         qcow2_read(&mut qcow2, &mut buf, 65536).unwrap();
         assert_eq!(buf, vec![0; 512]);
-        let mut buf = vec![3_u8; 600];
-        qcow2_read(&mut qcow2, &mut buf, 655350).unwrap();
-        assert_eq!(buf, vec![0; 600]);
+        for i in 0..100 {
+            let sz = 100_000;
+            let mut buf = vec![3_u8; sz];
+            qcow2_read(&mut qcow2, &mut buf, 655350 + i * sz).unwrap();
+            assert_eq!(buf, vec![0; 100_000]);
+        }
 
         let len = image.file.seek(SeekFrom::End(0)).unwrap();
         assert_eq!(org_len, len);
@@ -1766,12 +1828,39 @@ mod test {
         let mut rbuf = vec![0_u8; CLUSTER_SIZE as usize];
         qcow2_read(&mut qcow2, &mut rbuf, 0).unwrap();
         assert_eq!(rbuf, wbuf);
+        let cnt = qcow2.refcount.get_refcount(0).unwrap();
+        assert_eq!(cnt, 1);
 
         let wbuf = vec![5_u8; 1000];
         qcow2_write(&mut qcow2, &wbuf, 2000).unwrap();
         let mut rbuf = vec![0_u8; 1000];
         qcow2_read(&mut qcow2, &mut rbuf, 2000).unwrap();
         assert_eq!(rbuf, wbuf);
+        let cnt = qcow2.refcount.get_refcount(2000).unwrap();
+        assert_eq!(cnt, 1);
+    }
+
+    fn test_write_multi_cluster_helper(
+        qcow2: &mut Qcow2Driver<()>,
+        off: usize,
+        sz: usize,
+        cnt: u8,
+    ) {
+        let mut offset = off;
+        for i in 0..cnt {
+            let buf = vec![i + 1; sz];
+            qcow2_write(qcow2, &buf, offset).unwrap();
+            offset += buf.len();
+        }
+        let mut offset = off;
+        for i in 0..cnt {
+            let mut buf = vec![i + 1; sz];
+            qcow2_read(qcow2, &mut buf, offset).unwrap();
+            for (_, item) in buf.iter().enumerate() {
+                assert_eq!(item, &(i + 1));
+            }
+            offset += buf.len();
+        }
     }
 
     #[test]
@@ -1779,23 +1868,10 @@ mod test {
         let path = "/tmp/block_backend_test_write_multi_cluster.qcow2";
         let (_, mut qcow2) = create_qcow2(path);
 
-        let mut offset = 0;
-        let cnt: u8 = 2;
-        let sz = 100 * 1000;
-        for i in 0..cnt {
-            let buf = vec![i + 1; sz];
-            qcow2_write(&mut qcow2, &buf, offset).unwrap();
-            offset += buf.len();
-        }
-        let mut offset = 0;
-        for i in 0..cnt {
-            let mut buf = vec![i + 1; sz];
-            qcow2_read(&mut qcow2, &mut buf, offset).unwrap();
-            for (_, item) in buf.iter().enumerate() {
-                assert_eq!(item, &(i + 1));
-            }
-            offset += buf.len();
-        }
+        test_write_multi_cluster_helper(&mut qcow2, 832574, 100_000, 200);
+        test_write_multi_cluster_helper(&mut qcow2, 0, 16, 250);
+        test_write_multi_cluster_helper(&mut qcow2, 7689, 512, 99);
+        test_write_multi_cluster_helper(&mut qcow2, 56285351, 4096, 123);
     }
 
     #[test]
@@ -1871,8 +1947,12 @@ mod test {
         let (_, mut qcow2) = create_qcow2(path);
         let (case_list, _buf_list) = generate_rw_case_list();
         for case in &case_list {
-            qcow2.write_vectored(&case.wiovec, case.offset, ()).unwrap();
-            qcow2.read_vectored(&case.riovec, case.offset, ()).unwrap();
+            qcow2
+                .write_vectored(case.wiovec.clone(), case.offset, ())
+                .unwrap();
+            qcow2
+                .read_vectored(case.riovec.clone(), case.offset, ())
+                .unwrap();
 
             let mut wbuf = vec![0; case.sz as usize];
             let mut rbuf = vec![0; case.sz as usize];
@@ -1942,8 +2022,12 @@ mod test {
         let (_, mut qcow2) = create_qcow2(path);
         let (mut case_list, _buf_list) = generate_rw_random_list();
         for case in &case_list {
-            qcow2.write_vectored(&case.wiovec, case.offset, ()).unwrap();
-            qcow2.read_vectored(&case.riovec, case.offset, ()).unwrap();
+            qcow2
+                .write_vectored(case.wiovec.clone(), case.offset, ())
+                .unwrap();
+            qcow2
+                .read_vectored(case.riovec.clone(), case.offset, ())
+                .unwrap();
 
             let mut wbuf = vec![0; case.sz as usize];
             let mut rbuf = vec![0; case.sz as usize];
@@ -1957,7 +2041,7 @@ mod test {
         // read all write data once.
         let buf = vec![0_u8; 5 * CLUSTER_SIZE as usize];
         let riovecs = vec![Iovec::new(buf.as_ptr() as u64, 5 * CLUSTER_SIZE)];
-        qcow2.read_vectored(&riovecs, 0, ()).unwrap();
+        qcow2.read_vectored(riovecs, 0, ()).unwrap();
 
         case_list.sort_by(|a, b| a.offset.cmp(&b.offset));
         let mut idx = 0;
@@ -2303,7 +2387,7 @@ mod test {
         let (case_list, _buf_list) = generate_rw_random_list();
         for case in &case_list {
             qcow2_driver
-                .write_vectored(&case.wiovec, case.offset, ())
+                .write_vectored(case.wiovec.clone(), case.offset, ())
                 .unwrap();
         }
 
@@ -2356,7 +2440,7 @@ mod test {
         let (case_list, _buf_list) = generate_rw_random_list();
         for case in &case_list {
             qcow2_driver
-                .write_vectored(&case.wiovec, case.offset, ())
+                .write_vectored(case.wiovec.clone(), case.offset, ())
                 .unwrap();
         }
 

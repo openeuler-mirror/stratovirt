@@ -80,8 +80,8 @@ impl Qcow2ClusterType {
 }
 
 pub struct Qcow2Table {
-    pub cluster_bits: u64,
-    pub cluster_size: u64,
+    cluster_bits: u64,
+    cluster_size: u64,
     pub l1_table: Vec<u64>,
     pub l2_table_cache: Qcow2Cache,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
@@ -176,6 +176,12 @@ impl Qcow2Table {
         }
     }
 
+    /// Get max data remaining size after the offset which indexed by l2 table.
+    pub fn get_l2_table_max_remain_size(&self, guest_offset: u64, offset_in_cluster: u64) -> u64 {
+        (self.l2_size - self.get_l2_table_index(guest_offset)) * self.cluster_size
+            - offset_in_cluster
+    }
+
     pub fn update_l1_table(&mut self, l1_index: usize, l2_address: u64) {
         self.l1_table[l1_index] = l2_address;
     }
@@ -222,5 +228,62 @@ impl Qcow2Table {
 
     pub fn flush(&mut self) -> Result<()> {
         self.flush_l2_table_cache()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        cell::RefCell,
+        io::{Read, Seek, SeekFrom},
+        rc::Rc,
+    };
+
+    use crate::qcow2::{
+        cache::{CacheTable, ENTRY_SIZE_U64},
+        test::create_qcow2,
+    };
+
+    #[test]
+    fn test_update_l2_table() {
+        let path = "/tmp/block_backend_test_update_l2_table.qcow2";
+        let (mut image, mut qcow2) = create_qcow2(path);
+        let cluster_size = qcow2.header.cluster_size() as usize;
+        let addr = qcow2.alloc_cluster(1, true).unwrap();
+        let l2_cluster: Vec<u8> = vec![0_u8; cluster_size];
+        let l2_table = Rc::new(RefCell::new(
+            CacheTable::new(addr, l2_cluster.clone(), ENTRY_SIZE_U64).unwrap(),
+        ));
+        qcow2.table.update_l2_table(l2_table.clone()).unwrap();
+
+        let test_val1 = 0xff00ff00_u64;
+        l2_table.borrow_mut().set_entry_map(0, test_val1).unwrap();
+        let res = l2_table.borrow_mut().get_entry_map(0).unwrap();
+        assert_eq!(res, test_val1);
+
+        image.file.seek(SeekFrom::Start(addr)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [0_u8; ENTRY_SIZE_U64]);
+
+        let test_val2 = 0x00ff00ff_u64;
+        l2_table
+            .borrow_mut()
+            .set_entry_map(8191, test_val2)
+            .unwrap();
+        let res = l2_table.borrow_mut().get_entry_map(8191).unwrap();
+        assert_eq!(res, test_val2);
+
+        qcow2.table.flush_l2_table_cache().unwrap();
+        image.file.seek(SeekFrom::Start(addr)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, test_val1.to_be_bytes());
+
+        let offset = addr + ENTRY_SIZE_U64 as u64 * 8191;
+        image.file.seek(SeekFrom::Start(offset)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, test_val2.to_be_bytes());
     }
 }

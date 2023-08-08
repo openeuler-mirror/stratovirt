@@ -168,6 +168,7 @@ impl Qcow2Cache {
             return;
         }
         warn!("refcount reaches the max limit and is reset to 0");
+        self.lru_count = 0;
         for (_, entry) in self.cache_map.iter() {
             entry.borrow_mut().lru_count = 0;
         }
@@ -223,7 +224,7 @@ impl Qcow2Cache {
 
 #[cfg(test)]
 mod test {
-    use super::{CacheTable, Qcow2Cache};
+    use super::{CacheTable, Qcow2Cache, ENTRY_SIZE_U64};
     use std::{cell::RefCell, rc::Rc};
 
     #[test]
@@ -233,7 +234,7 @@ mod test {
         for i in 0..buf.len() {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
-        let mut entry = CacheTable::new(0x00 as u64, vec, 8).unwrap();
+        let mut entry = CacheTable::new(0x00 as u64, vec, ENTRY_SIZE_U64).unwrap();
         assert_eq!(entry.get_entry_map(0).unwrap(), 0x00);
         assert_eq!(entry.get_entry_map(3).unwrap(), 0x03);
         assert_eq!(entry.get_entry_map(4).unwrap(), 0x04);
@@ -250,19 +251,19 @@ mod test {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
         let entry_0 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), 8).unwrap(),
+            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_0.borrow_mut().lru_count = 0;
         let entry_1 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), 8).unwrap(),
+            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_1.borrow_mut().lru_count = 1;
         let entry_2 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), 8).unwrap(),
+            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_2.borrow_mut().lru_count = 2;
         let entry_3 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), 8).unwrap(),
+            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_3.borrow_mut().lru_count = 3;
 
@@ -271,5 +272,37 @@ mod test {
         assert!(qcow2_cache.lru_replace(0x01, entry_1).is_none());
         assert!(qcow2_cache.lru_replace(0x02, entry_2).is_none());
         assert!(qcow2_cache.lru_replace(0x03, entry_3).is_some());
+    }
+
+    #[test]
+    fn test_get_cache() {
+        let cnt = 200_u64;
+        let mut vec = Vec::new();
+        for i in 0..cnt {
+            vec.append(&mut i.to_be_bytes().to_vec());
+        }
+        let addr = 12345678;
+        let entry = Rc::new(RefCell::new(
+            CacheTable::new(addr, vec, ENTRY_SIZE_U64).unwrap(),
+        ));
+
+        let mut qcow2_cache = Qcow2Cache::new(2);
+        qcow2_cache.lru_replace(addr, entry.clone());
+        qcow2_cache.lru_count = u64::MAX - cnt / 2;
+        // Not in cache.
+        assert!(qcow2_cache.get(0).is_none());
+        assert!(qcow2_cache.get(addr + 10).is_none());
+
+        for i in 0..cnt {
+            let value = qcow2_cache.get(addr).unwrap();
+            let v = value.borrow_mut().get_entry_map(i as usize).unwrap();
+            assert_eq!(v, i);
+        }
+        assert_eq!(qcow2_cache.lru_count, cnt / 2);
+
+        // Entry index invalid.
+        let value = qcow2_cache.get(addr).unwrap();
+        let v = value.borrow_mut().get_entry_map(cnt as usize + 1);
+        assert!(v.err().unwrap().to_string().contains("Invalid idx"));
     }
 }

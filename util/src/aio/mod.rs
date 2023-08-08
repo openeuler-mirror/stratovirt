@@ -747,6 +747,15 @@ pub fn iovecs_split(iovecs: Vec<Iovec>, mut size: u64) -> (Vec<Iovec>, Vec<Iovec
     (begin, end)
 }
 
+pub fn iovec_write_zero(iovec: &[Iovec]) {
+    for iov in iovec.iter() {
+        // SAFETY: all callers have valid hva address.
+        unsafe {
+            std::ptr::write_bytes(iov.iov_base as *mut u8, 0, iov.iov_len as usize);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -900,5 +909,19 @@ mod tests {
         let (left, right) = iovecs_split(iovecs, 300);
         assert_eq!(left, vec![Iovec::new(0, 100), Iovec::new(200, 100)]);
         assert_eq!(right, vec![]);
+    }
+
+    #[test]
+    fn test_iovec_write_zero() {
+        let buf1 = vec![0x1_u8; 100];
+        let buf2 = vec![0x1_u8; 40];
+        let iovecs = vec![
+            Iovec::new(buf1.as_ptr() as u64, buf1.len() as u64),
+            Iovec::new(buf2.as_ptr() as u64, buf2.len() as u64),
+        ];
+
+        iovec_write_zero(&iovecs);
+        assert_eq!(buf1, vec![0_u8; 100]);
+        assert_eq!(buf2, vec![0_u8; 40]);
     }
 }
