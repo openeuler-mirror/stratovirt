@@ -63,7 +63,6 @@ const VIRTIO_PCI_CLASS_ID_STORAGE_OTHER: u16 = 0x0180;
 const VIRTIO_PCI_CLASS_ID_COMMUNICATION_OTHER: u16 = 0x0780;
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_PCI_CLASS_ID_DISPLAY_OTHER: u16 = 0x0380;
-#[cfg(target_arch = "x86_64")]
 const VIRTIO_PCI_CLASS_ID_DISPLAY_VGA: u16 = 0x0300;
 const VIRTIO_PCI_CLASS_ID_OTHERS: u16 = 0x00ff;
 
@@ -158,8 +157,9 @@ fn init_gpu_bar0(config: &mut PciConfig) -> PciResult<()> {
 ///
 /// # Arguments
 ///
-/// * `device_type` - Device type set by the host.
-fn get_virtio_class_id(device_type: u32) -> u16 {
+/// * `device_type`  - Device type set by the host.
+/// * `device_quirk` - Device quirk set by the host.
+fn get_virtio_class_id(device_type: u32, _device_quirk: Option<VirtioDeviceQuirk>) -> u16 {
     match device_type {
         VIRTIO_TYPE_BLOCK => VIRTIO_PCI_CLASS_ID_BLOCK,
         VIRTIO_TYPE_SCSI => VIRTIO_PCI_CLASS_ID_BLOCK,
@@ -169,7 +169,12 @@ fn get_virtio_class_id(device_type: u32) -> u16 {
         #[cfg(target_arch = "x86_64")]
         VIRTIO_TYPE_GPU => VIRTIO_PCI_CLASS_ID_DISPLAY_VGA,
         #[cfg(target_arch = "aarch64")]
-        VIRTIO_TYPE_GPU => VIRTIO_PCI_CLASS_ID_DISPLAY_OTHER,
+        VIRTIO_TYPE_GPU => {
+            if _device_quirk == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0) {
+                return VIRTIO_PCI_CLASS_ID_DISPLAY_VGA;
+            }
+            VIRTIO_PCI_CLASS_ID_DISPLAY_OTHER
+        }
         _ => {
             warn!("Unknown device type, please make sure it is supported.");
             VIRTIO_PCI_CLASS_ID_OTHERS
@@ -984,7 +989,7 @@ impl PciDevOps for VirtioPciDevice {
             VIRTIO_PCI_DEVICE_ID_BASE + device_type as u16,
         )?;
         self.base.config.config[REVISION_ID] = VIRTIO_PCI_ABI_VERSION;
-        let class_id = get_virtio_class_id(device_type);
+        let class_id = get_virtio_class_id(device_type, device_quirk);
         le_write_u16(
             &mut self.base.config.config,
             SUB_CLASS_CODE as usize,

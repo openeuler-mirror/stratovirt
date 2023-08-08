@@ -671,6 +671,7 @@ pub fn console_init(
     );
     display_replace_surface(&Some(con.clone()), surface)
         .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    set_run_stage(VmRunningStage::Bios);
     Some(con)
 }
 
