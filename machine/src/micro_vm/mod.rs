@@ -895,7 +895,7 @@ impl MachineOps for LightMachine {
                     .sys_mem
                     .write(
                         &mut fdt_vec.as_slice(),
-                        GuestAddress(boot_cfg.fdt_addr as u64),
+                        GuestAddress(boot_cfg.fdt_addr),
                         fdt_vec.len() as u64,
                     )
                     .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
@@ -1634,7 +1634,7 @@ impl CompileFDTHelper for LightMachine {
         let node = "memory";
         let memory_node_dep = fdt.begin_node(node)?;
         fdt.set_property_string("device_type", "memory")?;
-        fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+        fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
         fdt.end_node(memory_node_dep)?;
 
         Ok(())

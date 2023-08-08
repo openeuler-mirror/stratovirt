@@ -67,7 +67,7 @@ impl PciDevOps for PciHostRoot {
             SUB_CLASS_CODE as usize,
             CLASS_CODE_HOST_BRIDGE,
         )?;
-        le_write_u16(&mut self.config.config, REVISION_ID as usize, 0)?;
+        le_write_u16(&mut self.config.config, REVISION_ID, 0)?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         parent_bus

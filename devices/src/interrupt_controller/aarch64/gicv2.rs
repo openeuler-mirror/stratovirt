@@ -215,7 +215,7 @@ impl MachineLifecycle for GICv2 {
 impl GICv2Access for GICv2 {
     fn vcpu_gicr_attr(&self, offset: u64, cpu: usize) -> u64 {
         (((cpu as u64) << kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_SHIFT as u64)
-            & kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_MASK as u64)
+            & kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_MASK)
             | ((offset << kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_SHIFT as u64)
                 & kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_MASK as u64)
     }

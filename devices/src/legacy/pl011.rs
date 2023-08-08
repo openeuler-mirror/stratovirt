@@ -210,7 +210,7 @@ impl InputReceiver for PL011 {
             self.state.flags |= PL011_FLAG_RXFF as u32;
         }
         if self.state.read_count >= self.state.read_trigger {
-            self.state.int_level |= INT_RX as u32;
+            self.state.int_level |= INT_RX;
             self.interrupt();
         }
     }
@@ -245,7 +245,7 @@ impl SysBusDevOps for PL011 {
                     self.state.flags |= PL011_FLAG_RXFE as u32;
                 }
                 if self.state.read_count == self.state.read_trigger - 1 {
-                    self.state.int_level &= !(INT_RX as u32);
+                    self.state.int_level &= !INT_RX;
                 }
                 self.state.rsr = c >> 8;
                 self.interrupt();
@@ -328,7 +328,7 @@ impl SysBusDevOps for PL011 {
                     return false;
                 }
 
-                self.state.int_level |= INT_TX as u32;
+                self.state.int_level |= INT_TX;
                 self.interrupt();
             }
             1 => {

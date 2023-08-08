@@ -260,8 +260,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     fn load_refcount_table(&mut self) -> Result<()> {
-        let sz = self.header.refcount_table_clusters as u64
-            * (self.header.cluster_size() / ENTRY_SIZE as u64);
+        let sz =
+            self.header.refcount_table_clusters as u64 * (self.header.cluster_size() / ENTRY_SIZE);
         self.refcount.refcount_table = self
             .sync_aio
             .borrow_mut()
@@ -1012,11 +1012,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 );
             }
 
-            if !self
-                .table
-                .l2_table_cache
-                .contains_keys(l2_table_offset as u64)
-            {
+            if !self.table.l2_table_cache.contains_keys(l2_table_offset) {
                 let l2_cluster = self.load_cluster(l2_table_offset)?;
                 let l2_table_entry = Rc::new(RefCell::new(CacheTable::new(
                     l2_table_offset,
