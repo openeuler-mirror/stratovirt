@@ -26,6 +26,7 @@ use crate::config::{
 };
 use crate::qmp::qmp_schema;
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
+
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
@@ -700,9 +701,8 @@ impl VmConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::get_pci_bdf;
-
     use super::*;
+    use crate::config::get_pci_bdf;
 
     #[test]
     fn test_drive_config_cmdline_parser() {

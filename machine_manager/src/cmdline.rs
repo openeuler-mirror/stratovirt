@@ -13,14 +13,14 @@
 use std::os::unix::net::UnixListener;
 
 use anyhow::{bail, Context, Result};
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
-use util::file::clear_file;
-use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
     config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
     temp_cleaner::TempCleaner,
 };
+use util::arg_parser::{Arg, ArgMatches, ArgParser};
+use util::file::clear_file;
+use util::unix::{limit_permission, parse_unix_uri};
 
 /// This macro is to run struct $z 's function $s whose arg is $x 's inner member.
 /// There is a multi-macro-cast in cases of vec and bool.

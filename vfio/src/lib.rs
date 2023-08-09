@@ -11,11 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-pub use error::VfioError;
 
 mod vfio_dev;
 mod vfio_pci;
 
+pub use error::VfioError;
 pub use vfio_dev::{
     VfioContainer, VfioDevice, VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO,
     VFIO_DEVICE_GET_IRQ_INFO, VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS,
@@ -28,11 +28,12 @@ use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
 use log::error;
 use once_cell::sync::Lazy;
+
+use hypervisor::kvm::KVM_FDS;
 use vfio_dev::VfioGroup;
 
 pub static KVM_DEVICE_FD: Lazy<Option<DeviceFd>> = Lazy::new(create_kvm_vfio_device);

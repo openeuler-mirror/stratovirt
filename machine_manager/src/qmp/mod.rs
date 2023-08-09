@@ -37,20 +37,20 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context, Result};
 use log::{error, info, warn};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use util::leak_bucket::LeakBucket;
-use util::set_termi_canon_mode;
-use util::time::NANOSECONDS_PER_SECOND;
 
 use self::qmp_schema::{self as schema, QmpCommand};
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
 use crate::temp_cleaner::TempCleaner;
-use anyhow::{Context, Result};
+use util::leak_bucket::LeakBucket;
+use util::set_termi_canon_mode;
+use util::time::NANOSECONDS_PER_SECOND;
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -602,9 +602,10 @@ pub fn send_device_deleted_msg(id: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
     use super::*;
     use serde_json;
-    use std::os::unix::net::{UnixListener, UnixStream};
 
     #[test]
     fn test_qmp_greeting_msg() {
@@ -699,8 +700,9 @@ mod tests {
 
     #[test]
     fn test_qmp_event_macro() {
-        use crate::socket::{Socket, SocketRWHandler};
         use std::io::Read;
+
+        use crate::socket::{Socket, SocketRWHandler};
 
         // Pre test. Environment preparation
         QmpChannel::object_init();
@@ -750,8 +752,9 @@ mod tests {
 
     #[test]
     fn test_qmp_send_response() {
-        use crate::socket::Socket;
         use std::io::Read;
+
+        use crate::socket::Socket;
 
         // Pre test. Environment preparation
         let mut buffer = [0u8; 300];

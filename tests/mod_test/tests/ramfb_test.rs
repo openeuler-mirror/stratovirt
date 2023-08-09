@@ -10,17 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use mod_test::libdriver::fwcfg::{bios_args, FwCfgDmaAccess};
-use mod_test::libdriver::machine::TestStdMachine;
-use mod_test::libdriver::malloc::GuestAllocator;
-use mod_test::libtest::{test_init, TestState};
-use mod_test::utils::{swap_u32, swap_u64};
-
 use std::cell::RefCell;
 use std::fs;
 use std::mem;
 use std::path::Path;
 use std::rc::Rc;
+
+use mod_test::libdriver::fwcfg::{bios_args, FwCfgDmaAccess};
+use mod_test::libdriver::machine::TestStdMachine;
+use mod_test::libdriver::malloc::GuestAllocator;
+use mod_test::libtest::{test_init, TestState};
+use mod_test::utils::{swap_u32, swap_u64};
 
 const FRAMEBUFFER_SIZE: u64 = 3 * 1024 * 1024;
 const RAMFB_FORMAT: u32 = 0x34325258;

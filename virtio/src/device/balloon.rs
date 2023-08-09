@@ -20,11 +20,18 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{anyhow, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
+
+use crate::{
+    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+};
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use anyhow::{anyhow, Context, Result};
-use log::{error, warn};
 use machine_manager::{
     config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
     event,
@@ -42,13 +49,6 @@ use util::{
     offset_of,
     seccomp::BpfRule,
     unix::host_page_size,
-};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
-
-use crate::{
-    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
-    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;

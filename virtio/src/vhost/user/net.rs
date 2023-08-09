@@ -13,11 +13,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use address_space::AddressSpace;
-use machine_manager::config::NetworkInterfaceConfig;
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use anyhow::{anyhow, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::VhostOps;
@@ -31,7 +27,11 @@ use crate::{
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
     VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
-use anyhow::{anyhow, Context, Result};
+use address_space::AddressSpace;
+use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::byte_code::ByteCode;
+use util::loop_context::EventNotifierHelper;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;

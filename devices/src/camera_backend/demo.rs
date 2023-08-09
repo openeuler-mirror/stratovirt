@@ -23,13 +23,12 @@ use log::{debug, error, info};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
-use util::aio::{mem_from_buf, Iovec};
-
 use super::INTERVALS_PER_SEC;
 use crate::camera_backend::{
     CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
     CameraNotifyCallback, FmtType,
 };
+use util::aio::{mem_from_buf, Iovec};
 
 #[derive(Debug)]
 enum RgbColor {

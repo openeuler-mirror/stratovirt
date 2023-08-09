@@ -13,8 +13,9 @@
 use std::cmp::Ord;
 use std::mem::size_of;
 
-use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
+
+use crate::UtilError;
 
 /// This struct is used to offer bitmap.
 pub struct Bitmap<T: BitOps> {

@@ -15,11 +15,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, Context, Result};
+use log::info;
+
 use crate::error::BootLoaderError;
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, Context, Result};
 use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
-use log::info;
 use util::byte_code::ByteCode;
 
 const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;

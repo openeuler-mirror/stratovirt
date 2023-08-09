@@ -20,6 +20,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use log::error;
+use vmm_sys_util::epoll::EventSet;
 
 use super::cmdline::FsConfig;
 use super::fs::set_rlimit_nofile;
@@ -29,7 +30,6 @@ use machine_manager::{event_loop::EventLoop, temp_cleaner::TempCleaner};
 use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use vmm_sys_util::epoll::EventSet;
 
 /// The vhost-user filesystem device contains virtio fs device and the vhost-user
 /// server which can be connected with the vhost-user client in StratoVirt.

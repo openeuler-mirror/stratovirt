@@ -19,17 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use address_space::{
-    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
-};
 use log::{error, info, warn};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
-use util::loop_context::{
-    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-use util::unix::do_mmap;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::super::VhostOps;
 use super::message::{
@@ -40,6 +31,14 @@ use super::sock::VhostUserSock;
 use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
+use address_space::{
+    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
+use util::loop_context::{
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
+use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;

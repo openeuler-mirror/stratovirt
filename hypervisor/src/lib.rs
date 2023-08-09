@@ -13,6 +13,6 @@
 //! This crate offers interfaces for different kinds of hypervisors, such as KVM.
 
 pub mod error;
-pub use error::HypervisorError;
-
 pub mod kvm;
+
+pub use error::HypervisorError;

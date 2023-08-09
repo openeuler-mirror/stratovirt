@@ -11,12 +11,15 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::fmt::Debug;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, Context, Result};
 use libc::{c_void, read, EFD_NONBLOCK};
 use log::{error, warn};
 use nix::errno::Errno;
@@ -29,9 +32,6 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::clock::{get_current_time, ClockState};
 use crate::UtilError;
-use anyhow::{anyhow, Context, Result};
-use std::fmt;
-use std::fmt::Debug;
 
 const READY_EVENT_MAX: usize = 256;
 const AIO_PRFETCH_CYCLE_TIME: usize = 100;
@@ -669,9 +669,11 @@ pub fn read_fd(fd: RawFd) -> u64 {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::os::unix::io::{AsRawFd, RawFd};
+
     use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+    use super::*;
 
     impl EventLoopContext {
         fn check_existence(&self, fd: RawFd) -> Option<bool> {

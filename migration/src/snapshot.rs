@@ -10,15 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::general::{translate_id, Lifecycle};
-use crate::manager::{MigrationManager, MIGRATION_MANAGER};
-use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
-use crate::MigrationError;
-use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+
+use anyhow::{anyhow, bail, Context, Result};
+
+use crate::general::{translate_id, Lifecycle};
+use crate::manager::{MigrationManager, MIGRATION_MANAGER};
+use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
+use crate::MigrationError;
 use util::unix::host_page_size;
 
 pub const SERIAL_SNAPSHOT_ID: &str = "serial";

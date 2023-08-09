@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::config::{CmdParser, ConfigError, VmConfig};
+use std::net::Ipv4Addr;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
+
+use crate::config::{CmdParser, ConfigError, VmConfig};
 
 /// Configuration of vnc.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

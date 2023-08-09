@@ -10,13 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::malloc::GuestAllocator;
-use crate::libtest::TestState;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::time;
+
+use super::malloc::GuestAllocator;
+use crate::libtest::TestState;
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
 use util::offset_of;

@@ -13,17 +13,9 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::{Device, DeviceBase};
-use address_space::Region;
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
-use machine_manager::qmp::send_device_deleted_msg;
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
 use once_cell::sync::OnceCell;
-use util::byte_code::ByteCode;
 
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
@@ -46,6 +38,14 @@ use crate::pci::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
 };
+use crate::{Device, DeviceBase};
+use address_space::Region;
+use machine_manager::qmp::send_device_deleted_msg;
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
+use migration_derive::{ByteCode, Desc};
+use util::byte_code::ByteCode;
 
 const DEVICE_ID_RP: u16 = 0x000c;
 

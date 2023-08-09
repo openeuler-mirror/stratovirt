@@ -532,9 +532,8 @@ fn is_netdev_queues_valid(queues: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
-
     use super::*;
+    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
 
     #[test]
     fn test_network_config_cmdline_parser() {

@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cmp, mem};
+
 use crate::{
     pixman::{bytes_per_pixel, get_image_data, get_image_stride},
     vnc::{
@@ -17,7 +19,6 @@ use crate::{
         write_pixel,
     },
 };
-use std::{cmp, mem};
 use util::pixman::pixman_image_t;
 
 /// Size of subrectangle.

@@ -16,10 +16,17 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::VfioError;
-use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use log::error;
+use vfio_bindings::bindings::vfio;
+use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::ioctl::ioctl_with_mut_ref;
+
+use crate::vfio_dev::*;
+use crate::VfioError;
+use crate::{CONTAINERS, GROUPS};
+use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 #[cfg(target_arch = "aarch64")]
 use devices::pci::config::SECONDARY_BUS_NUM;
 use devices::pci::config::{
@@ -39,14 +46,7 @@ use devices::pci::{
 };
 use devices::{Device, DeviceBase};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
 use util::unix::host_page_size;
-use vfio_bindings::bindings::vfio;
-use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::ioctl::ioctl_with_mut_ref;
-
-use crate::vfio_dev::*;
-use crate::{CONTAINERS, GROUPS};
 
 const PCI_NUM_BARS: u8 = 6;
 const PCI_ROM_SLOT: u8 = 6;

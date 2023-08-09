@@ -10,21 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod error;
-use crate::{Device, DeviceBase};
-pub use anyhow::Result;
-pub use error::UsbError;
-use util::byte_code::ByteCode;
-
 #[cfg(not(target_env = "musl"))]
 pub mod camera;
 #[cfg(not(target_env = "musl"))]
 pub mod camera_media_type_guid;
 pub mod config;
-mod descriptor;
+pub mod error;
 #[cfg(not(target_env = "musl"))]
 pub mod hid;
-
 #[cfg(not(target_env = "musl"))]
 pub mod keyboard;
 #[cfg(not(target_env = "musl"))]
@@ -35,17 +28,25 @@ pub mod tablet;
 pub mod usbhost;
 pub mod xhci;
 
+mod descriptor;
+
+pub use anyhow::Result;
+
+pub use error::UsbError;
+
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context};
 use log::{debug, error};
-use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 
 use self::descriptor::USB_MAX_INTERFACES;
+use crate::{Device, DeviceBase};
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
 use machine_manager::qmp::send_device_deleted_msg;
+use util::aio::{mem_from_buf, mem_to_buf, Iovec};
+use util::byte_code::ByteCode;
 use xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;

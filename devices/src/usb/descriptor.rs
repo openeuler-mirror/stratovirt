@@ -14,10 +14,9 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use util::byte_code::ByteCode;
-
 use super::config::*;
 use super::UsbDevice;
+use util::byte_code::ByteCode;
 
 pub const USB_MAX_INTERFACES: u32 = 16;
 const USB_DESCRIPTOR_TYPE_SHIFT: u32 = 8;

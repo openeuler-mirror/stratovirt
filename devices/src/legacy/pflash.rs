@@ -14,13 +14,14 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, error, warn};
+
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
-use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, error, warn};
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 
 pub struct PFlash {
@@ -879,11 +880,12 @@ impl AmlBuilder for PFlash {
 
 #[cfg(test)]
 mod test {
+    use std::fs;
+    use std::fs::File;
+
     use super::*;
     use crate::sysbus::{IRQ_BASE, IRQ_MAX};
     use address_space::AddressSpace;
-    use std::fs;
-    pub use std::fs::File;
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(

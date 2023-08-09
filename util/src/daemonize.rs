@@ -39,8 +39,9 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::process::exit;
 
-use crate::UtilError;
 use anyhow::{anyhow, Result};
+
+use crate::UtilError;
 
 /// Write process id to pid file.
 fn create_pid_file(path: &str) -> Result<()> {

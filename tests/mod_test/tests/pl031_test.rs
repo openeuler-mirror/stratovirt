@@ -10,11 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
-use mod_test::libtest::{test_init, TestState};
-use rand::{thread_rng, Rng};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use rand::{thread_rng, Rng};
+
+use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
+use mod_test::libtest::{test_init, TestState};
 
 const RTC_ADDR_BASE: u64 = 0x0901_0000;
 

@@ -10,12 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, bail, Context, Result};
+
 use super::error::ConfigError;
 use crate::config::{
     pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_SOCK_PATH_LENGTH,
     MAX_STRING_LENGTH, MAX_TAG_LENGTH,
 };
-use anyhow::{anyhow, bail, Context, Result};
 
 /// Config struct for `fs`.
 /// Contains fs device's attr.

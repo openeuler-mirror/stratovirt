@@ -77,10 +77,9 @@
 //! ```
 //! This programe will be trapped.
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 
 use crate::offset_of;
-use anyhow::Result;
 
 // BPF Instruction classes
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/bpf_common.h#L7

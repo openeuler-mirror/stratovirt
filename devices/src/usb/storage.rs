@@ -20,8 +20,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 
-use machine_manager::config::{DriveFile, UsbStorageConfig};
-
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
@@ -36,6 +34,7 @@ use crate::{
     },
     ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
 };
+use machine_manager::config::{DriveFile, UsbStorageConfig};
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {

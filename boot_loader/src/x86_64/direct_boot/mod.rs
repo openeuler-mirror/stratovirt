@@ -20,9 +20,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use log::info;
 
-use address_space::{AddressSpace, GuestAddress};
-use util::byte_code::ByteCode;
-
 use self::gdt::setup_gdt;
 use self::mptable::setup_isa_mptable;
 use super::bootparam::{BootParams, RealModeKernelHeader, UNDEFINED_ID};
@@ -32,6 +29,8 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
+use address_space::{AddressSpace, GuestAddress};
+use util::byte_code::ByteCode;
 
 /// Load bzImage linux kernel to Guest Memory.
 ///
@@ -276,13 +275,14 @@ pub fn load_linux(
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use super::super::BOOT_GDT_MAX;
-    use address_space::*;
     use kvm_bindings::kvm_segment;
+
+    use super::super::BOOT_GDT_MAX;
+    use super::*;
+    use address_space::*;
 
     #[test]
     fn test_x86_bootloader_and_kernel_cmdline() {

@@ -10,37 +10,38 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod error;
-pub use error::PciError;
 pub mod config;
 pub mod demo_dev;
+pub mod demo_device;
+pub mod error;
 pub mod hotplug;
 pub mod intx;
 pub mod msix;
 
 mod bus;
-pub mod demo_device;
 mod host;
 mod root_port;
 
-use crate::{Device, DeviceBase};
+pub use anyhow::{bail, Result};
+
 pub use bus::PciBus;
 pub use config::{PciConfig, INTERRUPT_PIN};
+pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, is_msix_enabled};
 pub use root_port::RootPort;
-use util::AsAny;
 
 use std::{
     mem::size_of,
     sync::{Arc, Mutex, Weak},
 };
 
-pub use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::{Device, DeviceBase};
+use util::AsAny;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;

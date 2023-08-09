@@ -21,8 +21,6 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use serde_json::Value;
 
-use util::byte_code::ByteCode;
-
 use super::{
     machine::TestStdMachine,
     malloc::GuestAllocator,
@@ -53,6 +51,7 @@ use devices::usb::{
     },
     UsbDeviceRequest,
 };
+use util::byte_code::ByteCode;
 
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;

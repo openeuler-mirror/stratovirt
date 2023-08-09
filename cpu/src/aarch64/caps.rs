@@ -15,9 +15,9 @@ use kvm_bindings::{
     KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::{Cap, Kvm, VcpuFd};
-use machine_manager::config::{CpuConfig, PmuConfig};
 
 use super::core_regs::Result;
+use machine_manager::config::{CpuConfig, PmuConfig};
 
 // Capabilities for ARM cpu.
 #[derive(Debug, Clone)]

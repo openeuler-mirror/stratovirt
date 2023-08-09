@@ -13,14 +13,14 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hypervisor::kvm::KVM_FDS;
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::{kvm_userspace_memory_region, KVM_MEM_READONLY};
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
 use log::{debug, warn};
-use util::{num_ops::round_down, unix::host_page_size};
 
 use crate::{AddressRange, AddressSpaceError, FlatRange, RegionIoEventFd, RegionType};
-use anyhow::{anyhow, bail, Context, Result};
+use hypervisor::kvm::KVM_FDS;
+use util::{num_ops::round_down, unix::host_page_size};
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -615,12 +615,12 @@ impl Listener for KvmIoListener {
 
 #[cfg(test)]
 mod test {
-    use hypervisor::kvm::KVMFds;
     use libc::EFD_NONBLOCK;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
     use crate::{GuestAddress, HostMemMapping, Region, RegionIoEventFd};
+    use hypervisor::kvm::KVMFds;
 
     fn generate_region_ioeventfd<T: Into<u64>>(addr: u64, datamatch: T) -> RegionIoEventFd {
         let data = datamatch.into();

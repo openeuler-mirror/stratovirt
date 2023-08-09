@@ -10,6 +10,22 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{
+    cell::RefCell,
+    cmp,
+    collections::HashMap,
+    io::{Read, Write},
+    net::{Shutdown, TcpStream},
+    os::unix::prelude::{AsRawFd, RawFd},
+    rc::Rc,
+    sync::{Arc, Mutex, Weak},
+};
+
+use anyhow::{anyhow, bail, Result};
+use log::error;
+use sscanf::scanf;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
 use crate::{
     console::console_select,
     error::VncError,
@@ -26,19 +42,6 @@ use crate::{
         MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
     },
 };
-use anyhow::{anyhow, bail, Result};
-use log::error;
-use sscanf::scanf;
-use std::{
-    cell::RefCell,
-    cmp,
-    collections::HashMap,
-    io::{Read, Write},
-    net::{Shutdown, TcpStream},
-    os::unix::prelude::{AsRawFd, RawFd},
-    rc::Rc,
-    sync::{Arc, Mutex, Weak},
-};
 use util::{
     bitmap::Bitmap,
     loop_context::{
@@ -46,7 +49,6 @@ use util::{
         NotifierOperation,
     },
 };
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub const APP_NAME: &str = "stratovirt";
 const MAX_RECVBUF_LEN: usize = 1024;

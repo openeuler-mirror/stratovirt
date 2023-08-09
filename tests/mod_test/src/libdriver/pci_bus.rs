@@ -10,12 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::libdriver::pci::*;
 use crate::libtest::TestState;
 use crate::utils::{read_le_u16, read_le_u32, read_le_u64};
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 const PCIE_MMIO_BASE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
 const PCIE_MMIO_SIZE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;

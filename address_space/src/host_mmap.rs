@@ -18,13 +18,13 @@ use std::thread;
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+
+use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
 use util::{
     syscall::mbind,
     unix::{do_mmap, host_page_size},
 };
-
-use crate::{AddressRange, GuestAddress, Region};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 /// Verify existing pages in the mapping.
@@ -484,9 +484,11 @@ impl Drop for HostMemMapping {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::io::{Read, Seek, SeekFrom, Write};
+
     use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
 
     fn identify(ram: HostMemMapping, st: u64, end: u64) {
         assert_eq!(ram.start_address(), GuestAddress(st));

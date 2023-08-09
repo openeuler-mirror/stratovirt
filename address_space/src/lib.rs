@@ -77,17 +77,19 @@
 //! }
 //! ```
 
+pub mod error;
+
 mod address;
 mod address_space;
-pub mod error;
 mod host_mmap;
 mod listener;
 mod region;
 mod state;
 
+pub use anyhow::Result;
+
 pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
-pub use anyhow::Result;
 pub use error::AddressSpaceError;
 pub use host_mmap::{create_backend_mem, create_default_mem, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]

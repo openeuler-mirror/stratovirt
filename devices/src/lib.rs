@@ -19,13 +19,14 @@
 pub mod acpi;
 #[cfg(not(target_env = "musl"))]
 pub mod camera_backend;
-mod interrupt_controller;
 pub mod legacy;
 pub mod misc;
 pub mod pci;
 pub mod scsi;
 pub mod sysbus;
 pub mod usb;
+
+mod interrupt_controller;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{

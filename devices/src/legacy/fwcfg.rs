@@ -12,6 +12,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
+#[cfg(target_arch = "x86_64")]
+use byteorder::LittleEndian;
+use byteorder::{BigEndian, ByteOrder};
+use log::{error, warn};
+
 use crate::legacy::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
@@ -23,14 +29,10 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Context, Result};
-#[cfg(target_arch = "x86_64")]
-use byteorder::LittleEndian;
-use byteorder::{BigEndian, ByteOrder};
-use log::{error, warn};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::offset_of;
+
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
 // Size of ioports including control/data registers and DMA.

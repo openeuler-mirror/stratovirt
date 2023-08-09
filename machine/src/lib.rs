@@ -11,12 +11,18 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-mod micro_vm;
 pub mod standard_vm;
+
+mod micro_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
 
+pub use anyhow::Result;
+
 pub use crate::error::MachineError;
+pub use micro_vm::LightMachine;
+pub use standard_vm::StdMachine;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
@@ -27,34 +33,22 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 #[cfg(not(target_env = "musl"))]
 use std::time::Duration;
 
-#[cfg(not(target_env = "musl"))]
-use devices::misc::scream::Scream;
+use anyhow::{anyhow, bail, Context};
 use log::warn;
 #[cfg(not(target_env = "musl"))]
-use machine_manager::config::scream::parse_scream;
-use machine_manager::event_loop::EventLoop;
-#[cfg(not(target_env = "musl"))]
-use ui::console::{get_run_stage, VmRunningStage};
-use util::file::{clear_file, lock_file, unlock_file};
-#[cfg(not(target_env = "musl"))]
 use vmm_sys_util::eventfd::EventFd;
-
-pub use micro_vm::LightMachine;
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{
     create_backend_mem, create_default_mem, AddressSpace, KvmMemoryListener, Region,
 };
-pub use anyhow::Result;
-use anyhow::{anyhow, bail, Context};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
-#[cfg(target_arch = "aarch64")]
-use devices::InterruptController;
-
+#[cfg(not(target_env = "musl"))]
+use devices::misc::scream::Scream;
 use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(not(target_env = "musl"))]
@@ -62,8 +56,12 @@ use devices::usb::{
     camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
     usbhost::UsbHost, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
 };
+#[cfg(target_arch = "aarch64")]
+use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
     parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -78,12 +76,15 @@ use machine_manager::config::{
     parse_gpu, parse_usb_camera, parse_usb_host, parse_usb_keyboard, parse_usb_storage,
     parse_usb_tablet, parse_xhci,
 };
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
-pub use standard_vm::StdMachine;
+#[cfg(not(target_env = "musl"))]
+use ui::console::{get_run_stage, VmRunningStage};
+use util::file::{clear_file, lock_file, unlock_file};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},

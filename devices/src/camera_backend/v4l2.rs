@@ -26,17 +26,15 @@ use v4l2_sys_mit::{
 };
 use vmm_sys_util::epoll::EventSet;
 
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::aio::Iovec;
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
-
+use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
     CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::aio::Iovec;
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
 use util::v4l2::{new_init, V4l2Backend};
-
-use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 
 const BUFFER_CNT: usize = 4;
 

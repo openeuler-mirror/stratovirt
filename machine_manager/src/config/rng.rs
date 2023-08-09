@@ -134,9 +134,8 @@ pub fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::get_pci_bdf;
-
     use super::*;
+    use crate::config::get_pci_bdf;
 
     #[test]
     fn test_rng_config_cmdline_parser_01() {

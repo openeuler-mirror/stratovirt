@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use address_space::Region;
+use anyhow::{anyhow, Context, Result};
 use log::{error, warn};
 
 use crate::pci::intx::Intx;
@@ -23,7 +23,7 @@ use crate::pci::{
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
 };
 use crate::pci::{ranges_overlap, PciError};
-use anyhow::{anyhow, Context, Result};
+use address_space::Region;
 
 /// Size in bytes of the configuration space of legacy PCI device.
 pub const PCI_CONFIG_SPACE_SIZE: usize = 256;
@@ -1186,9 +1186,8 @@ impl PciConfig {
 
 #[cfg(test)]
 mod tests {
-    use address_space::{AddressSpace, GuestAddress, RegionOps};
-
     use super::*;
+    use address_space::{AddressSpace, GuestAddress, RegionOps};
 
     const MSI_CAP_ID: u8 = 0x05;
     const MSIX_CAP_ID: u8 = 0x11;

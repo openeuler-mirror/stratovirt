@@ -18,8 +18,9 @@ use std::{
     process,
 };
 
-use crate::OzoneError;
 use anyhow::{bail, Context, Result};
+
+use crate::OzoneError;
 
 const MOUNT_DIR: &str = "/proc/mounts";
 const CGROUP_ALLOW_LIST: [&str; 2] = ["cpuset.cpus", "memory.limit_in_bytes"];

@@ -10,6 +10,35 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod camera;
+pub mod display;
+pub mod error;
+pub mod vnc;
+
+mod balloon;
+mod boot_source;
+mod chardev;
+mod demo_dev;
+mod devices;
+mod drive;
+mod fs;
+mod gpu;
+mod incoming;
+mod iothread;
+mod machine_config;
+mod network;
+mod numa;
+mod pci;
+mod ramfb;
+mod rng;
+mod sasl_auth;
+pub mod scream;
+mod scsi;
+mod smbios;
+mod tls_creds;
+mod usb;
+mod vfio;
+
 pub use balloon::*;
 pub use boot_source::*;
 pub use camera::*;
@@ -37,42 +66,14 @@ pub use usb::*;
 pub use vfio::*;
 pub use vnc::*;
 
-mod balloon;
-mod boot_source;
-pub mod camera;
-mod chardev;
-mod demo_dev;
-mod devices;
-pub mod display;
-mod drive;
-pub mod error;
-mod fs;
-mod gpu;
-mod incoming;
-mod iothread;
-mod machine_config;
-mod network;
-mod numa;
-mod pci;
-mod ramfb;
-mod rng;
-mod sasl_auth;
-pub mod scream;
-mod scsi;
-mod smbios;
-mod tls_creds;
-mod usb;
-mod vfio;
-pub mod vnc;
-
 use std::collections::HashMap;
 use std::fs::File;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use serde::{Deserialize, Serialize};
+
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::{
@@ -784,6 +785,7 @@ mod tests {
     fn test_add_trace_events_02() {
         use std::fs::File;
         use std::io::Write;
+
         use util::trace::is_trace_event_enabled;
 
         let file = "/tmp/test_trace_events";

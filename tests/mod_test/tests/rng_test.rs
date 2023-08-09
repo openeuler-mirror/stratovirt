@@ -10,6 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::os::unix::fs::FileTypeExt;
+use std::path::Path;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{
     TestVirtQueue, TestVringDescEntry, VirtioDeviceOps, VIRTIO_F_VERSION_1,
@@ -17,13 +24,6 @@ use mod_test::libdriver::virtio::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libdriver::virtio_rng::create_rng;
 use mod_test::libtest::TestState;
-
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::os::unix::fs::FileTypeExt;
-use std::path::Path;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 
 const TIMEOUT_US: u64 = 10 * 1000 * 1000;
 const RANDOM_FILE: &str = "/dev/random";

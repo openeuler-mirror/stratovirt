@@ -15,12 +15,13 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_ioctls::Kvm;
 use serde::{Deserialize, Serialize};
 
 use crate::MigrationError;
-use anyhow::{anyhow, bail, Context, Result};
 use util::byte_code::ByteCode;
+
 /// This status for migration in migration process.
 ///
 /// # Notes

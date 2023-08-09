@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::str::FromStr;
+
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::config::{CmdParser, VmConfig};
-use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct SmbiosType0Config {
