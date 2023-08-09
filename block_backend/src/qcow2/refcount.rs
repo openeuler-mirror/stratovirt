@@ -250,7 +250,7 @@ impl RefCount {
             bail!("Failed to set refcounts, recover {}", status);
         }
         if flush {
-            self.flush_refcount_block_cache()?;
+            self.flush()?;
         }
         Ok(())
     }
@@ -279,7 +279,7 @@ impl RefCount {
         rc_vec.len()
     }
 
-    pub fn flush_refcount_block_cache(&self) -> Result<()> {
+    pub fn flush(&self) -> Result<()> {
         for (_, entry) in self.refcount_blk_cache.iter() {
             let mut borrowed_entry = entry.borrow_mut();
             if !borrowed_entry.dirty_info.is_dirty {
@@ -593,6 +593,10 @@ impl RefCount {
             borrowed_entry.dirty_info.start,
             borrowed_entry.dirty_info.end,
         )
+    }
+
+    pub fn drop_dirty_caches(&mut self) {
+        self.refcount_blk_cache.clean_up_dirty_cache();
     }
 }
 
