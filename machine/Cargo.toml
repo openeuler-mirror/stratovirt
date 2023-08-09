@@ -28,8 +28,6 @@ util = { path = "../util" }
 virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
 block_backend = { path = "../block_backend" }
-
-[target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }
 
 [features]

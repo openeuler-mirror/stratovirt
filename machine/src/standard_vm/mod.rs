@@ -69,11 +69,9 @@ use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 use migration::MigrationManager;
+use ui::input::{key_event, point_event};
 #[cfg(not(target_env = "musl"))]
-use ui::{
-    input::{key_event, point_event},
-    vnc::qmp_query_vnc,
-};
+use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
@@ -1011,12 +1009,14 @@ impl StdMachine {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn plug_usb_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
+        #[cfg(not(target_env = "musl"))]
         let mut cfg_args = format!("id={}", args.id);
+        #[cfg(target_env = "musl")]
+        let cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
                 self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
@@ -1024,6 +1024,7 @@ impl StdMachine {
             "usb-tablet" => {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
             }
+            #[cfg(not(target_env = "musl"))]
             "usb-camera" => {
                 if let Some(cameradev) = &args.cameradev {
                     cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
@@ -1033,6 +1034,7 @@ impl StdMachine {
                 }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
+            #[cfg(not(target_env = "musl"))]
             "usb-host" => {
                 let default_value = "0".to_string();
                 let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
@@ -1064,7 +1066,6 @@ impl StdMachine {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -1292,7 +1293,6 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            #[cfg(not(target_env = "musl"))]
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
                     error!("{:?}", e);
@@ -1373,19 +1373,12 @@ impl DeviceInterface for StdMachine {
         drop(locked_pci_host);
 
         // The device is not a pci device, assume it is a usb device.
-        #[cfg(not(target_env = "musl"))]
-        return match self.handle_unplug_usb_request(device_id) {
+        match self.handle_unplug_usb_request(device_id) {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
             ),
-        };
-
-        #[cfg(target_env = "musl")]
-        {
-            let err_str = format!("Failed to remove device: id {} not found", &device_id);
-            Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
         }
     }
 
@@ -1744,7 +1737,6 @@ impl DeviceInterface for StdMachine {
         Response::create_empty_response()
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn input_event(&self, key: String, value: String) -> Response {
         match send_input_event(key, value) {
             Ok(()) => Response::create_empty_response(),
@@ -2013,7 +2005,6 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     Ok(config)
 }
 
-#[cfg(not(target_env = "musl"))]
 fn send_input_event(key: String, value: String) -> Result<()> {
     match key.as_str() {
         "keyboard" => {

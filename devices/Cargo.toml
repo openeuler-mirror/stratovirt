@@ -29,9 +29,9 @@ migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
 block_backend = { path = "../block_backend"}
+ui = { path = "../ui" }
 
 [target.'cfg(not(target_env = "musl"))'.dependencies]
-ui = { path = "../ui" }
 pulse = { version = "2.27", package = "libpulse-binding" }
 psimple = { version = "2.27", package = "libpulse-simple-binding" }
 rusb = "0.9"
