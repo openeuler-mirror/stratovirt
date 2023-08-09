@@ -42,9 +42,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     console::{
-        create_msg_surface, get_active_console, graphic_hardware_update, register_display,
-        DisplayChangeListener, DisplayChangeListenerOperations, DisplayConsole, DisplayMouse,
-        DisplaySurface, DEFAULT_SURFACE_HEIGHT, DEFAULT_SURFACE_WIDTH,
+        create_msg_surface, get_active_console, get_run_stage, graphic_hardware_update,
+        register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayConsole,
+        DisplayMouse, DisplaySurface, VmRunningStage, DEFAULT_SURFACE_HEIGHT,
+        DEFAULT_SURFACE_WIDTH, DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
     data::keycode::KEYSYM2KEYCODE,
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
@@ -166,6 +167,15 @@ impl DisplayChangeListenerOperations for GtkInterface {
         &self,
         dcl: &std::sync::Arc<std::sync::Mutex<DisplayChangeListener>>,
     ) -> Result<()> {
+        // The way virtio-gpu devices are used in phase OS and others is different.
+        if self.dev_name.starts_with("virtio-gpu") {
+            if get_run_stage() == VmRunningStage::Os {
+                dcl.lock().unwrap().update_interval = 0;
+            } else {
+                dcl.lock().unwrap().update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT;
+            }
+        }
+
         let event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplayRefresh);
         let con_id = dcl.lock().unwrap().con_id;
