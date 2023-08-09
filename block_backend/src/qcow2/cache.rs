@@ -10,15 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{
-    cell::RefCell,
-    collections::{hash_map::Iter, HashMap},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::{bail, Result};
 use byteorder::{BigEndian, ByteOrder};
-use log::warn;
+use log::{error, warn};
+
+use crate::qcow2::SyncAioInfo;
 
 const CACHE_DEFAULT_SIZE: usize = 1;
 pub const ENTRY_SIZE_U16: usize = 2;
@@ -99,7 +97,7 @@ impl CacheTable {
     }
 
     #[inline(always)]
-    pub fn get_entry_map(&mut self, idx: usize) -> Result<u64> {
+    pub fn get_entry_map(&self, idx: usize) -> Result<u64> {
         self.be_read(idx)
     }
 
@@ -145,6 +143,8 @@ pub struct Qcow2Cache {
     /// LRU count which record the latest count and increased when cache is accessed.
     pub lru_count: u64,
     pub cache_map: HashMap<u64, Rc<RefCell<CacheTable>>>,
+    /// Used to store the modified CacheTable.
+    dirty_tables: Vec<Rc<RefCell<CacheTable>>>,
 }
 
 impl Qcow2Cache {
@@ -160,6 +160,7 @@ impl Qcow2Cache {
             max_size,
             lru_count: 0,
             cache_map: HashMap::with_capacity(max_size),
+            dirty_tables: Vec::with_capacity(max_size),
         }
     }
 
@@ -185,10 +186,6 @@ impl Qcow2Cache {
         entry.borrow_mut().lru_count = self.lru_count;
         self.lru_count += 1;
         Some(entry)
-    }
-
-    pub fn iter(&self) -> Iter<u64, Rc<RefCell<CacheTable>>> {
-        self.cache_map.iter()
     }
 
     pub fn lru_replace(
@@ -231,6 +228,36 @@ impl Qcow2Cache {
         for key in dirty_keys {
             self.cache_map.remove(&key);
         }
+    }
+
+    pub fn flush(&mut self, sync_aio: Rc<RefCell<SyncAioInfo>>) -> Result<()> {
+        let mut ret = Ok(());
+        for entry in self.dirty_tables.iter() {
+            let mut borrowed_entry = entry.borrow_mut();
+            if !borrowed_entry.dirty_info.is_dirty {
+                continue;
+            }
+            sync_aio
+                .borrow_mut()
+                .write_dirty_info(
+                    borrowed_entry.addr,
+                    borrowed_entry.get_value(),
+                    borrowed_entry.dirty_info.start,
+                    borrowed_entry.dirty_info.end,
+                )
+                .unwrap_or_else(|e| {
+                    error!("Failed to flush cache, {:?}", e.to_string());
+                    ret = Err(e);
+                });
+            borrowed_entry.dirty_info.clear();
+        }
+        self.dirty_tables.clear();
+
+        ret
+    }
+
+    pub fn add_dirty_table(&mut self, table: Rc<RefCell<CacheTable>>) {
+        self.dirty_tables.push(table);
     }
 }
 

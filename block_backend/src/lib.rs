@@ -27,7 +27,7 @@ use machine_manager::{
     config::DiskFormat,
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
-use qcow2::{Qcow2Driver, QCOW2_LIST};
+use qcow2::{qcow2_flush_metadata, Qcow2Driver, QCOW2_LIST};
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -134,6 +134,10 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id, exit_notifier);
+
+            // Add timer for flushing qcow2 metadata.
+            qcow2_flush_metadata(Arc::downgrade(&new_qcow2));
+
             Ok(new_qcow2)
         }
     }
