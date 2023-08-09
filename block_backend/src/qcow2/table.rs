@@ -83,6 +83,8 @@ pub struct Qcow2Table {
     cluster_bits: u64,
     cluster_size: u64,
     pub l1_table: Vec<u64>,
+    l1_table_offset: u64,
+    l1_size: u32,
     pub l2_table_cache: Qcow2Cache,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     l2_bits: u64,
@@ -96,6 +98,8 @@ impl Qcow2Table {
             cluster_bits: 0,
             cluster_size: 0,
             l1_table: Vec::new(),
+            l1_table_offset: 0,
+            l1_size: 0,
             l2_table_cache: Qcow2Cache::default(),
             l2_bits: 0,
             l2_size: 0,
@@ -131,23 +135,25 @@ impl Qcow2Table {
         self.l2_bits = header.cluster_bits as u64 - ENTRY_BITS;
         self.l2_size = header.cluster_size() / ENTRY_SIZE;
         self.l2_table_cache = l2_table_cache;
-        self.load_l1_table(header)
+        self.l1_table_offset = header.l1_table_offset;
+        self.l1_size = header.l1_size;
+        self.load_l1_table()
             .with_context(|| "Failed to load l1 table")?;
         Ok(())
     }
 
-    fn load_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn load_l1_table(&mut self) -> Result<()> {
         self.l1_table = self
             .sync_aio
             .borrow_mut()
-            .read_ctrl_cluster(header.l1_table_offset, header.l1_size as u64)?;
+            .read_ctrl_cluster(self.l1_table_offset, self.l1_size as u64)?;
         Ok(())
     }
 
-    pub fn save_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn save_l1_table(&mut self) -> Result<()> {
         self.sync_aio
             .borrow_mut()
-            .write_ctrl_cluster(header.l1_table_offset, &self.l1_table)
+            .write_ctrl_cluster(self.l1_table_offset, &self.l1_table)
     }
 
     pub fn get_l1_table_index(&self, guest_offset: u64) -> u64 {
@@ -227,7 +233,12 @@ impl Qcow2Table {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.flush_l2_table_cache()
+        self.flush_l2_table_cache()?;
+        self.save_l1_table()
+    }
+
+    pub fn drop_dirty_caches(&mut self) {
+        self.l2_table_cache.clean_up_dirty_cache();
     }
 }
 

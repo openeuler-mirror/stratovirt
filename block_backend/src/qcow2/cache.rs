@@ -220,6 +220,18 @@ impl Qcow2Cache {
         self.cache_map.insert(key, entry);
         replaced_entry
     }
+
+    pub fn clean_up_dirty_cache(&mut self) {
+        let mut dirty_keys = Vec::with_capacity(self.cache_map.len());
+        for (key, entry) in self.cache_map.iter() {
+            if entry.borrow().dirty_info.is_dirty {
+                dirty_keys.push(*key);
+            }
+        }
+        for key in dirty_keys {
+            self.cache_map.remove(&key);
+        }
+    }
 }
 
 #[cfg(test)]
