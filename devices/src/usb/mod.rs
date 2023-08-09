@@ -16,13 +16,9 @@ pub mod camera;
 pub mod camera_media_type_guid;
 pub mod config;
 pub mod error;
-#[cfg(not(target_env = "musl"))]
 pub mod hid;
-#[cfg(not(target_env = "musl"))]
 pub mod keyboard;
-#[cfg(not(target_env = "musl"))]
 pub mod storage;
-#[cfg(not(target_env = "musl"))]
 pub mod tablet;
 #[cfg(not(target_env = "musl"))]
 pub mod usbhost;

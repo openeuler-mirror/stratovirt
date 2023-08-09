@@ -10,12 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(not(target_env = "musl"))]
 pub mod console;
 pub mod error;
+#[cfg(not(target_env = "musl"))]
 pub mod gtk;
 pub mod input;
+#[cfg(not(target_env = "musl"))]
 pub mod pixman;
 pub mod utils;
+#[cfg(not(target_env = "musl"))]
 pub mod vnc;
 
 mod data;

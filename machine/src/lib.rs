@@ -52,9 +52,10 @@ use devices::misc::scream::Scream;
 use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(not(target_env = "musl"))]
+use devices::usb::{camera::UsbCamera, usbhost::UsbHost};
 use devices::usb::{
-    camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
-    usbhost::UsbHost, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
+    keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
+    UsbDeviceOps,
 };
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -72,9 +73,9 @@ use machine_manager::config::{
     MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
+use machine_manager::config::{parse_gpu, parse_usb_camera, parse_usb_host};
 use machine_manager::config::{
-    parse_gpu, parse_usb_camera, parse_usb_host, parse_usb_keyboard, parse_usb_storage,
-    parse_usb_tablet, parse_xhci,
+    parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -643,7 +644,6 @@ pub trait MachineOps {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
@@ -1198,7 +1198,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let device_cfg = parse_xhci(cfg_args)?;
@@ -1290,7 +1289,6 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `usb_dev` - Usb device.
-    #[cfg(not(target_env = "musl"))]
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1315,7 +1313,6 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `id` - id of the usb device.
-    #[cfg(not(target_env = "musl"))]
     fn detach_usb_from_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1339,7 +1336,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Keyboard Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
         // SAFETY: id is already checked not none in parse_usb_keyboard().
@@ -1356,7 +1352,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Tablet Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
         // SAFETY: id is already checked not none in parse_usb_tablet().
@@ -1391,7 +1386,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - USB Storage Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_storage(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
         let storage = UsbStorage::new(device_cfg, self.get_drive_files());
@@ -1508,15 +1502,12 @@ pub trait MachineOps {
                 "vhost-user-fs-pci" | "vhost-user-fs-device" => {
                     self.add_virtio_fs(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-kbd" => {
                     self.add_usb_keyboard(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
                 }
@@ -1524,7 +1515,6 @@ pub trait MachineOps {
                 "usb-camera" => {
                     self.add_usb_camera(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-storage" => {
                     self.add_usb_storage(vm_config, cfg_args)?;
                 }
