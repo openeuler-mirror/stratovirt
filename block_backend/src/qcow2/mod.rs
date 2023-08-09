@@ -990,7 +990,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
     // Check if there exist intersection between given address range and qcow2 mede data.
     fn check_overlap(&self, ignore: u64, offset: u64, size: u64) -> i64 {
-        let check = DEFAULT_QCOW2_METADATA_OVERLAP_CHECK | !ignore;
+        let check = DEFAULT_QCOW2_METADATA_OVERLAP_CHECK & !ignore;
         if check == 0 {
             return 0;
         }
