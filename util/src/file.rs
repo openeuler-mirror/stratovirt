@@ -24,7 +24,7 @@ const FILE_LOCK_READ: u64 = 0x01;
 /// Permission to write
 const FILE_LOCK_WRITE: u64 = 0x02;
 /// All permissions
-const FILE_LOCK_ALL:[u64; 2] = [FILE_LOCK_READ, FILE_LOCK_WRITE];
+const FILE_LOCK_ALL: [u64; 2] = [FILE_LOCK_READ, FILE_LOCK_WRITE];
 /// Permission lock base address, consistent with qemu
 const LOCK_PERM_BASE: u64 = 100;
 /// Shared lock base address, consistent with qemu
