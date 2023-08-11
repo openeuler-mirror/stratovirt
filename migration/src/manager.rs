@@ -50,8 +50,8 @@ pub trait MigrationHook: StateTransfer {
     ///
     /// # Arguments
     ///
-    /// * `id` - This unique id to represent a single device. It can be treated
-    ///          as `object_id` in `InstanceId`.
+    /// * `id` - This unique id to represent a single device. It can be treated as `object_id` in
+    ///   `InstanceId`.
     /// * `fd` - The `Write` trait object to save device data.
     fn save_device(&self, id: u64, fd: &mut dyn Write) -> Result<()> {
         let state_data = self

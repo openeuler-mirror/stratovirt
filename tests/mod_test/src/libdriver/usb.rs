@@ -1614,7 +1614,7 @@ impl TestXhciPciDevice {
         // subclass
         assert_eq!(buf[5], SC_VIDEO_INTERFACE_COLLECTION);
 
-        //2. VC interface
+        // 2. VC interface
         *offset += 8;
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
@@ -1637,7 +1637,7 @@ impl TestXhciPciDevice {
         *offset += 0xd;
         let _buf = self.get_transfer_data_indirect_with_offset(addr, remained as usize, *offset);
 
-        //3. VS interface
+        // 3. VS interface
         *offset += remained as u64;
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,

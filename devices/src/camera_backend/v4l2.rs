@@ -534,7 +534,8 @@ impl EventNotifierHelper for V4l2IoHandler {
             NotifierOperation::AddShared,
             v4l2_handler.lock().unwrap().backend.as_raw_fd(),
             None,
-            EventSet::IN | EventSet::EDGE_TRIGGERED | EventSet::HANG_UP, // For unexpected device removal.
+            // For unexpected device removal.
+            EventSet::IN | EventSet::EDGE_TRIGGERED | EventSet::HANG_UP,
             vec![handler],
         )]
     }

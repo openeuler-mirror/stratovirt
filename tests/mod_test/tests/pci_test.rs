@@ -44,7 +44,6 @@ struct DemoDev {
 }
 
 fn fmt_demo_deves(cfg: DemoDev, num: u8) -> String {
-    // let mut dev_str = format!("-device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.{}", cfg.bus_num);
     let mut dev_str: String = String::new();
 
     for i in 1..num + 1 {
@@ -1122,7 +1121,8 @@ fn test_pci_type0_config() {
         0xFFFF,
     );
 
-    // verify that the lower three bits of the command register of type0 device is readable and writable.
+    // verify that the lower three bits of the command register of type0 device is readable and
+    // writable.
     validate_config_perm_2byte(blk.borrow().pci_dev.clone(), PCI_COMMAND, 0x4, 0x4, 0x7);
 
     // verify that the interrupt status of the status register of type0 device is read-only.
@@ -2276,7 +2276,8 @@ fn test_pci_hotunplug_006() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
-/// Guest sets PIC/PCC twice during hotunplug, the device ignores the 2nd write to speed up hotunplug.
+/// Guest sets PIC/PCC twice during hotunplug, the device ignores the 2nd write to speed up
+/// hotunplug.
 #[test]
 fn test_pci_hotunplug_007() {
     let blk_nums = 1;
@@ -2911,7 +2912,7 @@ fn test_pci_root_port_exp_cap() {
 fn test_pci_combine_000() {
     let cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -2938,7 +2939,7 @@ fn test_pci_combine_000() {
 fn test_pci_combine_001() {
     let cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -3035,7 +3036,7 @@ fn test_pci_combine_002() {
 fn test_pci_combine_003() {
     let mut cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -3045,7 +3046,7 @@ fn test_pci_combine_003() {
     // the mmio space is 78MB, bar1 got over bounded
     assert!(bar_addr != INVALID_BAR_ADDR);
 
-    cfg.bar_size = 0x1000_0000; //2GB
+    cfg.bar_size = 0x1000_0000; // 2GB
     let (pci_dev, _) = init_demo_dev(cfg, 1);
     let bar_addr = pci_dev.borrow().io_map(0);
 

@@ -112,9 +112,8 @@ impl PowerDev {
                     sprop
                 )
             })?;
-            /* All the values except "online" property is multiplicated by 1000
-             * Only "online" property starts with 'o' character
-             */
+            // All the values except "online" property is multiplicated by 1000.
+            // Only "online" property starts with 'o' character.
             pdev_props[i] = if sysfs_props[i].starts_with('o') {
                 prop.unsigned_abs() as u32
             } else {

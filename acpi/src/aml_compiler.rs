@@ -1139,8 +1139,8 @@ impl AmlBuilder for AmlMutex {
 pub struct AmlAcquire {
     /// The mutex object is converted to byte stream.
     mutex: Vec<u8>,
-    /// If the mutex is owned by others, current thread suspends and waits for `timeout` **milliseconds**
-    /// `timeout` being set as 0xFFFF indicates that there is no timeout and
+    /// If the mutex is owned by others, current thread suspends and waits for `timeout`
+    /// **milliseconds**, `timeout` being set as 0xFFFF indicates that there is no timeout and
     /// the acquire mutex operation will keeping waiting.
     time_out: u16,
 }

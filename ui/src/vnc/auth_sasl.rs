@@ -210,8 +210,9 @@ impl ClientIoHandler {
 
         // Start authentication.
         let err: c_int = match security.saslconfig.sasl_stage {
-            // SAFETY: sasl_server_start() and sasl_server_step() is C function. All parameters passed of the
-            // function have been checked. Memory will be allocated for the incoming pointer inside the function.
+            // SAFETY: sasl_server_start() and sasl_server_step() is C function. All parameters
+            // passed of the function have been checked. Memory will be allocated for the incoming
+            // pointer inside the function.
             SaslStage::SaslServerStart => unsafe {
                 sasl_server_start(
                     security.saslconfig.sasl_conn,
@@ -311,9 +312,9 @@ impl ClientIoHandler {
         info!("local_addr: {} remote_addr: {}", local_addr, remote_addr);
         let local_addr = CString::new(local_addr)?;
         let remote_addr = CString::new(remote_addr)?;
-        // SAFETY: sasl_server_init() and sasl_server_new() is C function. All parameters passed of the
-        // function have been checked. Memory will be allocated for the incoming pointer inside the function.
-        // Sasl server init.
+        // SAFETY: sasl_server_init() and sasl_server_new() is C function. All parameters passed of
+        // the function have been checked. Memory will be allocated for the incoming pointer inside
+        // the function. Sasl server init.
         unsafe {
             err = sasl_server_init(ptr::null_mut(), appname.as_ptr());
         }

@@ -979,8 +979,7 @@ fn write_net_config_check(net: Rc<RefCell<TestVirtioPciDev>>, offset: u64, value
 /// Write value to virtio net configure, and check the write result.
 /// TestStep:
 ///   1. Init device.
-///   2. Write value to virtio net configure which can not be changed
-///      except mac in some conditions.
+///   2. Write value to virtio net configure which can not be changed except mac in some conditions.
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.

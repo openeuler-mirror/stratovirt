@@ -675,7 +675,7 @@ mod test {
         vm_fd.create_irq_chip().unwrap();
         let vcpu = Arc::new(vm_fd.create_vcpu(0).unwrap());
         let mut x86_cpu = X86CPUState::new(0, 1);
-        //test `set_boot_config` function
+        // test `set_boot_config` function
         assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
 
         // test setup special registers

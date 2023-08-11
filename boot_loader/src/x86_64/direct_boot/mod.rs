@@ -337,7 +337,7 @@ mod test {
         let mut boot_hdr = RealModeKernelHeader::new();
         assert!(setup_boot_params(&config, &space, &boot_hdr).is_ok());
 
-        //test setup_gdt function
+        // test setup_gdt function
         let c_seg = kvm_segment {
             base: 0,
             limit: 1048575,
@@ -386,7 +386,7 @@ mod test {
         assert_eq!(arr[2], 0xaf9b000000ffff);
         assert_eq!(arr[3], 0xcf93000000ffff);
 
-        //test setup_kernel_cmdline function
+        // test setup_kernel_cmdline function
         let cmd_len: u64 = config.kernel_cmdline.len() as u64;
         let mut read_buffer: [u8; 30] = [0; 30];
         assert!(setup_kernel_cmdline(&config, &space, &mut boot_hdr).is_ok());

@@ -1160,7 +1160,7 @@ pub fn do_fuse_init(
         max_background: 0,
         congestion_threshold: 0,
         max_write: MAX_WRITE_SIZE,
-        /* Granularity of c/m/atime in ns (cannot be worse than a second), default 1 */
+        // Granularity of c/m/atime in ns (cannot be worse than a second), default 1.
         time_gran: 1,
         max_pages: ((MAX_WRITE_SIZE + pagesize - 1) / pagesize) as u16,
         map_alignment: 0,

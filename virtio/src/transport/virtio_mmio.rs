@@ -923,7 +923,8 @@ mod tests {
         assert_eq!(virtio_device.lock().unwrap().hfeatures_sel(), 2);
 
         // write the device features
-        // false when the device status is CONFIG_STATUS_FEATURES_OK or CONFIG_STATUS_FAILED isn't CONFIG_STATUS_DRIVER
+        // false when the device status is CONFIG_STATUS_FEATURES_OK or CONFIG_STATUS_FAILED isn't
+        // CONFIG_STATUS_DRIVER
         virtio_device
             .lock()
             .unwrap()

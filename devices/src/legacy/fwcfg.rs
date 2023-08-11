@@ -664,7 +664,6 @@ impl FwCfgCommon {
     /// # Errors
     ///
     /// Return Error if fail to add the file entry.
-    ///
     fn dma_mem_write(&mut self, addr: u64, value: u64, size: u32) -> Result<()> {
         if size == 4 {
             if addr == 0 {
@@ -696,7 +695,6 @@ impl FwCfgCommon {
     /// # Return
     ///
     /// Return the value of the register
-    ///
     fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
         extract_u64(
             FW_CFG_DMA_SIGNATURE as u64,
@@ -716,7 +714,6 @@ impl FwCfgCommon {
     /// # Return
     ///
     /// Return the value of the register
-    ///
     fn read_data_reg(&mut self, _addr: u64, mut size: u32) -> Result<u64> {
         if size == 0 || size > std::mem::size_of::<u64>() as u32 {
             bail!(

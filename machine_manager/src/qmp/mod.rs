@@ -229,8 +229,7 @@ impl Response {
     /// # Arguments
     ///
     /// * `v` - The `Value` of qmp `return` field.
-    /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
-    ///          `id`.
+    /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s `id`.
     pub fn create_response(v: Value, id: Option<String>) -> Self {
         Response {
             return_: Some(v),
@@ -252,8 +251,7 @@ impl Response {
     /// # Arguments
     ///
     /// * `err_class` - The `QmpErrorClass` of qmp `error` field.
-    /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
-    ///          `id`.
+    /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s `id`.
     pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<String>) -> Self {
         Response {
             return_: None,

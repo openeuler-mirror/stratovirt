@@ -621,7 +621,8 @@ fn send_msix(msg: Message, dev_id: u16) {
 /// * `dev_id` - Dev id.
 /// * `_id` - MSI-X id used in MigrationManager.
 /// * `parent_region` - Parent region which the MSI-X region registered. If none, registered in BAR.
-/// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the table_offset and pba_offset together.
+/// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the
+///   table_offset and pba_offset together.
 pub fn init_msix(
     bar_id: usize,
     vector_nr: u32,

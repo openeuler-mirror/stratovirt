@@ -78,8 +78,10 @@ pub struct VncServer {
 }
 
 // SAFETY:
-// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
-// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in single thread.
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image
+//    by this pointer.
+// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in
+//    single thread.
 // So implement Send and Sync is safe.
 unsafe impl Send for VncServer {}
 unsafe impl Sync for VncServer {}

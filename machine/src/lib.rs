@@ -663,7 +663,8 @@ pub trait MachineOps {
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
-            // Because device_del needs an id when removing a device, it's necessary to ensure that the id is unique.
+            // Because device_del needs an id when removing a device, it's necessary to ensure that
+            // the id is unique.
             if name.is_empty() {
                 bail!("Device id is empty");
             }

@@ -267,7 +267,8 @@ pub fn create_qcow2_img(image_path: String, image_size: u64) {
 /// By default, the data occupied by the l2 table and refcount table should not exceed one cluster.
 /// If the defined disk is too large, it may result in incorrect data format for.
 /// For example.
-/// If you defined cluster size = 1 <<  16, the max disk size cannout exceed the 1 << (16 * 2 - 3) = 512M.
+/// If you defined cluster size = 1 <<  16, the max disk size cannout exceed the
+/// 1 << (16 * 2 - 3) = 512M.
 fn write_full_disk(image_path: String) {
     let mut qcow2 = Qcow2Driver::new(image_path);
     let cluster_bits = qcow2.header.cluster_bits;

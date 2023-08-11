@@ -116,7 +116,7 @@ pub enum VhostUserHdrFlag {
     ReservedBits = !0xf,
 }
 
-///the struct for the header of vhost user message.
+/// the struct for the header of vhost user message.
 #[repr(C)]
 pub struct VhostUserMsgHdr {
     /// The request id for vhost-user message
@@ -269,7 +269,7 @@ impl VhostUserVringState {
     }
 }
 
-///The configuration for the address of virtual ring.
+/// The configuration for the address of virtual ring.
 #[repr(C)]
 pub struct VhostUserVringAddr {
     /// Index for virtual ring.

@@ -59,9 +59,7 @@ pub enum HelpType {
 ///     .author("example")
 ///     .version("0.0.1")
 ///     .about("Description for application")
-///     .arg(
-///         Arg::with_name("arg_name")
-///     )
+///     .arg(Arg::with_name("arg_name"))
 ///     .get_matches();
 /// ```
 #[derive(Clone, Debug, Default)]

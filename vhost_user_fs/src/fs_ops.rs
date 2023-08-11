@@ -28,7 +28,8 @@ pub type DirentPtr = *mut libc::dirent;
 ///
 /// # Arguments
 ///
-/// * `file` - The file handler saves the file descriptor of starting directory to look up for the file.
+/// * `file` - The file handler saves the file descriptor of starting directory to look up for the
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `flags` - The flags used to get the information of the file.
 pub fn fstat_at(file: &File, name: CString, flags: i32) -> (libc::stat, i32) {
@@ -64,7 +65,8 @@ pub fn open(name: CString, flags: i32) -> (Option<File>, i32) {
 ///
 /// # Arguments
 ///
-/// * `file` - The file handler saves the file descriptor of starting directory to look up for the file.
+/// * `file` - The file handler saves the file descriptor of starting directory to look up for the
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode used to open a file.
 pub fn open_at(file: &File, name: CString, flags: i32, mode: u32) -> (Option<File>, i32) {
@@ -100,7 +102,7 @@ pub fn fchmod(file: &File, mode: u32) -> i32 {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode indicates the permissions of the file will be set.
 pub fn fchmod_at(file: &File, name: CString, mode: u32) -> i32 {
@@ -117,7 +119,7 @@ pub fn fchmod_at(file: &File, name: CString, mode: u32) -> i32 {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `uid` - The user id will be set.
 /// * `gid` - The group id will be set.
@@ -175,12 +177,13 @@ pub fn futimens(file: &File, a_sec: u64, a_nsec: i64, m_sec: u64, m_nsec: i64) -
     FUSE_OK
 }
 
-/// Update the timestamps with nanosecond precision by path name that is relative to the starting directory.
+/// Update the timestamps with nanosecond precision by path name that is relative to the starting
+/// directory.
 ///
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `a_sec` - The second of last access time.
 /// * `a_nsec` - The nanosecond of last access time.
@@ -219,7 +222,7 @@ pub fn utimensat(
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
     let mut buf = vec![0; MAX_PATH_LEN + 1];
@@ -248,7 +251,7 @@ pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `link_name` - The link name is new path name for the target path name.
 pub fn symlinkat(file: &File, name: CString, link_name: CString) -> i32 {
@@ -319,7 +322,7 @@ pub fn recover_uid_gid(old_uid: u32, old_gid: u32) -> i32 {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode indicates both the file mode to use and the type of node to be created.
 /// * `rdev` - The rdev indicates the major and minor numbers of the special file.
@@ -340,7 +343,7 @@ pub fn mknodat(file: &File, name: CString, mode: u32, rdev: u32) -> i32 {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `mode` - The mode indicates the permissions of the new directory.
 pub fn mkdir_at(file: &File, name: CString, mode: u32) -> i32 {
@@ -357,7 +360,7 @@ pub fn mkdir_at(file: &File, name: CString, mode: u32) -> i32 {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the file descriptor of starting directory to look up for the
-/// file.
+///   file.
 /// * `name` - The name indicates the file path is relative to the starting directory.
 /// * `flags` - The flags indicates the operation of deleting a name.
 pub fn unlinkat(file: &File, name: CString, flags: i32) -> i32 {
@@ -376,11 +379,11 @@ pub fn unlinkat(file: &File, name: CString, flags: i32) -> i32 {
 ///
 /// # Arguments
 ///
-/// * `olddir` - The directory file handler saves the file descriptor of starting directory to look up for the
-/// old file.
+/// * `olddir` - The directory file handler saves the file descriptor of starting directory to look
+///   up for the old file.
 /// * `name` - The name indicates the file path is relative to the starting of old directory.
-/// * `newdir` - The directory file handler saves the file descriptor of starting directory to look up for the
-/// new file.
+/// * `newdir` - The directory file handler saves the file descriptor of starting directory to look
+///   up for the new file.
 /// * `newname` - The name indicates the file path is relative to the starting of new directory.
 pub fn rename(olddir: &File, name: CString, newdir: &File, newname: CString) -> i32 {
     nix::errno::Errno::clear();
@@ -401,15 +404,16 @@ pub fn rename(olddir: &File, name: CString, newdir: &File, newname: CString) -> 
     FUSE_OK
 }
 
-/// Change a name for file in host filesystem by path name that is relative to the starting directory.
+/// Change a name for file in host filesystem by path name that is relative to the starting
+/// directory.
 ///
 /// # Arguments
 ///
-/// * `old_file` - The file handler saves the file descriptor of starting old directory to look up for the
-/// file.
+/// * `old_file` - The file handler saves the file descriptor of starting old directory to look up
+///   for the file.
 /// * `old_name` - The name indicates the file path is relative to the starting of old directory.
-/// * `new_file` - The file handler saves the file descriptor of starting new directory to look up for the
-/// file.
+/// * `new_file` - The file handler saves the file descriptor of starting new directory to look up
+///   for the file.
 /// * `new_name` - The name indicates the file path is relative to the starting of new directory.
 /// * `flags` - The flags indicates the operation of change a name.
 pub fn linkat(
@@ -459,8 +463,7 @@ pub fn fstat_vfs(file: &File) -> (libc::statvfs, i32) {
 /// # Arguments
 ///
 /// * `file` - The file handler saves the open file descriptor.
-/// * `datasync` - The datasync indicates whether to use the fdatasync
-/// or fsync interface.
+/// * `datasync` - The datasync indicates whether to use the fdatasync or fsync interface.
 pub fn fsync(file: &File, datasync: bool) -> i32 {
     nix::errno::Errno::clear();
 

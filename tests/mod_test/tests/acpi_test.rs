@@ -157,7 +157,9 @@ fn check_iort(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[88..]), 1); // Cache of coherent device
     assert_eq!(data[95], 3); // Memory flags of coherent device
     assert_eq!(LittleEndian::read_u32(&data[112..]), 0xffff); // Identity RID mapping
-    assert_eq!(LittleEndian::read_u32(&data[120..]), 48); // Without SMMU, id mapping is the first node in ITS group node
+
+    // Without SMMU, id mapping is the first node in ITS group node
+    assert_eq!(LittleEndian::read_u32(&data[120..]), 48);
 }
 
 fn check_spcr(data: &[u8]) {
@@ -176,8 +178,11 @@ fn check_spcr(data: &[u8]) {
     assert_eq!(data[58], 3); // Set baud rate: 3 = 9600
     assert_eq!(data[60], 1); // Stop bit
     assert_eq!(data[61], 2); // Hardware flow control
-    assert_eq!(LittleEndian::read_u16(&data[64..]), 0xffff); // PCI Device ID: it is not a PCI device
-    assert_eq!(LittleEndian::read_u16(&data[66..]), 0xffff); // PCI Vendor ID: it is not a PCI device
+
+    // PCI Device ID: it is not a PCI device
+    assert_eq!(LittleEndian::read_u16(&data[64..]), 0xffff);
+    // PCI Vendor ID: it is not a PCI device
+    assert_eq!(LittleEndian::read_u16(&data[66..]), 0xffff);
 }
 
 fn check_mcfg(data: &[u8]) {

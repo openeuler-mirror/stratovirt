@@ -97,7 +97,6 @@ impl QueueConfig {
     /// # Arguments
     ///
     /// * `max_size` - The maximum size of the virtqueue.
-    ///
     pub fn new(max_size: u16) -> Self {
         let addr_cache = VirtioAddrCache::default();
         QueueConfig {
@@ -1232,7 +1231,8 @@ mod tests {
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
-        // it is invalid when the address of descriptor table is overlapped to the address of avail ring
+        // it is invalid when the address of descriptor table is overlapped to the address of avail
+        // ring.
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN - 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
@@ -1592,8 +1592,8 @@ mod tests {
             assert!(false);
         }
 
-        // error comes when the length of indirect descriptor is more than the length of descriptor chain
-        // set the information of index 0 for descriptor
+        // error comes when the length of indirect descriptor is more than the length of descriptor
+        // chain set the information of index 0 for descriptor.
         vring
             .set_desc(
                 &sys_space,
@@ -1953,30 +1953,34 @@ mod tests {
         assert!(vring.set_avail_ring_flags(&sys_space, 0).is_ok());
         assert_eq!(vring.should_notify(&sys_space, features), true);
 
-        // it's false when the feature of event idx is closed and the feature of no interrupt for the avail ring is open
+        // it's false when the feature of event idx is closed and the feature of no interrupt for
+        // the avail ring is open
         let features = 0 as u64;
         assert!(vring
             .set_avail_ring_flags(&sys_space, VRING_AVAIL_F_NO_INTERRUPT)
             .is_ok());
         assert_eq!(vring.should_notify(&sys_space, features), false);
 
-        // it's true when the feature of event idx is open and (new - event_idx - Wrapping(1) < new -old)
+        // it's true when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) < new -old)
         let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); //event_idx
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), true);
 
-        // it's false when the feature of event idx is open and (new - event_idx - Wrapping(1) > new -old)
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); //event_idx
+        // it's false when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) > new - old)
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), false);
 
-        // it's false when the feature of event idx is open and (new - event_idx - Wrapping(1) = new -old)
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); //event_idx
+        // it's false when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) = new -old)
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), false);
     }
 }

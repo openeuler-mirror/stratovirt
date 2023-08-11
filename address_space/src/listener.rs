@@ -735,25 +735,26 @@ mod test {
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
-        // The evtfd already added, adding again should make an error
+        // The evtfd already added, adding again should make an error.
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_err());
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
-        // The evtfd already deleted, deleting again should cause an error
+        // The evtfd already deleted, deleting again should cause an error.
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());
 
-        // Register an ioeventfd with data-match
+        // Register an ioeventfd with data-match.
         let evtfd = generate_region_ioeventfd(64, 4_u64);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
 
-        // Register an ioeventfd which has same address with previously registered ones will cause an error
+        // Register an ioeventfd which has same address with previously registered ones will cause
+        // an error.
         let same_addred_evtfd = generate_region_ioeventfd(64, 4_u64);
         assert!(kml
             .handle_request(
@@ -836,14 +837,14 @@ mod test {
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
-        // evtfd already added, adding again should make an error
+        // evtfd already added, adding again should make an error.
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_err());
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
-        // evtfd already deleted, deleting again should make an error
+        // evtfd already deleted, deleting again should make an error.
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());

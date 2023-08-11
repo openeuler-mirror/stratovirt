@@ -215,13 +215,14 @@ pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 /// A single request can include both device-readable and device-writable data buffers.
 pub const VIRTIO_SCSI_F_INOUT: u32 = 0;
-/// The host SHOULD enable reporting of hot-plug and hot-unplug events for LUNs and targets on the SCSI bus.
-/// The guest SHOULD handle hot-plug and hot-unplug events.
+/// The host SHOULD enable reporting of hot-plug and hot-unplug events for LUNs and targets on the
+/// SCSI bus. The guest SHOULD handle hot-plug and hot-unplug events.
 pub const VIRTIO_SCSI_F_HOTPLUG: u32 = 1;
 /// The host will report changes to LUN parameters via a VIRTIO_SCSI_T_PARAM_CHANGE event.
 /// The guest SHOULD handle them.
 pub const VIRTIO_SCSI_F_CHANGE: u32 = 2;
-/// The extended fields for T10 protection information (DIF/DIX) are included in the SCSI request header.
+/// The extended fields for T10 protection information (DIF/DIX) are included in the SCSI request
+/// header.
 pub const VIRTIO_SCSI_F_T10_PI: u32 = 3;
 
 /// The IO type of virtio block, refer to Virtio Spec.

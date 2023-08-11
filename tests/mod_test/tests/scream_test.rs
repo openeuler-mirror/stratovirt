@@ -120,7 +120,8 @@ fn stream_header_init(ivshmem: &mut TestIvshmemDev, base: u64, offset: u64) {
     // set channel_map
     ivshmem.writel(fmt_base + offset_of!(ShmemStreamFmt, channel_map) as u64, 3);
 
-    // Setting is_started, it must be set at the end. Otherwise, the fmt data may not be updated in time.
+    // Setting is_started, it must be set at the end. Otherwise, the fmt data may not be updated in
+    // time.
     ivshmem.writel(base + offset_of!(ShmemStreamHeader, is_started) as u64, 1);
 }
 
@@ -253,7 +254,8 @@ fn scream_playback_basic_test() {
 
     thread::sleep(time::Duration::from_millis(1000));
 
-    // When four consecutive frames of data are written, only the last two frames of data can be read.
+    // When four consecutive frames of data are written, only the last two frames of data can be
+    // read.
     for i in 0..AUDIO_CHUNK_SIZE {
         ivshmem
             .borrow_mut()

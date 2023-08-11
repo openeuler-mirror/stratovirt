@@ -378,7 +378,8 @@ impl FuseBuffer {
     /// * `fd` - The file descriptor in host.
     /// * `offset` - The offset which needs to be read and written in host file.
     /// * `size` - The size which needs to be read and written in host file.
-    /// * `is_read` - If it is true, writing the data which is read from host file to the fuse buffers.
+    /// * `is_read` - If it is true, writing the data which is read from host file to the fuse
+    ///   buffers.
     /// If it is false, writing the data which is read from the fuse buffers to host file.
     pub fn access_file(
         &mut self,
@@ -494,12 +495,11 @@ impl<'a> FuseIovec<'a> {
 /// * `writer` - The writable fuse buffers.
 /// * `sys_mem` - Address space mapped with StratoVirt.
 /// * `in_header` - The in_header reading from the read-only fuse buffers.
-/// * `err` - The error number for processing the fuse message. If it is ok, set
-/// error number to 0. If it is false, set error number from linux.
-/// * `body_opt` - The body for replying the fuse message needs to be written
-/// to fuse buffers.
-/// * `body_len` - The length of body for replying the fuse message. if the body
-/// is none, set the length to 0.
+/// * `err` - The error number for processing the fuse message. If it is ok, set error number to 0.
+///   If it is false, set error number from linux.
+/// * `body_opt` - The body for replying the fuse message needs to be written to fuse buffers.
+/// * `body_len` - The length of body for replying the fuse message. if the body is none, set the
+///   length to 0.
 pub fn reply_fuse_msg(
     writer: &mut FuseBuffer,
     sys_mem: &Arc<AddressSpace>,
@@ -525,7 +525,7 @@ pub fn reply_fuse_msg(
         written_len = 0_u32;
     };
 
-    //write the body of fuse message in address space
+    // write the body of fuse message in address space.
     if let Some(body) = body_opt {
         for fuse_iov in body.iter() {
             if let Err(e) = writer.write_slice(sys_mem, fuse_iov.body, fuse_iov.len) {

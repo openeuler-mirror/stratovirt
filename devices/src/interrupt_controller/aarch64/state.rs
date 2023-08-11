@@ -402,7 +402,8 @@ impl GICv3 {
         self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, false)?;
 
         // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
-        // PRIBits indicate the number of priority bits implemented, independently for each target PE.
+        // PRIBits indicate the number of priority bits implemented, independently for each target
+        // PE.
         let icc_ctlr_el1_pri =
             ((gic_cpu.icc_ctlr_el1 & ICC_CTLR_EL1_PRIBITS_MASK) >> ICC_CTLR_EL1_PRIBITS_SHIFT) + 1;
         // Save APnR registers based on ICC_CTLR_EL1.PRIBITS
@@ -486,7 +487,8 @@ impl GICv3 {
         self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, true)?;
 
         // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
-        // PRIBits indicate the number of priority bits implemented, independently for each target PE.
+        // PRIBits indicate the number of priority bits implemented, independently for each target
+        // PE.
         let icc_ctlr_el1_pri =
             ((gic_cpu.icc_ctlr_el1 & ICC_CTLR_EL1_PRIBITS_MASK) >> ICC_CTLR_EL1_PRIBITS_SHIFT) + 1;
         // Restore APnR registers based on ICC_CTLR_EL1.PRIBITS

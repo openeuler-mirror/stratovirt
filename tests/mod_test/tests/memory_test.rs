@@ -259,14 +259,16 @@ fn region_update_exception() {
 ///   1/2/6/7: Success.
 ///   4/5: Failed.
 ///   3: Got [0x02u8; 8] from the device. The read and write behavior is the same as io region.
-///   8: Got [0x00u8; 8] fro the device. The write operation does nothing, and read the original data.
+///   8: Got [0x00u8; 8] fro the device. The write operation does nothing, and read the original
+///      data.
 #[test]
 fn rom_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
     let addr = 0x100_0000_0000; // 1TB
 
-    // Add a dummy rom device by qmp. The function of the device is to multiply the written value by 2
-    // through the write interface and save it, and read the saved value through the read interface.
+    // Add a dummy rom device by qmp. The function of the device is to multiply the written value by
+    // 2 through the write interface and save it, and read the saved value through the read
+    // interface.
     let file = File::create(&ROM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
@@ -599,8 +601,8 @@ fn ram_readwrite_exception() {
 /// Ram read and write Test.
 /// TestStep:
 ///   1. Start device.
-///   2. Write some data("test memory read write") to the address.
-///      And the read/write will across numa.
+///   2. Write some data("test memory read write") to the address. And the read/write will across
+///      numa.
 ///   3. Read data from the address and check it.
 ///   4. Destroy device.
 /// Expect:
@@ -655,8 +657,8 @@ fn ram_readwrite_numa() {
 /// Ram read and write Test.
 /// TestStep:
 ///   1. Start device.
-///   2. Write some data("test memory read write") to the address.
-///      And the read/write will across numa.
+///   2. Write some data("test memory read write") to the address. And the read/write will across
+///      numa.
 ///   3. Read data from the address and check it.
 ///   4. Destroy device.
 /// Expect:

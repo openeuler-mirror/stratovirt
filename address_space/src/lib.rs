@@ -18,7 +18,9 @@
 //! ```rust
 //! use std::sync::{Arc, Mutex};
 //! extern crate address_space;
-//! use address_space::{AddressSpace, Region, GuestAddress, HostMemMapping, RegionOps, FileBackend};
+//! use address_space::{
+//!     AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps,
+//! };
 //!
 //! struct DummyDevice;
 //! impl DummyDevice {
@@ -34,18 +36,16 @@
 //!
 //! fn main() {
 //!     // 1. create address_space
-//!     let space = AddressSpace::new(Region::init_container_region(u64::max_value(), "space"), "space").unwrap();
+//!     let space = AddressSpace::new(
+//!         Region::init_container_region(u64::max_value(), "space"),
+//!         "space",
+//!     )
+//!     .unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
-//!     let mem_mapping = Arc::new(HostMemMapping::new(
-//!         GuestAddress(0),
-//!         None,
-//!         0x1000,
-//!         None,
-//!         false,
-//!         false,
-//!         false,
-//!     ).unwrap());
+//!     let mem_mapping = Arc::new(
+//!         HostMemMapping::new(GuestAddress(0), None, 0x1000, None, false, false, false).unwrap(),
+//!     );
 //!     let ram_region = Region::init_ram_region(mem_mapping.clone(), "ram");
 //!     ram_region.set_priority(10);
 //!
@@ -69,7 +69,9 @@
 //!     let io_region = Region::init_io_region(0x1000, dev_ops, "io_region");
 //!
 //!     // 4. add sub_region to address_space's root region
-//!     space.root().add_subregion(ram_region, mem_mapping.start_address().raw_value());
+//!     space
+//!         .root()
+//!         .add_subregion(ram_region, mem_mapping.start_address().raw_value());
 //!     space.root().add_subregion(io_region, 0x2000);
 //!
 //!     // 5. access address_space

@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-// Demo keyboard-pointer device is a simple pci device. It can be used to test whether
-// VNC can correctly receive the input from the client and transmit it to the keyboard and pointer device
-// Users can write a rom address in the mmio configuration space of the device.
-// Then if an input event occurs, the event information will be recorded to the corresponding memory by this device.
+// Demo keyboard-pointer device is a simple pci device. It can be used to test whether VNC can
+// correctly receive the input from the client and transmit it to the keyboard and pointer device.
+// Users can write a rom address in the mmio configuration space of the device. Then if an input
+// event occurs, the event information will be recorded to the corresponding memory by this device.
 
 use std::sync::{Arc, Mutex};
 
