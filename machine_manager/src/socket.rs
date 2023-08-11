@@ -366,11 +366,8 @@ impl SocketRWHandler {
                 && scm.cmsg_len as u64 >= min_cmsg_len
             {
                 let fds = unsafe {
-                    #[cfg(not(target_env = "musl"))]
-                    let fd_num = (scm.cmsg_len - CMSG_LEN(0) as usize) / size_of::<RawFd>();
-                    #[cfg(target_env = "musl")]
                     let fd_num =
-                        (scm.cmsg_len as usize - CMSG_LEN(0) as usize) / size_of::<RawFd>();
+                        (scm.cmsg_len as u64 - CMSG_LEN(0) as u64) as usize / size_of::<RawFd>();
                     std::slice::from_raw_parts(CMSG_DATA(scm) as *const RawFd, fd_num)
                 };
                 self.scm_fd.append(&mut fds.to_vec());

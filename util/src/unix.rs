@@ -272,27 +272,20 @@ impl UnixSock {
         let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * out_fds.len()) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
-        #[cfg(target_env = "musl")]
-        let iovecs_len = iovecs_len as i32;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_len = cmsg_len as usize;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_capacity = cmsg_capacity as usize;
-
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
         let mut msg: msghdr = unsafe { std::mem::zeroed() };
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
         msg.msg_iov = iovecs.as_mut_ptr();
-        msg.msg_iovlen = iovecs_len;
+        msg.msg_iovlen = iovecs_len as _;
         msg.msg_control = null_mut();
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
         if !out_fds.is_empty() {
             let cmsg = cmsghdr {
-                cmsg_len,
+                cmsg_len: cmsg_len as _,
                 #[cfg(target_env = "musl")]
                 __pad1: 0,
                 cmsg_level: SOL_SOCKET,
@@ -309,7 +302,7 @@ impl UnixSock {
             }
 
             msg.msg_control = cmsg_buffer.as_mut_ptr() as *mut c_void;
-            msg.msg_controllen = cmsg_capacity;
+            msg.msg_controllen = cmsg_capacity as _;
         }
 
         // Safe as msg parameters are valid.
@@ -350,25 +343,20 @@ impl UnixSock {
         let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * in_fds.len()) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
-        #[cfg(target_env = "musl")]
-        let iovecs_len = iovecs_len as i32;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_capacity = cmsg_capacity as usize;
-
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
         let mut msg: msghdr = unsafe { std::mem::zeroed() };
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
         msg.msg_iov = iovecs.as_mut_ptr();
-        msg.msg_iovlen = iovecs_len;
+        msg.msg_iovlen = iovecs_len as _;
         msg.msg_control = null_mut();
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
         if !in_fds.is_empty() {
             msg.msg_control = cmsg_buffer.as_mut_ptr() as *mut c_void;
-            msg.msg_controllen = cmsg_capacity;
+            msg.msg_controllen = cmsg_capacity as _;
         }
 
         // Safe as msg parameters are valid.
@@ -406,12 +394,8 @@ impl UnixSock {
             let cmsg = unsafe { (cmsg_ptr as *mut cmsghdr).read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
-                #[cfg(not(target_env = "musl"))]
-                let fd_count =
-                    (cmsg.cmsg_len - unsafe { CMSG_LEN(0) } as usize) / size_of::<RawFd>();
-                #[cfg(target_env = "musl")]
-                let fd_count =
-                    (cmsg.cmsg_len as usize - unsafe { CMSG_LEN(0) } as usize) / size_of::<RawFd>();
+                let fd_count = (cmsg.cmsg_len as u64 - unsafe { CMSG_LEN(0) } as u64) as usize
+                    / size_of::<RawFd>();
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),
