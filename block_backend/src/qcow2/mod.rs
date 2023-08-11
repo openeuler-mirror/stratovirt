@@ -2308,7 +2308,8 @@ mod test {
         host_offset
     }
 
-    // Change snapshot table offset to unaligned address which will lead to error in refcount update process.
+    // Change snapshot table offset to unaligned address which will lead to error in refcount update
+    // process.
     #[test]
     fn simulate_revert_snapshot_creation() {
         let path = "/tmp/revert_create.qcow2";
@@ -2361,7 +2362,8 @@ mod test {
         }
     }
 
-    // Change snapshot table offset to unaligned address which will lead to error in refcount update process.
+    // Change snapshot table offset to unaligned address which will lead to error in refcount update
+    // process.
     #[test]
     fn simulate_revert_snapshot_deletion() {
         let path = "/tmp/revert_delete.qcow2";

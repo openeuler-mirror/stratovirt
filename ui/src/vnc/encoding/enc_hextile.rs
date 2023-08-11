@@ -126,7 +126,7 @@ fn compress_each_tile<'a>(
                 client_dpm,
                 &mut tmp_buf,
             );
-            //If the length becomes longer after compression, give up compression.
+            // If the length becomes longer after compression, give up compression.
             if tmp_buf.len() > (sub_rect.h * sub_rect.w * client_dpm.pf.pixel_bytes as i32) as usize
             {
                 flag = RAW;

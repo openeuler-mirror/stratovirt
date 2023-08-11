@@ -352,7 +352,8 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn new(port_cfg: VirtioSerialPort) -> Self {
-        // Console is default host connected. And pty chardev has opened by default in realize() function.
+        // Console is default host connected. And pty chardev has opened by default in realize()
+        // function.
         let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
 
         SerialPort {
@@ -443,8 +444,8 @@ impl SerialPortHandler {
             }
             debug!("elem desc_unm: {}", elem.desc_num);
 
-            // Discard requests when there is no port using this queue or this port's socket is not connected.
-            // Popping elements without processing means discarding the request.
+            // Discard requests when there is no port using this queue or this port's socket is not
+            // connected. Popping elements without processing means discarding the request.
             if self.port.is_some() && self.port.as_ref().unwrap().lock().unwrap().host_connected {
                 let mut iovec = elem.out_iovec;
                 let mut iovec_size = Element::iovec_size(&iovec);
@@ -497,7 +498,8 @@ impl SerialPortHandler {
             let mut locked_output = output.lock().unwrap();
             // To do:
             // If the buffer is not fully written to chardev, the incomplete part will be discarded.
-            // This may occur when chardev is abnormal. Consider optimizing this logic in the future.
+            // This may occur when chardev is abnormal. Consider optimizing this logic in the
+            // future.
             if let Err(e) = locked_output.write_all(&buffer[..write_len]) {
                 error!("Failed to write msg to chardev: {:?}", e);
             }

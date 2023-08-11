@@ -804,7 +804,8 @@ impl VncClient {
 
         match sec_type {
             TestAuthType::VncAuthNone => {
-                // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share mode.
+                // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share
+                // mode.
                 self.read_msg(&mut buf, 4)?;
                 if buf[..4].to_vec() != [0_u8; 4].to_vec() {
                     bail!("Reject by vnc server");

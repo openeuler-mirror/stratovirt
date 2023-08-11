@@ -165,8 +165,9 @@ impl VfioPciDevice {
             return Ok(());
         }
 
-        // Cache the pci config space to avoid overwriting the original config space. Because we will
-        // parse the chain of extended caps in cache config and insert them into original config space.
+        // Cache the pci config space to avoid overwriting the original config space. Because we
+        // will parse the chain of extended caps in cache config and insert them into original
+        // config space.
         let mut config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
         config.config = config_data;
         let mut next = PCI_CONFIG_SPACE_SIZE;

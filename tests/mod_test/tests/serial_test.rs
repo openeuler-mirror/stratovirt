@@ -162,7 +162,8 @@ impl SerialTest {
 
     // Fill a batch of buffers elements in queues[$queue_id].
     fn fill_buffer_in_vq(&mut self, queue_id: usize) -> (Vec<u32>, Vec<u64>) {
-        // Note: limited by the MST framework, we only allocate 32 * 1K sized buffers. It's enough for test.
+        // Note: limited by the MST framework, we only allocate 32 * 1K sized buffers. It's enough
+        // for test.
         let mut buf_addrs = Vec::with_capacity(32);
         let mut free_heads = Vec::with_capacity(32);
         for _ in 0..32 {
@@ -664,11 +665,13 @@ fn virtconsole_pty_err_out_control_msg() {
 
     st.serial_init();
 
-    // Error out control msg which has invalid event. Just discard this invalid msg. Nothing happened.
+    // Error out control msg which has invalid event. Just discard this invalid msg. Nothing
+    // happened.
     let invalid_event_msg = VirtioConsoleControl::new(nr as u32, VIRTIO_CONSOLE_PORT_NAME, 1);
     st.out_control_event(invalid_event_msg);
 
-    // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing happened.
+    // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing
+    // happened.
     let invalid_event_msg = VirtioConsoleControl::new((nr + 5) as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
     st.out_control_event(invalid_event_msg);
 
@@ -689,8 +692,10 @@ fn virtconsole_pty_err_out_control_msg() {
 /// Virtio serial pci device invalid input control message buffer test.
 /// TestStep:
 ///   1. Init virtio serial device(1 virtconsole, pty backend chardev).
-///   2. Don't provide buffer in input_control_queue. Send a message which should response in input_control_queue.
-///   3. Provide 1 byte buffer in input_control_queue. Send a message which should response in input_control_queue.
+///   2. Don't provide buffer in input_control_queue. Send a message which should response in
+///      input_control_queue.
+///   3. Provide 1 byte buffer in input_control_queue. Send a message which should response in
+///      input_control_queue.
 ///   4. Destroy device.
 /// Expect:
 ///   1/4: success.
@@ -710,7 +715,8 @@ fn virtconsole_pty_invalid_in_control_buffer() {
     // Init virtqueues.
     st.virtqueue_setup(DEFAULT_SERIAL_VIRTQUEUES);
 
-    // No buffer in input_control_queue. Will discard all requests sent by input_control_queue. Nothing else happened.
+    // No buffer in input_control_queue. Will discard all requests sent by input_control_queue.
+    // Nothing else happened.
     let ready_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_DEVICE_READY, 1);
     st.out_control_event(ready_msg);
 
@@ -721,7 +727,8 @@ fn virtconsole_pty_invalid_in_control_buffer() {
         size_of::<VirtioConsoleControl>() as u64,
     );
 
-    // Error control msg: Guest is not ready. It will do nothing. Buffer in input_control_queue will not be used.
+    // Error control msg: Guest is not ready. It will do nothing. Buffer in input_control_queue will
+    // not be used.
     let ready_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_DEVICE_READY, 0);
     st.out_control_event(ready_msg);
 
@@ -732,11 +739,13 @@ fn virtconsole_pty_invalid_in_control_buffer() {
     // Give only 1 byte for input control message which will result virtio error.
     st.virtqueue_add_element(IN_CONTROL_QUEUE_ID, None, 1);
 
-    // Error control msg: Port is not ready. It will do nothing. Buffer in input_control_queue will not be used.
+    // Error control msg: Port is not ready. It will do nothing. Buffer in input_control_queue will
+    // not be used.
     let ready_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_READY, 0);
     st.out_control_event(ready_msg);
 
-    // Console is default host connected. Should response VIRTIO_CONSOLE_CONSOLE_PORT msg. 1 byte Buffer will be used.
+    // Console is default host connected. Should response VIRTIO_CONSOLE_CONSOLE_PORT msg. 1 byte
+    // Buffer will be used.
     let ready_msg = VirtioConsoleControl::new(0, VIRTIO_CONSOLE_PORT_READY, 1);
     st.out_control_event(ready_msg);
 
@@ -781,11 +790,13 @@ fn virtserialport_socket_not_connect() {
 
     st.serial_init();
 
-    // Requests will be discarded when host (port 1, output queue id: 5) is not connected. Nothing happened.
+    // Requests will be discarded when host (port 1, output queue id: 5) is not connected. Nothing
+    // happened.
     let test_data = String::from("Test\n");
     st.virtqueue_add_element(5, Some(test_data.as_bytes()), test_data.len() as u64);
 
-    // Requests will be discarded when it is sent in virtqueue which has no port(port 2, output queue id: 7). Nothing happened.
+    // Requests will be discarded when it is sent in virtqueue which has no port(port 2, output
+    // queue id: 7). Nothing happened.
     let test_data = String::from("Test\n");
     st.virtqueue_add_element(7, Some(test_data.as_bytes()), test_data.len() as u64);
 

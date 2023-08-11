@@ -180,11 +180,11 @@ impl SysBusDevOps for PL031 {
 
         match offset {
             RTC_MR => {
-                // TODO: The MR register is used for implementing the RTC alarm. A RTC alarm is a feature
-                // that can be used to allow a computer to 'wake up' after shut down to execute tasks
-                // every day or on a certain day. It can sometimes be found in the 'Power Management'
-                // section of motherboard's BIOS setup. This RTC alarm function is not implemented yet,
-                // here is a reminder just in case.
+                // TODO: The MR register is used for implementing the RTC alarm. A RTC alarm is a
+                // feature that can be used to allow a computer to 'wake up' after shut down to
+                // execute tasks every day or on a certain day. It can sometimes be found in the
+                // 'Power Management' section of motherboard's BIOS setup. This RTC alarm function
+                // is not implemented yet, here is a reminder just in case.
                 self.state.mr = value;
             }
             RTC_LR => {

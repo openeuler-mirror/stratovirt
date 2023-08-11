@@ -298,9 +298,9 @@ impl Request {
         let host_page_size = host_page_size();
         let mut advice = 0;
         // If host_page_size equals BALLOON_PAGE_SIZE and have the same share properties,
-        // we can directly call the madvise function without any problem. And if the advice is MADV_WILLNEED,
-        // we just hint the whole host page it lives on, since we can't do anything
-        // smaller.
+        // we can directly call the madvise function without any problem. And if the advice is
+        // MADV_WILLNEED, we just hint the whole host page it lives on, since we can't do
+        // anything smaller.
         if host_page_size == BALLOON_PAGE_SIZE {
             while let Some((hva, share)) = hvaset.pop() {
                 if last_addr == 0 {
@@ -604,7 +604,8 @@ impl BalloonIoHandler {
     ///
     /// * `req_type` - Type of request.
     ///
-    /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
+    /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the
+    /// balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
         let queue = if req_type {
             self.trace_request("Balloon".to_string(), "to inflate".to_string());
@@ -922,8 +923,8 @@ impl Balloon {
 
     /// Init balloon object for global use.
     pub fn object_init(dev: Arc<Mutex<Balloon>>) {
-        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-        // this function will not be called simultaneously.
+        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+        // words, this function will not be called simultaneously.
         unsafe {
             if BALLOON_DEV.is_none() {
                 BALLOON_DEV = Some(dev)
@@ -1139,8 +1140,8 @@ impl VirtioDevice for Balloon {
 }
 
 pub fn qmp_balloon(target: u64) -> bool {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-    // this function will not be called simultaneously.
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         match dev.lock().unwrap().set_guest_memory_size(target) {
             Ok(()) => {
@@ -1157,8 +1158,8 @@ pub fn qmp_balloon(target: u64) -> bool {
 }
 
 pub fn qmp_query_balloon() -> Option<u64> {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-    // this function will not be called simultaneously.
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         let unlocked_dev = dev.lock().unwrap();
         return Some(unlocked_dev.get_guest_memory_size());

@@ -196,8 +196,8 @@ pub struct QcowSnapshot {
     pub date_sec: u32,
     pub date_nsec: u32,
     pub vm_clock_nsec: u64,
-    // Icount value which corresponds to the record/replay instruction count when the snapshots was token.
-    // Sed to -1 which means icount was disabled.
+    // Icount value which corresponds to the record/replay instruction count when the snapshots was
+    // token. Sed to -1 which means icount was disabled.
     pub icount: u64,
     pub extra_data_size: u32,
 }

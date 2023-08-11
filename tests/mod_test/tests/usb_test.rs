@@ -1917,7 +1917,7 @@ fn test_xhci_keyboard_device_init_device_request_repeat() {
         xhci.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::Success as u32);
-        //get protocol
+        // get protocol
         xhci.get_protocol(slot_id);
         xhci.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();

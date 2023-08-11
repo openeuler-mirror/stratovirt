@@ -1233,7 +1233,8 @@ impl VirtioDevice for Block {
         }
 
         if !is_plug {
-            // If it is an unplug operation, the block backend is set to none. Unregister aio before it.
+            // If it is an unplug operation, the block backend is set to none. Unregister aio before
+            // it.
             if let Some(block_backend) = self.block_backend.as_ref() {
                 block_backend.lock().unwrap().unregister_io_event()?;
             } else {

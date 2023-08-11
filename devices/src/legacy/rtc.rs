@@ -154,8 +154,8 @@ impl RTC {
     /// # Arguments
     ///
     /// * `mem_size` - Guest memory size.
-    /// * `gap_start` - The start address of gap on x86_64 platform.
-    ///                 This value can be found in memory layout.
+    /// * `gap_start` - The start address of gap on x86_64 platform. This value can be found in
+    ///   memory layout.
     pub fn set_memory(&mut self, mem_size: u64, gap_start: u64) {
         self.mem_size = mem_size;
         self.gap_start = gap_start;

@@ -1235,8 +1235,9 @@ mod test {
 
     #[test]
     fn test_interfaces_table_data_len() {
-        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
-        // the rest data follow the same principle that the 1st element is the very data vector's length.
+        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4
+        // respectively in their data[0] vector. The rest data follow the same principle that the
+        // 1st element is the very data vector's length.
         test_interface_table_data_len(gen_desc_interface_camera_vc().unwrap(), 5);
         test_interface_table_data_len(gen_desc_interface_camera_vs(list_format()).unwrap(), 4);
     }

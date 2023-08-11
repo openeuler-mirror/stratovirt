@@ -48,11 +48,10 @@ fn set_up() -> TestState {
 /// Test the read and write functions of a ged device.
 ///
 /// Steps
-/// 1. Send qmp command "system_powerdown"
+/// 1. Send qmp command "system_powerdown".
 /// 2. Read ged event.
 /// 3. Read abnormal address, except 0.
-/// 4. Write event and read, excepy 0 because
-///    ged can't write.
+/// 4. Write event and read, excepy 0 because ged can't write.
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn test_shutdown() {
@@ -76,11 +75,9 @@ fn test_shutdown() {
 /// Verify that the restart function is normal.
 ///
 /// Steps
-/// 1. Send qmp command "system_powerdown" and
-///    "system_reset" to achieve "reboot"
+/// 1. Send qmp command "system_powerdown" and "system_reset" to achieve "reboot".
 /// 2. Read ged event.
-/// 3. Send qmp command "query-status" to get
-///    the status of vm, except "running".
+/// 3. Send qmp command "query-status" to get the status of vm, except "running".
 #[test]
 #[cfg(target_arch = "aarch64")]
 fn test_reboot() {

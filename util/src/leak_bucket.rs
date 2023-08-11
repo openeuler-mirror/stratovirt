@@ -36,8 +36,8 @@ pub struct LeakBucket {
     prev_time: Instant,
     /// Indicate whether the timer started.
     timer_started: bool,
-    /// When bucket is ready for allowing more IO operation, the internal callback will write this FD.
-    /// This FD should be listened by IO thread.
+    /// When bucket is ready for allowing more IO operation, the internal callback will write this
+    /// FD. This FD should be listened by IO thread.
     timer_wakeup: Arc<EventFd>,
 }
 

@@ -1231,7 +1231,8 @@ impl DeviceInterface for StdMachine {
             );
         }
 
-        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following process.
+        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following
+        // process.
         let pci_bdf = match get_device_bdf(args.bus.clone(), args.addr.clone()) {
             Ok(bdf) => bdf,
             Err(e) => {
@@ -1832,7 +1833,8 @@ impl DeviceInterface for StdMachine {
                 }
 
                 let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
-                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we don't support.
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we
+                // don't support.
                 let vmstate_str = "None\r\n".to_string();
                 info_str += &vmstate_str;
 

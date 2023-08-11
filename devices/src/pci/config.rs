@@ -300,7 +300,7 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
 
-/* Device classes and subclasses */
+// Device classes and subclasses
 pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
@@ -655,7 +655,8 @@ impl PciConfig {
         le_write_u16(&mut self.config, offset, old_command & !writable_command)
     }
 
-    /// Reset bits that's writable in the common configuration fields for both type0 and type1 devices.
+    /// Reset bits that's writable in the common configuration fields for both type0 and type1
+    /// devices.
     pub fn reset_common_regs(&mut self) -> Result<()> {
         self.reset_single_writable_reg(COMMAND as usize)?;
         self.reset_single_writable_reg(STATUS as usize)?;

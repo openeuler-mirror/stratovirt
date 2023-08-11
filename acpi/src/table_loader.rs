@@ -78,10 +78,10 @@ impl ByteCode for EntryContent {}
 
 /// Stores the command and corresponding content of entry.
 /// - For `AllocateEntry`, Guest will alloc guest memory resource.
-/// - For `AddPointerEntry`, Guest will update pointer at specified offset of dst file
-///   by adding base address of source file.
-/// - For `AddPointerEntry`, Guest will calculate u8-type checksum of a range in file
-///   and store it at specified offset of the same file.
+/// - For `AddPointerEntry`, Guest will update pointer at specified offset of dst file by adding
+///   base address of source file.
+/// - For `AddPointerEntry`, Guest will calculate u8-type checksum of a range in file and store it
+///   at specified offset of the same file.
 #[derive(Copy, Clone, Default)]
 struct TableLoaderEntry {
     /// The Type of command.
@@ -221,8 +221,8 @@ impl TableLoader {
     /// * `file` - File name.
     /// * `file_blob` - File blob data.
     /// * `align` - Required alignment of this blob.
-    /// * `is_fseg` - Represents range where Guest will allocate for this entry.
-    ///               If true, Guest will allocate in FSEG zone.
+    /// * `is_fseg` - Represents range where Guest will allocate for this entry. If true, Guest will
+    ///   allocate in FSEG zone.
     pub fn add_alloc_entry(
         &mut self,
         file: &str,
