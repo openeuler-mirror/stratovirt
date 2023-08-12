@@ -51,7 +51,7 @@ use util::{
         get_iov_size, iovec_write_zero, iovecs_split, raw_write_zeroes, Aio, AioCb, AioEngine,
         Iovec, OpCode,
     },
-    num_ops::{div_round_up, round_down, round_up},
+    num_ops::{div_round_up, ranges_overlap, round_down, round_up},
     time::{get_format_time, gettime},
 };
 
@@ -1051,81 +1051,91 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.refcount.offset_into_cluster(offset) + size,
             self.header.cluster_size(),
         )
-        .unwrap();
-        let offset = self.refcount.start_of_cluster(offset);
-        if u64::MAX - offset < size {
+        .unwrap() as usize;
+        let offset = self.refcount.start_of_cluster(offset) as usize;
+        if usize::MAX - offset < size {
             // Ensure there exist no overflow.
             return -1;
         }
 
+        // SAFETY: all tables have been assigned, indicating that their addresses are reasonable.
         if check & METADATA_OVERLAP_CHECK_ACTIVEL1 != 0
             && self.header.l1_size != 0
-            && check_overlaps(
+            && ranges_overlap(
                 offset,
                 size,
-                self.header.l1_table_offset,
-                self.header.l1_size as u64 * ENTRY_SIZE,
+                self.header.l1_table_offset as usize,
+                self.header.l1_size as usize * ENTRY_SIZE as usize,
             )
+            .unwrap()
         {
             return METADATA_OVERLAP_CHECK_ACTIVEL1 as i64;
         }
 
         if check & METADATA_OVERLAP_CHECK_ACTIVEL2 != 0 {
             for l1_entry in &self.table.l1_table {
-                if check_overlaps(
+                if ranges_overlap(
                     offset,
                     size,
-                    l1_entry & L1_TABLE_OFFSET_MASK,
-                    self.header.cluster_size(),
-                ) {
+                    (l1_entry & L1_TABLE_OFFSET_MASK) as usize,
+                    self.header.cluster_size() as usize,
+                )
+                .unwrap()
+                {
                     return METADATA_OVERLAP_CHECK_ACTIVEL2 as i64;
                 }
             }
         }
 
         if check & METADATA_OVERLAP_CHECK_REFCOUNTTABLE != 0
-            && check_overlaps(
+            && ranges_overlap(
                 offset,
                 size,
-                self.header.refcount_table_offset,
-                self.header.refcount_table_clusters as u64 * self.header.cluster_size(),
+                self.header.refcount_table_offset as usize,
+                self.header.refcount_table_clusters as usize * self.header.cluster_size() as usize,
             )
+            .unwrap()
         {
             return METADATA_OVERLAP_CHECK_REFCOUNTTABLE as i64;
         }
 
         if check & METADATA_OVERLAP_CHECK_REFCOUNTBLOCK != 0 {
             for block_offset in &self.refcount.refcount_table {
-                if check_overlaps(
+                if ranges_overlap(
                     offset,
                     size,
-                    block_offset & REFCOUNT_TABLE_OFFSET_MASK,
-                    self.header.cluster_size(),
-                ) {
+                    (block_offset & REFCOUNT_TABLE_OFFSET_MASK) as usize,
+                    self.header.cluster_size() as usize,
+                )
+                .unwrap()
+                {
                     return METADATA_OVERLAP_CHECK_REFCOUNTBLOCK as i64;
                 }
             }
         }
 
         if check & METADATA_OVERLAP_CHECK_SNAPSHOTTABLE != 0
-            && check_overlaps(
+            && ranges_overlap(
                 offset,
                 size,
-                self.snapshot.snapshot_table_offset,
-                self.snapshot.snapshot_size,
+                self.snapshot.snapshot_table_offset as usize,
+                self.snapshot.snapshot_size as usize,
             )
+            .unwrap()
         {
             return METADATA_OVERLAP_CHECK_SNAPSHOTTABLE as i64;
         }
 
         if check & METADATA_OVERLAP_CHECK_INACTIVEL1 != 0 {
             for snap in &self.snapshot.snapshots {
-                if check_overlaps(
+                if ranges_overlap(
                     offset,
                     size,
-                    snap.l1_table_offset,
-                    snap.l1_size as u64 * ENTRY_SIZE,
-                ) {
+                    snap.l1_table_offset as usize,
+                    snap.l1_size as usize * ENTRY_SIZE as usize,
+                )
+                .unwrap()
+                {
                     return METADATA_OVERLAP_CHECK_INACTIVEL1 as i64;
                 }
             }
@@ -1138,19 +1148,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 pub fn bytes_to_clusters(size: u64, cluster_sz: u64) -> Result<u64> {
     div_round_up(size, cluster_sz)
         .with_context(|| format!("Failed to div round up, size is {}", size))
-}
-
-// Check if there is an intersection between two addresses. Return true if there is a crossover.
-fn check_overlaps(addr1: u64, size1: u64, addr2: u64, size2: u64) -> bool {
-    // Note: ensure that there is no overflow at the calling function.
-    if addr1 + size1 == 0 || addr2 + size2 == 0 {
-        return false;
-    }
-
-    let last1 = addr1 + size1 - 1;
-    let last2 = addr2 + size2 - 1;
-
-    !(last1 < addr2 || last2 < addr1)
 }
 
 pub trait InternalSnapshotOps: Send + Sync {

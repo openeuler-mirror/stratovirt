@@ -43,12 +43,13 @@ use devices::pci::config::{
 use devices::pci::msix::{update_dev_id, MsixState};
 use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
-    ranges_overlap, PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
+    PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
 };
 use devices::{Device, DeviceBase};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::num_ops::ranges_overlap;
 use util::num_ops::{read_data_u32, write_data_u32};
 use util::offset_of;
 
@@ -855,7 +856,9 @@ impl VirtioPciDevice {
         let pci_cfg_data_offset =
             self.cfg_cap_offset + offset_of!(VirtioPciCfgAccessCap, pci_cfg_data);
         let cap_size = size_of::<VirtioPciCfgAccessCap>();
-        if !ranges_overlap(start, end - start, pci_cfg_data_offset, cap_size) {
+        // SAFETY: pci_cfg_data_offset is the offset of VirtioPciCfgAccessCap in Pci config space
+        // which is much less than u16::MAX.
+        if !ranges_overlap(start, end - start, pci_cfg_data_offset, cap_size).unwrap() {
             return;
         }
 

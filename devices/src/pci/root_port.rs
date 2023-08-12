@@ -35,8 +35,7 @@ use crate::pci::intx::init_intx;
 use crate::pci::msix::init_msix;
 use crate::pci::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRUPT_PIN};
 use crate::pci::{
-    le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
-    PciDevOps,
+    le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, PciDevOps,
 };
 use crate::{Device, DeviceBase};
 use address_space::Region;
@@ -45,7 +44,7 @@ use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use util::{byte_code::ByteCode, num_ops::ranges_overlap};
 
 const DEVICE_ID_RP: u16 = 0x000c;
 
@@ -257,7 +256,8 @@ impl RootPort {
     fn correct_race_unplug(&mut self, offset: usize, data: &[u8], old_status: u16) {
         let size = data.len();
         let cap_offset = self.base.config.pci_express_cap_offset;
-        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTSTA) as usize, 2) {
+        // SAFETY: Checked in write_config.
+        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTSTA) as usize, 2).unwrap() {
             return;
         }
 
@@ -285,7 +285,8 @@ impl RootPort {
         let size = data.len();
         let cap_offset = self.base.config.pci_express_cap_offset;
         // Only care the write config about slot control
-        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTCTL) as usize, 2) {
+        // SAFETY: Checked in write_config.
+        if !ranges_overlap(offset, size, (cap_offset + PCI_EXP_SLTCTL) as usize, 2).unwrap() {
             return;
         }
 
@@ -434,6 +435,7 @@ impl PciDevOps for RootPort {
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();
+        // SAFETY: offset is no more than 0xfff.
         let end = offset + size;
         if end > PCIE_CONFIG_SPACE_SIZE || size > 4 {
             error!(
@@ -477,9 +479,9 @@ impl PciDevOps for RootPort {
             }
         }
 
-        if ranges_overlap(offset, size, COMMAND as usize, 1)
-            || ranges_overlap(offset, size, IO_BASE as usize, 2)
-            || ranges_overlap(offset, size, MEMORY_BASE as usize, 20)
+        if ranges_overlap(offset, size, COMMAND as usize, 1).unwrap()
+            || ranges_overlap(offset, size, IO_BASE as usize, 2).unwrap()
+            || ranges_overlap(offset, size, MEMORY_BASE as usize, 20).unwrap()
         {
             self.register_region();
         }
@@ -490,7 +492,7 @@ impl PciDevOps for RootPort {
         )
         .unwrap();
         let exp_slot_status = (cap_offset + PCI_EXP_SLTSTA) as usize;
-        if ranges_overlap(offset, size, exp_slot_status, 2) {
+        if ranges_overlap(offset, size, exp_slot_status, 2).unwrap() {
             let new_status = le_read_u16(data, 0).unwrap();
             if new_status & !old_status & PCI_EXP_SLOTSTA_EVENTS != 0 {
                 status = (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
