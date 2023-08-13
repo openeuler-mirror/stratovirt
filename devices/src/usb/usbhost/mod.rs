@@ -365,7 +365,7 @@ unsafe impl Send for UsbHost {}
 impl UsbHost {
     pub fn new(config: UsbHostConfig) -> Result<Self> {
         let mut context = Context::new()?;
-        context.set_log_level(rusb::LogLevel::Warning);
+        context.set_log_level(rusb::LogLevel::None);
         let iso_urb_frames = config.iso_urb_frames;
         let iso_urb_count = config.iso_urb_count;
         let id = config.id.clone().unwrap();
@@ -893,7 +893,7 @@ impl EventNotifierHelper for UsbHost {
         let mut notifiers = Vec::new();
 
         let poll = get_libusb_pollfds(usbhost);
-        let timeout = Some(Duration::from_micros(500));
+        let timeout = Some(Duration::new(0, 0));
         let handler: Rc<NotifierCallback> = Rc::new(move |_, _fd: RawFd| {
             cloned_usbhost
                 .lock()
@@ -940,8 +940,6 @@ impl UsbDeviceOps for UsbHost {
         if self.handle.is_none() {
             return;
         }
-        self.abort_host_transfers()
-            .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
 
         self.clear_iso_queues();
     }
