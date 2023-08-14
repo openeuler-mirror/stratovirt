@@ -77,6 +77,17 @@ const QUEUE_AVAIL_HIGH_REG: u64 = 0x94;
 const QUEUE_USED_LOW_REG: u64 = 0xa0;
 /// The high 32bit of queue's Used Ring address.
 const QUEUE_USED_HIGH_REG: u64 = 0xa4;
+/// Shared memory region id.
+#[allow(unused)]
+const SHM_SEL: u64 = 0xac;
+/// Shared memory region 64 bit long length. 64 bits in two halves.
+const SHM_LEN_LOW: u64 = 0xb0;
+const SHM_LEN_HIGH: u64 = 0xb4;
+/// Shared memory region 64 bit long physical address. 64 bits in two halves.
+#[allow(unused)]
+const SHM_BASE_LOW: u64 = 0xb8;
+#[allow(unused)]
+const SHM_BASE_HIGH: u64 = 0xbc;
 /// Configuration atomicity value.
 const CONFIG_GENERATION_REG: u64 = 0xfc;
 
@@ -290,6 +301,9 @@ impl VirtioMmioDevice {
             INTERRUPT_STATUS_REG => locked_device.interrupt_status(),
             STATUS_REG => locked_device.device_status(),
             CONFIG_GENERATION_REG => locked_device.config_generation() as u32,
+            // SHM_SEL is unimplemented. According to the Virtio v1.2 spec: Reading from a non-existent
+            // region(i.e. where the ID written to SHMSel is unused) results in a length of -1.
+            SHM_LEN_LOW | SHM_LEN_HIGH => u32::MAX,
             _ => {
                 return Err(anyhow!(VirtioError::MmioRegErr(offset)));
             }
