@@ -70,7 +70,7 @@ macro_rules! add_args_to_config_multi {
 
 /// This function is to define all commandline arguments.
 pub fn create_args_parser<'a>() -> ArgParser<'a> {
-    ArgParser::new("StratoVirt")
+    let parser = ArgParser::new("StratoVirt")
         .version(util::VERSION)
         .author("The StratoVirt Project Developers")
         .about("A light kvm-based hypervisor.")
@@ -153,14 +153,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .value_name("<parameters>")
             .help("\n\t\tset numa node: -numa node,nodeid=<0>,cpus=<0-1>,memdev=<mem0>; \
                    \n\t\tset numa distance: -numa dist,src=<0>,dst=<1>,val=<20> ")
-            .takes_values(true),
-        )
-        .arg(
-            Arg::with_name("cameradev")
-            .multiple(true)
-            .long("cameradev")
-            .value_name("<parameters>")
-            .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
             .takes_values(true),
         )
         .arg(
@@ -489,7 +481,19 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd type4 table: -smbios type=4[,sock_pfx=str][,manufacturer=str][,version=str][,serial=str][,asset=str][,part=str][,max-speed=%d][,current-speed=%d]; \
                    \n\t\tadd type17 table: -smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str][,asset=str][,part=str][,speed=%d]")
             .takes_values(true),
-        )
+        );
+
+    #[cfg(feature = "usb_camera")]
+    let parser = parser.arg(
+        Arg::with_name("cameradev")
+            .multiple(true)
+            .long("cameradev")
+            .value_name("<parameters>")
+            .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
+            .takes_values(true),
+    );
+
+    parser
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -556,6 +560,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
     add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
+    #[cfg(feature = "usb_camera")]
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
     add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
 

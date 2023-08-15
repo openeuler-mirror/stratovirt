@@ -29,10 +29,11 @@ use super::{
 };
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
 use crate::libtest::{test_init, TestState};
+#[cfg(feature = "usb_camera")]
+use devices::usb::camera::{
+    INTERFACE_ID_CONTROL, SC_VIDEOCONTROL, SC_VIDEOSTREAMING, SC_VIDEO_INTERFACE_COLLECTION,
+};
 use devices::usb::{
-    camera::{
-        INTERFACE_ID_CONTROL, SC_VIDEOCONTROL, SC_VIDEOSTREAMING, SC_VIDEO_INTERFACE_COLLECTION,
-    },
     config::*,
     hid::{
         HID_GET_IDLE, HID_GET_PROTOCOL, HID_GET_REPORT, HID_SET_IDLE, HID_SET_PROTOCOL,
@@ -1612,6 +1613,7 @@ impl TestXhciPciDevice {
         // class
         assert_eq!(buf[4], USB_CLASS_VIDEO);
         // subclass
+        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[5], SC_VIDEO_INTERFACE_COLLECTION);
 
         // 2. VC interface
@@ -1622,9 +1624,12 @@ impl TestXhciPciDevice {
             *offset,
         );
 
+        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[1], USB_DT_INTERFACE);
+        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[2], INTERFACE_ID_CONTROL);
         assert_eq!(buf[5], USB_CLASS_VIDEO);
+        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[6], SC_VIDEOCONTROL);
 
         // get total vc length from its header descriptor
@@ -1647,6 +1652,7 @@ impl TestXhciPciDevice {
 
         assert_eq!(buf[1], USB_DT_INTERFACE);
         assert_eq!(buf[5], USB_CLASS_VIDEO);
+        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[6], SC_VIDEOSTREAMING);
 
         // get total vs length from its header descriptor

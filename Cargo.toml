@@ -28,6 +28,7 @@ scream_alsa = ["machine/scream_alsa"]
 scream_pulseaudio = ["machine/scream_pulseaudio"]
 demo_device = ["machine/demo_device"]
 usb_host = ["machine/usb_host"]
+usb_camera = ["machine/usb_camera"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
