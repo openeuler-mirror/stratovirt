@@ -670,7 +670,6 @@ pub trait MachineOps {
             if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
                 bail!("Device id {} existed", name);
             }
-            #[cfg(not(target_env = "musl"))]
             if self.check_id_existed_in_xhci(name).unwrap_or_default() {
                 bail!("Device id {} existed in xhci", name);
             }
