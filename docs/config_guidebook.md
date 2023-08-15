@@ -843,6 +843,8 @@ Video Camera Device that based on USB video class protocol. It should be attache
 
 Note: Only one camera can be configured.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-camera.
+
 #### 2.13.5 USB Storage
 USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
 

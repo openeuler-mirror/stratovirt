@@ -53,7 +53,7 @@ use devices::misc::scream::Scream;
 use devices::pci::demo_dev::DemoDev;
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 use devices::usb::camera::UsbCamera;
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::UsbHost;
@@ -67,6 +67,10 @@ use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::parse_gpu;
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::parse_usb_camera;
 #[cfg(feature = "usb_host")]
 use machine_manager::config::parse_usb_host;
 #[cfg(feature = "scream")]
@@ -79,8 +83,6 @@ use machine_manager::config::{
     MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig,
     PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
-#[cfg(not(target_env = "musl"))]
-use machine_manager::config::{parse_gpu, parse_usb_camera};
 use machine_manager::config::{
     parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
@@ -1377,7 +1379,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Camera Configuration.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "usb_camera")]
     fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
         let camera = UsbCamera::new(device_cfg)?;
@@ -1518,7 +1520,7 @@ pub trait MachineOps {
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "usb_camera")]
                 "usb-camera" => {
                     self.add_usb_camera(vm_config, cfg_args)?;
                 }

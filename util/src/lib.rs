@@ -38,6 +38,7 @@ pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;
+#[cfg(feature = "usb_camera")]
 pub mod v4l2;
 
 pub use anyhow::Result;
