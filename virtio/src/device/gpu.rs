@@ -725,6 +725,29 @@ impl GpuIoHandler {
         scanout.cursor_visible = true;
     }
 
+    fn update_cursor(&mut self, info_cursor: &VirtioGpuUpdateCursor, hdr_type: u32) -> Result<()> {
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        match &mut scanout.mouse {
+            None => {
+                let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
+                scanout.mouse = Some(mouse);
+            }
+            Some(mouse) => {
+                if hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
+                    mouse.hot_x = info_cursor.hot_x;
+                    mouse.hot_y = info_cursor.hot_y;
+                }
+            }
+        }
+
+        if info_cursor.resource_id > 0 {
+            self.update_cursor_image(info_cursor);
+        }
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
+        Ok(())
+    }
+
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_cursor = VirtioGpuUpdateCursor::default();
         self.get_request(req, &mut info_cursor)?;
@@ -758,24 +781,11 @@ impl GpuIoHandler {
                 }
                 display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
                 scanout.cursor_visible = false;
+            } else if info_cursor.resource_id > 0 && !scanout.cursor_visible {
+                self.update_cursor(&info_cursor, VIRTIO_GPU_CMD_MOVE_CURSOR)?;
             }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
-            match &mut scanout.mouse {
-                None => {
-                    let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
-                    scanout.mouse = Some(mouse);
-                }
-                Some(mouse) => {
-                    mouse.hot_x = info_cursor.hot_x;
-                    mouse.hot_y = info_cursor.hot_y;
-                }
-            }
-
-            if info_cursor.resource_id > 0 {
-                self.update_cursor_image(&info_cursor);
-            }
-            let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
-            display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
+            self.update_cursor(&info_cursor, VIRTIO_GPU_CMD_UPDATE_CURSOR)?;
         } else {
             bail!("Wrong header type for cursor queue");
         }
