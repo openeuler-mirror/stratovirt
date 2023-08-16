@@ -844,8 +844,9 @@ impl UsbHost {
                 Err(e) => {
                     locked_iso_queue.unused.push_back(iso_transfer.unwrap());
                     if e == Error::NoDevice || e == Error::Io {
-                        // When the USB device reports the preceding error, XHCI notifies the guest of the
-                        // error through packet status. The guest initiallizes the device again.
+                        // When the USB device reports the preceding error, XHCI notifies the guest
+                        // of the error through packet status. The guest initiallizes the device
+                        // again.
                         packet.lock().unwrap().status = UsbPacketStatus::Stall;
                     };
                     break;

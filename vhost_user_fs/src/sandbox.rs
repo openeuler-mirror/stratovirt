@@ -62,7 +62,8 @@ impl Sandbox {
     }
 
     /// In "namespace" sandbox mode.
-    /// The program switches into a new file system namespace and invokes pivot_root(2) to make the shared directory tree its root.
+    /// The program switches into a new file system namespace and invokes pivot_root(2) to make the
+    /// shared directory tree its root.
     pub fn enable_namespace(&mut self) -> Result<()> {
         let mut flags = libc::CLONE_NEWPID | libc::CLONE_NEWNS | libc::CLONE_NEWNET;
         let euid = unsafe { libc::geteuid() };
@@ -335,8 +336,9 @@ pub fn drop_groups() -> Result<()> {
     if group_num == -1 {
         bail!("getgroups fail");
     } else if group_num > 0 {
-        // Sets the supplementary group IDs for the calling process. Appropriate privileges are required.
-        // A process can drop all of its supplementary groups with the call:setgroups(0, NULL).
+        // Sets the supplementary group IDs for the calling process. Appropriate privileges are
+        // required. A process can drop all of its supplementary groups with the
+        // call:setgroups(0, NULL).
         if unsafe { libc::setgroups(0, std::ptr::null()) } == -1 {
             bail!("setgroups fail");
         }

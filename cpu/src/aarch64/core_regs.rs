@@ -113,7 +113,8 @@ impl From<Arm64CoreRegs> for u64 {
         // #define KVM_REG_SIZE_U128	0x0040000000000000ULL
         // #define KVM_REG_ARM_CORE	0x00100000ULL
 
-        // The id of the register is encoded as specified for `KVM_GET_ONE_REG` in the kernel documentation.
+        // The id of the register is encoded as specified for `KVM_GET_ONE_REG` in the kernel
+        // documentation.
         // reg_id = KVM_REG_ARM64 | KVM_REG_SIZE_* | KVM_REG_ARM_CORE | reg_offset_index
         // reg_offset_index = reg_offset / sizeof(u32)
         // KVM_REG_SIZE_* => KVM_REG_SIZE_U32/KVM_REG_SIZE_U64/KVM_REG_SIZE_U128

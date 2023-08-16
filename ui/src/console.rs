@@ -240,8 +240,8 @@ struct DisplayState {
     refresh_num: i32,
 }
 
-// SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
-// and only be saved in the single thread. So implement Send is safe.
+// SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
+// initialization process, and only be saved in the single thread. So implement Send is safe.
 unsafe impl Send for DisplayState {}
 
 impl DisplayState {
@@ -283,8 +283,10 @@ pub struct ConsoleList {
 }
 
 // SAFETY:
-// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
-// 2. The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image
+//    by this pointer.
+// 2. The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
+//    initialization process,
 // and only be saved in the single thread.
 // So implement Send is safe.
 unsafe impl Send for ConsoleList {}

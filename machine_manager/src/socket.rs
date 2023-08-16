@@ -46,9 +46,9 @@ pub(crate) const LEAK_BUCKET_LIMIT: u64 = 100;
 /// # Example
 ///
 /// ```no_run
-/// use std::os::unix::net::{UnixListener, UnixStream};
-/// use std::os::unix::io::AsRawFd;
 /// use std::io::prelude::*;
+/// use std::os::unix::io::AsRawFd;
+/// use std::os::unix::net::{UnixListener, UnixStream};
 ///
 /// use machine_manager::socket::Socket;
 ///
@@ -290,9 +290,9 @@ impl AsRawFd for SocketStream {
 /// # Examples
 ///
 /// ```no_run
-/// use std::os::unix::net::UnixStream;
-/// use std::os::unix::io::AsRawFd;
 /// use std::io::prelude::*;
+/// use std::os::unix::io::AsRawFd;
+/// use std::os::unix::net::UnixStream;
 ///
 /// use machine_manager::socket::SocketRWHandler;
 ///
@@ -514,9 +514,9 @@ impl Write for SocketRWHandler {
 /// # Examples
 ///
 /// ```no_run
-/// use std::os::unix::net::UnixStream;
-/// use std::os::unix::io::AsRawFd;
 /// use std::io::prelude::*;
+/// use std::os::unix::io::AsRawFd;
+/// use std::os::unix::net::UnixStream;
 ///
 /// use machine_manager::socket::SocketHandler;
 ///

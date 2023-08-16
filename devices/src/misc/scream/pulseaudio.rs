@@ -130,13 +130,12 @@ impl PulseStreamData {
         self.channel_map.init();
         self.channel_map.set_len(format.channels);
         let map: &mut [Position] = self.channel_map.get_mut();
-        /* In Windows, the channel mask shows as following figure.
-         *   31    11   10   9   8     7    6   5    4     3   2     1   0
-         *  |     |  | SR | SL | BC | FRC| FLC| BR | BL | LFE| FC | FR | FL |
-         *
-         *  Each bit in the channel mask represents a particular speaker position.
-         *  Now, it map a windows SPEAKER_* position to a PA_CHANNEL_POSITION_*.
-         */
+        // In Windows, the channel mask shows as following figure.
+        //   31    11   10   9   8     7    6   5    4     3   2     1   0
+        //  |     |  | SR | SL | BC | FRC| FLC| BR | BL | LFE| FC | FR | FL |
+        //
+        //  Each bit in the channel mask represents a particular speaker position.
+        //  Now, it map a windows SPEAKER_* position to a PA_CHANNEL_POSITION_*.
         let mut key: i32 = -1;
         for (i, item) in map.iter_mut().enumerate().take(format.channels as usize) {
             for j in (key + 1)..32 {
@@ -204,7 +203,8 @@ impl PulseStreamData {
         }
 
         if self.ss.rate > 0 {
-            // Sample spec has changed, so the playback buffer size for the requested latency must be recalculated as well.
+            // Sample spec has changed, so the playback buffer size for the requested latency must
+            // be recalculated as well.
             self.buffer_attr.tlength =
                 self.ss
                     .usec_to_bytes(MicroSeconds(self.latency as u64 * 1000)) as u32;

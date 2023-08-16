@@ -11,7 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 //! The abstract layer that connects different frontend & backend camera devices.
-//! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait CameraHostdevOps.
+//! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait
+//! CameraHostdevOps.
 
 pub mod demo;
 pub mod v4l2;

@@ -400,7 +400,7 @@ impl VmConfig {
         cmd_parser.push("");
         cmd_parser.push("pmu");
         cmd_parser.parse(features)?;
-        //Check PMU when actually enabling PMU.
+        // Check PMU when actually enabling PMU.
         if let Some(k) = cmd_parser.get_value::<String>("pmu")? {
             self.machine_config.cpu_config.pmu = match k.as_ref() {
                 "on" => PmuConfig::On,
@@ -1106,7 +1106,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     #[test]
     fn test_cpu_features() {
-        //Test PMU flags
+        // Test PMU flags
         let mut vm_config = VmConfig::default();
         vm_config.add_cpu_feature("host").unwrap();
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);

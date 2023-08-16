@@ -15,8 +15,8 @@
 /// It can have 0-6 bars, if set, msix always lives in bar 0, data handling in bar 1.
 /// 1. its functionality is to read and write data for the guest, meanwhile, do a little
 ///    mathmetic logic(multiply data[0] with 2) with the write op.
-/// 2. After r/w, it sends back a msix interrupt to the guest, which means that it has
-///    also msix capability. We assume msix bar is in bar 0.
+/// 2. After r/w, it sends back a msix interrupt to the guest, which means that it has also
+///    msix capability. We assume msix bar is in bar 0.
 /// 3. Finally, it supports hotplug/hotunplug.
 /// As that it has device memory, it means it has a bar space, we assume the
 /// bar size is 4KB in bar 1.

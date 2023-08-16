@@ -243,7 +243,8 @@ impl XhciTransfer {
     }
 
     fn report_transfer_error(&mut self) -> Result<()> {
-        // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
+        // An error occurs in the transfer. The transfer is set to the completed and will not be
+        // retried.
         self.complete = true;
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
         evt.slot_id = self.slotid as u8;
@@ -1382,7 +1383,8 @@ impl XhciDevice {
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer layer.
+            // It is safe to use plus here becuase we previously verify the address on the outer
+            // layer.
             GuestAddress(input_ctx + EP_INPUT_CTX_OFFSET + entry_offset),
             ep_ctx.as_mut_dwords(),
         )?;
@@ -1397,7 +1399,8 @@ impl XhciDevice {
         ep_ctx.ep_info |= EP_RUNNING;
         dma_write_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer layer.
+            // It is safe to use plus here becuase we previously verify the address on the outer
+            // layer.
             GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
             ep_ctx.as_dwords(),
         )?;

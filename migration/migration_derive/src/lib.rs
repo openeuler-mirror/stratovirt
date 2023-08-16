@@ -40,9 +40,11 @@
 //! }
 //!
 //! fn main() {
-//!     println!("Description of DeviceState is {:?}", DeviceState::descriptor());
+//!     println!(
+//!         "Description of DeviceState is {:?}",
+//!         DeviceState::descriptor()
+//!     );
 //! }
-//!
 //! ```
 //!
 //! 2. The `ByteCode` derive to auto add `ByteCode` trait and its relying trait for
