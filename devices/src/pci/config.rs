@@ -536,13 +536,6 @@ impl PciConfig {
     }
 
     fn validate_config_boundary(&self, offset: usize, data: &[u8]) -> Result<()> {
-        if offset + data.len() > self.config.len() {
-            return Err(anyhow!(PciError::InvalidConf(
-                "config size".to_string(),
-                format!("offset {} with len {}", offset, data.len())
-            )));
-        }
-
         // According to pcie specification 7.2.2.2 PCI Express Device Requirements:
         if data.len() > 4 {
             return Err(anyhow!(PciError::InvalidConf(
@@ -550,6 +543,16 @@ impl PciConfig {
                 format!("{}", data.len())
             )));
         }
+
+        offset
+            .checked_add(data.len())
+            .filter(|&end| end <= self.config.len())
+            .with_context(|| {
+                PciError::InvalidConf(
+                    "config size".to_string(),
+                    format!("offset {} with len {}", offset, data.len()),
+                )
+            })?;
 
         Ok(())
     }
