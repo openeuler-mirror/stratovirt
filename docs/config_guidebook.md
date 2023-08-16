@@ -1101,6 +1101,8 @@ Sample Configuration：
 
 Note: Only supported on aarch64.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable ramfb.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.

@@ -58,6 +58,7 @@ List of optional features:
 - usb_camera_v4l2: enable USB camera with `v4l2` backend
 - gtk: enable GTK display
 - vnc: enable VNC display
+- ramfb: enable ramfb display device
 
 ```shell
 $ cargo build --release --features "scream_alsa"
