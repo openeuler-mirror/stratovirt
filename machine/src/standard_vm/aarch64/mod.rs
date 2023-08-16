@@ -46,7 +46,7 @@ use cpu::{
 };
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use devices::acpi::power::PowerDev;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "ramfb")]
 use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
@@ -55,7 +55,7 @@ use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
 #[cfg(feature = "gtk")]
@@ -778,7 +778,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "ramfb")]
     fn add_ramfb(&mut self, cfg_args: &str) -> Result<()> {
         let install = parse_ramfb(cfg_args)?;
         let fwcfg_dev = self

@@ -33,6 +33,7 @@ mod machine_config;
 mod network;
 mod numa;
 mod pci;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 mod ramfb;
 mod rng;
 mod sasl_auth;
@@ -64,6 +65,7 @@ pub use machine_config::*;
 pub use network::*;
 pub use numa::*;
 pub use pci::*;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 pub use ramfb::*;
 pub use rng::*;
 pub use sasl_auth::*;

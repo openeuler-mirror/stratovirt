@@ -1535,7 +1535,7 @@ pub trait MachineOps {
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "ramfb")]
                 "ramfb" => {
                     self.add_ramfb(cfg_args)?;
                 }

@@ -57,6 +57,7 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 - usb_camera_v4l2：使能USB摄像头，使用`v4l2`后端
 - gtk：使能GTK显示
 - vnc：使能VNC显示
+- ramfb：使能ramfb显示设备
 
 ```shell
 $ cargo build --release --features "scream_alsa"
