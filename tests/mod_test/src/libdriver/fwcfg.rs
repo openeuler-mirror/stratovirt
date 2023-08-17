@@ -16,6 +16,7 @@ use super::malloc::GuestAllocator;
 use crate::libtest::TestState;
 use crate::utils::{swap_u16, swap_u32, swap_u64};
 use devices::legacy::FwCfgEntryType;
+#[cfg(target_arch = "aarch64")]
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "aarch64")]
