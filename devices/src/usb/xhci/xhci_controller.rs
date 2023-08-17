@@ -2135,7 +2135,7 @@ pub fn dma_read_u32(
     addr: GuestAddress,
     buf: &mut [u32],
 ) -> Result<()> {
-    let vec_len = size_of::<u32>() * buf.len();
+    let vec_len = std::mem::size_of_val(buf);
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
     dma_read_bytes(addr_space, addr, tmp)?;
@@ -2150,7 +2150,7 @@ pub fn dma_write_u32(
     addr: GuestAddress,
     buf: &[u32],
 ) -> Result<()> {
-    let vec_len = size_of::<u32>() * buf.len();
+    let vec_len = std::mem::size_of_val(buf);
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
     for i in 0..buf.len() {

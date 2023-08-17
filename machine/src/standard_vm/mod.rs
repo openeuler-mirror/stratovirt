@@ -1134,7 +1134,7 @@ impl DeviceInterface for StdMachine {
             _ => Default::default(),
         };
 
-        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
+        Response::create_response(serde_json::to_value(qmp_state).unwrap(), None)
     }
 
     fn query_cpus(&self) -> Response {
@@ -1195,7 +1195,7 @@ impl DeviceInterface for StdMachine {
     fn query_balloon(&self) -> Response {
         if let Some(actual) = qmp_query_balloon() {
             let ret = qmp_schema::BalloonInfo { actual };
-            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+            return Response::create_response(serde_json::to_value(ret).unwrap(), None);
         }
         Response::create_error_response(
             qmp_schema::QmpErrorClass::DeviceNotActive(
