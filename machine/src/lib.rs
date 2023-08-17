@@ -49,7 +49,9 @@ use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(feature = "scream")]
 use devices::misc::scream::Scream;
-use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
+#[cfg(feature = "demo_device")]
+use devices::pci::demo_dev::DemoDev;
+use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(not(target_env = "musl"))]
 use devices::usb::{camera::UsbCamera, usbhost::UsbHost};
@@ -61,16 +63,17 @@ use devices::usb::{
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(feature = "demo_device")]
+use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "scream")]
 use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
-    parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio,
-    parse_vhost_user_blk_pci, parse_virtio_serial, parse_virtserialport, parse_vsock,
-    BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
-    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk_pci,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, DriveFile, Incoming,
+    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig,
+    PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 #[cfg(not(target_env = "musl"))]
 use machine_manager::config::{parse_gpu, parse_usb_camera, parse_usb_host};
@@ -1530,6 +1533,7 @@ pub trait MachineOps {
                 "ramfb" => {
                     self.add_ramfb(cfg_args)?;
                 }
+                #[cfg(feature = "demo_device")]
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
                 }
@@ -1558,6 +1562,7 @@ pub trait MachineOps {
         bail!("Display is not supported.");
     }
 
+    #[cfg(feature = "demo_device")]
     fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
