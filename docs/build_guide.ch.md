@@ -58,6 +58,7 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 - gtk：使能GTK显示
 - vnc：使能VNC显示
 - ramfb：使能ramfb显示设备
+- virtio_gpu：使能virtio-gpu虚拟显卡
 
 ```shell
 $ cargo build --release --features "scream_alsa"

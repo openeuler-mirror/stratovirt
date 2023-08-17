@@ -59,6 +59,7 @@ List of optional features:
 - gtk: enable GTK display
 - vnc: enable VNC display
 - ramfb: enable ramfb display device
+- virtio_gpu: enable virtio-gpu virtualized graphics card
 
 ```shell
 $ cargo build --release --features "scream_alsa"

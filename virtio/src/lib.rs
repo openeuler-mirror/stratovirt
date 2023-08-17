@@ -34,7 +34,7 @@ mod transport;
 
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState, VirtioBlkConfig};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
 pub use device::net::*;
 pub use device::rng::{Rng, RngState};

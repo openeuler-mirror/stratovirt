@@ -43,3 +43,4 @@ usb_camera_v4l2 = ["usb_camera", "devices/usb_camera_v4l2", "machine_manager/usb
 gtk = ["ui/gtk", "machine_manager/gtk"]
 vnc = ["ui/vnc", "machine_manager/vnc"]
 ramfb = ["devices/ramfb", "machine_manager/ramfb"]
+virtio_gpu = ["virtio/virtio_gpu", "machine_manager/virtio_gpu"]
