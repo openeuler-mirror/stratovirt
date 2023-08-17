@@ -267,9 +267,9 @@ impl UnixSock {
         // SAFETY: we checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SATETY: we checked the out_fds lens before.
-        let cmsg_len = unsafe { CMSG_LEN((size_of::<RawFd>() * out_fds.len()) as u32) };
+        let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
         // SAFETY: we checked the out_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * out_fds.len()) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -340,7 +340,7 @@ impl UnixSock {
         // SAFETY: we check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: we check the in_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * in_fds.len()) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
