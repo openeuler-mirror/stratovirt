@@ -25,6 +25,8 @@ util = { path = "../util" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
 block_backend = {path = "../block_backend"}
+ui = { path = "../ui", optional = true }
 
-[target.'cfg(not(target_env = "musl"))'.dependencies]
-ui = { path = "../ui" }
+[features]
+default = []
+virtio_gpu = ["ui", "machine_manager/virtio_gpu"]

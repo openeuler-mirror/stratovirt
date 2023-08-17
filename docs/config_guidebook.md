@@ -1063,6 +1063,8 @@ Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable virtio-gpu.
+
 ### 2.19 ivshmem-scream
 
 ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.

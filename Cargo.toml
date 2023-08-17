@@ -32,6 +32,7 @@ usb_camera_v4l2 = ["machine/usb_camera_v4l2"]
 gtk = ["machine/gtk"]
 vnc = ["machine/vnc"]
 ramfb = ["machine/ramfb"]
+virtio_gpu = ["machine/virtio_gpu"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

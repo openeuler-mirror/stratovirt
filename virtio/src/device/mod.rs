@@ -12,7 +12,7 @@
 
 pub mod balloon;
 pub mod block;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 pub mod gpu;
 pub mod net;
 pub mod rng;

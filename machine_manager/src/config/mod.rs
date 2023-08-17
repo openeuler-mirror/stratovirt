@@ -26,6 +26,7 @@ mod demo_dev;
 mod devices;
 mod drive;
 mod fs;
+#[cfg(feature = "virtio_gpu")]
 mod gpu;
 mod incoming;
 mod iothread;
@@ -58,6 +59,7 @@ pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
 pub use fs::*;
+#[cfg(feature = "virtio_gpu")]
 pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;

@@ -67,7 +67,7 @@ use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::parse_usb_camera;
@@ -100,7 +100,7 @@ use util::{
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
@@ -1002,7 +1002,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1531,7 +1531,7 @@ pub trait MachineOps {
                 "usb-host" => {
                     self.add_usb_host(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "virtio_gpu")]
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
