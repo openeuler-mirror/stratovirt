@@ -215,6 +215,16 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
             std::io::Error::last_os_error()
         );
     }
+
+    // SAFETY: master is got from openpty.
+    let ret = unsafe { libc::fcntl(master, libc::F_SETFL, libc::O_NONBLOCK) };
+    if ret < 0 {
+        bail!(
+            "Failed to set pty master to nonblocking mode, error is {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
     Ok((master, path))
 }
 
