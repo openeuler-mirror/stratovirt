@@ -41,13 +41,6 @@ const FUTEX_CMP_REQUEUE_PRIVATE: u32 = FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAKE_OP_PRIVATE: u32 = FUTEX_WAKE_OP | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAIT_BITSET_PRIVATE: u32 = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG;
 
-/// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/fcntl.h
-const F_GETFD: u32 = 1;
-const F_SETFD: u32 = 2;
-const F_SETFL: u32 = 4;
-const F_LINUX_SPECIFIC_BASE: u32 = 1024;
-const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6;
-
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/ioctls.h
 const TCGETS: u32 = 0x5401;
 const TCSETS: u32 = 0x5402;
@@ -94,10 +87,12 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_io_setup),
         BpfRule::new(libc::SYS_brk),
         BpfRule::new(libc::SYS_fcntl)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_DUPFD_CLOEXEC)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFL),
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_DUPFD_CLOEXEC as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETFD as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_GETFD as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETLK as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_GETFL as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETFL as u32),
         BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         BpfRule::new(libc::SYS_openat),
@@ -181,8 +176,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_rseq),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_pipe2),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_fcntl),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_memfd_create),
         #[cfg(target_env = "gnu")]
