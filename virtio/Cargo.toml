@@ -25,8 +25,8 @@ util = { path = "../util" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
 block_backend = {path = "../block_backend"}
-ui = { path = "../ui", optional = true }
+ui = { path = "../ui", features = ["console"], optional = true }
 
 [features]
 default = []
-virtio_gpu = ["ui", "machine_manager/virtio_gpu"]
+virtio_gpu = ["ui", "machine_manager/virtio_gpu", "util/pixman"]

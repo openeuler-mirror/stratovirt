@@ -25,5 +25,7 @@ machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
 
 [features]
-gtk = ["dep:gtk", "dep:gettext-rs", "machine_manager/gtk"]
-vnc = ["dep:rustls", "dep:rustls-pemfile", "dep:sasl2-sys", "machine_manager/vnc"]
+pixman = ["util/pixman"]
+console = ["pixman"]
+gtk = ["console", "dep:gtk", "dep:gettext-rs", "machine_manager/gtk"]
+vnc = ["console", "dep:rustls", "dep:rustls-pemfile", "dep:sasl2-sys", "machine_manager/vnc"]
