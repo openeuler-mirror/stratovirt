@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::error;
+use log::{debug, error};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::chardev::{Chardev, InputReceiver};
@@ -389,7 +389,12 @@ impl SysBusDevOps for Serial {
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        self.write_internal(offset, data[0]).is_ok()
+        if let Err(e) = self.write_internal(offset, data[0]) {
+            debug!("Failed to write serial device {}: {:?}", self.name(), e);
+            false
+        } else {
+            true
+        }
     }
 
     fn set_irq(&mut self, _sysbus: &mut SysBus) -> Result<i32> {
