@@ -31,8 +31,7 @@ block_backend = { path = "../block_backend" }
 ui = { path = "../ui" }
 
 [features]
-default = ["qmp"]
-qmp = []
+default = []
 boot_time = ["cpu/boot_time"]
 scream = ["devices/scream", "machine_manager/scream"]
 scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
