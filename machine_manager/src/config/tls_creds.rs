@@ -57,11 +57,7 @@ impl VmConfig {
             tlscred.endpoint = Some(endpoint);
         }
         if let Some(verifypeer) = cmd_parser.get_value::<String>("verify-peer")? {
-            if verifypeer == *"true" {
-                tlscred.verifypeer = true;
-            } else {
-                tlscred.verifypeer = false;
-            }
+            tlscred.verifypeer = verifypeer == *"true";
         }
         tlscred.cred_type = "x509".to_string();
 

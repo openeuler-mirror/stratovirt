@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::mem::size_of;
-
 use anyhow::{anyhow, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 
@@ -240,7 +238,7 @@ impl FdtBuilder {
     }
 
     pub fn set_property_array_u32(&mut self, prop: &str, array: &[u32]) -> Result<()> {
-        let mut prop_array = Vec::with_capacity(array.len() * size_of::<u32>());
+        let mut prop_array = Vec::with_capacity(std::mem::size_of_val(array));
         for element in array {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }
@@ -249,7 +247,7 @@ impl FdtBuilder {
     }
 
     pub fn set_property_array_u64(&mut self, prop: &str, array: &[u64]) -> Result<()> {
-        let mut prop_array = Vec::with_capacity(array.len() * size_of::<u64>());
+        let mut prop_array = Vec::with_capacity(std::mem::size_of_val(array));
         for element in array {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }

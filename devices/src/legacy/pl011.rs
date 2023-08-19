@@ -339,10 +339,10 @@ impl SysBusDevOps for PL011 {
                 if let Some(output) = &mut self.chardev.lock().unwrap().output {
                     let mut locked_output = output.lock().unwrap();
                     if let Err(e) = locked_output.write_all(&[ch]) {
-                        error!("Failed to write to pl011 output fd, error is {:?}", e);
+                        debug!("Failed to write to pl011 output fd, error is {:?}", e);
                     }
                     if let Err(e) = locked_output.flush() {
-                        error!("Failed to flush pl011, error is {:?}", e);
+                        debug!("Failed to flush pl011, error is {:?}", e);
                     }
                 } else {
                     debug!("Failed to get output fd");
