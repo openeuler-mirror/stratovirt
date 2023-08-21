@@ -1956,8 +1956,7 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
         read_only: args.read_only.unwrap_or(false),
         direct: true,
         iops: args.iops,
-        // TODO Add aio option by qmp, now we set it based on "direct".
-        aio: AioEngine::Native,
+        aio: args.file.aio,
         media: "disk".to_string(),
         discard: false,
         write_zeroes: WriteZeroesState::Off,
