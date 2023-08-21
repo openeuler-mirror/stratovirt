@@ -11,7 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod config;
+#[cfg(feature = "demo_device")]
 pub mod demo_dev;
+#[cfg(feature = "demo_device")]
 pub mod demo_device;
 pub mod error;
 pub mod hotplug;

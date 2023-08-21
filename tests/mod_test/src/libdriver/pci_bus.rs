@@ -16,11 +16,17 @@ use std::rc::Rc;
 use crate::libdriver::pci::*;
 use crate::libtest::TestState;
 use crate::utils::{read_le_u16, read_le_u32, read_le_u64};
+#[cfg(target_arch = "aarch64")]
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
+#[cfg(target_arch = "x86_64")]
+use machine::standard_vm::x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 const PCIE_MMIO_BASE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
 const PCIE_MMIO_SIZE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;
+#[cfg(target_arch = "aarch64")]
 const PCIE_ECAM_BASE: u64 = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+#[cfg(target_arch = "x86_64")]
+const PCIE_ECAM_BASE: u64 = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
 
 pub trait PciBusOps {
     fn memread(&self, addr: u32, len: usize) -> Vec<u8>;

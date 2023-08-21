@@ -15,7 +15,7 @@ pub mod aarch64;
 pub mod error;
 
 #[cfg(target_arch = "x86_64")]
-mod x86_64;
+pub mod x86_64;
 
 pub use anyhow::Result;
 

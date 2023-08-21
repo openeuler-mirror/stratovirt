@@ -39,7 +39,6 @@ use std::{
 use anyhow::{bail, Result};
 use log::error;
 
-#[cfg(not(target_env = "musl"))]
 use crate::pci::demo_device::{
     dpy_device::DemoDisplay, gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse,
 };
@@ -72,11 +71,8 @@ impl DemoDev {
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
         let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
-            #[cfg(not(target_env = "musl"))]
             "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem, cfg.id.clone()))),
-            #[cfg(not(target_env = "musl"))]
             "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
-            #[cfg(not(target_env = "musl"))]
             "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(_sys_mem))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };

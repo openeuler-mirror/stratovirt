@@ -18,6 +18,7 @@ pub mod vnc;
 mod balloon;
 mod boot_source;
 mod chardev;
+#[cfg(feature = "demo_device")]
 mod demo_dev;
 mod devices;
 mod drive;
@@ -44,6 +45,7 @@ pub use balloon::*;
 pub use boot_source::*;
 pub use camera::*;
 pub use chardev::*;
+#[cfg(feature = "demo_device")]
 pub use demo_dev::*;
 pub use devices::*;
 pub use display::*;
