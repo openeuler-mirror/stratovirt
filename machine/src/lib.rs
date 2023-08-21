@@ -47,7 +47,7 @@ use address_space::{
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "scream")]
 use devices::misc::scream::Scream;
 use devices::pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
@@ -61,7 +61,7 @@ use devices::usb::{
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "scream")]
 use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
@@ -1216,7 +1216,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - scream configuration.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "scream")]
     fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
@@ -1533,7 +1533,7 @@ pub trait MachineOps {
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "scream")]
                 "ivshmem-scream" => {
                     self.add_ivshmem_scream(vm_config, cfg_args)?;
                 }

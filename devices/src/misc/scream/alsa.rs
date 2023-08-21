@@ -24,8 +24,8 @@ use anyhow::Result;
 use log::{debug, error, warn};
 
 use super::{
-    pulseaudio::TARGET_LATENCY_MS, AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData,
-    AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
+    AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData, AUDIO_SAMPLE_RATE_44KHZ,
+    AUDIO_SAMPLE_RATE_48KHZ, TARGET_LATENCY_MS, WINDOWS_SAMPLE_BASE_RATE,
 };
 
 const MAX_CHANNELS: u8 = 8;

@@ -1065,7 +1065,6 @@ Nine properties are supported for ivshmem-scream device.
 * id: unique device id.
 * memdev: configuration of the back-end memory device used by the ivshmem.
 * interface: configuring audio playback and recording interfaces, currently can be set to `ALSA`, `PulseAudio` or `Demo`.
-`ALSA` is used by default.
 * playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
 * record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
 * bus: bus number of the device.
@@ -1076,9 +1075,11 @@ Nine properties are supported for ivshmem-scream device.
 Sample Configuration:
 
 ```shell
--device ivshmem-scream,id=<scream_id>,memdev=<object_id>[,interface=<interfaces>][,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
+-device ivshmem-scream,id=<scream_id>,memdev=<object_id>,interface=<interfaces>[,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
 -object memory-backend-ram,id=<object_id>,share=on,size=2M
 ```
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable scream.
 
 ### 2.20 ramfb
 Ramfb is a simple display device. It is used in the Windows system on aarch64.

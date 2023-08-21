@@ -10,13 +10,40 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
+use std::str::FromStr;
+
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use super::{pci_args_check, CmdParser};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScreamInterface {
+    #[cfg(feature = "scream_alsa")]
+    Alsa,
+    #[cfg(feature = "scream_pulseaudio")]
+    PulseAudio,
+    Demo,
+}
+
+impl FromStr for ScreamInterface {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            #[cfg(feature = "scream_alsa")]
+            "ALSA" => Ok(ScreamInterface::Alsa),
+            #[cfg(feature = "scream_pulseaudio")]
+            "PulseAudio" => Ok(ScreamInterface::PulseAudio),
+            "Demo" => Ok(ScreamInterface::Demo),
+            _ => Err(anyhow!("Unknown scream interface")),
+        }
+    }
+}
+
 pub struct ScreamConfig {
     pub memdev: String,
-    pub interface: String,
+    pub interface: ScreamInterface,
     pub playback: String,
     pub record: String,
 }
@@ -25,7 +52,7 @@ impl ScreamConfig {
     pub fn new() -> Self {
         Self {
             memdev: "".to_string(),
-            interface: "ALSA".to_string(),
+            interface: ScreamInterface::Demo,
             playback: "".to_string(),
             record: "".to_string(),
         }
@@ -59,11 +86,11 @@ pub fn parse_scream(cfg_args: &str) -> Result<ScreamConfig> {
         .get_value::<String>("memdev")?
         .with_context(|| "No memdev configured for scream device")?;
 
-    if let Some(interface) = cmd_parser.get_value::<String>("interface")? {
-        dev_cfg.interface = interface;
-    }
+    dev_cfg.interface = cmd_parser
+        .get_value::<ScreamInterface>("interface")?
+        .with_context(|| "No interface configured for scream device")?;
 
-    if dev_cfg.interface.eq(&"Demo".to_string()) {
+    if dev_cfg.interface == ScreamInterface::Demo {
         dev_cfg.playback = cmd_parser
             .get_value::<String>("playback")?
             .with_context(|| "No playback configured for interface")?;
