@@ -90,7 +90,7 @@ use machine_manager::{
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
-use util::aio::{AioEngine, WriteZeroesState};
+use util::aio::WriteZeroesState;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::{
@@ -1223,12 +1223,7 @@ impl DeviceInterface for LightMachine {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: if direct {
-                AioEngine::Native
-            } else {
-                AioEngine::Off
-            },
+            aio: args.file.aio,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             discard: false,
             write_zeroes: WriteZeroesState::Off,

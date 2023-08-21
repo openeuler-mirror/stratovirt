@@ -47,10 +47,14 @@ const AIO_IOURING: &str = "io_uring";
 /// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum AioEngine {
+    #[serde(alias = "off")]
+    #[default]
     Off = 0,
+    #[serde(alias = "native")]
     Native = 1,
+    #[serde(alias = "iouring")]
     IoUring = 2,
 }
 
