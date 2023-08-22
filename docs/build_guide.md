@@ -55,7 +55,7 @@ List of optional features:
 - scream_alsa: enable virtual sound card with `ALSA` interface
 - scream_pulseaudio: enable virtual sound card with `PulseAudio` interface
 - usb_host: enable USB Host device
-- usb_camera: enable USB camera
+- usb_camera_v4l2: enable USB camera with `v4l2` backend
 
 ```shell
 $ cargo build --release --features "scream_alsa"
