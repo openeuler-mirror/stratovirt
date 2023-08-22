@@ -15,13 +15,16 @@
 //! CameraHostdevOps.
 
 pub mod demo;
+#[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
 
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use self::{demo::DemoCamera, v4l2::V4l2CameraBackend};
+use self::demo::DemoCamera;
+#[cfg(feature = "usb_camera_v4l2")]
+use self::v4l2::V4l2CameraBackend;
 use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
 use util::aio::Iovec;
 
@@ -142,6 +145,7 @@ pub trait CameraHostdevOps: Send + Sync {
 
 pub fn camera_ops(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraHostdevOps>>> {
     let cam: Arc<Mutex<dyn CameraHostdevOps>> = match config.backend {
+        #[cfg(feature = "usb_camera_v4l2")]
         CamBackendType::V4l2 => Arc::new(Mutex::new(V4l2CameraBackend::new(
             config.drive.id.clone().unwrap(),
             config.drive.path.clone().with_context(|| {
