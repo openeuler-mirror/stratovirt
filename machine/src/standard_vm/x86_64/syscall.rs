@@ -13,6 +13,7 @@
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
+#[cfg(feature = "usb_camera")]
 use util::v4l2::{
     VIDIOC_DQBUF, VIDIOC_ENUM_FMT, VIDIOC_ENUM_FRAMEINTERVALS, VIDIOC_ENUM_FRAMESIZES,
     VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
@@ -212,7 +213,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
 
 /// Create a syscall bpf rule for syscall `ioctl`.
 fn ioctl_allow_list() -> BpfRule {
-    BpfRule::new(libc::SYS_ioctl)
+    let bpf_rule = BpfRule::new(libc::SYS_ioctl)
         .add_constraint(SeccompCmpOpt::Eq, 1, TCGETS)
         .add_constraint(SeccompCmpOpt::Eq, 1, TCSETS)
         .add_constraint(SeccompCmpOpt::Eq, 1, TIOCGWINSZ)
@@ -285,7 +286,10 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_LAPIC() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32);
+
+    #[cfg(feature = "usb_camera")]
+    let bpf_rule = bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYCAP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FMT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_G_FMT() as u32)
@@ -298,7 +302,9 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMOFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32);
+
+    bpf_rule
 }
 
 fn madvise_rule() -> BpfRule {

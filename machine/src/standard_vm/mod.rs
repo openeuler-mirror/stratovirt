@@ -58,16 +58,18 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::get_cameradev_config;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
     NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
+use machine_manager::machine::MachineLifecycle;
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
-use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
 use migration::MigrationManager;
 use ui::input::{key_event, point_event};
 #[cfg(not(target_env = "musl"))]
@@ -1013,9 +1015,6 @@ impl StdMachine {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
-        #[cfg(not(target_env = "musl"))]
-        let mut cfg_args = format!("id={}", args.id);
-        #[cfg(target_env = "musl")]
         let cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
@@ -1024,8 +1023,9 @@ impl StdMachine {
             "usb-tablet" => {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
             }
-            #[cfg(not(target_env = "musl"))]
+            #[cfg(feature = "usb_camera")]
             "usb-camera" => {
+                let mut cfg_args = format!("id={}", args.id);
                 if let Some(cameradev) = &args.cameradev {
                     cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
                 }
@@ -1034,8 +1034,9 @@ impl StdMachine {
                 }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
-            #[cfg(not(target_env = "musl"))]
+            #[cfg(feature = "usb_host")]
             "usb-host" => {
+                let mut cfg_args = format!("id={}", args.id);
                 let default_value = "0".to_string();
                 let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
                 let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
@@ -1523,6 +1524,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    #[cfg(feature = "usb_camera")]
     fn cameradev_add(&mut self, args: qmp_schema::CameraDevAddArgument) -> Response {
         let config = match get_cameradev_config(args) {
             Ok(conf) => conf,
@@ -1548,6 +1550,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    #[cfg(feature = "usb_camera")]
     fn cameradev_del(&mut self, id: String) -> Response {
         match self
             .get_vm_config()

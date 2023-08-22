@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 pub mod camera;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 pub mod camera_media_type_guid;
 pub mod config;
 pub mod error;
@@ -20,7 +20,7 @@ pub mod hid;
 pub mod keyboard;
 pub mod storage;
 pub mod tablet;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_host")]
 pub mod usbhost;
 pub mod xhci;
 

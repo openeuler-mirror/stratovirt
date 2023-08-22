@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "usb_camera")]
 pub mod camera;
 pub mod display;
 pub mod error;
@@ -43,6 +44,7 @@ mod vfio;
 
 pub use balloon::*;
 pub use boot_source::*;
+#[cfg(feature = "usb_camera")]
 pub use camera::*;
 pub use chardev::*;
 #[cfg(feature = "demo_device")]
@@ -129,6 +131,7 @@ pub struct VmConfig {
     pub incoming: Option<Incoming>,
     pub vnc: Option<VncConfig>,
     pub display: Option<DisplayConfig>,
+    #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
     pub windows_emu_pid: Option<String>,
     pub smbios: SmbiosConfig,

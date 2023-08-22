@@ -843,6 +843,8 @@ Video Camera Device that based on USB video class protocol. It should be attache
 
 Note: Only one camera can be configured.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-camera.
+
 #### 2.13.5 USB Storage
 USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
 
@@ -897,6 +899,8 @@ Pass through the host device identified by the vendor and product ID:
 Note:
 1. The combination of vendor and product ID takes precedence over the combination of bus number and physical port number.
 2. The combination of bus and physical port takes precedence over the combination of bus number and addr number.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-host.
 
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.

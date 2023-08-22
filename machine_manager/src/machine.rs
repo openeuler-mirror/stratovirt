@@ -175,10 +175,20 @@ pub trait DeviceInterface {
     fn chardev_remove(&mut self, _id: String) -> Response;
 
     /// Creates a new camera device.
-    fn cameradev_add(&mut self, args: CameraDevAddArgument) -> Response;
+    fn cameradev_add(&mut self, _args: CameraDevAddArgument) -> Response {
+        Response::create_response(
+            serde_json::to_value("cameradev_add not supported for VM".to_string()).unwrap(),
+            None,
+        )
+    }
 
     /// Delete a camera device.
-    fn cameradev_del(&mut self, id: String) -> Response;
+    fn cameradev_del(&mut self, _id: String) -> Response {
+        Response::create_response(
+            serde_json::to_value("cameradev_del not supported for VM".to_string()).unwrap(),
+            None,
+        )
+    }
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
