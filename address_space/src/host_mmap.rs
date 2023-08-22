@@ -43,6 +43,22 @@ pub struct FileBackend {
     pub page_size: u64,
 }
 
+fn file_unlink(file_path: &str) {
+    let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
+
+    if unsafe { libc::unlink(fs_cstr) } != 0 {
+        error!(
+            "Failed to unlink file \"{}\", error: {:?}",
+            file_path,
+            std::io::Error::last_os_error()
+        );
+    }
+    // SAFETY: fs_cstr obtained by calling CString::into_raw.
+    unsafe {
+        drop(std::ffi::CString::from_raw(fs_cstr));
+    }
+}
+
 impl FileBackend {
     /// Construct a new FileBackend with an opened file.
     ///
@@ -73,6 +89,7 @@ impl FileBackend {
     /// * fail to set file length.
     pub fn new_mem(file_path: &str, file_len: u64) -> Result<FileBackend> {
         let path = std::path::Path::new(&file_path);
+        let mut need_unlink = false;
         let file = if path.is_dir() {
             // The last six characters of template file must be "XXXXXX" for `mkstemp`
             // function to create unique temporary file.
@@ -103,32 +120,14 @@ impl FileBackend {
             }
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
-            let not_existed = !path.exists();
+            need_unlink = !path.exists();
             // Open the file, if not exist, create it.
-            let file_ret = std::fs::OpenOptions::new()
+            std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .open(path)
-                .with_context(|| format!("Failed to open file: {}", file_path))?;
-
-            if not_existed {
-                let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
-
-                if unsafe { libc::unlink(fs_cstr) } != 0 {
-                    error!(
-                        "Failed to unlink file \"{}\", error: {:?}",
-                        file_path,
-                        std::io::Error::last_os_error()
-                    );
-                }
-                // SAFETY: fs_cstr obtained by calling CString::into_raw.
-                unsafe {
-                    drop(std::ffi::CString::from_raw(fs_cstr));
-                }
-            }
-
-            file_ret
+                .with_context(|| format!("Failed to open file: {}", file_path))?
         };
 
         // Safe because struct `statfs` only contains plain-data-type field,
@@ -142,8 +141,12 @@ impl FileBackend {
 
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
-            file.set_len(file_len)
-                .with_context(|| format!("Failed to set length of file: {}", file_path))?;
+            if file.set_len(file_len).is_err() {
+                if need_unlink {
+                    file_unlink(file_path);
+                }
+                bail!("Failed to set length of file: {}", file_path);
+            }
         } else if old_file_len < file_len {
             bail!(
             "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
