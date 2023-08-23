@@ -13,7 +13,7 @@
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
-#[cfg(feature = "usb_camera")]
+#[cfg(feature = "usb_camera_v4l2")]
 use util::v4l2::{
     VIDIOC_DQBUF, VIDIOC_ENUM_FMT, VIDIOC_ENUM_FRAMEINTERVALS, VIDIOC_ENUM_FRAMESIZES,
     VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
@@ -270,7 +270,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32);
 
-    #[cfg(feature = "usb_camera")]
+    #[cfg(feature = "usb_camera_v4l2")]
     let bpf_rule = bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYCAP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FMT() as u32)

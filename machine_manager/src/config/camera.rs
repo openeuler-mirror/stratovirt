@@ -31,6 +31,7 @@ pub struct CameraDevConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CamBackendType {
+    #[cfg(feature = "usb_camera_v4l2")]
     V4l2,
     Demo,
 }
@@ -40,6 +41,7 @@ impl FromStr for CamBackendType {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
+            #[cfg(feature = "usb_camera_v4l2")]
             "v4l2" => Ok(CamBackendType::V4l2),
             "demo" => Ok(CamBackendType::Demo),
             _ => Err(anyhow!("Unknown camera backend type")),
@@ -52,7 +54,7 @@ impl CameraDevConfig {
         CameraDevConfig {
             id: None,
             path: None,
-            backend: CamBackendType::V4l2,
+            backend: CamBackendType::Demo,
         }
     }
 }
