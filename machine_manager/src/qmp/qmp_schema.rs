@@ -17,6 +17,7 @@ use strum_macros::{EnumIter, EnumString, EnumVariantNames};
 
 use super::Version;
 use crate::qmp::{Command, Empty, TimeStamp};
+use util::aio::AioEngine;
 
 /// A error enum for qmp
 #[allow(clippy::upper_case_acronyms)]
@@ -717,6 +718,8 @@ impl Command for update_region {
 pub struct FileOptions {
     pub driver: String,
     pub filename: String,
+    #[serde(default)]
+    pub aio: AioEngine,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
