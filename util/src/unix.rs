@@ -414,6 +414,7 @@ impl UnixSock {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
     use std::time::Duration;
 
@@ -457,6 +458,10 @@ mod tests {
 
         assert!(listener.accept().is_ok());
         assert_eq!(listener.is_accepted(), true);
+
+        if sock_path.exists() {
+            fs::remove_file("./test_socket1.sock").unwrap();
+        }
     }
 
     #[test]
@@ -491,5 +496,9 @@ mod tests {
         let (data_size, fd_size) = stream.recv_msg(&mut recv, &mut in_fd).unwrap();
         assert_eq!(data_size, buff.len());
         assert_eq!(fd_size, in_fd.len());
+
+        if sock_path.exists() {
+            fs::remove_file("./test_socket2.sock").unwrap();
+        }
     }
 }
