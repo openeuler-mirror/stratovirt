@@ -11,11 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::max;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::prelude::RawFd;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::debug;
+use log::{debug, error};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
@@ -30,8 +35,12 @@ use crate::pci::msix::update_dev_id;
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDeviceOps;
 use crate::{Device, DeviceBase};
-use address_space::{AddressSpace, Region};
+use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::XhciConfig;
+use machine_manager::event_loop::register_event_helper;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;
@@ -66,6 +75,9 @@ pub struct XhciPciDevice {
     pub xhci: Arc<Mutex<XhciDevice>>,
     dev_id: Arc<AtomicU16>,
     mem_region: Region,
+    doorbell_fd: Arc<EventFd>,
+    delete_evts: Vec<RawFd>,
+    iothread: Option<String>,
 }
 
 impl XhciPciDevice {
@@ -88,6 +100,9 @@ impl XhciPciDevice {
                 XHCI_PCI_CONFIG_LENGTH as u64,
                 "XhciPciContainer",
             ),
+            doorbell_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            delete_evts: Vec::new(),
+            iothread: config.iothread.clone(),
         }
     }
 
@@ -140,10 +155,21 @@ impl XhciPciDevice {
             build_doorbell_ops(&self.xhci),
             "XhciPciDoorbellRegion",
         );
+        doorbell_region.set_ioeventfds(&self.ioeventfds());
+
         self.mem_region
             .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64)
             .with_context(|| "Failed to register doorbell region.")?;
         Ok(())
+    }
+
+    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+        vec![RegionIoEventFd {
+            fd: self.doorbell_fd.clone(),
+            addr_range: AddressRange::from((0, 4u64)),
+            data_match: false,
+            data: 0,
+        }]
     }
 
     pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
@@ -197,6 +223,46 @@ impl Device for XhciPciDevice {
     }
 }
 
+struct DoorbellHandler {
+    xhci: Arc<Mutex<XhciDevice>>,
+    fd: Arc<EventFd>,
+}
+
+impl DoorbellHandler {
+    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
+        DoorbellHandler { xhci, fd }
+    }
+}
+
+impl EventNotifierHelper for DoorbellHandler {
+    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_io_handler = io_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            let locked_handler = cloned_io_handler.lock().unwrap();
+            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
+
+            if !locked_xhci.running() {
+                error!("Failed to write doorbell, XHCI is not running");
+                return None;
+            }
+            if let Err(e) = locked_xhci.handle_command() {
+                error!("Failed to handle command: {:?}", e);
+                locked_xhci.host_controller_error();
+            }
+
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            io_handler.lock().unwrap().fd.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
+    }
+}
+
 impl PciDevOps for XhciPciDevice {
     fn pci_base(&self) -> &PciDevBase {
         &self.base
@@ -237,6 +303,17 @@ impl PciDevOps for XhciPciDevice {
             PCI_NO_FRAME_LENGTH_TIMING_CAP;
         self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
         self.mem_region_init()?;
+
+        let handler = Arc::new(Mutex::new(DoorbellHandler::new(
+            self.xhci.clone(),
+            self.doorbell_fd.clone(),
+        )));
+
+        register_event_helper(
+            EventNotifierHelper::internal_notifiers(handler),
+            self.iothread.as_ref(),
+            &mut self.delete_evts,
+        )?;
 
         let intrs_num = self.xhci.lock().unwrap().intrs.len() as u32;
         init_msix(

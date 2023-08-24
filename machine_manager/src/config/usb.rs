@@ -35,6 +35,7 @@ pub struct XhciConfig {
     pub p2: Option<u8>,
     // number of usb3.0 ports
     pub p3: Option<u8>,
+    pub iothread: Option<String>,
 }
 
 impl XhciConfig {
@@ -43,6 +44,7 @@ impl XhciConfig {
             id: None,
             p2: None,
             p3: None,
+            iothread: None,
         }
     }
 
@@ -72,6 +74,9 @@ impl XhciConfig {
 impl ConfigCheck for XhciConfig {
     fn check(&self) -> Result<()> {
         check_id(self.id.clone(), "xhci controller")?;
+        if let Some(iothread) = self.iothread.as_ref() {
+            check_arg_too_long(iothread, "iothread name")?;
+        }
         self.check_ports()
     }
 }
@@ -84,18 +89,14 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
         .push("bus")
         .push("addr")
         .push("p2")
-        .push("p3");
+        .push("p3")
+        .push("iothread");
     cmd_parser.parse(conf)?;
     let mut dev = XhciConfig::new();
     dev.id = cmd_parser.get_value::<String>("id")?;
-
-    if let Some(p2) = cmd_parser.get_value::<u8>("p2")? {
-        dev.p2 = Some(p2);
-    }
-
-    if let Some(p3) = cmd_parser.get_value::<u8>("p3")? {
-        dev.p3 = Some(p3);
-    }
+    dev.p2 = cmd_parser.get_value::<u8>("p2")?;
+    dev.p3 = cmd_parser.get_value::<u8>("p3")?;
+    dev.iothread = cmd_parser.get_value::<String>("iothread")?;
 
     dev.check()?;
     Ok(dev)
