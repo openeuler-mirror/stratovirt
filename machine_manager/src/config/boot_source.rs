@@ -187,7 +187,7 @@ impl Param {
     ///
     /// * `item` - The `str` transformed to `Param`.
     fn from_str(item: &str) -> Self {
-        let split = item.split('=');
+        let split = item.splitn(2, '=');
         let vec = split.collect::<Vec<&str>>();
         if vec.len() == 1 {
             Param {
