@@ -248,8 +248,8 @@ fn build_hotplug_blk_cmd(
     let add_blk_command = format!(
         "{{\"execute\": \"blockdev-add\", \
         \"arguments\": {{\"node-name\": \"drive-{}\", \"file\": {{\"driver\": \
-        \"file\", \"filename\": \"{}\"}}, \"cache\": {{\"direct\": true}}, \
-        \"read-only\": false}}}}",
+        \"file\", \"filename\": \"{}\"}, \"aio\": \"native\"}, \
+        \"cache\": {{\"direct\": true}}, \"read-only\": false}}}}",
         hotplug_blk_id, hotplug_image_path
     );
 
