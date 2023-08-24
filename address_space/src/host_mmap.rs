@@ -563,6 +563,7 @@ mod test {
             f_back.as_ref().unwrap().file.metadata().unwrap().len(),
             100u64
         );
+        std::fs::remove_file(file_path).unwrap();
     }
 
     #[test]
@@ -612,5 +613,6 @@ mod test {
         )
         .unwrap();
         mem_prealloc(host_addr, 0x10_0000, 2);
+        std::fs::remove_file(file_path).unwrap();
     }
 }
