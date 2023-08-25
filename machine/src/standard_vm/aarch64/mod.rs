@@ -709,7 +709,7 @@ impl MachineOps for StdMachine {
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "windows_emu_pid")]
         locked_vm.watch_windows_emu_pid(
             vm_config,
             locked_vm.power_button.clone(),

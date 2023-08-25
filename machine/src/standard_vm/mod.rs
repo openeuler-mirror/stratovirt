@@ -1097,7 +1097,7 @@ impl StdMachine {
     }
 
     /// When windows emu exits, stratovirt should exits too.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "windows_emu_pid")]
     fn watch_windows_emu_pid(
         &self,
         vm_config: &VmConfig,
