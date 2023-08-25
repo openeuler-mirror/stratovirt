@@ -30,12 +30,12 @@ use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use log::warn;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(target_arch = "x86_64")]
@@ -92,7 +92,7 @@ use migration::MigrationManager;
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::file::{clear_file, lock_file, unlock_file};
 use util::{
@@ -1938,7 +1938,7 @@ fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
     ])
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 fn check_windows_emu_pid(
     pid_path: String,
     powerdown_req: Arc<EventFd>,
