@@ -55,6 +55,10 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 - scream_pulseaudio：使能虚拟声卡，使用`PulseAudio`后端
 - usb_host：使能USB Host设备
 - usb_camera_v4l2：使能USB摄像头，使用`v4l2`后端
+- gtk：使能GTK显示
+- vnc：使能VNC显示
+- ramfb：使能ramfb显示设备
+- virtio_gpu：使能virtio-gpu虚拟显卡
 
 ```shell
 $ cargo build --release --features "scream_alsa"

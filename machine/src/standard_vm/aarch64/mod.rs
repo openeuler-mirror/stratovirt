@@ -46,7 +46,7 @@ use cpu::{
 };
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use devices::acpi::power::PowerDev;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "ramfb")]
 use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
@@ -55,10 +55,10 @@ use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
@@ -74,8 +74,10 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
+#[cfg(feature = "gtk")]
+use ui::gtk::gtk_display_init;
+#[cfg(feature = "vnc")]
+use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
@@ -703,12 +705,11 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        #[cfg(not(target_env = "musl"))]
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "windows_emu_pid")]
         locked_vm.watch_windows_emu_pid(
             vm_config,
             locked_vm.power_button.clone(),
@@ -751,9 +752,10 @@ impl MachineOps for StdMachine {
     }
 
     /// Create display.
-    #[cfg(not(target_env = "musl"))]
+    #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
+        #[cfg(feature = "gtk")]
         match vm_config.display {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
@@ -770,12 +772,13 @@ impl MachineOps for StdMachine {
         };
 
         // VNC display init.
+        #[cfg(feature = "vnc")]
         vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "ramfb")]
     fn add_ramfb(&mut self, cfg_args: &str) -> Result<()> {
         let install = parse_ramfb(cfg_args)?;
         let fwcfg_dev = self

@@ -212,6 +212,7 @@ pub enum SysBusDevType {
     PL011,
     FwCfg,
     Flash,
+    #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
     Ramfb,
     Others,
 }

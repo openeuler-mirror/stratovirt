@@ -446,30 +446,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .required(false),
         )
         .arg(
-            Arg::with_name("vnc")
-            .multiple(false)
-            .long("vnc")
-            .value_name("ip:port")
-            .help("specify the ip and port for vnc")
-            .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("display")
-            .multiple(false)
-            .long("display")
-            .value_name("gtk")
-            .help("set display for virtual machine: currently only supports gtk")
-            .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("windows_emu_pid")
-            .multiple(false)
-            .long("windows_emu_pid")
-            .value_name("pid")
-            .help("watch on the external windows emu pid")
-            .takes_value(true),
-        )
-        .arg(
             Arg::with_name("smbios")
             .multiple(true)
             .long("smbios")
@@ -491,6 +467,36 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .value_name("<parameters>")
             .help("set cameradev: -cameradev v4l2,id=<testCam>,path=</dev/video0>")
             .takes_values(true),
+    );
+
+    #[cfg(feature = "gtk")]
+    let parser = parser.arg(
+        Arg::with_name("display")
+            .multiple(false)
+            .long("display")
+            .value_name("gtk")
+            .help("set display for virtual machine: currently only supports gtk")
+            .takes_value(true),
+    );
+
+    #[cfg(feature = "vnc")]
+    let parser = parser.arg(
+        Arg::with_name("vnc")
+            .multiple(false)
+            .long("vnc")
+            .value_name("ip:port")
+            .help("specify the ip and port for vnc")
+            .takes_value(true),
+    );
+
+    #[cfg(feature = "windows_emu_pid")]
+    let parser = parser.arg(
+        Arg::with_name("windows_emu_pid")
+            .multiple(false)
+            .long("windows_emu_pid")
+            .value_name("pid")
+            .help("watch on the external windows emu pid")
+            .takes_value(true),
     );
 
     parser
@@ -527,8 +533,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
+    #[cfg(feature = "vnc")]
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
+    #[cfg(feature = "gtk")]
     add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
+    #[cfg(feature = "windows_emu_pid")]
     add_args_to_config!(
         (args.value_of("windows_emu_pid")),
         vm_cfg,

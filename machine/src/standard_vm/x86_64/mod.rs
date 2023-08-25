@@ -46,7 +46,7 @@ use devices::legacy::{
 use devices::pci::{PciDevOps, PciHost};
 use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
@@ -62,8 +62,10 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
+#[cfg(feature = "gtk")]
+use ui::gtk::gtk_display_init;
+#[cfg(feature = "vnc")]
+use ui::vnc::vnc_init;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
@@ -545,12 +547,11 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        #[cfg(not(target_env = "musl"))]
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "windows_emu_pid")]
         locked_vm.watch_windows_emu_pid(
             vm_config,
             locked_vm.shutdown_req.clone(),
@@ -631,9 +632,10 @@ impl MachineOps for StdMachine {
     }
 
     /// Create display.
-    #[cfg(not(target_env = "musl"))]
+    #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
+        #[cfg(feature = "gtk")]
         match vm_config.display {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
@@ -650,6 +652,7 @@ impl MachineOps for StdMachine {
         };
 
         // VNC display init.
+        #[cfg(feature = "vnc")]
         vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         Ok(())

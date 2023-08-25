@@ -989,6 +989,8 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable VNC.
+
 ### 2.17 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
@@ -1061,6 +1063,8 @@ Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable virtio-gpu.
+
 ### 2.19 ivshmem-scream
 
 ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
@@ -1098,6 +1102,8 @@ Sample Configuration：
 ```
 
 Note: Only supported on aarch64.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable ramfb.
 
 ## 3. Trace
 

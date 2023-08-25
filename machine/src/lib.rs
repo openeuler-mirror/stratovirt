@@ -30,12 +30,12 @@ use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use log::warn;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(target_arch = "x86_64")]
@@ -67,7 +67,7 @@ use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::parse_usb_camera;
@@ -92,7 +92,7 @@ use migration::MigrationManager;
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::file::{clear_file, lock_file, unlock_file};
 use util::{
@@ -100,7 +100,7 @@ use util::{
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
@@ -1002,7 +1002,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1531,11 +1531,11 @@ pub trait MachineOps {
                 "usb-host" => {
                     self.add_usb_host(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "virtio_gpu")]
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "ramfb")]
                 "ramfb" => {
                     self.add_ramfb(cfg_args)?;
                 }
@@ -1938,7 +1938,7 @@ fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
     ])
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 fn check_windows_emu_pid(
     pid_path: String,
     powerdown_req: Arc<EventFd>,

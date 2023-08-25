@@ -10,11 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod balloon;
-pub mod block;
-#[cfg(feature = "virtio_gpu")]
-pub mod gpu;
-pub mod net;
-pub mod rng;
-pub mod scsi_cntlr;
-pub mod serial;
+fn main() {
+    if cfg!(any(
+        feature = "demo_device",
+        feature = "gtk",
+        feature = "ramfb",
+        feature = "virtio_gpu",
+        feature = "vnc",
+    )) {
+        println!("cargo:rustc-link-arg=-lpixman-1");
+    }
+}

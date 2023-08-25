@@ -56,6 +56,10 @@ List of optional features:
 - scream_pulseaudio: enable virtual sound card with `PulseAudio` interface
 - usb_host: enable USB Host device
 - usb_camera_v4l2: enable USB camera with `v4l2` backend
+- gtk: enable GTK display
+- vnc: enable VNC display
+- ramfb: enable ramfb display device
+- virtio_gpu: enable virtio-gpu virtualized graphics card
 
 ```shell
 $ cargo build --release --features "scream_alsa"

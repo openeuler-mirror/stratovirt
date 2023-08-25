@@ -28,7 +28,7 @@ pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod reader;
 pub mod seccomp;
