@@ -65,6 +65,7 @@ Add a block backend.
 * `cache` : if use direct io.
 * `read-only` : if readonly.
 * `driver` : the block image format. Possible values are `raw` or `qcow2`. If not set, default is `raw`.
+* `aio` : the aio type of block device.
 
 #### Notes
 
@@ -80,7 +81,7 @@ Add a block backend.
 #### Example
 
 ```json
-<- {"execute": "blockdev-add", "arguments": {"node-name": "drive-0", "file": {"driver": "file", "filename": "/path/to/block"}, "cache": {"direct": true}, "read-only": false}}
+<- {"execute": "blockdev-add", "arguments": {"node-name": "drive-0", "file": {"driver": "file", "filename": "/path/to/block", "aio": native}, "cache": {"direct": true}, "read-only": false}}
 -> {"return": {}}
 ```
 
