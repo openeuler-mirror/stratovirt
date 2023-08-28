@@ -510,6 +510,14 @@ impl VirtioPciDevice {
             }
             locked_dev.virtio_base_mut().reset();
         }
+
+        if let Some(intx) = &self.base.config.intx {
+            intx.lock().unwrap().reset();
+        }
+        if let Some(msix) = &self.base.config.msix {
+            msix.lock().unwrap().clear_pending_vectors();
+        }
+
         true
     }
 
