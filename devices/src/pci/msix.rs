@@ -180,6 +180,13 @@ impl Msix {
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
     }
 
+    pub fn clear_pending_vectors(&mut self) {
+        let max_vector_nr = self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE;
+        for v in 0..max_vector_nr {
+            self.clear_pending_vector(v);
+        }
+    }
+
     fn update_irq_routing(&mut self, vector: u16, is_masked: bool) -> Result<()> {
         let entry = self.get_message(vector);
         let route = if let Some(route) = self.gsi_msi_routes.get_mut(&vector) {
