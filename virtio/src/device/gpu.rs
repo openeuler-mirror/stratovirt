@@ -1572,7 +1572,7 @@ impl VirtioDevice for Gpu {
         let config_cpy_slice = config_cpy.as_mut_bytes();
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
-        if config_space.events_clear != 0 {
+        if config_cpy.events_clear != 0 {
             config_space.events_read &= !config_cpy.events_clear;
         }
 
