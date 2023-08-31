@@ -47,8 +47,8 @@ const UVC_VENDOR_ID: u16 = 0xB74C;
 // The first 4 chars of "VIDEO", 5 substitutes V.
 const UVC_PRODUCT_ID: u16 = 0x51DE;
 
-pub const INTERFACE_ID_CONTROL: u8 = 0;
-pub const INTERFACE_ID_STREAMING: u8 = 1;
+const INTERFACE_ID_CONTROL: u8 = 0;
+const INTERFACE_ID_STREAMING: u8 = 1;
 
 const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
 const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 2;
@@ -58,9 +58,9 @@ const VS_INTERFACE_NUM: u8 = 1;
 
 // According to UVC specification 1.5
 // A.2. Video Interface Subclass Codes
-pub const SC_VIDEOCONTROL: u8 = 0x01;
-pub const SC_VIDEOSTREAMING: u8 = 0x02;
-pub const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
+const SC_VIDEOCONTROL: u8 = 0x01;
+const SC_VIDEOSTREAMING: u8 = 0x02;
+const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
 // A.3. Video Interface Protocol Codes
 const PC_PROTOCOL_UNDEFINED: u8 = 0x0;
 // A.4. Video Class-Specific Descriptor Types
