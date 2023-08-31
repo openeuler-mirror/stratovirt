@@ -20,7 +20,3 @@ acpi = { path = "../../acpi" }
 smbios = { path = "../../smbios" }
 machine = { path = "../../machine" }
 virtio = { path = "../../virtio", features = ["virtio_gpu"] }
-
-[features]
-default = []
-usb_camera = ["devices/usb_camera"]
