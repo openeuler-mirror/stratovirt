@@ -97,12 +97,6 @@ pub const VIRTIO_NET_CTRL_VLAN_DEL: u8 = 1;
 pub const VIRTIO_NET_CTRL_MQ: u8 = 4;
 /// Driver configure the command before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
-/// The minimum pairs of multiple queue.
-pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
-/// The maximum pairs of multiple queue.
-pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
-/// Support more than one virtqueue.
-pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 const QUEUE_SIZE_NET: u16 = 256;
 
