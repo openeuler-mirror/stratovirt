@@ -416,7 +416,6 @@ fn check_madt_of_two_gicr(
     );
 }
 
-#[cfg(target_arch = "aarch64")]
 #[test]
 fn test_acpi_virt() {
     let mut args = Vec::new();
@@ -467,7 +466,6 @@ fn test_acpi_virt() {
     test_state.borrow_mut().stop();
 }
 
-#[cfg(target_arch = "aarch64")]
 #[test]
 fn test_acpi_two_gicr() {
     let mut args = Vec::new();
