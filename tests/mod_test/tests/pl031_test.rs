@@ -49,7 +49,6 @@ fn set_up() -> TestState {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn check_time() {
     let mut ts = set_up();
 
@@ -71,7 +70,6 @@ fn check_time() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn set_time() {
     let mut ts = set_up();
     let time1 = pl031_read_time(&ts);
@@ -89,7 +87,6 @@ fn set_time() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn rtc_enable() {
     let mut ts = set_up();
 
@@ -98,7 +95,6 @@ fn rtc_enable() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn set_mask() {
     let mut ts = set_up();
 
@@ -109,7 +105,6 @@ fn set_mask() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn reg_fuzz() {
     let mut ts = set_up();
     let mut rng = thread_rng();

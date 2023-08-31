@@ -1,0 +1,38 @@
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
+#[cfg(target_arch = "aarch64")]
+mod acpi_test;
+mod balloon_test;
+mod block_test;
+mod fwcfg_test;
+#[cfg(target_arch = "aarch64")]
+mod ged_test;
+mod memory_test;
+mod net_test;
+mod pci_test;
+#[cfg(target_arch = "aarch64")]
+mod pl031_test;
+#[cfg(target_arch = "aarch64")]
+mod ramfb_test;
+mod rng_test;
+mod scream_test;
+mod scsi_test;
+mod serial_test;
+#[cfg(feature = "usb_camera")]
+mod usb_camera_test;
+mod usb_storage_test;
+mod usb_test;
+mod virtio_gpu_test;
+mod virtio_test;
+mod virtiofs_test;
+mod vnc_test;
