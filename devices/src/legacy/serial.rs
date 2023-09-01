@@ -17,7 +17,6 @@ use anyhow::{bail, Context, Result};
 use log::{debug, error};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::chardev::{Chardev, InputReceiver};
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
@@ -27,6 +26,7 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use chardev_backend::chardev::{Chardev, InputReceiver};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};

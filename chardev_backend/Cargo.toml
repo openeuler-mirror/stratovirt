@@ -1,0 +1,14 @@
+[package]
+name = "chardev_backend"
+version = "2.2.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+
+[dependencies]
+vmm-sys-util = "0.11.0"
+anyhow = "1.0"
+log = "0.4"
+libc = "0.2"
+machine_manager = { path = "../machine_manager" }
+util = { path = "../util" }
