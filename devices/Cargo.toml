@@ -29,6 +29,7 @@ migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
 block_backend = { path = "../block_backend"}
+chardev_backend = { path = "../chardev_backend" }
 ui = { path = "../ui" }
 pulse = { version = "2.27", package = "libpulse-binding", optional = true }
 psimple = { version = "2.27", package = "libpulse-simple-binding", optional = true }

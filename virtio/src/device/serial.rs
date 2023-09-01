@@ -30,7 +30,7 @@ use crate::{
     VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
-use devices::legacy::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
+use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
     config::{ChardevType, VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,

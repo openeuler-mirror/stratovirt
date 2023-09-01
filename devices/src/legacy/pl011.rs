@@ -16,7 +16,6 @@ use anyhow::{Context, Result};
 use log::{debug, error};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::chardev::{Chardev, InputReceiver};
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
@@ -26,6 +25,7 @@ use acpi::{
     AmlScopeBuilder, AmlString, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::GuestAddress;
+use chardev_backend::chardev::{Chardev, InputReceiver};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
