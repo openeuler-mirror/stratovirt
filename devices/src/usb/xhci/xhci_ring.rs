@@ -19,7 +19,9 @@ use log::debug;
 
 use super::super::UsbError;
 use super::xhci_controller::{dma_read_u32, dma_write_u32, DwordOrder, XhciEpCtx};
-use super::{TRBType, TRB_C, TRB_LK_TC, TRB_SIZE, TRB_TR_CH, TRB_TYPE_MASK, TRB_TYPE_SHIFT};
+use super::xhci_trb::{
+    TRBType, TRB_C, TRB_LK_TC, TRB_SIZE, TRB_TR_CH, TRB_TYPE_MASK, TRB_TYPE_SHIFT,
+};
 use crate::usb::xhci::xhci_controller::dma_read_bytes;
 use address_space::{AddressSpace, GuestAddress};
 

@@ -23,7 +23,7 @@ use log::{debug, error, info, warn};
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
-use super::{
+use super::xhci_trb::{
     TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_TR_DIR, TRB_TR_FRAMEID_MASK,
     TRB_TR_FRAMEID_SHIFT, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TR_SIA,
     TRB_TYPE_SHIFT,
