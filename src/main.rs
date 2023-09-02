@@ -23,9 +23,9 @@ use machine_manager::{
     config::MachineType,
     config::VmConfig,
     event_loop::EventLoop,
-    qmp::QmpChannel,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_socket::Socket,
     signal_handler::{exit_with_code, register_kill_signal, VM_EXIT_GENE_ERR},
-    socket::Socket,
     temp_cleaner::TempCleaner,
     test_server::TestSock,
 };

@@ -71,21 +71,19 @@ use devices::sysbus::{SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::config::DiskFormat;
+use machine_manager::config::{
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DiskFormat,
+    DriveFile, Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
+    DEFAULT_VIRTQUEUE_SIZE,
+};
+use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
-use machine_manager::{
-    config::{
-        parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
-        Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
-        DEFAULT_VIRTQUEUE_SIZE,
-    },
-    event,
-    machine::{
-        DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-        MachineInterface, MachineLifecycle, MigrateInterface,
-    },
-    qmp::{qmp_schema, QmpChannel, Response},
+use machine_manager::machine::{
+    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
+    MachineInterface, MachineLifecycle, MigrateInterface,
+};
+use machine_manager::qmp::{
+    qmp_channel::QmpChannel, qmp_response::Response, qmp_schema, qmp_schema::UpdateRegionArgument,
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};

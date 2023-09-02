@@ -32,7 +32,7 @@ use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
 use log::error;
 
-use machine_manager::qmp::{qmp_schema, Response};
+use machine_manager::qmp::{qmp_response::Response, qmp_schema};
 
 /// Start to snapshot VM.
 ///

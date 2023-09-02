@@ -17,7 +17,7 @@ use vmm_sys_util::signal::register_signal_handler;
 
 use crate::{
     event,
-    qmp::{qmp_schema, QmpChannel},
+    qmp::{qmp_channel::QmpChannel, qmp_schema},
     temp_cleaner::TempCleaner,
 };
 use util::set_termi_canon_mode;

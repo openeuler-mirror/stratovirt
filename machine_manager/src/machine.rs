@@ -17,6 +17,7 @@ use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::config::ShutdownAction;
+use crate::qmp::qmp_response::{Response, Version};
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
@@ -24,7 +25,6 @@ use crate::qmp::qmp_schema::{
     MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
     TypeLists, UpdateRegionArgument,
 };
-use crate::qmp::{Response, Version};
 
 #[derive(Clone)]
 pub struct PathInfo {
