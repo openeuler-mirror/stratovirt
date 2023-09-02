@@ -109,7 +109,7 @@ impl UsbEndpoint {
 }
 
 /// USB device common structure.
-pub struct UsbDevice {
+pub struct UsbDeviceBase {
     pub base: DeviceBase,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
@@ -127,9 +127,9 @@ pub struct UsbDevice {
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
-impl UsbDevice {
+impl UsbDeviceBase {
     pub fn new(id: String, data_buf_len: usize) -> Self {
-        let mut dev = UsbDevice {
+        let mut dev = UsbDeviceBase {
             base: DeviceBase::new(id, false),
             port: None,
             speed: 0,
@@ -321,7 +321,7 @@ impl UsbDevice {
     }
 }
 
-impl Drop for UsbDevice {
+impl Drop for UsbDeviceBase {
     fn drop(&mut self) {
         if self.unplugged {
             send_device_deleted_msg(&self.base.id);
@@ -329,11 +329,17 @@ impl Drop for UsbDevice {
     }
 }
 
-/// UsbDeviceOps is the interface for USB device.
+/// UsbDevice is the interface for USB device.
 /// Include device handle attach/detach and the transfer between controller and device.
-pub trait UsbDeviceOps: Send + Sync {
+pub trait UsbDevice: Send + Sync {
+    /// Get the UsbDeviceBase.
+    fn usb_device_base(&self) -> &UsbDeviceBase;
+
+    /// Get the mut UsbDeviceBase.
+    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase;
+
     /// Realize the USB device.
-    fn realize(self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>>;
+    fn realize(self) -> Result<Arc<Mutex<dyn UsbDevice>>>;
 
     /// Unrealize the USB device.
     fn unrealize(&mut self) -> Result<()> {
@@ -341,7 +347,7 @@ pub trait UsbDeviceOps: Send + Sync {
     }
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
-        let usb_dev = self.get_mut_usb_device();
+        let usb_dev = self.usb_device_base_mut();
         usb_dev.set_config_descriptor(0)?;
         Ok(())
     }
@@ -361,7 +367,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
-        let usb_dev = self.get_mut_usb_device();
+        let usb_dev = self.usb_device_base_mut();
         usb_dev.port = port;
     }
 
@@ -389,23 +395,17 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Unique device id.
     fn device_id(&self) -> &str {
-        &self.get_usb_device().base.id
+        &self.usb_device_base().base.id
     }
-
-    /// Get the UsbDevice.
-    fn get_usb_device(&self) -> &UsbDevice;
-
-    /// Get the mut UsbDevice.
-    fn get_mut_usb_device(&mut self) -> &mut UsbDevice;
 
     /// Get the device speed.
     fn speed(&self) -> u32 {
-        let usb_dev = self.get_usb_device();
+        let usb_dev = self.usb_device_base();
         usb_dev.speed
     }
 
     fn do_parameter(&mut self, packet: &Arc<Mutex<UsbPacket>>) -> Result<()> {
-        let usb_dev = self.get_mut_usb_device();
+        let usb_dev = self.usb_device_base_mut();
         let mut locked_p = packet.lock().unwrap();
         let device_req = UsbDeviceRequest {
             request_type: locked_p.parameter as u8,
@@ -424,7 +424,7 @@ pub trait UsbDeviceOps: Send + Sync {
         drop(locked_p);
         self.handle_control(packet, &device_req);
         let mut locked_p = packet.lock().unwrap();
-        let usb_dev = self.get_mut_usb_device();
+        let usb_dev = self.usb_device_base_mut();
         if locked_p.is_async {
             return Ok(());
         }
@@ -441,14 +441,14 @@ pub trait UsbDeviceOps: Send + Sync {
 }
 
 /// Notify controller to process data request.
-pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
+pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
     let locked_dev = dev.lock().unwrap();
     let xhci = if let Some(cntlr) = &locked_dev.get_controller() {
         cntlr.upgrade().unwrap()
     } else {
         bail!("USB controller not found");
     };
-    let usb_dev = locked_dev.get_usb_device();
+    let usb_dev = locked_dev.usb_device_base();
     let usb_port = if let Some(port) = &usb_dev.port {
         port.upgrade().unwrap()
     } else {

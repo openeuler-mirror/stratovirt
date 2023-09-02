@@ -29,9 +29,7 @@ use super::{
     TRB_TYPE_SHIFT,
 };
 use crate::usb::{config::*, TransferOps};
-use crate::usb::{
-    UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
-};
+use crate::usb::{UsbDevice, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus};
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::XhciConfig;
 use machine_manager::event_loop::EventLoop;
@@ -461,7 +459,7 @@ pub struct UsbPort {
     /// Port ID
     pub port_id: u8,
     pub speed_mask: u32,
-    pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
+    pub dev: Option<Arc<Mutex<dyn UsbDevice>>>,
     pub used: bool,
     pub slot_id: u32,
 }
@@ -1163,7 +1161,7 @@ impl XhciDevice {
     }
 
     /// Send SET_ADDRESS request to usb device.
-    fn set_device_address(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>, addr: u32) {
+    fn set_device_address(&mut self, dev: &Arc<Mutex<dyn UsbDevice>>, addr: u32) {
         let mut locked_dev = dev.lock().unwrap();
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
@@ -1918,7 +1916,7 @@ impl XhciDevice {
         Ok(Arc::new(Mutex::new(packet)))
     }
 
-    fn get_usb_dev(&self, slotid: u32, epid: u32) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
+    fn get_usb_dev(&self, slotid: u32, epid: u32) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         let port = self.slots[(slotid - 1) as usize]
             .usb_port
             .as_ref()
@@ -2043,7 +2041,7 @@ impl XhciDevice {
     /// Assign USB port and attach the device.
     pub fn assign_usb_port(
         &mut self,
-        dev: &Arc<Mutex<dyn UsbDeviceOps>>,
+        dev: &Arc<Mutex<dyn UsbDevice>>,
     ) -> Option<Arc<Mutex<UsbPort>>> {
         let speed = dev.lock().unwrap().speed();
         for port in &self.usb_ports {

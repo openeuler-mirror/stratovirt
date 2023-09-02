@@ -59,7 +59,7 @@ use devices::usb::camera::UsbCamera;
 use devices::usb::usbhost::UsbHost;
 use devices::usb::{
     keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
-    UsbDeviceOps,
+    UsbDevice,
 };
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -1301,7 +1301,7 @@ pub trait MachineOps {
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
-        usb_dev: Arc<Mutex<dyn UsbDeviceOps>>,
+        usb_dev: Arc<Mutex<dyn UsbDevice>>,
     ) -> Result<()> {
         let parent_dev = self
             .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")

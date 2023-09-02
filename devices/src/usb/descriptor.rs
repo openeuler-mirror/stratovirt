@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use super::config::*;
-use super::UsbDevice;
+use super::UsbDeviceBase;
 use util::byte_code::ByteCode;
 
 pub const USB_MAX_INTERFACES: u32 = 16;
@@ -473,7 +473,7 @@ pub trait UsbDescriptorOps {
     fn init_descriptor(&mut self, desc: Arc<UsbDescDevice>, str: Vec<String>) -> Result<()>;
 }
 
-impl UsbDescriptorOps for UsbDevice {
+impl UsbDescriptorOps for UsbDeviceBase {
     fn get_descriptor(&self, value: u32) -> Result<Vec<u8>> {
         let desc_type = value >> USB_DESCRIPTOR_TYPE_SHIFT;
         let index = value & USB_DESCRIPTOR_INDEX_MASK;
