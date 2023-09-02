@@ -142,16 +142,6 @@ pub struct PciDevBase {
     pub parent_bus: Weak<Mutex<PciBus>>,
 }
 
-impl Device for PciDevBase {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base
-    }
-}
-
 pub trait PciDevOps: Device + Send + AsAny {
     /// Get base property of pci device.
     fn pci_base(&self) -> &PciDevBase;
