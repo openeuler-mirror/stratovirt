@@ -37,9 +37,10 @@ use util::unix::limit_permission;
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
-    fn input_handle(&mut self, buffer: &[u8]);
-
-    fn get_remain_space_size(&mut self) -> usize;
+    /// Handle the input data and trigger interrupt if necessary.
+    fn receive(&mut self, buffer: &[u8]);
+    /// Return the remain space size of receiver buffer.
+    fn remain_size(&mut self) -> usize;
 }
 
 /// Provide the trait that notifies device the socket is opened or closed.
@@ -51,8 +52,6 @@ pub enum ChardevStatus {
     Close,
     Open,
 }
-
-type ReceFn = Option<Arc<dyn Fn(&[u8]) + Send + Sync>>;
 
 /// Character device structure.
 pub struct Chardev {
@@ -70,10 +69,8 @@ pub struct Chardev {
     stream_fd: Option<i32>,
     /// Device is deactivated or not.
     pub deactivated: bool,
-    /// Handle the input data and trigger interrupt if necessary.
-    receive: ReceFn,
-    /// Return the remain space size of receiver buffer.
-    get_remain_space_size: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
+    /// Input receiver.
+    receiver: Option<Arc<Mutex<dyn InputReceiver>>>,
     /// Used to notify device the socket is opened or closed.
     dev: Option<Arc<Mutex<dyn ChardevNotifyDevice>>>,
 }
@@ -88,8 +85,7 @@ impl Chardev {
             output: None,
             stream_fd: None,
             deactivated: false,
-            receive: None,
-            get_remain_space_size: None,
+            receiver: None,
             dev: None,
         }
     }
@@ -153,15 +149,8 @@ impl Chardev {
         Ok(())
     }
 
-    pub fn set_input_callback<T: 'static + InputReceiver>(&mut self, dev: &Arc<Mutex<T>>) {
-        let cloned_dev = dev.clone();
-        self.receive = Some(Arc::new(move |data: &[u8]| {
-            cloned_dev.lock().unwrap().input_handle(data)
-        }));
-        let cloned_dev = dev.clone();
-        self.get_remain_space_size = Some(Arc::new(move || {
-            cloned_dev.lock().unwrap().get_remain_space_size()
-        }));
+    pub fn set_receiver<T: 'static + InputReceiver>(&mut self, dev: &Arc<Mutex<T>>) {
+        self.receiver = Some(dev.clone());
     }
 
     pub fn set_device(&mut self, dev: Arc<Mutex<dyn ChardevNotifyDevice>>) {
@@ -235,37 +224,30 @@ fn get_notifier_handler(
     match backend {
         ChardevType::Stdio | ChardevType::Pty => Rc::new(move |_, _| {
             let locked_chardev = chardev.lock().unwrap();
-            let get_remain_space_size = locked_chardev
-                .get_remain_space_size
-                .as_ref()
-                .unwrap()
-                .clone();
-            drop(locked_chardev);
-            let buff_size = get_remain_space_size();
-            let locked_chardev = chardev.lock().unwrap();
-            if locked_chardev.deactivated {
+            if locked_chardev.receiver.is_none() || locked_chardev.deactivated {
+                error!("Failed to get chardev receiver");
                 return None;
             }
-            let mut buffer = vec![0_u8; buff_size];
-            let input_h = locked_chardev.input.clone();
-            let receive = locked_chardev.receive.clone();
-            drop(locked_chardev);
-            if let Some(input) = input_h {
-                if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                    receive.as_ref().unwrap()(&mut buffer[..index]);
-                } else {
-                    error!("Failed to read input data");
-                }
-            } else {
+            if locked_chardev.input.is_none() {
                 error!("Failed to get chardev input fd");
+                return None;
+            }
+            let receiver = locked_chardev.receiver.clone().unwrap();
+            let input = locked_chardev.input.clone().unwrap();
+            drop(locked_chardev);
+
+            let mut locked_receiver = receiver.lock().unwrap();
+            let buff_size = locked_receiver.remain_size();
+            let mut buffer = vec![0_u8; buff_size];
+            if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+                locked_receiver.receive(&buffer[..index]);
+            } else {
+                error!("Failed to read input data");
             }
             None
         }),
         ChardevType::Socket { .. } => Rc::new(move |_, _| {
             let mut locked_chardev = chardev.lock().unwrap();
-            if locked_chardev.deactivated {
-                return None;
-            }
             let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
             let stream_fd = stream.as_raw_fd();
@@ -282,26 +264,25 @@ fn get_notifier_handler(
             let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
                 let mut locked_chardev = cloned_chardev.lock().unwrap();
                 if event == EventSet::IN {
-                    let get_remain_space_size = locked_chardev
-                        .get_remain_space_size
-                        .as_ref()
-                        .unwrap()
-                        .clone();
-                    drop(locked_chardev);
-                    let buff_size = get_remain_space_size();
-                    let locked_chardev = cloned_chardev.lock().unwrap();
-                    if locked_chardev.deactivated {
+                    if locked_chardev.receiver.is_none() || locked_chardev.deactivated {
+                        error!("Failed to get chardev receiver");
                         return None;
                     }
-                    let mut buffer = vec![0_u8; buff_size];
-                    if let Some(input) = locked_chardev.input.clone() {
-                        if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                            locked_chardev.receive.as_ref().unwrap()(&mut buffer[..index]);
-                        } else {
-                            error!("Failed to read input data");
-                        }
-                    } else {
+                    if locked_chardev.input.is_none() {
                         error!("Failed to get chardev input fd");
+                        return None;
+                    }
+                    let receiver = locked_chardev.receiver.clone().unwrap();
+                    let input = locked_chardev.input.clone().unwrap();
+                    drop(locked_chardev);
+
+                    let mut locked_receiver = receiver.lock().unwrap();
+                    let buff_size = locked_receiver.remain_size();
+                    let mut buffer = vec![0_u8; buff_size];
+                    if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+                        locked_receiver.receive(&buffer[..index]);
+                    } else {
+                        error!("Failed to read input data");
                     }
                     None
                 } else if event & EventSet::HANG_UP == EventSet::HANG_UP {

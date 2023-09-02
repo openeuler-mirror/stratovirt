@@ -382,7 +382,7 @@ impl SerialPort {
     }
 
     fn activate(&mut self, handler: &Arc<Mutex<SerialPortHandler>>) {
-        self.chardev.lock().unwrap().set_input_callback(handler);
+        self.chardev.lock().unwrap().set_receiver(handler);
         self.chardev.lock().unwrap().deactivated = false;
     }
 
@@ -611,7 +611,7 @@ impl EventNotifierHelper for SerialPortHandler {
 }
 
 impl InputReceiver for SerialPortHandler {
-    fn input_handle(&mut self, buffer: &[u8]) {
+    fn receive(&mut self, buffer: &[u8]) {
         self.input_handle_internal(buffer).unwrap_or_else(|e| {
             error!("Port handle input error: {:?}", e);
             report_virtio_error(
@@ -622,7 +622,7 @@ impl InputReceiver for SerialPortHandler {
         });
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
+    fn remain_size(&mut self) -> usize {
         BUF_SIZE
     }
 }

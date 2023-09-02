@@ -186,7 +186,7 @@ impl PL011 {
             PL011_SNAPSHOT_ID,
         );
         let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
@@ -197,7 +197,7 @@ impl PL011 {
 }
 
 impl InputReceiver for PL011 {
-    fn input_handle(&mut self, data: &[u8]) {
+    fn receive(&mut self, data: &[u8]) {
         self.state.flags &= !PL011_FLAG_RXFE as u32;
         for val in data {
             let mut slot = (self.state.read_pos + self.state.read_count) as usize;
@@ -218,7 +218,7 @@ impl InputReceiver for PL011 {
         }
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
+    fn remain_size(&mut self) -> usize {
         PL011_FIFO_SIZE - self.state.read_count as usize
     }
 }
@@ -492,7 +492,7 @@ mod test {
         assert_eq!(pl011_dev.state.int_enabled, 0);
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
-        pl011_dev.input_handle(&data);
+        pl011_dev.receive(&data);
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.state.rfifo[i], data[i] as u32);
