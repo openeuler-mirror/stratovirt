@@ -115,36 +115,6 @@ pub struct UsbEndpointDescriptor {
 
 impl ByteCode for UsbEndpointDescriptor {}
 
-/// USB qualifier descriptor for transfer
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UsbQualifierDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bcdUSB: u16,
-    pub bDeviceClass: u8,
-    pub bDeviceSubClass: u8,
-    pub bDeviceProtocol: u8,
-    pub bMaxPacketSize0: u8,
-    pub bNumConfigurations: u8,
-    pub bRESERVED: u8,
-}
-
-impl ByteCode for UsbQualifierDescriptor {}
-
-/// USB string descriptor for transfer
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UsbStringDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub wData: [u16; 1],
-}
-
-impl ByteCode for UsbStringDescriptor {}
-
 /// USB binary device object store descriptor for transfer.
 #[allow(non_snake_case)]
 #[repr(C, packed)]
