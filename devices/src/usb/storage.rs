@@ -26,7 +26,7 @@ use super::descriptor::{
 };
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
-use super::{UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
+use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
 use crate::{
     ScsiBus::{
         ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
@@ -223,7 +223,7 @@ impl UsbStorageState {
 
 /// USB storage device.
 pub struct UsbStorage {
-    usb_device: UsbDevice,
+    base: UsbDeviceBase,
     state: UsbStorageState,
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
@@ -314,7 +314,7 @@ impl UsbStorage {
         };
 
         Self {
-            usb_device: UsbDevice::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
+            base: UsbDeviceBase::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
             config: config.clone(),
@@ -344,7 +344,7 @@ impl UsbStorage {
                 if device_req.request == GET_MAX_LUN {
                     // TODO: Now only supports 1 LUN.
                     let maxlun = USB_STORAGE_SCSI_LUN_ID;
-                    self.usb_device.data_buf[0] = maxlun;
+                    self.base.data_buf[0] = maxlun;
                     packet.actual_length = 1;
                     return;
                 }
@@ -509,15 +509,22 @@ impl UsbStorage {
     }
 }
 
-impl UsbDeviceOps for UsbStorage {
-    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_HIGH;
+impl UsbDevice for UsbStorage {
+    fn usb_device_base(&self) -> &UsbDeviceBase {
+        &self.base
+    }
+
+    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
+        &mut self.base
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
+        self.base.reset_usb_endpoint();
+        self.base.speed = USB_SPEED_HIGH;
         let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
-        s[STR_SERIAL_STORAGE_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
-        self.usb_device
-            .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+        s[STR_SERIAL_STORAGE_INDEX as usize] = self.base.generate_serial_number(prefix);
+        self.base.init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
@@ -536,8 +543,8 @@ impl UsbDeviceOps for UsbStorage {
 
     fn reset(&mut self) {
         info!("Storage device reset");
-        self.usb_device.remote_wakeup = 0;
-        self.usb_device.addr = 0;
+        self.base.remote_wakeup = 0;
+        self.base.addr = 0;
         self.state = UsbStorageState::new();
     }
 
@@ -545,7 +552,7 @@ impl UsbDeviceOps for UsbStorage {
         debug!("Storage device handle_control request {:?}, ", device_req);
         let mut locked_packet = packet.lock().unwrap();
         match self
-            .usb_device
+            .base
             .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
@@ -585,14 +592,6 @@ impl UsbDeviceOps for UsbStorage {
         }
     }
 
-    fn get_usb_device(&self) -> &UsbDevice {
-        &self.usb_device
-    }
-
-    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
-        &mut self.usb_device
-    }
-
     fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>) {
         self.cntlr = Some(cntlr);
     }
@@ -602,6 +601,6 @@ impl UsbDeviceOps for UsbStorage {
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.usb_device.get_endpoint(true, 1)
+        self.base.get_endpoint(true, 1)
     }
 }
