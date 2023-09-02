@@ -67,8 +67,6 @@ pub struct Chardev {
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
     /// Fd of socket stream.
     stream_fd: Option<i32>,
-    /// Device is deactivated or not.
-    pub deactivated: bool,
     /// Input receiver.
     receiver: Option<Arc<Mutex<dyn InputReceiver>>>,
     /// Used to notify device the socket is opened or closed.
@@ -84,7 +82,6 @@ impl Chardev {
             input: None,
             output: None,
             stream_fd: None,
-            deactivated: false,
             receiver: None,
             dev: None,
         }
@@ -224,7 +221,7 @@ fn get_notifier_handler(
     match backend {
         ChardevType::Stdio | ChardevType::Pty => Rc::new(move |_, _| {
             let locked_chardev = chardev.lock().unwrap();
-            if locked_chardev.receiver.is_none() || locked_chardev.deactivated {
+            if locked_chardev.receiver.is_none() {
                 error!("Failed to get chardev receiver");
                 return None;
             }
@@ -238,6 +235,9 @@ fn get_notifier_handler(
 
             let mut locked_receiver = receiver.lock().unwrap();
             let buff_size = locked_receiver.remain_size();
+            if buff_size == 0 {
+                return None;
+            }
             let mut buffer = vec![0_u8; buff_size];
             if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
                 locked_receiver.receive(&buffer[..index]);
@@ -264,7 +264,7 @@ fn get_notifier_handler(
             let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
                 let mut locked_chardev = cloned_chardev.lock().unwrap();
                 if event == EventSet::IN {
-                    if locked_chardev.receiver.is_none() || locked_chardev.deactivated {
+                    if locked_chardev.receiver.is_none() {
                         error!("Failed to get chardev receiver");
                         return None;
                     }
@@ -278,6 +278,9 @@ fn get_notifier_handler(
 
                     let mut locked_receiver = receiver.lock().unwrap();
                     let buff_size = locked_receiver.remain_size();
+                    if buff_size == 0 {
+                        return None;
+                    }
                     let mut buffer = vec![0_u8; buff_size];
                     if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
                         locked_receiver.receive(&buffer[..index]);
