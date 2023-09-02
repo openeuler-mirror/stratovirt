@@ -70,7 +70,7 @@ use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;

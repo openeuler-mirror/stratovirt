@@ -21,7 +21,7 @@ use crate::config::{
     check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     MAX_PATH_LENGTH, MAX_VIRTIO_QUEUE,
 };
-use crate::qmp::{qmp_schema, QmpChannel};
+use crate::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 

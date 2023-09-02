@@ -40,7 +40,7 @@ use self::descriptor::USB_MAX_INTERFACES;
 use crate::{Device, DeviceBase};
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
-use machine_manager::qmp::send_device_deleted_msg;
+use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
 use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 use util::byte_code::ByteCode;
 use xhci::xhci_controller::{UsbPort, XhciDevice};

@@ -39,7 +39,7 @@ use crate::pci::{
 };
 use crate::{Device, DeviceBase};
 use address_space::Region;
-use machine_manager::qmp::send_device_deleted_msg;
+use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };

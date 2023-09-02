@@ -12,11 +12,12 @@
 
 pub use serde_json::Value as Any;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use strum_macros::{EnumIter, EnumString, EnumVariantNames};
 
-use super::Version;
-use crate::qmp::{Command, Empty, TimeStamp};
+use super::qmp_channel::TimeStamp;
+use super::qmp_response::{Empty, Version};
 use util::aio::AioEngine;
 
 /// A error enum for qmp
@@ -436,6 +437,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+}
+
+/// Command trait for Deserialize and find back Response.
+trait Command: Serialize {
+    type Res: DeserializeOwned;
+    fn back(self) -> Self::Res;
 }
 
 /// qmp_capabilities
@@ -2379,6 +2386,22 @@ impl Command for query_mem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_qmp_event_msg() {
+        let event_json =
+            r#"{"event":"STOP","data":{},"timestamp":{"seconds":1575531524,"microseconds":91519}}"#;
+        let qmp_event: QmpEvent = serde_json::from_str(&event_json).unwrap();
+        match qmp_event {
+            QmpEvent::Stop {
+                data: _,
+                timestamp: _,
+            } => {
+                assert!(true);
+            }
+            _ => assert!(false),
+        }
+    }
 
     #[test]
     fn test_qmp_unexpected_arguments() {
