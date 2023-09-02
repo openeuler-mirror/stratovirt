@@ -37,7 +37,7 @@ use anyhow::{bail, Context};
 use log::{debug, error};
 
 use self::descriptor::USB_MAX_INTERFACES;
-use crate::{Device, DeviceBase};
+use crate::DeviceBase;
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
@@ -125,16 +125,6 @@ pub struct UsbDevice {
     pub unplugged: bool,
     /// The index of the interfaces.
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
-}
-
-impl Device for UsbDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base
-    }
 }
 
 impl UsbDevice {
