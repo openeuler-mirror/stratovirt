@@ -223,46 +223,6 @@ impl Device for XhciPciDevice {
     }
 }
 
-struct DoorbellHandler {
-    xhci: Arc<Mutex<XhciDevice>>,
-    fd: Arc<EventFd>,
-}
-
-impl DoorbellHandler {
-    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
-        DoorbellHandler { xhci, fd }
-    }
-}
-
-impl EventNotifierHelper for DoorbellHandler {
-    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let cloned_io_handler = io_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
-            read_fd(fd);
-            let locked_handler = cloned_io_handler.lock().unwrap();
-            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
-
-            if !locked_xhci.running() {
-                error!("Failed to write doorbell, XHCI is not running");
-                return None;
-            }
-            if let Err(e) = locked_xhci.handle_command() {
-                error!("Failed to handle command: {:?}", e);
-                locked_xhci.host_controller_error();
-            }
-
-            None
-        });
-        vec![EventNotifier::new(
-            NotifierOperation::AddShared,
-            io_handler.lock().unwrap().fd.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![handler],
-        )]
-    }
-}
-
 impl PciDevOps for XhciPciDevice {
     fn pci_base(&self) -> &PciDevBase {
         &self.base
@@ -406,5 +366,45 @@ impl PciDevOps for XhciPciDevice {
         self.base.config.reset()?;
 
         Ok(())
+    }
+}
+
+struct DoorbellHandler {
+    xhci: Arc<Mutex<XhciDevice>>,
+    fd: Arc<EventFd>,
+}
+
+impl DoorbellHandler {
+    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
+        DoorbellHandler { xhci, fd }
+    }
+}
+
+impl EventNotifierHelper for DoorbellHandler {
+    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_io_handler = io_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            let locked_handler = cloned_io_handler.lock().unwrap();
+            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
+
+            if !locked_xhci.running() {
+                error!("Failed to write doorbell, XHCI is not running");
+                return None;
+            }
+            if let Err(e) = locked_xhci.handle_command() {
+                error!("Failed to handle command: {:?}", e);
+                locked_xhci.host_controller_error();
+            }
+
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            io_handler.lock().unwrap().fd.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
     }
 }
