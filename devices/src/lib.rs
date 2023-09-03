@@ -26,6 +26,7 @@ pub mod scsi;
 pub mod sysbus;
 pub mod usb;
 
+#[cfg(target_arch = "aarch64")]
 mod interrupt_controller;
 
 #[cfg(target_arch = "aarch64")]
