@@ -53,7 +53,6 @@ fn set_up() -> TestState {
 /// 3. Read abnormal address, except 0.
 /// 4. Write event and read, excepy 0 because ged can't write.
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn test_shutdown() {
     let mut ts = set_up();
 
@@ -79,7 +78,6 @@ fn test_shutdown() {
 /// 2. Read ged event.
 /// 3. Send qmp command "query-status" to get the status of vm, except "running".
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn test_reboot() {
     let mut ts = set_up();
 

@@ -29,10 +29,6 @@ use super::{
 };
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
 use crate::libtest::{test_init, TestState};
-#[cfg(feature = "usb_camera")]
-use devices::usb::camera::{
-    INTERFACE_ID_CONTROL, SC_VIDEOCONTROL, SC_VIDEOSTREAMING, SC_VIDEO_INTERFACE_COLLECTION,
-};
 use devices::usb::{
     config::*,
     hid::{
@@ -139,6 +135,12 @@ pub const STORAGE_DEVICE_OUT_ENDPOINT_ID: u32 = 4;
 pub const PRIMARY_INTERRUPTER_ID: usize = 0;
 pub const XHCI_PCI_SLOT_NUM: u8 = 0x5;
 pub const XHCI_PCI_FUN_NUM: u8 = 0;
+const INTERFACE_ID_CONTROL: u8 = 0;
+// According to UVC specification 1.5
+// A.2. Video Interface Subclass Codes
+const SC_VIDEOCONTROL: u8 = 0x01;
+const SC_VIDEOSTREAMING: u8 = 0x02;
+const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
 
 #[derive(Eq, PartialEq)]
 enum UsbDeviceType {
@@ -1613,7 +1615,6 @@ impl TestXhciPciDevice {
         // class
         assert_eq!(buf[4], USB_CLASS_VIDEO);
         // subclass
-        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[5], SC_VIDEO_INTERFACE_COLLECTION);
 
         // 2. VC interface
@@ -1624,12 +1625,9 @@ impl TestXhciPciDevice {
             *offset,
         );
 
-        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[1], USB_DT_INTERFACE);
-        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[2], INTERFACE_ID_CONTROL);
         assert_eq!(buf[5], USB_CLASS_VIDEO);
-        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[6], SC_VIDEOCONTROL);
 
         // get total vc length from its header descriptor
@@ -1652,7 +1650,6 @@ impl TestXhciPciDevice {
 
         assert_eq!(buf[1], USB_DT_INTERFACE);
         assert_eq!(buf[5], USB_CLASS_VIDEO);
-        #[cfg(feature = "usb_camera")]
         assert_eq!(buf[6], SC_VIDEOSTREAMING);
 
         // get total vs length from its header descriptor

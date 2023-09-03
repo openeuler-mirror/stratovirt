@@ -17,7 +17,6 @@ use std::{fs::remove_file, fs::File, io::Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use devices::camera_backend::FmtType;
 use devices::usb::xhci::TRBCCode;
 use mod_test::libdriver::usb::{
     TestUsbBuilder, TestXhciPciDevice, CONTROL_ENDPOINT_ID, PRIMARY_INTERRUPTER_ID,
@@ -27,6 +26,14 @@ use mod_test::libtest::TestState;
 const UVC_FID: u8 = 1;
 const UVC_HEADER_LEN: u8 = 2;
 const VS_ENDPOINT_ID: u32 = 3;
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Default)]
+enum FmtType {
+    #[default]
+    Yuy2 = 0,
+    Rgb565,
+    Mjpg,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DeviceConfig {
