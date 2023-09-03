@@ -837,6 +837,7 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
 /// Switch display image.
 fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let mut borrowed_gs = gs.borrow_mut();
+    let scale_mode = borrowed_gs.scale_mode.clone();
     let active_con = borrowed_gs.con.upgrade();
     let con = match active_con {
         Some(con) => con,
@@ -938,6 +939,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
             image: transfer_image,
         });
     };
+
+    let (window_width, window_height) = borrowed_gs.get_window_size()?;
+    if scale_mode.borrow().is_full_screen() || scale_mode.borrow().is_free_scale() {
+        borrowed_gs.scale_x = window_width / surface_width as f64;
+        borrowed_gs.scale_y = window_height / surface_height as f64;
+    }
     drop(borrowed_gs);
 
     if need_resize {
