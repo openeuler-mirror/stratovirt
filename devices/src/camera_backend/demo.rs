@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use super::INTERVALS_PER_SEC;
 use crate::camera_backend::{
-    CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
+    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType,
 };
 use util::aio::{mem_from_buf, Iovec};
@@ -119,7 +119,7 @@ impl Default for DeviceConfig {
 }
 
 /// Demo camera backend used for test.
-pub struct DemoCamera {
+pub struct DemoCameraBackend {
     id: String,
     /// Device config path.
     config_path: String,
@@ -137,9 +137,9 @@ pub struct DemoCamera {
     state: Arc<Mutex<DeviceState>>,
 }
 
-impl DemoCamera {
+impl DemoCameraBackend {
     pub fn new(id: String, config_path: String) -> Result<Self> {
-        Ok(DemoCamera {
+        Ok(DemoCameraBackend {
             id,
             config_path,
             frame_image: Arc::new(Mutex::new(FrameImage::default())),
@@ -374,7 +374,7 @@ fn build_rgb565_list() -> CameraFormatList {
     }
 }
 
-impl CameraHostdevOps for DemoCamera {
+impl CameraBackend for DemoCameraBackend {
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
         *self.cur_format.lock().unwrap() = *cam_fmt;
         info!("Demo camera backend set format {:?}", cam_fmt);
