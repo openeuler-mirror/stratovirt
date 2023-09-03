@@ -12,7 +12,7 @@
 
 //! The abstract layer that connects different frontend & backend camera devices.
 //! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait
-//! CameraHostdevOps.
+//! CameraBackend.
 
 pub mod demo;
 #[cfg(feature = "usb_camera_v4l2")]
@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use self::demo::DemoCamera;
+use self::demo::DemoCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
 use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
@@ -105,7 +105,7 @@ pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
 /// Callback function which is called when backend is broken.
 pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
 
-pub trait CameraHostdevOps: Send + Sync {
+pub trait CameraBackend: Send + Sync {
     /// Set a specific format.
     fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
 
@@ -143,8 +143,8 @@ pub trait CameraHostdevOps: Send + Sync {
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
 
-pub fn camera_ops(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraHostdevOps>>> {
-    let cam: Arc<Mutex<dyn CameraHostdevOps>> = match config.backend {
+pub fn create_cam_backend(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraBackend>>> {
+    let cam: Arc<Mutex<dyn CameraBackend>> = match config.backend {
         #[cfg(feature = "usb_camera_v4l2")]
         CamBackendType::V4l2 => Arc::new(Mutex::new(V4l2CameraBackend::new(
             config.drive.id.clone().unwrap(),
@@ -153,7 +153,7 @@ pub fn camera_ops(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraHostdev
             })?,
             config.iothread,
         )?)),
-        CamBackendType::Demo => Arc::new(Mutex::new(DemoCamera::new(
+        CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
             config.id.clone().unwrap(),
             config.path.with_context(|| {
                 ConfigError::FieldIsMissing("path".to_string(), "Demo".to_string())
