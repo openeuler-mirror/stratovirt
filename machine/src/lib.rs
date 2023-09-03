@@ -50,7 +50,7 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "scream")]
 use devices::misc::scream::Scream;
 #[cfg(feature = "demo_device")]
-use devices::pci::demo_dev::DemoDev;
+use devices::pci::demo_device::DemoDev;
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]

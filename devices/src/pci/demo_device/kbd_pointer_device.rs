@@ -21,7 +21,7 @@ use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use once_cell::sync::Lazy;
 
-use crate::pci::demo_dev::DeviceTypeOperation;
+use super::DeviceTypeOperation;
 use address_space::{AddressSpace, GuestAddress};
 use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
 
