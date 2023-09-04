@@ -17,7 +17,6 @@ use anyhow::{bail, Context, Result};
 use log::{debug, error};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::chardev::{Chardev, InputReceiver};
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
@@ -27,6 +26,7 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use chardev_backend::chardev::{Chardev, InputReceiver};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
@@ -163,7 +163,7 @@ impl Serial {
             value: format!("uart,mmio,0x{:08x}", region_base),
         });
         let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
@@ -342,7 +342,7 @@ impl Serial {
 }
 
 impl InputReceiver for Serial {
-    fn input_handle(&mut self, data: &[u8]) {
+    fn receive(&mut self, data: &[u8]) {
         if self.state.mcr & UART_MCR_LOOP == 0 {
             let len = self.rbr.len();
             if len >= RECEIVER_BUFF_SIZE {
@@ -359,7 +359,7 @@ impl InputReceiver for Serial {
         }
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
+    fn remain_size(&mut self) -> usize {
         RECEIVER_BUFF_SIZE
     }
 }
@@ -496,7 +496,7 @@ mod test {
 
         // test receive method
         let data = [0x01, 0x02];
-        usart.input_handle(&data);
+        usart.receive(&data);
         assert_eq!(usart.rbr.is_empty(), false);
         assert_eq!(usart.rbr.len(), 2);
         assert_eq!(usart.rbr.front(), Some(&0x01));

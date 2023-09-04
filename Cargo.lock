@@ -260,6 +260,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "chardev_backend"
+version = "2.2.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "log",
+ "machine_manager",
+ "util",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -328,6 +340,7 @@ dependencies = [
  "block_backend",
  "byteorder",
  "cairo-rs",
+ "chardev_backend",
  "drm-fourcc",
  "hypervisor",
  "kvm-bindings",
@@ -1823,6 +1836,7 @@ dependencies = [
  "anyhow",
  "block_backend",
  "byteorder",
+ "chardev_backend",
  "devices",
  "hypervisor",
  "kvm-ioctls",

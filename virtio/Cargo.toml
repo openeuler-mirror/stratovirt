@@ -25,6 +25,7 @@ util = { path = "../util" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
 block_backend = {path = "../block_backend"}
+chardev_backend = {path = "../chardev_backend" }
 ui = { path = "../ui", features = ["console"], optional = true }
 
 [features]
