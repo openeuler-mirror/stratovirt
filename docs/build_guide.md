@@ -64,3 +64,31 @@ List of optional features:
 ```shell
 $ cargo build --release --features "scream_alsa"
 ```
+
+# Build static StratoVirt in containers
+
+## 1. Check docker environment
+
+In order to build StratoVirt in containers, ensure that the docker software is installed. This can be checked with the following command:
+
+```shell
+$ docker -v
+Docker version 18.09.0
+```
+
+If you want to deploy a docker environment, the following link can help you:
+
+<https://docs.docker.com/get-docker/>
+
+## 2. Run the build script
+
+Run the script under tools/build_stratovirt_static directory to automatically run a docker container to build a statically linked StratoVirt.
+
+```shell
+$ cd tools/build_stratovirt_static
+# Build StratoVirt with your custom_image_name
+$ sh build_stratovirt_from_docker.sh custom_image_name
+```
+
+After the build is complete, you can find the statically linked binary StratoVirt in the path: `target/${arch}-unknown-linux-musl/release/stratovirt`.
+
