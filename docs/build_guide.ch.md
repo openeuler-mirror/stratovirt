@@ -63,3 +63,31 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 ```shell
 $ cargo build --release --features "scream_alsa"
 ```
+
+# 通过容器构建StratoVirt静态链接二进制
+
+## 1. 检查docker环境
+
+为了通过容器构建StratoVirt，需保证已经安装了docker软件。可通过下面的命令检查：
+
+```shell
+$ docker -v
+Docker version 18.09.0
+```
+
+如果你想部署docker环境，下面的链接可以帮助你：
+
+<https://docs.docker.com/get-docker/>
+
+## 2. 使用tools下提供的构建工具
+
+运行tools/build_stratovirt_static下的脚本，自动拉起docker容器构建静态链接的StratoVirt。
+
+```shell
+$ cd tools/build_stratovirt_static
+# 自定义一个镜像名称，构建StratoVirt静态链接二进制
+$ sh build_stratovirt_from_docker.sh custom_image_name
+```
+
+构建完成后，可找到StratoVirt构建静态链接二进制的路径在 `target/${arch}-unknown-linux-musl/release/stratovirt`.
+
