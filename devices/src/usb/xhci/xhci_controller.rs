@@ -2009,11 +2009,14 @@ impl XhciDevice {
 
     /// Used for device to wakeup endpoint
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
-        if slot_id == INVALID_SLOT_ID {
-            debug!("Invalid slot id, maybe device not activated.");
+        let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
+        if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
+            debug!(
+                "Invalid slot id or ep id, maybe device not activated, {:?}",
+                e
+            );
             return Ok(());
         }
-        let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         self.kick_endpoint(slot_id, ep_id as u32)?;
         Ok(())
     }
