@@ -244,7 +244,12 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
 pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
-    if mem_config.mem_share {
+    if let Some(path) = &mem_config.mem_path {
+        f_back = Some(
+            FileBackend::new_mem(path, mem_config.mem_size)
+                .with_context(|| "Failed to create file that backs memory")?,
+        );
+    } else if mem_config.mem_share {
         let anon_mem_name = String::from("stratovirt_anon_mem");
 
         let anon_fd =
@@ -263,11 +268,6 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
             offset: 0,
             page_size: host_page_size(),
         });
-    } else if let Some(path) = &mem_config.mem_path {
-        f_back = Some(
-            FileBackend::new_mem(path, mem_config.mem_size)
-                .with_context(|| "Failed to create file that backs memory")?,
-        );
     }
     let block = Arc::new(HostMemMapping::new(
         GuestAddress(0),
