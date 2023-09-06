@@ -1970,6 +1970,33 @@ impl DeviceInterface for StdMachine {
             ),
         }
     }
+
+    fn query_vcpu_reg(&self, args: qmp_schema::QueryVcpuRegArgument) -> Response {
+        let vcpu = args.vcpu;
+        let addr = match u64::from_str_radix(args.addr.as_str(), 16) {
+            Ok(addr) => addr,
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "address not in hexadecimal".to_string(),
+                    ),
+                    None,
+                );
+            }
+        };
+
+        if let Some(val) = self.get_vcpu_reg_val(addr, vcpu) {
+            return Response::create_response(
+                serde_json::to_value(format!("{:X}", val)).unwrap(),
+                None,
+            );
+        }
+
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("not supported or arguments error".to_string()),
+            None,
+        )
+    }
 }
 
 fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
