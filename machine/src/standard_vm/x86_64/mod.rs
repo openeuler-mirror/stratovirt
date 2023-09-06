@@ -298,6 +298,10 @@ impl StdMachine {
         let machine_ram = self.get_vm_ram();
         machine_ram.mtree(0_u32);
     }
+
+    pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
+        None
+    }
 }
 
 impl StdMachineOps for StdMachine {

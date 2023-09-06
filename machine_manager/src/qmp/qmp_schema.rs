@@ -437,6 +437,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-vcpu-reg")]
+    query_vcpu_reg {
+        arguments: query_vcpu_reg,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// Command trait for Deserialize and find back Response.
@@ -2382,6 +2388,29 @@ impl Command for query_mem {
         Default::default()
     }
 }
+
+/// query-vcpu-reg
+///
+/// # Arguments
+///
+/// * `addr` - the register addr will be query.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-vcpu-reg",
+///      "arguments": { "addr": "603000000013df1a", "vcpu": 0 } }
+/// <- { "return": "348531C5" }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_vcpu_reg {
+    #[serde(rename = "addr")]
+    pub addr: String,
+    #[serde(rename = "vcpu")]
+    pub vcpu: usize,
+}
+pub type QueryVcpuRegArgument = query_vcpu_reg;
 
 #[cfg(test)]
 mod tests {

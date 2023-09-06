@@ -22,8 +22,8 @@ use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
     Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
-    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
-    TypeLists, UpdateRegionArgument,
+    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
+    QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -482,6 +482,13 @@ pub trait DeviceInterface {
         _args: BlockdevSnapshotInternalArgument,
     ) -> Response {
         Response::create_empty_response()
+    }
+
+    fn query_vcpu_reg(&self, _args: QueryVcpuRegArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query_vcpu_reg is not supported yet".to_string()),
+            None,
+        )
     }
 }
 

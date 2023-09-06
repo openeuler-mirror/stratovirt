@@ -42,7 +42,8 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{
-    CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuTopology, CPU, PMU_INTR, PPI_BASE,
+    CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuLifecycleState, CpuTopology, CPU,
+    PMU_INTR, PPI_BASE,
 };
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use devices::acpi::power::PowerDev;
@@ -381,6 +382,27 @@ impl StdMachine {
         self.sys_mem.memspace_show();
         let machine_ram = self.get_vm_ram();
         machine_ram.mtree(0_u32);
+    }
+
+    pub fn get_vcpu_reg_val(&self, addr: u64, vcpu_index: usize) -> Option<u128> {
+        if let Some(vcpu) = self.get_cpus().get(vcpu_index) {
+            let (cpu_state, _) = vcpu.state();
+            let cpu_state = *cpu_state.lock().unwrap();
+            if cpu_state != CpuLifecycleState::Paused {
+                self.pause();
+            }
+
+            let value = match vcpu.fd().get_one_reg(addr) {
+                Ok(value) => Some(value),
+                _ => None,
+            };
+
+            if cpu_state != CpuLifecycleState::Paused {
+                self.resume();
+            }
+            return value;
+        }
+        None
     }
 }
 
