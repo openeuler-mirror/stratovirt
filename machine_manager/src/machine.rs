@@ -23,7 +23,7 @@ use crate::qmp::qmp_schema::{
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
     Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
-    QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
+    QueryMemGpaArgument, QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -487,6 +487,13 @@ pub trait DeviceInterface {
     fn query_vcpu_reg(&self, _args: QueryVcpuRegArgument) -> Response {
         Response::create_error_response(
             QmpErrorClass::GenericError("query_vcpu_reg is not supported yet".to_string()),
+            None,
+        )
+    }
+
+    fn query_mem_gpa(&self, _args: QueryMemGpaArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query_mem_gpa is not supported yet".to_string()),
             None,
         )
     }
