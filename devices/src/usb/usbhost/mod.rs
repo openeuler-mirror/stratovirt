@@ -943,6 +943,12 @@ impl UsbDeviceOps for UsbHost {
         }
 
         self.clear_iso_queues();
+
+        self.handle
+            .as_mut()
+            .unwrap()
+            .reset()
+            .unwrap_or_else(|e| error!("Failed to reset the usb host device {:?}", e));
     }
 
     fn set_controller(&mut self, _cntlr: std::sync::Weak<Mutex<XhciDevice>>) {}
