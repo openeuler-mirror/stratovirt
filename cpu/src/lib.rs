@@ -72,7 +72,7 @@ use vmm_sys_util::signal::{register_signal_handler, Killable};
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
-use machine_manager::{qmp::qmp_schema, qmp::QmpChannel};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
 #[cfg(target_arch = "x86_64")]

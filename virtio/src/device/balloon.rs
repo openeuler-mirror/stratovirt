@@ -36,8 +36,8 @@ use machine_manager::{
     config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
     event,
     event_loop::{register_event_helper, unregister_event_helper},
+    qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
-    qmp::QmpChannel,
 };
 use util::{
     bitmap::Bitmap,

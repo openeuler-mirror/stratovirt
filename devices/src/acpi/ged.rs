@@ -32,7 +32,7 @@ use acpi::{
 use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::QmpChannel;
+use machine_manager::qmp::qmp_channel::QmpChannel;
 use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
 use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
 

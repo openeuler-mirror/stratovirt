@@ -69,7 +69,7 @@ use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::MachineLifecycle;
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::MigrationManager;
 use ui::input::{key_event, point_event};
 #[cfg(feature = "vnc")]

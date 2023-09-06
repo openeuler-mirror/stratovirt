@@ -58,7 +58,7 @@ use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use syscall::syscall_whitelist;
