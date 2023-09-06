@@ -794,9 +794,10 @@ Three properties can be set for USB controller.
 * id: unique device id.
 * bus: bus number of the device.
 * addr: including slot number and function number.
+* iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
 
 ```shell
--device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>
+-device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>[,iothread=<iothread1>]
 ```
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
