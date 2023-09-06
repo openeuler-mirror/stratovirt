@@ -468,6 +468,21 @@ Query vcpu register value.
 <- {"return": "348531C5"}
 ```
 
+### query-mem-gpa
+
+Query the value of the guest physical address.
+
+#### Arguments
+
+* `gpa` : the guest physical address.
+
+#### Example
+
+```json
+-> {"execute": "query-mem-gpa", "arguments": {"gpa": "13c4d1d00" }}
+<- {"return": "B9000001"}
+```
+
 ## Event Notification
 
 When some events happen, connected client will receive QMP events.

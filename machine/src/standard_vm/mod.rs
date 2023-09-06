@@ -1997,6 +1997,32 @@ impl DeviceInterface for StdMachine {
             None,
         )
     }
+
+    fn query_mem_gpa(&self, args: qmp_schema::QueryMemGpaArgument) -> Response {
+        let gpa = match u64::from_str_radix(args.gpa.as_str(), 16) {
+            Ok(gpa) => gpa,
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "address not in hexadecimal".to_string(),
+                    ),
+                    None,
+                );
+            }
+        };
+
+        match self.sys_mem.read_object::<u32>(GuestAddress(gpa)) {
+            Ok(val) => {
+                Response::create_response(serde_json::to_value(format!("{:X}", val)).unwrap(), None)
+            }
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(
+                    "this gpa does not support query".to_string(),
+                ),
+                None,
+            ),
+        }
+    }
 }
 
 fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {

@@ -470,7 +470,8 @@ fn qmp_command_exec(
         (human_monitor_command, human_monitor_command),
         (blockdev_snapshot_internal_sync, blockdev_snapshot_internal_sync),
         (blockdev_snapshot_delete_internal_sync, blockdev_snapshot_delete_internal_sync),
-        (query_vcpu_reg, query_vcpu_reg)
+        (query_vcpu_reg, query_vcpu_reg),
+        (query_mem_gpa, query_mem_gpa)
     );
 
     // Handle the Qmp command which macro can't cover
