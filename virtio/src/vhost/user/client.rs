@@ -510,7 +510,11 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            let last_avail_idx = queue.vring.get_avail_idx(&self.mem_space)?;
+            let last_avail_idx = if queue.vring.is_enabled() {
+                queue.vring.get_avail_idx(&self.mem_space)?
+            } else {
+                0
+            };
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
