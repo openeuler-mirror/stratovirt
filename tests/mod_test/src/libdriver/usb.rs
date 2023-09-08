@@ -44,7 +44,7 @@ use devices::usb::{
             XHCI_INTR_REG_IMAN, XHCI_INTR_REG_IMOD, XHCI_INTR_REG_SIZE, XHCI_OPER_REG_CONFIG,
             XHCI_OPER_REG_PAGESIZE, XHCI_OPER_REG_USBCMD, XHCI_OPER_REG_USBSTS,
         },
-        TRBCCode, TRBType, TRB_SIZE,
+        xhci_trb::{TRBCCode, TRBType, TRB_SIZE},
     },
     UsbDeviceRequest,
 };
