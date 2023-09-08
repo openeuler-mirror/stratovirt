@@ -510,7 +510,11 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            let last_avail_idx = queue.vring.get_avail_idx(&self.mem_space)?;
+            let last_avail_idx = if queue.vring.is_enabled() {
+                queue.vring.get_avail_idx(&self.mem_space)?
+            } else {
+                0
+            };
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
@@ -534,15 +538,20 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, queue) in self.queues.iter().enumerate() {
-            let enabled = queue.lock().unwrap().is_enabled();
-            self.set_vring_enable(queue_index, enabled)
-                .with_context(|| {
-                    format!(
-                        "Failed to set vring enable for vhost-user, index: {}",
-                        queue_index,
-                    )
-                })?;
+        if self.backend_type == VhostBackendType::TypeBlock {
+            // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
+            // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
+            // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
+            for (queue_index, queue) in self.queues.iter().enumerate() {
+                let enabled = queue.lock().unwrap().is_enabled();
+                self.set_vring_enable(queue_index, enabled)
+                    .with_context(|| {
+                        format!(
+                            "Failed to set vring enable for vhost-user, index: {}",
+                            queue_index,
+                        )
+                    })?;
+            }
         }
 
         Ok(())

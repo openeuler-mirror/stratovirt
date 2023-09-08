@@ -40,9 +40,9 @@ use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use virtio::vhost::user::RegionMemInfo;
 use virtio::{
-    Queue, QueueConfig, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_EVENT_IDX,
+    vhost::user::RegionMemInfo, virtio_has_feature, Queue, QueueConfig,
+    VhostUser::VHOST_USER_F_PROTOCOL_FEATURES, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
 };
 
@@ -246,6 +246,51 @@ impl VirtioFs {
 
         bail!("Failed to find the guest address for addr: 0x{:X}", addr);
     }
+
+    fn register_fs_handler(&mut self, queue_index: usize) -> Result<()> {
+        // Before setting up new notifiers, we should remove old ones.
+        self.unregister_fs_handler(queue_index)?;
+
+        let driver_features = self.config.driver_features;
+        let mut queue_info = self.config.get_mut_queue_config(queue_index)?;
+        if queue_info.kick_evt.is_none() || queue_info.call_evt.is_none() {
+            bail!(
+                "The event for kicking {} or calling {} is none",
+                queue_info.kick_evt.is_none(),
+                queue_info.call_evt.is_none(),
+            );
+        }
+        queue_info.config.ready = true;
+
+        let fs_handler = Arc::new(Mutex::new(
+            FsIoHandler::new(
+                queue_info.config,
+                queue_info.kick_evt.as_ref().unwrap().clone(),
+                queue_info.call_evt.as_ref().unwrap().clone(),
+                &self.sys_mem,
+                driver_features,
+                self.fs.clone(),
+            )
+            .with_context(|| "Failed to create fs handler")?,
+        ));
+
+        self.fs_handlers[queue_index] = Some(fs_handler.clone());
+        EventLoop::update_event(EventNotifierHelper::internal_notifiers(fs_handler), None)
+            .with_context(|| "Failed to update event for queue status which is ready")?;
+
+        Ok(())
+    }
+
+    fn unregister_fs_handler(&mut self, queue_index: usize) -> Result<()> {
+        if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
+            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
+                .with_context(|| "Failed to update event for queue status which is not ready")?;
+        };
+        let mut queue_info = self.config.get_mut_queue_config(queue_index)?;
+        queue_info.config.ready = false;
+
+        Ok(())
+    }
 }
 
 impl VhostUserReqHandler for VirtioFs {
@@ -398,6 +443,11 @@ impl VhostUserReqHandler for VirtioFs {
                 queue_info.call_evt = Some(Arc::new(call_evt));
             })
             .with_context(|| format!("Failed to set vring call, index: {}", index))?;
+
+        if !virtio_has_feature(self.config.driver_features, VHOST_USER_F_PROTOCOL_FEATURES) {
+            self.register_fs_handler(queue_index)?;
+        }
+
         Ok(())
     }
 
@@ -417,43 +467,11 @@ impl VhostUserReqHandler for VirtioFs {
     }
 
     fn set_vring_enable(&mut self, queue_index: usize, status: u32) -> Result<()> {
-        let driver_features = self.config.driver_features;
-
-        let mut queue_info = self.config.get_mut_queue_config(queue_index)?;
-        queue_info.config.ready = status == 1;
-
-        // Before setting up new notifiers, we should remove old ones.
-        if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
-            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
-                .with_context(|| "Failed to update event for queue status which is not ready")?;
-        };
-
         if status == 1 {
-            if queue_info.kick_evt.is_none() || queue_info.call_evt.is_none() {
-                bail!(
-                    "The event for kicking {} or calling {} is none",
-                    queue_info.kick_evt.is_none(),
-                    queue_info.call_evt.is_none(),
-                );
-            }
-
-            let fs_handler = Arc::new(Mutex::new(
-                FsIoHandler::new(
-                    queue_info.config,
-                    queue_info.kick_evt.as_ref().unwrap().clone(),
-                    queue_info.call_evt.as_ref().unwrap().clone(),
-                    &self.sys_mem,
-                    driver_features,
-                    self.fs.clone(),
-                )
-                .with_context(|| "Failed to create fs handler")?,
-            ));
-
-            self.fs_handlers[queue_index] = Some(fs_handler.clone());
-            EventLoop::update_event(EventNotifierHelper::internal_notifiers(fs_handler), None)
-                .with_context(|| "Failed to update event for queue status which is ready")?;
+            self.register_fs_handler(queue_index)?;
+        } else {
+            self.unregister_fs_handler(queue_index)?;
         }
-
         Ok(())
     }
 }
