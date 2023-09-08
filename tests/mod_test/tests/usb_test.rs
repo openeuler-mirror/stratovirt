@@ -19,7 +19,7 @@ use devices::usb::xhci::xhci_regs::{
     XHCI_INTR_REG_ERSTBA_LO, XHCI_INTR_REG_ERSTSZ, XHCI_INTR_REG_IMAN, XHCI_OPER_NE_MASK,
     XHCI_OPER_REG_CONFIG, XHCI_OPER_REG_DNCTRL, XHCI_OPER_REG_USBCMD, XHCI_OPER_REG_USBSTS,
 };
-use devices::usb::xhci::{TRBCCode, TRBType, TRB_SIZE};
+use devices::usb::xhci::xhci_trb::{TRBCCode, TRBType, TRB_SIZE};
 use devices::usb::UsbDeviceRequest;
 use mod_test::libdriver::pci::{PCI_DEVICE_ID, PCI_VENDOR_ID};
 use mod_test::libdriver::usb::{

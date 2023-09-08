@@ -13,6 +13,6 @@
 pub mod xhci_controller;
 pub mod xhci_pci;
 pub mod xhci_regs;
+pub mod xhci_trb;
 
 mod xhci_ring;
-mod xhci_trb;
