@@ -27,7 +27,7 @@ use machine_manager::{
     config::DiskFormat,
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
-use qcow2::{Qcow2Driver, QCOW2_LIST};
+use qcow2::{qcow2_flush_metadata, Qcow2Driver, QCOW2_LIST};
 use raw::RawDriver;
 use util::aio::{Aio, Iovec, WriteZeroesState};
 
@@ -57,9 +57,9 @@ pub struct BlockProperty {
 pub trait BlockDriverOps<T: Clone>: Send {
     fn disk_size(&mut self) -> Result<u64>;
 
-    fn read_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()>;
+    fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()>;
 
-    fn write_vectored(&mut self, iovec: &[Iovec], offset: usize, completecb: T) -> Result<()>;
+    fn write_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()>;
 
     fn datasync(&mut self, completecb: T) -> Result<()>;
 
@@ -117,22 +117,32 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 .lock()
                 .unwrap()
                 .insert(prop.id.clone(), new_qcow2.clone());
-            let cloned_qcow2 = new_qcow2.clone();
+            let cloned_qcow2 = Arc::downgrade(&new_qcow2);
             // NOTE: we can drain request when request in io thread.
             let drain = prop.iothread.is_some();
             let cloned_drive_id = prop.id.clone();
             let exit_notifier = Arc::new(move || {
-                let mut locked_qcow2 = cloned_qcow2.lock().unwrap();
-                info!("clean up qcow2 {:?} resources.", cloned_drive_id);
-                if let Err(e) = locked_qcow2.flush() {
-                    error!("Failed to flush qcow2 {:?}", e);
-                }
-                if drain {
-                    locked_qcow2.drain_request();
+                if let Some(qcow2) = cloned_qcow2.upgrade() {
+                    let mut locked_qcow2 = qcow2.lock().unwrap();
+                    info!("clean up qcow2 {:?} resources.", cloned_drive_id);
+                    if let Err(e) = locked_qcow2.flush() {
+                        error!("Failed to flush qcow2 {:?}", e);
+                    }
+                    if drain {
+                        locked_qcow2.drain_request();
+                    }
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id, exit_notifier);
+
+            // Add timer for flushing qcow2 metadata.
+            qcow2_flush_metadata(Arc::downgrade(&new_qcow2));
+
             Ok(new_qcow2)
         }
     }
+}
+
+pub fn remove_block_backend(id: &str) {
+    QCOW2_LIST.lock().unwrap().remove(id);
 }

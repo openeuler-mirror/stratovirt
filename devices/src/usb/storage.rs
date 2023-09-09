@@ -20,8 +20,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 
-use machine_manager::config::{DriveFile, UsbStorageConfig};
-
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
@@ -36,6 +34,7 @@ use crate::{
     },
     ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
 };
+use machine_manager::config::{DriveFile, UsbStorageConfig};
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -233,10 +232,11 @@ pub struct UsbStorage {
     /// Scsi bus attached to this usb-storage device.
     scsi_bus: Arc<Mutex<ScsiBus>>,
     /// Effective scsi backend.
-    // Note: scsi device should attach to scsi bus. Logically, scsi device should not be placed in UsbStorage.
-    // But scsi device is needed in processing scsi request. Because the three (usb-storage/scsi bus/scsi device)
-    // correspond one-to-one, add scsi device member here for the execution efficiency (No need to find a unique
-    // device from the hash table of the unique bus).
+    // Note: scsi device should attach to scsi bus. Logically, scsi device should not be placed in
+    // UsbStorage. But scsi device is needed in processing scsi request. Because the three
+    // (usb-storage/scsi bus/scsi device) correspond one-to-one, add scsi device member here
+    // for the execution efficiency (No need to find a unique device from the hash table of the
+    // unique bus).
     scsi_dev: Arc<Mutex<ScsiDevice>>,
 }
 
@@ -519,7 +519,8 @@ impl UsbDeviceOps for UsbStorage {
         self.usb_device
             .init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
 
-        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
+        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
+        // supported.
         let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
         locked_scsi_dev.realize(None)?;
         drop(locked_scsi_dev);

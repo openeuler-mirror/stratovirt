@@ -21,8 +21,6 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use serde_json::Value;
 
-use util::byte_code::ByteCode;
-
 use super::{
     machine::TestStdMachine,
     malloc::GuestAllocator,
@@ -32,9 +30,6 @@ use super::{
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
 use crate::libtest::{test_init, TestState};
 use devices::usb::{
-    camera::{
-        INTERFACE_ID_CONTROL, SC_VIDEOCONTROL, SC_VIDEOSTREAMING, SC_VIDEO_INTERFACE_COLLECTION,
-    },
     config::*,
     hid::{
         HID_GET_IDLE, HID_GET_PROTOCOL, HID_GET_REPORT, HID_SET_IDLE, HID_SET_PROTOCOL,
@@ -53,6 +48,7 @@ use devices::usb::{
     },
     UsbDeviceRequest,
 };
+use util::byte_code::ByteCode;
 
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
@@ -139,6 +135,12 @@ pub const STORAGE_DEVICE_OUT_ENDPOINT_ID: u32 = 4;
 pub const PRIMARY_INTERRUPTER_ID: usize = 0;
 pub const XHCI_PCI_SLOT_NUM: u8 = 0x5;
 pub const XHCI_PCI_FUN_NUM: u8 = 0;
+const INTERFACE_ID_CONTROL: u8 = 0;
+// According to UVC specification 1.5
+// A.2. Video Interface Subclass Codes
+const SC_VIDEOCONTROL: u8 = 0x01;
+const SC_VIDEOSTREAMING: u8 = 0x02;
+const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
 
 #[derive(Eq, PartialEq)]
 enum UsbDeviceType {
@@ -1207,7 +1209,7 @@ impl TestXhciPciDevice {
         self.queue_trb(slot_id, ep_id, &mut trb);
     }
 
-    // Queue multi-TD  with IDT=1
+    // Queue multi-TD with IDT=1
     pub fn queue_multi_direct_td(&mut self, slot_id: u32, ep_id: u32, sz: u64, num: usize) {
         for _ in 0..num {
             self.queue_direct_td(slot_id, ep_id, sz);
@@ -1615,7 +1617,7 @@ impl TestXhciPciDevice {
         // subclass
         assert_eq!(buf[5], SC_VIDEO_INTERFACE_COLLECTION);
 
-        //2. VC interface
+        // 2. VC interface
         *offset += 8;
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
@@ -1638,7 +1640,7 @@ impl TestXhciPciDevice {
         *offset += 0xd;
         let _buf = self.get_transfer_data_indirect_with_offset(addr, remained as usize, *offset);
 
-        //3. VS interface
+        // 3. VS interface
         *offset += remained as u64;
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
@@ -1982,7 +1984,7 @@ impl TestXhciPciDevice {
             request_type: USB_INTERFACE_IN_REQUEST,
             request: USB_REQUEST_GET_INTERFACE,
             value: 0,
-            index: index,
+            index,
             length: buf_len,
         };
         self.queue_device_request(slot_id, &device_req);
@@ -1994,7 +1996,7 @@ impl TestXhciPciDevice {
             request_type: USB_INTERFACE_OUT_REQUEST,
             request: USB_REQUEST_SET_INTERFACE,
             value: v,
-            index: index,
+            index,
             length: buf_len,
         };
         self.queue_device_request(slot_id, &device_req);

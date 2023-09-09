@@ -10,36 +10,40 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod error;
-pub use error::PciError;
 pub mod config;
+#[cfg(feature = "demo_device")]
 pub mod demo_dev;
+#[cfg(feature = "demo_device")]
+pub mod demo_device;
+pub mod error;
 pub mod hotplug;
 pub mod intx;
 pub mod msix;
 
 mod bus;
-pub mod demo_device;
 mod host;
 mod root_port;
 
+pub use anyhow::{bail, Result};
+
 pub use bus::PciBus;
 pub use config::{PciConfig, INTERRUPT_PIN};
+pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, is_msix_enabled};
 pub use root_port::RootPort;
-use util::AsAny;
 
 use std::{
     mem::size_of,
     sync::{Arc, Mutex, Weak},
 };
 
-pub use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::{Device, DeviceBase};
+use util::AsAny;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;
@@ -127,12 +131,53 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
-pub trait PciDevOps: Send + AsAny {
+#[derive(Clone)]
+pub struct PciDevBase {
+    pub base: DeviceBase,
+    /// Pci config space.
+    pub config: PciConfig,
+    /// Devfn.
+    pub devfn: u8,
+    /// Primary Bus.
+    pub parent_bus: Weak<Mutex<PciBus>>,
+}
+
+impl Device for PciDevBase {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
+pub trait PciDevOps: Device + Send + AsAny {
+    /// Get base property of pci device.
+    fn pci_base(&self) -> &PciDevBase;
+
+    /// Get mutable base property of pci device.
+    fn pci_base_mut(&mut self) -> &mut PciDevBase;
+
     /// Init writable bit mask.
-    fn init_write_mask(&mut self) -> Result<()>;
+    fn init_write_mask(&mut self, is_bridge: bool) -> Result<()> {
+        self.pci_base_mut().config.init_common_write_mask()?;
+        if is_bridge {
+            self.pci_base_mut().config.init_bridge_write_mask()?;
+        }
+
+        Ok(())
+    }
 
     /// Init write-and-clear bit mask.
-    fn init_write_clear_mask(&mut self) -> Result<()>;
+    fn init_write_clear_mask(&mut self, is_bridge: bool) -> Result<()> {
+        self.pci_base_mut().config.init_common_write_clear_mask()?;
+        if is_bridge {
+            self.pci_base_mut().config.init_bridge_write_clear_mask()?;
+        }
+
+        Ok(())
+    }
 
     /// Realize PCI/PCIe device.
     fn realize(self) -> Result<()>;
@@ -148,7 +193,9 @@ pub trait PciDevOps: Send + AsAny {
     ///
     /// * `offset` - Offset in configuration space.
     /// * `data` - Data buffer for reading.
-    fn read_config(&mut self, offset: usize, data: &mut [u8]);
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
+        self.pci_base_mut().config.read(offset, data);
+    }
 
     /// Configuration space write.
     ///
@@ -173,17 +220,9 @@ pub trait PciDevOps: Send + AsAny {
         ((bus_num as u16) << bus_shift) | (devfn as u16)
     }
 
-    /// Get device name.
-    fn name(&self) -> String;
-
     /// Reset device
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         Ok(())
-    }
-
-    /// Get device devfn
-    fn devfn(&self) -> Option<u8> {
-        None
     }
 
     /// Get the path of the PCI bus where the device resides.
@@ -314,22 +353,11 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
     ((pci_slot + pin) % PCI_PIN_NUM) as u32
 }
 
-/// Check whether two regions overlap with each other.
-///
-/// # Arguments
-///
-/// * `start` - Start address of the first region.
-/// * `end` - End address of the first region.
-/// * `region_start` - Start address of the second region.
-/// * `region_end` - End address of the second region.
-pub fn ranges_overlap(start: usize, size: usize, range_start: usize, range_size: usize) -> bool {
-    let end = start + size;
-    let range_end = range_start + range_size;
-    !(start >= range_end || range_start >= end)
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::DeviceBase;
+    use address_space::{AddressSpace, Region};
+
     use super::*;
 
     #[test]
@@ -372,45 +400,56 @@ mod tests {
     }
 
     #[test]
-    fn test_ranges_overlap() {
-        assert!(ranges_overlap(100, 100, 150, 100));
-        assert!(ranges_overlap(100, 100, 150, 50));
-        assert!(!ranges_overlap(100, 100, 200, 50));
-        assert!(ranges_overlap(100, 100, 100, 50));
-        assert!(!ranges_overlap(100, 100, 50, 50));
-        assert!(ranges_overlap(100, 100, 50, 100));
-    }
-
-    #[test]
     fn set_dev_id() {
         struct PciDev {
-            name: String,
+            base: PciDevBase,
+        }
+
+        impl Device for PciDev {
+            fn device_base(&self) -> &DeviceBase {
+                &self.base.base
+            }
+
+            fn device_base_mut(&mut self) -> &mut DeviceBase {
+                &mut self.base.base
+            }
         }
 
         impl PciDevOps for PciDev {
-            fn init_write_mask(&mut self) -> Result<()> {
-                Ok(())
+            fn pci_base(&self) -> &PciDevBase {
+                &self.base
             }
 
-            fn init_write_clear_mask(&mut self) -> Result<()> {
-                Ok(())
+            fn pci_base_mut(&mut self) -> &mut PciDevBase {
+                &mut self.base
             }
-
-            fn read_config(&mut self, _offset: usize, _data: &mut [u8]) {}
 
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
-
-            fn name(&self) -> String {
-                self.name.clone()
-            }
 
             fn realize(self) -> Result<()> {
                 Ok(())
             }
         }
 
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+        )
+        .unwrap();
+        let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16, "parent_bus"),
+            sys_mem.root().clone(),
+        )));
+
         let dev = PciDev {
-            name: "PCI device".to_string(),
+            base: PciDevBase {
+                base: DeviceBase::new("PCI device".to_string(), false),
+                config: PciConfig::new(1, 1),
+                devfn: 0,
+                parent_bus: Arc::downgrade(&parent_bus),
+            },
         };
         assert_eq!(dev.set_dev_id(1, 2), 258);
     }

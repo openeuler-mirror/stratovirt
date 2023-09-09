@@ -10,16 +10,56 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "usb_camera")]
+pub mod camera;
+#[cfg(feature = "gtk")]
+pub mod display;
+pub mod error;
+#[cfg(feature = "vnc")]
+pub mod vnc;
+
+mod balloon;
+mod boot_source;
+mod chardev;
+#[cfg(feature = "demo_device")]
+mod demo_dev;
+mod devices;
+mod drive;
+mod fs;
+#[cfg(feature = "virtio_gpu")]
+mod gpu;
+mod incoming;
+mod iothread;
+mod machine_config;
+mod network;
+mod numa;
+mod pci;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
+mod ramfb;
+mod rng;
+mod sasl_auth;
+#[cfg(feature = "scream")]
+pub mod scream;
+mod scsi;
+mod smbios;
+mod tls_creds;
+mod usb;
+mod vfio;
+
 pub use balloon::*;
 pub use boot_source::*;
+#[cfg(feature = "usb_camera")]
 pub use camera::*;
 pub use chardev::*;
+#[cfg(feature = "demo_device")]
 pub use demo_dev::*;
 pub use devices::*;
+#[cfg(feature = "gtk")]
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
 pub use fs::*;
+#[cfg(feature = "virtio_gpu")]
 pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;
@@ -27,6 +67,7 @@ pub use machine_config::*;
 pub use network::*;
 pub use numa::*;
 pub use pci::*;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 pub use ramfb::*;
 pub use rng::*;
 pub use sasl_auth::*;
@@ -35,44 +76,17 @@ pub use smbios::*;
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
+#[cfg(feature = "vnc")]
 pub use vnc::*;
-
-mod balloon;
-mod boot_source;
-pub mod camera;
-mod chardev;
-mod demo_dev;
-mod devices;
-pub mod display;
-mod drive;
-pub mod error;
-mod fs;
-mod gpu;
-mod incoming;
-mod iothread;
-mod machine_config;
-mod network;
-mod numa;
-mod pci;
-mod ramfb;
-mod rng;
-mod sasl_auth;
-pub mod scream;
-mod scsi;
-mod smbios;
-mod tls_creds;
-mod usb;
-mod vfio;
-pub mod vnc;
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use serde::{Deserialize, Serialize};
+
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::{
@@ -123,9 +137,13 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
+    #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
+    #[cfg(feature = "gtk")]
     pub display: Option<DisplayConfig>,
+    #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
+    #[cfg(feature = "windows_emu_pid")]
     pub windows_emu_pid: Option<String>,
     pub smbios: SmbiosConfig,
 }
@@ -259,6 +277,7 @@ impl VmConfig {
     /// # Arguments
     ///
     /// * `windows_emu_pid` - The args of windows_emu_pid.
+    #[cfg(feature = "windows_emu_pid")]
     pub fn add_windows_emu_pid(&mut self, windows_emu_pid: &str) -> Result<()> {
         if windows_emu_pid.is_empty() {
             bail!("The arg of windows_emu_pid is empty!");
@@ -784,6 +803,7 @@ mod tests {
     fn test_add_trace_events_02() {
         use std::fs::File;
         use std::io::Write;
+
         use util::trace::is_trace_event_enabled;
 
         let file = "/tmp/test_trace_events";

@@ -254,49 +254,49 @@ pub const COLOR_TABLE_RGB: [[pixman_color_t; 8]; 2] = [
             green: 0x00 << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* black */
+        }, // black
         pixman_color_t {
             red: 0x00 << 8,
             green: 0x00 << 8,
             blue: 0xaa << 8,
             alpha: 0xffff,
-        }, /* blue */
+        }, // blue
         pixman_color_t {
             red: 0x00 << 8,
             green: 0xaa << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* green */
+        }, // green
         pixman_color_t {
             red: 0x00 << 8,
             green: 0xaa << 8,
             blue: 0xaa << 8,
             alpha: 0xffff,
-        }, /* cyan */
+        }, // cyan
         pixman_color_t {
             red: 0xaa << 8,
             green: 0x00 << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* red */
+        }, // red
         pixman_color_t {
             red: 0xaa << 8,
             green: 0x00 << 8,
             blue: 0xaa << 8,
             alpha: 0xffff,
-        }, /* magenta */
+        }, // magenta
         pixman_color_t {
             red: 0xaa << 8,
             green: 0xaa << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* yellow */
+        }, // yellow
         pixman_color_t {
             red: 0xaa << 8,
             green: 0xaa << 8,
             blue: 0xaa << 8,
             alpha: 0xffff,
-        }, /* white */
+        }, // white
     ],
     [
         pixman_color_t {
@@ -304,49 +304,49 @@ pub const COLOR_TABLE_RGB: [[pixman_color_t; 8]; 2] = [
             green: 0x00 << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* black */
+        }, // black
         pixman_color_t {
             red: 0x00 << 8,
             green: 0x00 << 8,
             blue: 0xff << 8,
             alpha: 0xffff,
-        }, /* blue */
+        }, // blue
         pixman_color_t {
             red: 0x00 << 8,
             green: 0xff << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* green */
+        }, // green
         pixman_color_t {
             red: 0x00 << 8,
             green: 0xff << 8,
             blue: 0xff << 8,
             alpha: 0xffff,
-        }, /* cyan */
+        }, // cyan
         pixman_color_t {
             red: 0xff << 8,
             green: 0x00 << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* red */
+        }, // red
         pixman_color_t {
             red: 0xff << 8,
             green: 0x00 << 8,
             blue: 0xff << 8,
             alpha: 0xffff,
-        }, /* magenta */
+        }, // magenta
         pixman_color_t {
             red: 0xff << 8,
             green: 0xff << 8,
             blue: 0x00 << 8,
             alpha: 0xffff,
-        }, /* yellow */
+        }, // yellow
         pixman_color_t {
             red: 0xff << 8,
             green: 0xff << 8,
             blue: 0xff << 8,
             alpha: 0xffff,
-        }, /* white */
+        }, // white
     ],
 ];
 

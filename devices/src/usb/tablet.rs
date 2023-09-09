@@ -142,7 +142,7 @@ impl PointerOpts for UsbTabletAdapter {
             return Ok(());
         }
         let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
-        let mut evt = &mut locked_tablet.hid.pointer.queue[index];
+        let evt = &mut locked_tablet.hid.pointer.queue[index];
         if button & INPUT_BUTTON_WHEEL_UP == INPUT_BUTTON_WHEEL_UP {
             evt.v_wheel = 1;
         } else if button & INPUT_BUTTON_WHEEL_DOWN == INPUT_BUTTON_WHEEL_DOWN {

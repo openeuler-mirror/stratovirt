@@ -45,3 +45,50 @@ $ cargo build --release --target ${arch}-unknown-linux-musl
 ```
 
 Now you can find StratoVirt static binary file in `target/${arch}-unknown-linux-musl/release/stratovirt`.
+
+## 4. Build with features
+
+For different scenarios, StratoVirt provides feature conditional compilation options based on the cargo `feature`.
+
+List of optional features:
+
+- scream_alsa: enable virtual sound card with `ALSA` interface
+- scream_pulseaudio: enable virtual sound card with `PulseAudio` interface
+- usb_host: enable USB Host device
+- usb_camera_v4l2: enable USB camera with `v4l2` backend
+- gtk: enable GTK display
+- vnc: enable VNC display
+- ramfb: enable ramfb display device
+- virtio_gpu: enable virtio-gpu virtualized graphics card
+
+```shell
+$ cargo build --release --features "scream_alsa"
+```
+
+# Build static StratoVirt in containers
+
+## 1. Check docker environment
+
+In order to build StratoVirt in containers, ensure that the docker software is installed. This can be checked with the following command:
+
+```shell
+$ docker -v
+Docker version 18.09.0
+```
+
+If you want to deploy a docker environment, the following link can help you:
+
+<https://docs.docker.com/get-docker/>
+
+## 2. Run the build script
+
+Run the script under tools/build_stratovirt_static directory to automatically run a docker container to build a statically linked StratoVirt.
+
+```shell
+$ cd tools/build_stratovirt_static
+# Build StratoVirt with your custom_image_name
+$ sh build_stratovirt_from_docker.sh custom_image_name
+```
+
+After the build is complete, you can find the statically linked binary StratoVirt in the path: `target/${arch}-unknown-linux-musl/release/stratovirt`.
+

@@ -15,15 +15,15 @@ mod gicv3;
 #[allow(dead_code)]
 mod state;
 
-use kvm_ioctls::DeviceFd;
-
 pub use gicv2::{GICv2, GICv2Config};
 pub use gicv3::{GICv3, GICv3Config};
 
 use std::sync::Arc;
 
-use crate::interrupt_controller::error::InterruptError;
 use anyhow::{anyhow, Context, Result};
+use kvm_ioctls::DeviceFd;
+
+use crate::interrupt_controller::error::InterruptError;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::{
     device_tree::{self, FdtBuilder},

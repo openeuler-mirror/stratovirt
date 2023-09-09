@@ -32,18 +32,20 @@ use gtk::{
     glib::{self, Priority, SyncSender},
     prelude::{ApplicationExt, ApplicationExtManual, Continue, NotebookExtManual},
     traits::{
-        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, MenuShellExt,
+        CheckMenuItemExt, GtkMenuItemExt, GtkWindowExt, HeaderBarExt, LabelExt, MenuShellExt,
         RadioMenuItemExt, WidgetExt,
     },
-    Application, ApplicationWindow, DrawingArea, HeaderBar, RadioMenuItem,
+    Application, ApplicationWindow, DrawingArea, HeaderBar, Label, RadioMenuItem,
 };
 use log::{debug, error};
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     console::{
-        create_msg_surface, get_active_console, graphic_hardware_update, register_display,
-        DisplayChangeListener, DisplayChangeListenerOperations, DisplayConsole, DisplayMouse,
-        DisplaySurface, DEFAULT_SURFACE_HEIGHT, DEFAULT_SURFACE_WIDTH,
+        create_msg_surface, get_active_console, get_run_stage, graphic_hardware_update,
+        register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayConsole,
+        DisplayMouse, DisplaySurface, VmRunningStage, DEFAULT_SURFACE_HEIGHT,
+        DEFAULT_SURFACE_WIDTH, DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
     data::keycode::KEYSYM2KEYCODE,
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
@@ -54,7 +56,6 @@ use crate::{
 };
 use machine_manager::config::{DisplayConfig, UiContext};
 use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
-use vmm_sys_util::eventfd::EventFd;
 
 const CHANNEL_BOUND: usize = 1024;
 /// Width of default window.
@@ -121,7 +122,7 @@ impl Default for DisplayEventType {
 }
 
 #[derive(Default)]
-pub struct DisplayChangeEvent {
+struct DisplayChangeEvent {
     dev_name: String,
     event_type: DisplayEventType,
     x: i32,
@@ -141,13 +142,13 @@ impl DisplayChangeEvent {
     }
 }
 
-pub struct GtkInterface {
+struct GtkInterface {
     dev_name: String,
     dce_sender: SyncSender<DisplayChangeEvent>,
 }
 
 impl GtkInterface {
-    pub fn new(dev_name: String, dce_sender: SyncSender<DisplayChangeEvent>) -> Self {
+    fn new(dev_name: String, dce_sender: SyncSender<DisplayChangeEvent>) -> Self {
         Self {
             dev_name,
             dce_sender,
@@ -166,6 +167,15 @@ impl DisplayChangeListenerOperations for GtkInterface {
         &self,
         dcl: &std::sync::Arc<std::sync::Mutex<DisplayChangeListener>>,
     ) -> Result<()> {
+        // The way virtio-gpu devices are used in phase OS and others is different.
+        if self.dev_name.starts_with("virtio-gpu") {
+            if get_run_stage() == VmRunningStage::Os {
+                dcl.lock().unwrap().update_interval = 0;
+            } else {
+                dcl.lock().unwrap().update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT;
+            }
+        }
+
         let event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplayRefresh);
         let con_id = dcl.lock().unwrap().con_id;
@@ -553,7 +563,13 @@ fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Res
     // Set title bar.
     let header = HeaderBar::new();
     header.set_show_close_button(true);
-    header.set_title(Some(&gtk_cfg.vm_name));
+    header.set_decoration_layout(Some("menu:minimize,maximize,close"));
+
+    let label: Label = Label::new(Some(&gtk_cfg.vm_name));
+    label.set_markup(
+        &("<span font_desc='12.5' weight='normal'>".to_string() + &gtk_cfg.vm_name + "</span>"),
+    );
+    header.set_custom_title(Some(&label));
     window.set_titlebar(Some(&header));
 
     // Set default icon.
@@ -821,6 +837,7 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
 /// Switch display image.
 fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let mut borrowed_gs = gs.borrow_mut();
+    let scale_mode = borrowed_gs.scale_mode.clone();
     let active_con = borrowed_gs.con.upgrade();
     let con = match active_con {
         Some(con) => con,
@@ -922,6 +939,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
             image: transfer_image,
         });
     };
+
+    let (window_width, window_height) = borrowed_gs.get_window_size()?;
+    if scale_mode.borrow().is_full_screen() || scale_mode.borrow().is_free_scale() {
+        borrowed_gs.scale_x = window_width / surface_width as f64;
+        borrowed_gs.scale_y = window_height / surface_height as f64;
+    }
     drop(borrowed_gs);
 
     if need_resize {

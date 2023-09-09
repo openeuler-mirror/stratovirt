@@ -17,10 +17,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::Arc;
 
-use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
-use util::byte_code::ByteCode;
 
 use super::{
     checked_offset_mem, ElemIovec, Element, VringOps, INVALID_VECTOR_NUM, VIRTQ_DESC_F_INDIRECT,
@@ -29,6 +27,8 @@ use super::{
 use crate::{
     report_virtio_error, virtio_has_feature, VirtioError, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
 };
+use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
+use util::byte_code::ByteCode;
 
 /// When host consumes a buffer, don't interrupt the guest.
 const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
@@ -97,7 +97,6 @@ impl QueueConfig {
     /// # Arguments
     ///
     /// * `max_size` - The maximum size of the virtqueue.
-    ///
     pub fn new(max_size: u16) -> Self {
         let addr_cache = VirtioAddrCache::default();
         QueueConfig {
@@ -116,11 +115,11 @@ impl QueueConfig {
         }
     }
 
-    pub fn get_desc_size(&self) -> u64 {
+    fn get_desc_size(&self) -> u64 {
         min(self.size, self.max_size) as u64 * DESCRIPTOR_LEN
     }
 
-    pub fn get_used_size(&self, features: u64) -> u64 {
+    fn get_used_size(&self, features: u64) -> u64 {
         let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             2_u64
         } else {
@@ -130,7 +129,7 @@ impl QueueConfig {
         size + VRING_FLAGS_AND_IDX_LEN + (min(self.size, self.max_size) as u64) * USEDELEM_LEN
     }
 
-    pub fn get_avail_size(&self, features: u64) -> u64 {
+    fn get_avail_size(&self, features: u64) -> u64 {
         let size = if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             2_u64
         } else {
@@ -613,7 +612,7 @@ impl SplitVring {
         let new = match self.get_used_idx(sys_mem) {
             Ok(used_idx) => Wrapping(used_idx),
             Err(ref e) => {
-                error!("Failed to get the status for notifying used vring  {:?}", e);
+                error!("Failed to get the status for notifying used vring: {:?}", e);
                 return false;
             }
         };
@@ -621,7 +620,7 @@ impl SplitVring {
         let used_event_idx = match self.get_used_event(sys_mem) {
             Ok(idx) => Wrapping(idx),
             Err(ref e) => {
-                error!("Failed to get the status for notifying used vring  {:?}", e);
+                error!("Failed to get the status for notifying used vring: {:?}", e);
                 return false;
             }
         };
@@ -1232,7 +1231,8 @@ mod tests {
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
-        // it is invalid when the address of descriptor table is overlapped to the address of avail ring
+        // it is invalid when the address of descriptor table is overlapped to the address of avail
+        // ring.
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN - 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
@@ -1592,8 +1592,8 @@ mod tests {
             assert!(false);
         }
 
-        // error comes when the length of indirect descriptor is more than the length of descriptor chain
-        // set the information of index 0 for descriptor
+        // error comes when the length of indirect descriptor is more than the length of descriptor
+        // chain set the information of index 0 for descriptor.
         vring
             .set_desc(
                 &sys_space,
@@ -1948,35 +1948,39 @@ mod tests {
         let mut vring = SplitVring::new(queue_config);
         assert_eq!(vring.is_valid(&sys_space), true);
 
-        // it's true when the feature of event idx and no interrupt for the avail ring  is closed
+        // it's true when the feature of event idx and no interrupt for the avail ring is closed
         let features = 0 as u64;
         assert!(vring.set_avail_ring_flags(&sys_space, 0).is_ok());
         assert_eq!(vring.should_notify(&sys_space, features), true);
 
-        // it's false when the feature of event idx is closed and the feature of no interrupt for the avail ring is open
+        // it's false when the feature of event idx is closed and the feature of no interrupt for
+        // the avail ring is open
         let features = 0 as u64;
         assert!(vring
             .set_avail_ring_flags(&sys_space, VRING_AVAIL_F_NO_INTERRUPT)
             .is_ok());
         assert_eq!(vring.should_notify(&sys_space, features), false);
 
-        // it's true when the feature of event idx is open and (new - event_idx - Wrapping(1) < new -old)
+        // it's true when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) < new -old)
         let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); //event_idx
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), true);
 
-        // it's false when the feature of event idx is open and (new - event_idx - Wrapping(1) > new -old)
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); //event_idx
+        // it's false when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) > new - old)
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), false);
 
-        // it's false when the feature of event idx is open and (new - event_idx - Wrapping(1) = new -old)
-        vring.last_signal_used = Wrapping(5); //old
-        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); //new
-        assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); //event_idx
+        // it's false when the feature of event idx is open and
+        // (new - event_idx - Wrapping(1) = new -old)
+        vring.last_signal_used = Wrapping(5); // old
+        assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
+        assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); // event_idx
         assert_eq!(vring.should_notify(&sys_space, features), false);
     }
 }

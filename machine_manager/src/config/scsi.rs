@@ -53,7 +53,7 @@ impl Default for ScsiCntlrConfig {
         ScsiCntlrConfig {
             id: "".to_string(),
             iothread: None,
-            //At least 1 cmd queue.
+            // At least 1 cmd queue.
             queues: 1,
             boot_prefix: None,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,

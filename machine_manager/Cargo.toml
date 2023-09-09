@@ -24,4 +24,15 @@ util = { path = "../util" }
 
 [features]
 default = []
-
+scream = []
+scream_alsa = ["scream"]
+scream_pulseaudio = ["scream"]
+demo_device = []
+usb_host = []
+usb_camera = []
+usb_camera_v4l2 = ["usb_camera"]
+windows_emu_pid = []
+gtk = []
+vnc = []
+ramfb = []
+virtio_gpu = []

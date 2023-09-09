@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    error::VncError,
-    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
-};
+use std::ffi::{CStr, CString};
+use std::ptr;
+
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};
 use log::info;
@@ -24,8 +23,11 @@ use sasl2_sys::prelude::{
     SASL_SUCCESS_DATA,
 };
 use sasl2_sys::sasl::SASL_USERNAME;
-use std::ffi::{CStr, CString};
-use std::ptr;
+
+use crate::{
+    error::VncError,
+    vnc::client_io::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
+};
 use util::byte_code::ByteCode;
 
 /// Vnc Service.
@@ -78,17 +80,17 @@ impl SaslAuth {
 #[derive(Debug, Clone)]
 pub struct SaslConfig {
     /// State of sasl connection .
-    pub sasl_conn: *mut sasl_conn_t,
+    sasl_conn: *mut sasl_conn_t,
     /// Mech list server support.
-    pub mech_list: String,
+    mech_list: String,
     /// Authentication mechanism currently in use.
-    pub mech_name: String,
+    mech_name: String,
     /// State of auth.
-    pub sasl_stage: SaslStage,
+    sasl_stage: SaslStage,
     /// Security layer in sasl.
-    pub want_ssf: bool,
+    want_ssf: bool,
     /// Strength of ssf.
-    pub run_ssf: u32,
+    run_ssf: u32,
 }
 
 impl Default for SaslConfig {
@@ -168,7 +170,7 @@ impl ClientIoHandler {
     }
 
     /// Length of client authentication message.
-    pub fn get_authmessage_length(&mut self) -> Result<()> {
+    fn get_authmessage_length(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let len = u32::from_be_bytes(buf);
@@ -188,7 +190,7 @@ impl ClientIoHandler {
     }
 
     /// Receive the authentication information from client and return the result.
-    pub fn client_sasl_auth(&mut self) -> Result<()> {
+    fn client_sasl_auth(&mut self) -> Result<()> {
         info!("Sasl Authentication");
         let buf = self.read_incoming_msg();
 
@@ -208,8 +210,9 @@ impl ClientIoHandler {
 
         // Start authentication.
         let err: c_int = match security.saslconfig.sasl_stage {
-            // SAFETY: sasl_server_start() and sasl_server_step() is C function. All parameters passed of the
-            // function have been checked. Memory will be allocated for the incoming pointer inside the function.
+            // SAFETY: sasl_server_start() and sasl_server_step() is C function. All parameters
+            // passed of the function have been checked. Memory will be allocated for the incoming
+            // pointer inside the function.
             SaslStage::SaslServerStart => unsafe {
                 sasl_server_start(
                     security.saslconfig.sasl_conn,
@@ -309,9 +312,9 @@ impl ClientIoHandler {
         info!("local_addr: {} remote_addr: {}", local_addr, remote_addr);
         let local_addr = CString::new(local_addr)?;
         let remote_addr = CString::new(remote_addr)?;
-        // SAFETY: sasl_server_init() and sasl_server_new() is C function. All parameters passed of the
-        // function have been checked. Memory will be allocated for the incoming pointer inside the function.
-        // Sasl server init.
+        // SAFETY: sasl_server_init() and sasl_server_new() is C function. All parameters passed of
+        // the function have been checked. Memory will be allocated for the incoming pointer inside
+        // the function. Sasl server init.
         unsafe {
             err = sasl_server_init(ptr::null_mut(), appname.as_ptr());
         }

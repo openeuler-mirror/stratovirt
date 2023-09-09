@@ -272,9 +272,11 @@ const SCSI_TARGET_INQUIRY_LEN: u32 = 36;
 /// | Peripheral Qualifier | Peripheral Device Type |
 /// Unknown or no device type.
 const TYPE_UNKNOWN: u8 = 0x1f;
-/// A peripheral device having the specified peripheral device type is not connected to this logical unit.
+/// A peripheral device having the specified peripheral device type is not connected to this logical
+/// unit.
 const TYPE_INACTIVE: u8 = 0x20;
-/// Scsi target device is not capable of supporting a peripheral device connected to this logical unit.
+/// Scsi target device is not capable of supporting a peripheral device connected to this logical
+/// unit.
 const TYPE_NO_LUN: u8 = 0x7f;
 
 /// Notification Classes for GET EVENT STATUS NOTIFICATION.
@@ -314,14 +316,15 @@ pub const GESN_EC_NEWMEDIA: u8 = 2;
 /// The media has been removed from the specified slot, and the Drive is unable to access the media
 /// without user intervention. This applies to media changers only.
 pub const GESN_EC_MEDIAREMOVAL: u8 = 3;
-/// The user has requested that the media in the specified slot be loaded. This applies to media changers only.
+/// The user has requested that the media in the specified slot be loaded. This applies to media
+/// changers only.
 pub const GESN_EC_MEDIACHANGED: u8 = 4;
-/// A DVD+RW background format has completed. Since DVD+RW Drives are capable of generationg multiple
-/// media events concurrently, such Drives shall be capable of queuing media events.
+/// A DVD+RW background format has completed. Since DVD+RW Drives are capable of generationg
+/// multiple media events concurrently, such Drives shall be capable of queuing media events.
 pub const GESN_EC_BGFORMATCOMPLETED: u8 = 5;
-/// A DVD+RW background format has been automatically restarted by the Drive. Since DVD+RW Drives are
-/// capable of generationg multiple media events concurrently, such Drives shall be capable of queuing
-/// media event.
+/// A DVD+RW background format has been automatically restarted by the Drive. Since DVD+RW Drives
+/// are capable of generationg multiple media events concurrently, such Drives shall be capable of
+/// queuing media event.
 pub const GESN_EC_BGFORMATRESTARTED: u8 = 6;
 
 /// Some generally useful CD-ROM information. From <linux/cdrom.h>
@@ -484,7 +487,8 @@ pub trait ScsiRequestOps: Send + Sync + AsAny {
 
 pub struct ScsiRequest {
     pub cmd: ScsiCommand,
-    // Requested lun id for scsi request. It may be not equal to scsi device's lun id when it's a scsi target request.
+    // Requested lun id for scsi request. It may be not equal to scsi device's lun id when it's a
+    // scsi target request.
     pub req_lun: u16,
     pub opstype: u32,
     // For datain and dataout. Can be empty when it's a ScsiXferMode::ScsiXferNone request.
@@ -577,12 +581,12 @@ impl ScsiRequest {
         match mode {
             ScsiXferMode::ScsiXferFromDev => {
                 locked_backend
-                    .read_vectored(&iovecs, offset, scsicompletecb)
+                    .read_vectored(iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for reading")?;
             }
             ScsiXferMode::ScsiXferToDev => {
                 locked_backend
-                    .write_vectored(&iovecs, offset, scsicompletecb)
+                    .write_vectored(iovecs, offset, scsicompletecb)
                     .with_context(|| "Failed to process scsi request for writing")?;
             }
             _ => {
@@ -1002,7 +1006,8 @@ fn scsi_command_emulate_vpd_page(
         }
     }
 
-    // It's OK for just using outbuf byte 3, because all page_code's buflen in stratovirt is less than 255 now.
+    // It's OK for just using outbuf byte 3, because all page_code's buflen in stratovirt is less
+    // than 255 now.
     outbuf[3] = buflen as u8 - 4;
     Ok(outbuf)
 }
@@ -1141,7 +1146,8 @@ fn scsi_command_emulate_read_capacity_10(
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
     nb_sectors -= 1;
 
-    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical block).
+    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical
+    //             block).
     // Bytes[4-7]: Logical Block Length In Bytes.
     BigEndian::write_u32(&mut outbuf[0..4], nb_sectors);
     BigEndian::write_u32(&mut outbuf[4..8], block_size);
@@ -1309,26 +1315,30 @@ fn scsi_command_emulate_mode_sense_page(
             // Byte[buflen + 3]: Bits[6-7]: Reserved | DVD-RAW WRITE | DVD-R WRITE |
             //                   Reserved | Test Write | CD-R/RW Write | CD-R Write.
             // Byte[buflen + 4]: BUF | Multi Session(1) | Mode 2 Form 2(1) | Mode 2 Form 1(1) |
-            //                   Digital Port 2(1) | Digital Port 1(1) | Composite(1) | Audio Play(1).
+            //                   Digital Port 2(1) | Digital Port 1(1) | Composite(1) |
+            //                   Audio Play(1).
             // Byte[buflen + 5]: Read Bar Code(1) | UPC(1) | ISRC(1) | C2 Pointers supported(1) |
             //                   R-W Deinterleaved & corrected(1) | R-W supported(1) |
             //                   CD-DA Stream is Accurate(1) | CD-DA Cmds supported(1).
-            // Byte[buflen + 6]: Bits[5-7]: Loading Mechanism Type(1) | Reserved | Eject(1) | Prevent Jumper(1) |
-            //                   Lock State | Lock(1).
+            // Byte[buflen + 6]: Bits[5-7]: Loading Mechanism Type(1) | Reserved | Eject(1) |
+            //                   Prevent Jumper(1) | Lock State | Lock(1).
             // Byte[buflen + 7]: Bits[6-7]: Reserved | R-W in Lead-in | Side Change Capable | SSS |
-            //                   Changer Supports Disc Present | Separate Channel Mute | Separate volume levels
+            //                   Changer Supports Disc Present | Separate Channel Mute |
+            //                   Separate volume levels.
             // Bytes[buflen + 8 - buflen + 9]: Obsolete.
             // Bytes[buflen + 10 - buflen + 11]: Number of Volume Levels Supported.
             // Bytes[buflen + 12 - buflen + 13]: Buffer Size Supported.
             // Bytes[buflen + 14 - buflen + 15]: Obsolete.
             // Byte[buflen + 16]: Reserved.
-            // Byte[buflen + 17]: Bits[6-7]: Reserved | Bits[4-5]: Length | LSBF | RCK | BCKF | Reserved.
+            // Byte[buflen + 17]: Bits[6-7]: Reserved | Bits[4-5]: Length | LSBF | RCK | BCKF |
+            //                    Reserved.
             // Bytes[buflen + 18 - buflen + 21]: Obsolete.
             // Bytes[buflen + 22 - buflen + 23]: Copy Management Revision Supported.
             // Bytes[buflen + 24 - buflen + 26]: Reserved.
             // Byte[buflen + 27]: Bits[2-7]: Reserved. Bits[0-1]: Rotation Control Selected.
             // Bytes[buflen + 28 - buflen + 29]: Current Write Speed Selected.
-            // Bytes[buflen + 31]: Number of Logical Unit Write Speed Performance Descriptor Tables(n).
+            // Bytes[buflen + 31]: Number of Logical Unit Write Speed Performance Descriptor
+            //                     Tables(n).
             outbuf.resize(buflen + 32, 0);
             outbuf[buflen] = page;
             outbuf[buflen + 1] = 28;
@@ -1423,7 +1433,8 @@ fn scsi_command_emulate_service_action_in_16(
 
         drop(dev_lock);
 
-        // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical block).
+        // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical
+        //            block).
         // Byte[8-11]: Logical Block Length in Bytes.
         BigEndian::write_u64(&mut outbuf[0..8], nb_sectors);
         BigEndian::write_u32(&mut outbuf[8..12], block_size);
@@ -1460,12 +1471,14 @@ fn scsi_command_emulate_read_disc_information(
 
     // Outbuf:
     // Bytes[0-1]: Disc Information Length(32).
-    // Byte2: Disc Information Data Type(000b) | Erasable(0) | State of last Session(01b) | Disc Status(11b).
+    // Byte2: Disc Information Data Type(000b) | Erasable(0) | State of last Session(01b) |
+    //        Disc Status(11b).
     // Byte3: Number of First Track on Disc.
     // Byte4: Number of Sessions.
     // Byte5: First Track Number in Last Session(Least Significant Byte).
     // Byte6: Last Track Number in Last Session(Last Significant Byte).
-    // Byte7: DID_V | DBC_V | URU:Unrestricted Use Disc(1) | DAC_V | Reserved | Legacy | BG Format Status.
+    // Byte7: DID_V | DBC_V | URU:Unrestricted Use Disc(1) | DAC_V | Reserved | Legacy |
+    //        BG Format Status.
     // Byte8: Disc Type(00h: CD-DA or CD-ROM Disc).
     // Byte9: Number of sessions(Most Significant Byte).
     // Byte10: First Trace Number in Last Session(Most Significant Byte).
@@ -1584,7 +1597,8 @@ fn scsi_command_emulate_get_configuration(
     // Bytes[8-n]: Feature Descriptor(s):
     // Bytes[20-31]: Feature 1: Core Feature:
     // Bytes[20-21]: Feature Code(0001h).
-    // Byte[22]: Bits[6-7]: Reserved. Bits[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[22]: Bits[6-7]: Reserved. Bits[2-5]: Version(0010b). Bit 1: Persistent(1).
+    //           Bit 0: Current(1).
     // Byte[23]: Additional Length(8).
     // Bytes[24-27]: Physical Interface Standard. (Scsi Family: 00000001h)
     // Byte[28]: Bits[2-7]: Reserved. Bit 1: INQ2. Bit 0: DBE(1).
@@ -1598,10 +1612,11 @@ fn scsi_command_emulate_get_configuration(
     // Bytes[8-n]: Feature Descriptor(s):
     // Bytes[32-40]: Feature 2: Removable media feature:
     // Bytes[32-33]: Feature Code(0003h).
-    // Byte[34]: Bits[6-7]: Reserved. Bit[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[34]: Bits[6-7]: Reserved. Bit[2-5]: Version(0010b). Bit 1: Persistent(1).
+    //           Bit 0: Current(1).
     // Byte[35]: Additional Length(4).
-    // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1). Bit 2: Pvnt Jmpr.
-    //           Bit 1: DBML. Bit 0: Lock(1).
+    // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1).
+    //           Bit 2: Pvnt Jmpr. Bit 1: DBML. Bit 0: Lock(1).
     // Byte[37-39]: Reserved.
     BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVABLE_MEDIUM);
     outbuf[34] = 0x0b;
@@ -1651,8 +1666,9 @@ fn scsi_command_emulate_get_event_status_notification(
         // Byte6: Start Slot.
         // Byte7: End Slot.
 
-        // Do not support hot-plug/hot-unplug scsi cd which will be present all the time once vm starts.
-        // To do: this outbuf event code and media status should be changed after allowing hot-plug.
+        // Do not support hot-plug/hot-unplug scsi cd which will be present all the time once vm
+        // starts. To do: this outbuf event code and media status should be changed after
+        // allowing hot-plug.
         outbuf[4] = GESN_EC_NOCHG;
         outbuf[5] = 1 << GESN_MS_MEDIA_PRESENT_BIT;
     } else {

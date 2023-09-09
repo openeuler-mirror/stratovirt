@@ -10,13 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::machine::TestStdMachine;
 use super::malloc::GuestAllocator;
 use super::virtio_pci_modern::TestVirtioPciDev;
 use crate::libtest::{test_init, TestState};
-
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub fn create_rng(
     random_file: String,

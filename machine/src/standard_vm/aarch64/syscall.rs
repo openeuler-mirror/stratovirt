@@ -13,6 +13,7 @@
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
+#[cfg(feature = "usb_camera_v4l2")]
 use util::v4l2::{
     VIDIOC_DQBUF, VIDIOC_ENUM_FMT, VIDIOC_ENUM_FRAMEINTERVALS, VIDIOC_ENUM_FRAMESIZES,
     VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
@@ -40,13 +41,6 @@ const FUTEX_WAKE_PRIVATE: u32 = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
 const FUTEX_CMP_REQUEUE_PRIVATE: u32 = FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAKE_OP_PRIVATE: u32 = FUTEX_WAKE_OP | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAIT_BITSET_PRIVATE: u32 = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG;
-
-/// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/fcntl.h
-const F_GETFD: u32 = 1;
-const F_SETFD: u32 = 2;
-const F_SETFL: u32 = 4;
-const F_LINUX_SPECIFIC_BASE: u32 = 1024;
-const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/ioctls.h
 const TCGETS: u32 = 0x5401;
@@ -94,10 +88,12 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_io_setup),
         BpfRule::new(libc::SYS_brk),
         BpfRule::new(libc::SYS_fcntl)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_DUPFD_CLOEXEC)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFL),
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_DUPFD_CLOEXEC as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETFD as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_GETFD as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETLK as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_GETFL as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETFL as u32),
         BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         BpfRule::new(libc::SYS_openat),
@@ -182,8 +178,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_pipe2),
         #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_fcntl),
-        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_memfd_create),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_ftruncate),
@@ -217,7 +211,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
 
 /// Create a syscall bpf rule for syscall `ioctl`.
 fn ioctl_allow_list() -> BpfRule {
-    BpfRule::new(libc::SYS_ioctl)
+    let bpf_rule = BpfRule::new(libc::SYS_ioctl)
         .add_constraint(SeccompCmpOpt::Eq, 1, TCGETS)
         .add_constraint(SeccompCmpOpt::Eq, 1, TCSETS)
         .add_constraint(SeccompCmpOpt::Eq, 1, TIOCGWINSZ)
@@ -274,7 +268,10 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32);
+
+    #[cfg(feature = "usb_camera_v4l2")]
+    let bpf_rule = bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_QUERYCAP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FMT() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_G_FMT() as u32)
@@ -287,7 +284,9 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_STREAMOFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32);
+
+    bpf_rule
 }
 
 fn madvise_rule() -> BpfRule {

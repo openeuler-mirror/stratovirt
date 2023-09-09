@@ -17,13 +17,16 @@
 //! - legacy devices, such as serial devices
 
 pub mod acpi;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 pub mod camera_backend;
-mod interrupt_controller;
 pub mod legacy;
 pub mod misc;
+pub mod pci;
 pub mod scsi;
+pub mod sysbus;
 pub mod usb;
+
+mod interrupt_controller;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
@@ -33,3 +36,33 @@ pub use interrupt_controller::{
 pub use legacy::error::LegacyError as LegacyErrs;
 pub use scsi::bus as ScsiBus;
 pub use scsi::disk as ScsiDisk;
+
+#[derive(Clone, Default)]
+pub struct DeviceBase {
+    /// Name of this device
+    pub id: String,
+    /// Whether it supports hot-plug/hot-unplug.
+    pub hotpluggable: bool,
+}
+
+impl DeviceBase {
+    pub fn new(id: String, hotpluggable: bool) -> Self {
+        DeviceBase { id, hotpluggable }
+    }
+}
+
+pub trait Device {
+    fn device_base(&self) -> &DeviceBase;
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase;
+
+    /// Get device name.
+    fn name(&self) -> String {
+        self.device_base().id.clone()
+    }
+
+    /// Query whether it supports hot-plug/hot-unplug.
+    fn hotpluggable(&self) -> bool {
+        self.device_base().hotpluggable
+    }
+}

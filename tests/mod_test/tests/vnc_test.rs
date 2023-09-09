@@ -10,7 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::Result;
+use serde_json::Value;
+use vmm_sys_util::epoll::EventSet;
+
 use mod_test::{
     libdriver::vnc::{
         create_new_client, set_up, tear_down, DemoGpuConfig, EncodingType, InputConfig,
@@ -20,9 +25,6 @@ use mod_test::{
     },
     libtest::TestState,
 };
-use serde_json::Value;
-use std::{cell::RefCell, rc::Rc};
-use vmm_sys_util::epoll::EventSet;
 
 fn qmp_query_vnc(test_state: Rc<RefCell<TestState>>) -> Value {
     let str = "{\"execute\": \"query-vnc\"}".to_string();
@@ -224,7 +226,8 @@ fn test_set_multiple_area_dirty() {
 /// 9. Demo GPU update the abnormal cursor image of VNC server -> expect 2.
 /// ExpectOutput:
 /// 1. The client receives the cursor image, and the format meets expect.
-/// 2. The state of VNC client and server are normal, and the next normal connection will not be effect.
+/// 2. The state of VNC client and server are normal, and the next normal connection will not be
+///    effect.
 #[test]
 fn test_send_cursor_image() {
     let port: u16 = 1;
@@ -527,8 +530,10 @@ fn test_set_pixel_format() {
 /// 2. VNC client send key event -> expect 1.
 /// 3. VNC client send pointer event -> expect 2.
 /// ExpectOutput:
-/// 1. VNC server received the keyboard event, the observed key value in demo keyboard device meets the expectation.
-/// 2. VNC server received the pointer event, the observed coordinate in demo pointer device has been changed.
+/// 1. VNC server received the keyboard event, the observed key value in demo keyboard device meets
+///    the expectation.
+/// 2. VNC server received the pointer event, the observed coordinate in demo pointer device has
+///    been changed.
 #[test]
 fn test_vnc_kbd_mouse() {
     let port: u16 = 4;
@@ -591,7 +596,8 @@ fn test_vnc_kbd_mouse() {
 /// 2. VNC client setting feature of EncodingDesktopresize.
 /// 3. VNC client send the key event of Ctl+Alt+Num -> expect 1.
 /// ExpectOutput:
-/// 1. The activate display device is be changed, and the VNC client receive the message of desktopresize.
+/// 1. The activate display device is be changed, and the VNC client receive the message of
+///    desktopresize.
 #[test]
 fn test_switch_display_device() {
     let port: u16 = 5;
@@ -799,7 +805,7 @@ fn test_client_cut_event(test_state: Rc<RefCell<TestState>>, port: u16) -> Resul
         pad0: 0,
         pad1: 0,
         length: text.len() as u32,
-        text: text,
+        text,
     };
     assert!(vnc_client.test_send_client_cut(client_cut).is_ok());
     // Send a qmp to query vnc client state.

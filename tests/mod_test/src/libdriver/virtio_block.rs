@@ -13,8 +13,6 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
-use util::byte_code::ByteCode;
-use util::num_ops::round_up;
 
 use super::machine::TestStdMachine;
 use super::malloc::GuestAllocator;
@@ -27,6 +25,8 @@ use crate::libdriver::virtio::{
 use crate::libtest::{test_init, TestState};
 use crate::utils::ImageType;
 use crate::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
+use util::byte_code::ByteCode;
+use util::num_ops::round_up;
 
 pub const VIRTIO_BLK_F_BARRIER: u64 = 0;
 pub const VIRTIO_BLK_F_SIZE_MAX: u64 = 1;

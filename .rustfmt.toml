@@ -1,0 +1,10 @@
+use_field_init_shorthand = true
+edition = "2021"
+
+# These are unstable configurations of rustfmt, which can only be checked with
+# `cargo +nightly fmt --all`, currently will not be integrated into CI.
+
+#wrap_comments = true
+#comment_width = 100
+#normalize_comments = true
+#format_code_in_doc_comments = true

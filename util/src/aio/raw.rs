@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::Iovec;
+use std::os::unix::io::RawFd;
+
 use libc::{
     c_int, c_void, fallocate, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t,
     FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_ZERO_RANGE,
 };
 use log::error;
-use std::os::unix::io::RawFd;
+
+use super::Iovec;
 
 pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;
@@ -30,7 +32,8 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -40,7 +43,7 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
             buf,
             size,
             offset,
-            errno::errno().0
+            nix::errno::errno()
         );
     }
     ret
@@ -58,7 +61,8 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -66,7 +70,7 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
         error!(
             "Failed to preadv: offset{}, errno{}.",
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -84,7 +88,8 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -94,7 +99,7 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
             buf,
             size,
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -112,7 +117,8 @@ pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
                 offset as off_t,
             ) as i64
         };
-        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+        if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
+        {
             break;
         }
     }
@@ -120,7 +126,7 @@ pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
         error!(
             "Failed to pwritev: offset{}, errno{}.",
             offset,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
@@ -130,59 +136,49 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
     // SAFETY: fd is valid.
     let ret = unsafe { i64::from(fdatasync(fd)) };
     if ret < 0 {
-        error!("Failed to fdatasync: errno{}.", errno::errno().0);
+        error!("Failed to fdatasync: errno{}.", nix::errno::errno());
     }
     ret
 }
 
 pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let mut ret;
-    loop {
-        // SAFETY: fd is valid.
-        ret = unsafe {
-            fallocate(
-                fd as c_int,
-                FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                offset as i64,
-                size as i64,
-            ) as i64
-        };
-        if ret == 0 || errno::errno().0 != libc::EINTR {
-            break;
-        }
-    }
-    if ret < 0 {
+    let ret = do_fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, size);
+    if ret < 0 && ret != -libc::ENOTSUP as i64 {
         error!(
             "Failed to fallocate for {}, errno {}.",
             fd,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
 }
 
 pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let mut ret;
-    loop {
-        // SAFETY: fd is valid.
-        ret = unsafe {
-            fallocate(
-                fd as c_int,
-                FALLOC_FL_ZERO_RANGE,
-                offset as i64,
-                size as i64,
-            ) as i64
-        };
-        if ret == 0 || errno::errno().0 != libc::EINTR {
-            break;
-        }
-    }
-    if ret < 0 {
+    let ret = do_fallocate(fd, FALLOC_FL_ZERO_RANGE, offset, size);
+    if ret < 0 && ret != -libc::ENOTSUP as i64 {
         error!(
             "Failed to fallocate zero range for fd {}, errno {}.",
             fd,
-            errno::errno().0,
+            nix::errno::errno(),
         );
     }
     ret
+}
+
+fn do_fallocate(fd: RawFd, mode: i32, offset: usize, size: u64) -> i64 {
+    loop {
+        // SAFETY: fd is valid.
+        let ret = unsafe { fallocate(fd as c_int, mode, offset as i64, size as i64) as i64 };
+        if ret == 0 {
+            return 0;
+        }
+        if nix::errno::errno() != libc::EINTR {
+            break;
+        }
+    }
+
+    if [libc::ENODEV, libc::ENOSYS, libc::EOPNOTSUPP, libc::ENOTTY].contains(&nix::errno::errno()) {
+        return -libc::ENOTSUP as i64;
+    }
+    -nix::errno::errno() as i64
 }

@@ -21,10 +21,6 @@ use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 
-use address_space::{AddressSpace, GuestAddress};
-use machine_manager::config::XhciConfig;
-use machine_manager::event_loop::EventLoop;
-
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::{
@@ -36,6 +32,9 @@ use crate::usb::{config::*, TransferOps};
 use crate::usb::{
     UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus,
 };
+use address_space::{AddressSpace, GuestAddress};
+use machine_manager::config::XhciConfig;
+use machine_manager::event_loop::EventLoop;
 
 const INVALID_SLOT_ID: u32 = 0;
 pub const MAX_INTRS: u32 = 1;
@@ -244,7 +243,8 @@ impl XhciTransfer {
     }
 
     fn report_transfer_error(&mut self) -> Result<()> {
-        // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
+        // An error occurs in the transfer. The transfer is set to the completed and will not be
+        // retried.
         self.complete = true;
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
         evt.slot_id = self.slotid as u8;
@@ -1383,12 +1383,13 @@ impl XhciDevice {
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer layer.
+            // It is safe to use plus here becuase we previously verify the address on the outer
+            // layer.
             GuestAddress(input_ctx + EP_INPUT_CTX_OFFSET + entry_offset),
             ep_ctx.as_mut_dwords(),
         )?;
         self.disable_endpoint(slot_id, ep_id)?;
-        let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+        let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         epctx.epid = ep_id;
         epctx.enabled = true;
         // It is safe to use plus here becuase we previously verify the address on the outer layer.
@@ -1398,7 +1399,8 @@ impl XhciDevice {
         ep_ctx.ep_info |= EP_RUNNING;
         dma_write_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer layer.
+            // It is safe to use plus here becuase we previously verify the address on the outer
+            // layer.
             GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
             ep_ctx.as_dwords(),
         )?;
@@ -1616,7 +1618,7 @@ impl XhciDevice {
             let mut locked_xfer = xfer.lock().unwrap();
             locked_xfer.packet = packet;
             self.endpoint_do_transfer(&mut locked_xfer)?;
-            let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+            let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             if locked_xfer.complete {
                 epctx.update_dequeue(&self.mem_space, None)?;
             } else {
@@ -2007,11 +2009,14 @@ impl XhciDevice {
 
     /// Used for device to wakeup endpoint
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
-        if slot_id == INVALID_SLOT_ID {
-            debug!("Invalid slot id, maybe device not activated.");
+        let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
+        if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
+            debug!(
+                "Invalid slot id or ep id, maybe device not activated, {:?}",
+                e
+            );
             return Ok(());
         }
-        let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         self.kick_endpoint(slot_id, ep_id as u32)?;
         Ok(())
     }
@@ -2133,7 +2138,7 @@ pub fn dma_read_u32(
     addr: GuestAddress,
     buf: &mut [u32],
 ) -> Result<()> {
-    let vec_len = size_of::<u32>() * buf.len();
+    let vec_len = std::mem::size_of_val(buf);
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
     dma_read_bytes(addr_space, addr, tmp)?;
@@ -2148,7 +2153,7 @@ pub fn dma_write_u32(
     addr: GuestAddress,
     buf: &[u32],
 ) -> Result<()> {
-    let vec_len = size_of::<u32>() * buf.len();
+    let vec_len = std::mem::size_of_val(buf);
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
     for i in 0..buf.len() {

@@ -10,10 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod interrupt;
+
+pub use interrupt::MsiVector;
+
 use std::collections::HashMap;
 use std::mem::{align_of, size_of};
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 use kvm_bindings::*;
@@ -24,11 +29,7 @@ use vmm_sys_util::{
     eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
 
-use anyhow::{bail, Context, Result};
-pub use interrupt::MsiVector;
 use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
-
-mod interrupt;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -141,7 +142,7 @@ impl KVMFds {
 
         // Safe because data in `routes` is reliable.
         unsafe {
-            let mut irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
             if irq_routing.is_null() {
                 bail!("Failed to alloc irq routing");
             }

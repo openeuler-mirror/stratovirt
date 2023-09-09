@@ -22,6 +22,12 @@ use util::num_ops::round_up;
 /// Maximum number of snapshots.
 pub const QCOW2_MAX_SNAPSHOTS: usize = 65536;
 
+// Length of Qcow2 internal snapshot which doesn't have icount in extra data.
+// Qcow2 snapshots created by qemu-kvm/qemu-img(version <= 5.0) may have this format.
+const SNAPSHOT_EXTRA_DATA_LEN_16: usize = 16;
+// Length of Qcow2 internal snapshot which has icount in extra data.
+const SNAPSHOT_EXTRA_DATA_LEN_24: usize = 24;
+
 #[derive(Clone)]
 pub struct InternalSnapshot {
     pub snapshots: Vec<QcowSnapshot>,
@@ -78,13 +84,6 @@ impl InternalSnapshot {
         snap
     }
 
-    pub fn insert_snapshot(&mut self, snap: QcowSnapshot, index: usize) {
-        let size = snap.get_size();
-        self.snapshots.insert(index, snap);
-        self.snapshot_size += size;
-        self.nb_snapshots += 1;
-    }
-
     pub fn find_new_snapshot_id(&self) -> u64 {
         let mut id_max = 0;
         for snap in &self.snapshots {
@@ -96,10 +95,21 @@ impl InternalSnapshot {
         id_max + 1
     }
 
-    pub fn save_snapshot_table(&self, addr: u64) -> Result<()> {
+    pub fn save_snapshot_table(
+        &self,
+        addr: u64,
+        extra_snap: &QcowSnapshot,
+        attach: bool,
+    ) -> Result<()> {
         let mut buf = Vec::new();
         for snap in &self.snapshots {
+            if !attach && snap.id == extra_snap.id {
+                continue;
+            }
             buf.append(&mut snap.gen_snapshot_table_entry());
+        }
+        if attach {
+            buf.append(&mut extra_snap.gen_snapshot_table_entry());
         }
         self.sync_aio.borrow_mut().write_buffer(addr, &buf)
     }
@@ -122,7 +132,10 @@ impl InternalSnapshot {
             let header = QcowSnapshotHeader::from_vec(&header_buf)?;
             pos += header_size;
 
-            let extra_size = size_of::<QcowSnapshotExtraData>();
+            let extra_size = header.extra_date_size as usize;
+            if ![SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24].contains(&extra_size) {
+                bail!("Invalid extra data size {}", extra_size);
+            }
             let mut extra_buf = vec![0_u8; extra_size];
             self.sync_aio
                 .borrow_mut()
@@ -192,8 +205,8 @@ pub struct QcowSnapshot {
     pub date_sec: u32,
     pub date_nsec: u32,
     pub vm_clock_nsec: u64,
-    // Icount value which corresponds to the record/replay instruction count when the snapshots was token.
-    // Sed to -1 which means icount was disabled.
+    // Icount value which corresponds to the record/replay instruction count when the snapshots was
+    // token. Sed to -1 which means icount was disabled.
     pub icount: u64,
     pub extra_data_size: u32,
 }
@@ -210,7 +223,7 @@ impl QcowSnapshot {
 
     fn gen_snapshot_table_entry(&self) -> Vec<u8> {
         let id_str = self.id.to_string();
-        let entry_size = size_of::<QcowSnapshotHeader>() + size_of::<QcowSnapshotExtraData>();
+        let entry_size = size_of::<QcowSnapshotHeader>() + self.extra_data_size as usize;
         let mut buf = vec![0_u8; entry_size];
 
         // Snapshot Header.
@@ -222,14 +235,16 @@ impl QcowSnapshot {
         BigEndian::write_u32(&mut buf[20..24], self.date_nsec);
         BigEndian::write_u64(&mut buf[24..32], self.vm_clock_nsec);
         BigEndian::write_u32(&mut buf[32..36], self.vm_state_size);
-        BigEndian::write_u32(&mut buf[36..40], size_of::<QcowSnapshotExtraData>() as u32);
+        BigEndian::write_u32(&mut buf[36..40], self.extra_data_size);
 
         // Snapshot Extra data.
         // vm_state_size_large is used for vm snapshot.
         // It's equal to vm_state_size which is also 0 in disk snapshot.
         BigEndian::write_u64(&mut buf[40..48], self.vm_state_size as u64);
         BigEndian::write_u64(&mut buf[48..56], self.disk_size);
-        BigEndian::write_u64(&mut buf[56..64], self.icount);
+        if self.extra_data_size == SNAPSHOT_EXTRA_DATA_LEN_24 as u32 {
+            BigEndian::write_u64(&mut buf[56..64], self.icount);
+        }
 
         // Snapshot ID.
         let mut id_vec = id_str.as_bytes().to_vec();
@@ -288,15 +303,22 @@ pub struct QcowSnapshotExtraData {
 
 impl QcowSnapshotExtraData {
     fn from_vec(buf: &[u8]) -> Result<QcowSnapshotExtraData> {
-        let extra_len = size_of::<QcowSnapshotExtraData>();
-        if buf.len() != extra_len {
-            bail!("Only support snapshot extra data length {}", extra_len);
-        }
+        let has_icount = match buf.len() {
+            SNAPSHOT_EXTRA_DATA_LEN_24 => true,
+            SNAPSHOT_EXTRA_DATA_LEN_16 => false,
+            _ => bail!("Invalid snapshot extra data length {}.", buf.len()),
+        };
 
-        Ok(QcowSnapshotExtraData {
+        let mut extra = QcowSnapshotExtraData {
             _vm_state_size_large: BigEndian::read_u64(&buf[0..8]),
             disk_size: BigEndian::read_u64(&buf[8..16]),
-            icount: BigEndian::read_u64(&buf[16..24]),
-        })
+            icount: u64::MAX,
+        };
+
+        if has_icount {
+            extra.icount = BigEndian::read_u64(&buf[16..24]);
+        }
+
+        Ok(extra)
     }
 }

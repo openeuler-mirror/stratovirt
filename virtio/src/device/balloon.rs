@@ -20,17 +20,24 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{anyhow, Context, Result};
+use log::{error, warn};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
+
+use crate::{
+    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+};
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use anyhow::{anyhow, Context, Result};
-use log::{error, warn};
 use machine_manager::{
     config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
     event,
     event_loop::{register_event_helper, unregister_event_helper},
+    qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
-    qmp::QmpChannel,
 };
 use util::{
     bitmap::Bitmap,
@@ -42,13 +49,6 @@ use util::{
     offset_of,
     seccomp::BpfRule,
     unix::host_page_size,
-};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
-
-use crate::{
-    error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
-    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -88,19 +88,19 @@ struct BalloonStat {
 #[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
-    pub num_pages: u32,
+    num_pages: u32,
     /// Number of pages we've actually got in balloon device.
-    pub actual: u32,
-    pub _reserved: u32,
-    pub _reserved1: u32,
+    actual: u32,
+    _reserved: u32,
+    _reserved1: u32,
     /// Buffer percent is a percentage of memory actually needed by
     /// the applications and services running inside the virtual machine.
     /// This parameter takes effect only when VIRTIO_BALLOON_F_MESSAGE_VQ is supported.
     /// Recommended value range: [20, 80] and default is 50.
-    pub membuf_percent: u32,
+    membuf_percent: u32,
     /// Monitor interval(second) host wants to adjust VM memory size.
     /// Recommended value range: [5, 300] and default is 10.
-    pub monitor_interval: u32,
+    monitor_interval: u32,
 }
 
 impl ByteCode for BalloonStat {}
@@ -298,9 +298,9 @@ impl Request {
         let host_page_size = host_page_size();
         let mut advice = 0;
         // If host_page_size equals BALLOON_PAGE_SIZE and have the same share properties,
-        // we can directly call the madvise function without any problem. And if the advice is MADV_WILLNEED,
-        // we just hint the whole host page it lives on, since we can't do anything
-        // smaller.
+        // we can directly call the madvise function without any problem. And if the advice is
+        // MADV_WILLNEED, we just hint the whole host page it lives on, since we can't do
+        // anything smaller.
         if host_page_size == BALLOON_PAGE_SIZE {
             while let Some((hva, share)) = hvaset.pop() {
                 if last_addr == 0 {
@@ -604,7 +604,8 @@ impl BalloonIoHandler {
     ///
     /// * `req_type` - Type of request.
     ///
-    /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
+    /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the
+    /// balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
         let queue = if req_type {
             self.trace_request("Balloon".to_string(), "to inflate".to_string());
@@ -922,8 +923,8 @@ impl Balloon {
 
     /// Init balloon object for global use.
     pub fn object_init(dev: Arc<Mutex<Balloon>>) {
-        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-        // this function will not be called simultaneously.
+        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+        // words, this function will not be called simultaneously.
         unsafe {
             if BALLOON_DEV.is_none() {
                 BALLOON_DEV = Some(dev)
@@ -950,7 +951,7 @@ impl Balloon {
     /// # Argument
     ///
     /// * `size` - Target memory size.
-    pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
+    fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
         let host_page_size = host_page_size();
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
@@ -976,10 +977,11 @@ impl Balloon {
     }
 
     /// Get the actual memory size of guest.
-    pub fn get_guest_memory_size(&self) -> u64 {
+    fn get_guest_memory_size(&self) -> u64 {
         self.mem_info.lock().unwrap().get_ram_size() - self.get_balloon_memory_size()
     }
-    pub fn set_num_pages(&mut self, target: u32) {
+
+    fn set_num_pages(&mut self, target: u32) {
         self.num_pages = target;
     }
 }
@@ -1138,8 +1140,8 @@ impl VirtioDevice for Balloon {
 }
 
 pub fn qmp_balloon(target: u64) -> bool {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-    // this function will not be called simultaneously.
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         match dev.lock().unwrap().set_guest_memory_size(target) {
             Ok(()) => {
@@ -1156,8 +1158,8 @@ pub fn qmp_balloon(target: u64) -> bool {
 }
 
 pub fn qmp_query_balloon() -> Option<u64> {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
-    // this function will not be called simultaneously.
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         let unlocked_dev = dev.lock().unwrap();
         return Some(unlocked_dev.get_guest_memory_size());

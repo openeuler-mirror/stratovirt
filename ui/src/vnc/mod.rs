@@ -16,6 +16,19 @@ pub mod client_io;
 pub mod encoding;
 pub mod server_io;
 
+use std::{
+    cmp,
+    collections::HashMap,
+    net::TcpListener,
+    ptr,
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use anyhow::{anyhow, Result};
+use core::time;
+use once_cell::sync::Lazy;
+
 use crate::{
     console::{
         graphic_hardware_update, register_display, DisplayChangeListener,
@@ -38,21 +51,10 @@ use crate::{
         server_io::{make_server_config, VncConnHandler, VncServer, VncSurface},
     },
 };
-use anyhow::{anyhow, Result};
-use core::time;
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
     qmp::qmp_schema::{VncClientInfo, VncInfo},
-};
-use once_cell::sync::Lazy;
-use std::{
-    cmp,
-    collections::HashMap,
-    net::TcpListener,
-    ptr,
-    sync::{Arc, Mutex},
-    thread,
 };
 use util::{
     bitmap::Bitmap,
@@ -421,7 +423,7 @@ pub fn set_area_dirty(
 }
 
 /// Get the width of image.
-pub fn vnc_width(width: i32) -> i32 {
+fn vnc_width(width: i32) -> i32 {
     cmp::min(
         MAX_WINDOW_WIDTH as i32,
         round_up(width as u64, DIRTY_PIXELS_NUM as u64) as i32,
@@ -552,7 +554,7 @@ pub fn write_pixel(
     }
 }
 
-/// Convert the sent information to a format supported  
+/// Convert the sent information to a format supported
 /// by the client depend on byte arrangement
 ///
 /// # Arguments
@@ -560,7 +562,7 @@ pub fn write_pixel(
 /// * `client_dpm` - Output mod of client display.
 /// * `buf` - send buffer.
 /// * `color` - the pixel value need to be convert.
-pub fn convert_pixel(client_dpm: &DisplayMode, buf: &mut Vec<u8>, color: u32) {
+fn convert_pixel(client_dpm: &DisplayMode, buf: &mut Vec<u8>, color: u32) {
     let mut ret = [0u8; 4];
     let r = ((color & 0x00ff0000) >> 16) << client_dpm.pf.red.bits >> 8;
     let g = ((color & 0x0000ff00) >> 8) << client_dpm.pf.green.bits >> 8;
@@ -607,7 +609,7 @@ pub fn convert_pixel(client_dpm: &DisplayMode, buf: &mut Vec<u8>, color: u32) {
 /// * `rect` - dirty area of image.
 /// * `client_dpm` - Output mod information of client display.
 /// * `buf` - send buffer.
-pub fn raw_send_framebuffer_update(
+fn raw_send_framebuffer_update(
     image: *mut pixman_image_t,
     rect: &Rectangle,
     client_dpm: &DisplayMode,

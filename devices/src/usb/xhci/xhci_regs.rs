@@ -14,18 +14,16 @@ use std::sync::atomic::{fence, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
-
-use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
-use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
-
-use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use super::xhci_ring::XhciTRB;
+use super::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 use crate::usb::{config::*, UsbError};
+use address_space::{AddressSpace, GuestAddress, RegionOps};
+use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
@@ -702,16 +700,8 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let mut xhci = xhci.lock().unwrap();
         let slot_id = (offset >> 2) as u32;
         if slot_id == 0 {
-            if value == 0 {
-                if let Err(e) = xhci.handle_command() {
-                    error!("Failed to handle command: {:?}", e);
-                    xhci.host_controller_error();
-                    return false;
-                }
-            } else {
-                error!("Invalid doorbell write: value {:x}", value);
-                return false;
-            }
+            error!("Invalid slot id 0 !");
+            return false;
         } else {
             let ep_id = value & DB_TARGET_MASK;
             if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {

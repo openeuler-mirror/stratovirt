@@ -10,12 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::path::Path;
+
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+
 use crate::config::{
     ConfigError, {CmdParser, VmConfig},
 };
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TlsCredObjConfig {
@@ -55,11 +57,7 @@ impl VmConfig {
             tlscred.endpoint = Some(endpoint);
         }
         if let Some(verifypeer) = cmd_parser.get_value::<String>("verify-peer")? {
-            if verifypeer == *"true" {
-                tlscred.verifypeer = true;
-            } else {
-                tlscred.verifypeer = false;
-            }
+            tlscred.verifypeer = verifypeer == *"true";
         }
         tlscred.cred_type = "x509".to_string();
 
@@ -76,8 +74,9 @@ impl VmConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{env, fs};
+
+    use super::*;
 
     #[test]
     fn test_add_tlscred() {

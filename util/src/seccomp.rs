@@ -50,19 +50,20 @@
 //! let mut seccomp_filter = SyscallFilter::new(SeccompOpt::Trap);
 //!
 //! let nr_open = {
-//!     #[cfg(target_arch="x86_64")]
+//!     #[cfg(target_arch = "x86_64")]
 //!     let nr = libc::SYS_open;
-//!     #[cfg(target_arch="aarch64")]
+//!     #[cfg(target_arch = "aarch64")]
 //!     let nr = libc::SYS_openat;
 //!     nr
 //! };
 //!
 //! seccomp_filter.push(&mut BpfRule::new(nr_open));
 //! seccomp_filter.push(&mut BpfRule::new(libc::SYS_fcntl));
-//! seccomp_filter.push(
-//!         &mut BpfRule::new(libc::SYS_read)
-//!             .add_constraint(SeccompCmpOpt::Ne, 2, 1024)
-//!     );
+//! seccomp_filter.push(&mut BpfRule::new(libc::SYS_read).add_constraint(
+//!     SeccompCmpOpt::Ne,
+//!     2,
+//!     1024,
+//! ));
 //! seccomp_filter.push(&mut BpfRule::new(libc::SYS_write));
 //! seccomp_filter.push(&mut BpfRule::new(libc::SYS_close));
 //! seccomp_filter.push(&mut BpfRule::new(libc::SYS_sigaltstack));
@@ -77,10 +78,9 @@
 //! ```
 //! This programe will be trapped.
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 
 use crate::offset_of;
-use anyhow::Result;
 
 // BPF Instruction classes
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/bpf_common.h#L7
@@ -319,8 +319,8 @@ impl BpfRule {
     /// # Arguments
     /// * `cmp` - Compare operator for given args_value and the raw args_value.
     /// * `args_idx` - The index number of system call's arguments.
-    /// * `args_value` - The value of args_num you want to limit. This value
-    ///                  used with `cmp` together.
+    /// * `args_value` - The value of args_num you want to limit. This value used with `cmp`
+    ///   together.
     pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_idx: u32, args_value: u32) -> BpfRule {
         if self.inner_rules.is_empty() {
             self.tail_rule = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::nr());
@@ -433,7 +433,7 @@ impl SyscallFilter {
     /// this structure dropped or not. You can only use this function once in
     /// a thread. Otherwise you will get an error.
     pub fn realize(mut self) -> Result<()> {
-        //Add opt as a bpf_filter to sock_filters
+        // Add opt as a bpf_filter to sock_filters.
         self.sock_filters.append(&mut handle_process(self.opt));
 
         let sock_bpf_vec = self.sock_filters;

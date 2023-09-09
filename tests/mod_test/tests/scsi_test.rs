@@ -17,9 +17,6 @@ use std::slice::from_raw_parts;
 use std::{thread, time};
 
 use rand::Rng;
-use util::aio::{aio_probe, AioEngine};
-use util::byte_code::ByteCode;
-use util::offset_of;
 
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
@@ -30,6 +27,9 @@ use mod_test::libdriver::virtio::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
+use util::aio::{aio_probe, AioEngine};
+use util::byte_code::ByteCode;
+use util::offset_of;
 
 const TEST_VIRTIO_SCSI_CDB_SIZE: usize = 32;
 const TEST_VIRTIO_SCSI_SENSE_SIZE: usize = 96;
@@ -315,8 +315,8 @@ impl VirtioScsiTest {
     fn scsi_try_io(&mut self, target: u8, lun: u16, scsi_type: ScsiDeviceType) {
         // Test: scsi command: WRITE_10.
         // Write to LBA(logical block address) 0, transfer length 1 sector.
-        // Test Result: Check if scsi command WRITE_10 was handled successfully for scsi harddisk and
-        // was failure for scsi CD-ROM.
+        // Test Result: Check if scsi command WRITE_10 was handled successfully for scsi harddisk
+        // and was failure for scsi CD-ROM.
         let mut write_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
         write_cdb[0] = WRITE_10;
         write_cdb[8] = 0x1; // 1 logical sector. CD: 2048 Bytes. HD: 512 Bytes.
@@ -338,16 +338,16 @@ impl VirtioScsiTest {
             data_out: Some(write_data.clone()),
             data_in_length: 0,
             expect_response: VIRTIO_SCSI_S_OK,
-            expect_status: expect_status,
+            expect_status,
             expect_result_data: None,
-            expect_sense: expect_sense,
+            expect_sense,
         };
         self.scsi_cdb_test(cdb_test_args);
 
         // Test: scsi command: READ_10.
         // Read from LBA(logical block address) 0, transfer length 1.
-        // Test Result: Check if scsi command READ_10 was handled successfully. And check the read data is
-        // the right data which was sent in WRITE_10 test for scsi harddisk.
+        // Test Result: Check if scsi command READ_10 was handled successfully. And check the read
+        // data is the right data which was sent in WRITE_10 test for scsi harddisk.
         let mut read_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
         read_cdb[0] = READ_10;
         read_cdb[8] = 0x1; // 1 sector.
@@ -635,8 +635,8 @@ fn scsi_test_init(
 /// Virtio Scsi hard disk basic function test. target 31, lun 7.
 /// TestStep:
 ///   0. Init process.
-///   1. Traverse all possible targets from 0 to VIRTIO_SCSI_MAX_TARGET(255).
-///      (using scsi command INQUIRY) (lun is always 0 in this traverse process).
+///   1. Traverse all possible targets from 0 to VIRTIO_SCSI_MAX_TARGET(255). (using scsi command
+///      INQUIRY) (lun is always 0 in this traverse process).
 ///   2. Get all luns info in target 31.(using scsi command REPORT_LUNS)
 ///   3. Check if scsi device is OK.(using scsi command TEST_UNIT_READY)
 ///   4. Get the capacity of the disk.(using scsi command READ_CAPACITY_10)
@@ -666,7 +666,8 @@ fn scsi_hd_basic_test() {
     inquiry_cdb[0] = INQUIRY;
     inquiry_cdb[4] = INQUIRY_DATA_LEN;
     for i in 0..32 {
-        // Test 1 Result: Only response 0 for target == 31. Otherwise response VIRTIO_SCSI_S_BAD_TARGET.
+        // Test 1 Result: Only response 0 for target == 31. Otherwise response
+        //                VIRTIO_SCSI_S_BAD_TARGET.
         let expect_result = if i == target as u16 {
             VIRTIO_SCSI_S_OK
         } else {
@@ -750,7 +751,8 @@ fn scsi_hd_basic_test() {
     };
     let data_in = vst.scsi_cdb_test(cdb_test_args);
 
-    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical block).
+    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical
+    //             block).
     // Bytes[4-7]: Logical Block Length In Bytes.
     // Total size = (last logical block address + 1) * block length.
     assert_eq!(
@@ -1092,14 +1094,14 @@ fn scsi_cd_basic_test() {
     // Byte[8]: BUF/Multi Session(1)/Mode 2 Form 2(1)/Mode 2 Form 1(1)/Digital Port 2(1)/
     //          Digital Port 1(1)/Composite(1)/Audio Play(1).
     expect_result_vec[8] = 0x7f;
-    // Byte[9]: Read Bar Code(1)/UPC(1)/ISRC(1)/C2 Pointers supported(1)/R-W Deinterleaved & corrected(1)/
-    //          R-W supported(1)/CD-DA Stream is Accurate(1)/CD-DA Cmds supported(1).
+    // Byte[9]: Read Bar Code(1)/UPC(1)/ISRC(1)/C2 Pointers supported(1)/R-W Deinterleaved &
+    //          corrected(1)/R-W supported(1)/CD-DA Stream is Accurate(1)/CD-DA Cmds supported(1).
     expect_result_vec[9] = 0xff;
     // Byte[10]: Bits[5-7]: Loading Mechanism Type(1)/Reserved/Eject(1)/Prevent Jumper(1)/
     //           Lock State/Lock(1).
     expect_result_vec[10] = 0x2d;
-    // Byte[11]: Bits[6-7]: Reserved/R-W in Lead-in/Side Change Capable/SSS/Changer Supports Disc Present/
-    //           Separate Channel Mute/Separate volume levels
+    // Byte[11]: Bits[6-7]: Reserved/R-W in Lead-in/Side Change Capable/SSS/Changer Supports Disc
+    //           Present/Separate Channel Mute/Separate volume levels
     // Bytes[12-13]: Obsolete.
     // Bytes[14-15]: Number of Volume Levels Supported.
     expect_result_vec[15] = 0x2;
@@ -1141,8 +1143,8 @@ fn scsi_cd_basic_test() {
     // Test 3: scsi command: READ_TOC.
     // Test 3.1:
     // Byte1 bit1: MSF = 0. Byte2 bits[0-3]: Format = 0;
-    // Test 3.1 Result: Check if scsi command READ_TOC was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 3.1 Result: Check if scsi command READ_TOC was handled successfully. And check the read
+    // data is the same with the expect result.
     let mut read_toc_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     read_toc_cdb[0] = READ_TOC;
     read_toc_cdb[8] = READ_TOC_DATA_LEN;
@@ -1185,8 +1187,8 @@ fn scsi_cd_basic_test() {
     // Byte1 bit1: MSF = 1.
     // Byte2 bits[0-3]: Format = 0; (Format(Select specific returned data format)(CD: 0,1,2)).
     // Byte6: Track/Session Number.
-    // Test 3.2 Result: Check if scsi command READ_TOC was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 3.2 Result: Check if scsi command READ_TOC was handled successfully. And check the read
+    // data is the same with the expect result.
     let mut read_toc_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     read_toc_cdb[0] = READ_TOC;
     read_toc_cdb[1] = 2;
@@ -1218,8 +1220,8 @@ fn scsi_cd_basic_test() {
     // Byte1 bit1: MSF = 0.
     // Byte2 bits[0-3]: Format = 1; (Format(Select specific returned data format)(CD: 0,1,2)).
     // Byte6: Track/Session Number.
-    // Test 3.3 Result: Check if scsi command READ_TOC was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 3.3 Result: Check if scsi command READ_TOC was handled successfully. And check the read
+    // data is the same with the expect result.
     let mut read_toc_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     read_toc_cdb[0] = READ_TOC;
     read_toc_cdb[2] = 1;
@@ -1239,19 +1241,21 @@ fn scsi_cd_basic_test() {
     vst.scsi_cdb_test(cdb_test_args);
 
     // Test 4: scsi command: READ_DISC_INFORMATION.
-    // Test 4 Result: Check if scsi command READ_DISC_INFORMATION was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 4 Result: Check if scsi command READ_DISC_INFORMATION was handled successfully. And
+    // check the read data is the same with the expect result.
     let mut read_disc_information_cdb: [u8; TEST_VIRTIO_SCSI_CDB_SIZE] =
         [0; TEST_VIRTIO_SCSI_CDB_SIZE];
     read_disc_information_cdb[0] = READ_DISC_INFORMATION;
     read_disc_information_cdb[8] = READ_DISC_INFORMATION_DATA_LEN;
     // Bytes[0-1]: Disc Information Length(32).
-    // Byte2: Disc Information Data Type(000b) | Erasable(0) | State of last Session(01b) | Disc Status(11b).
+    // Byte2: Disc Information Data Type(000b) | Erasable(0) | State of last Session(01b) |
+    //        Disc Status(11b).
     // Byte3: Number of First Track on Disc.
     // Byte4: Number of Sessions.
     // Byte5: First Track Number in Last Session(Least Significant Byte).
     // Byte6: Last Track Number in Last Session(Last Significant Byte).
-    // Byte7: DID_V | DBC_V | URU:Unrestricted Use Disc(1) | DAC_V | Reserved | Legacy | BG Format Status.
+    // Byte7: DID_V | DBC_V | URU:Unrestricted Use Disc(1) | DAC_V | Reserved | Legacy |
+    //        BG Format Status.
     // Byte8: Disc Type(00h: CD-DA or CD-ROM Disc).
     // Byte9: Number of sessions(Most Significant Byte).
     // Byte10: First Trace Number in Last Session(Most Significant Byte).
@@ -1279,8 +1283,8 @@ fn scsi_cd_basic_test() {
 
     // Test 5: scsi command: GET_CONFIGURATION.
     // The size of test img is TEST_IMAGE_SIZE(64M), so it is a CD-ROM.
-    // Test 5 Result: Check if scsi command GET_CONFIGURATION was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 5 Result: Check if scsi command GET_CONFIGURATION was handled successfully. And check
+    // the read data is the same with the expect result.
     let mut get_configuration_cdb = [0_u8; TEST_VIRTIO_SCSI_CDB_SIZE];
     get_configuration_cdb[0] = GET_CONFIGURATION;
     get_configuration_cdb[8] = GET_CONFIGURATION_DATA_LEN;
@@ -1311,7 +1315,8 @@ fn scsi_cd_basic_test() {
     // Bytes[20-31]: Feature 1: Core Feature:
     // Bytes[20-21]: Feature Code(0001h).
     expect_result_vec[21] = 0x1;
-    // Byte[22]: Bits[6-7]: Reserved. Bits[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[22]: Bits[6-7]: Reserved. Bits[2-5]: Version(0010b). Bit 1: Persistent(1).
+    //           Bit 0: Current(1).
     expect_result_vec[22] = 0xb;
     // Byte[23]: Additional Length(8).
     expect_result_vec[23] = 8;
@@ -1323,12 +1328,13 @@ fn scsi_cd_basic_test() {
     // Bytes[32-40]: Feature 2: Removable media feature:
     // Bytes[32-33]: Feature Code(0003h).
     expect_result_vec[33] = 3;
-    // Byte[34]: Bits[6-7]: Reserved. Bit[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[34]: Bits[6-7]: Reserved. Bit[2-5]: Version(0010b). Bit 1: Persistent(1).
+    //           Bit 0: Current(1).
     expect_result_vec[34] = 0xb;
     // Byte[35]: Additional Length(4).
     expect_result_vec[35] = 4;
-    // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1). Bit 2: Pvnt Jmpr.
-    //           Bit 1: DBML. Bit 0: Lock(1).
+    // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1).
+    //           Bit 2: Pvnt Jmpr. Bit 1: DBML. Bit 0: Lock(1).
     expect_result_vec[36] = 0x39;
     // Byte[37-39]: Reserved.
     let cdb_test_args = CdbTest {
@@ -1345,8 +1351,8 @@ fn scsi_cd_basic_test() {
     vst.scsi_cdb_test(cdb_test_args);
 
     // Test 6: scsi command: GET_EVENT_STATUS_NOTIFICATION.
-    // Test 6 Result: Check if scsi command GET_EVENT_STATUS_NOTIFICATION was handled successfully. And check the read data
-    // is the same with the expect result.
+    // Test 6 Result: Check if scsi command GET_EVENT_STATUS_NOTIFICATION was handled successfully.
+    // And check the read data is the same with the expect result.
     let mut get_event_status_notification_cdb: [u8; TEST_VIRTIO_SCSI_CDB_SIZE] =
         [0; TEST_VIRTIO_SCSI_CDB_SIZE];
     get_event_status_notification_cdb[0] = GET_EVENT_STATUS_NOTIFICATION;
@@ -1647,8 +1653,8 @@ struct VirtioScsiConfig {
 /// can be set from guest.
 /// TestStep:
 ///   1. Init process.
-///   2. For every parameter in VirtioScsiConfig, do check just like:
-///      Read default value -> Set other value -> Read value again -> Check if value was set successfully.
+///   2. For every parameter in VirtioScsiConfig, do check just like: Read default value -> Set
+///      other value -> Read value again -> Check if value was set successfully.
 ///   3. Destroy device.
 /// Note:
 ///   1. sense size and cdb size can not be changed in stratovirt now. So, they are 0 now.
@@ -1869,8 +1875,8 @@ fn aio_model_test() {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
             image_path: image_path.clone(),
-            target: target,
-            lun: lun,
+            target,
+            lun,
             read_only: false,
             direct: false,
             aio: TestAioType::AioIOUring,
@@ -1884,8 +1890,8 @@ fn aio_model_test() {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
             image_path: image_path.clone(),
-            target: target,
-            lun: lun,
+            target,
+            lun,
             read_only: false,
             direct: true,
             aio: TestAioType::AioIOUring,
@@ -1896,15 +1902,15 @@ fn aio_model_test() {
     // Scsi Disk 3. AIO OFF. Direct true. This is not allowed.
     // Stratovirt will report "low performance expect when use sync io with direct on"
 
-    //Scsi Disk 4. AIO OFF. Direct false.
+    // Scsi Disk 4. AIO OFF. Direct false.
     lun += 1;
     let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw));
     device_vec.push(ScsiDeviceConfig {
         cntlr_id: 0,
         device_type: ScsiDeviceType::ScsiHd,
         image_path: image_path.clone(),
-        target: target,
-        lun: lun,
+        target,
+        lun,
         read_only: false,
         direct: false,
         aio: TestAioType::AioOff,
@@ -1921,8 +1927,8 @@ fn aio_model_test() {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
             image_path: image_path.clone(),
-            target: target,
-            lun: lun,
+            target,
+            lun,
             read_only: false,
             direct: true,
             aio: TestAioType::AioNative,

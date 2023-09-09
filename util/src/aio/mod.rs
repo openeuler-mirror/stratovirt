@@ -14,6 +14,8 @@ mod libaio;
 mod raw;
 mod uring;
 
+pub use raw::*;
+
 use std::clone::Clone;
 use std::io::Write;
 use std::os::unix::io::RawFd;
@@ -21,18 +23,17 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
 
+use anyhow::{anyhow, bail, Context, Result};
 use libc::c_void;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
+use uring::IoUringContext;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
 use crate::num_ops::{round_down, round_up};
 use crate::unix::host_page_size;
-use anyhow::{anyhow, bail, Context, Result};
 use libaio::LibaioContext;
-pub use raw::*;
-use uring::IoUringContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
@@ -43,13 +44,17 @@ const AIO_OFF: &str = "off";
 const AIO_NATIVE: &str = "native";
 /// Io-uring aio type.
 const AIO_IOURING: &str = "io_uring";
-/// Max bytes of bounce buffer for misaligned IO.
+/// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum AioEngine {
+    #[serde(alias = "off")]
+    #[default]
     Off = 0,
+    #[serde(alias = "native")]
     Native = 1,
+    #[serde(alias = "iouring")]
     IoUring = 2,
 }
 
@@ -595,13 +600,13 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn discard_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
-        if ret < 0 {
+        if ret < 0 && ret != -libc::ENOTSUP as i64 {
             error!("Failed to do sync discard.");
         }
         (self.complete_func)(&cb, ret)
     }
 
-    fn write_zeroes_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn write_zeroes_sync(&mut self, mut cb: AioCb<T>) -> Result<()> {
         let mut ret;
         if cb.opcode == OpCode::WriteZeroesUnmap {
             ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
@@ -610,6 +615,12 @@ impl<T: Clone + 'static> Aio<T> {
             }
         }
         ret = raw_write_zeroes(cb.file_fd, cb.offset, cb.nbytes);
+        if ret == -libc::ENOTSUP as i64 && !cb.iovec.is_empty() {
+            cb.opcode = OpCode::Pwritev;
+            cb.write_zeroes = WriteZeroesState::Off;
+            return self.submit_request(cb);
+        }
+
         if ret < 0 {
             error!("Failed to do sync write zeroes.");
         }
@@ -729,23 +740,34 @@ pub fn iovecs_split(iovecs: Vec<Iovec>, mut size: u64) -> (Vec<Iovec>, Vec<Iovec
             end.push(iov);
             continue;
         }
-        if iov.iov_len as u64 > size {
+        if iov.iov_len > size {
             begin.push(Iovec::new(iov.iov_base, size));
             end.push(Iovec::new(iov.iov_base + size, iov.iov_len - size));
             size = 0;
         } else {
-            size -= iov.iov_len as u64;
+            size -= iov.iov_len;
             begin.push(iov);
         }
     }
     (begin, end)
 }
 
+pub fn iovec_write_zero(iovec: &[Iovec]) {
+    for iov in iovec.iter() {
+        // SAFETY: all callers have valid hva address.
+        unsafe {
+            std::ptr::write_bytes(iov.iov_base as *mut u8, 0, iov.iov_len as usize);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::prelude::AsRawFd;
+
     use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
 
     fn perform_sync_rw(
         fsize: usize,
@@ -894,5 +916,19 @@ mod tests {
         let (left, right) = iovecs_split(iovecs, 300);
         assert_eq!(left, vec![Iovec::new(0, 100), Iovec::new(200, 100)]);
         assert_eq!(right, vec![]);
+    }
+
+    #[test]
+    fn test_iovec_write_zero() {
+        let buf1 = vec![0x1_u8; 100];
+        let buf2 = vec![0x1_u8; 40];
+        let iovecs = vec![
+            Iovec::new(buf1.as_ptr() as u64, buf1.len() as u64),
+            Iovec::new(buf2.as_ptr() as u64, buf2.len() as u64),
+        ];
+
+        iovec_write_zero(&iovecs);
+        assert_eq!(buf1, vec![0_u8; 100]);
+        assert_eq!(buf2, vec![0_u8; 40]);
     }
 }

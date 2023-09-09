@@ -23,12 +23,12 @@ pub mod edid;
 pub mod error;
 pub mod file;
 pub mod leak_bucket;
-mod link_list;
+pub mod link_list;
 pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod reader;
 pub mod seccomp;
@@ -38,13 +38,18 @@ pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;
+#[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
+
 pub use anyhow::Result;
+
 pub use error::UtilError;
+
+use std::{any::Any, sync::Mutex};
+
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use log::debug;
 use once_cell::sync::Lazy;
-use std::{any::Any, sync::Mutex};
 use vmm_sys_util::terminal::Terminal;
 
 /// Read the program version in `Cargo.toml` and concat with git commit id.

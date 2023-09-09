@@ -12,7 +12,15 @@
 
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail, Context, Result};
+#[cfg(target_arch = "x86_64")]
+use byteorder::LittleEndian;
+use byteorder::{BigEndian, ByteOrder};
+use log::{error, warn};
+
 use crate::legacy::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
@@ -21,15 +29,10 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{anyhow, bail, Context, Result};
-#[cfg(target_arch = "x86_64")]
-use byteorder::LittleEndian;
-use byteorder::{BigEndian, ByteOrder};
-use log::{error, warn};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::offset_of;
+
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
 // Size of ioports including control/data registers and DMA.
@@ -661,7 +664,6 @@ impl FwCfgCommon {
     /// # Errors
     ///
     /// Return Error if fail to add the file entry.
-    ///
     fn dma_mem_write(&mut self, addr: u64, value: u64, size: u32) -> Result<()> {
         if size == 4 {
             if addr == 0 {
@@ -693,7 +695,6 @@ impl FwCfgCommon {
     /// # Return
     ///
     /// Return the value of the register
-    ///
     fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
         extract_u64(
             FW_CFG_DMA_SIGNATURE as u64,
@@ -713,7 +714,6 @@ impl FwCfgCommon {
     /// # Return
     ///
     /// Return the value of the register
-    ///
     fn read_data_reg(&mut self, _addr: u64, mut size: u32) -> Result<u64> {
         if size == 0 || size > std::mem::size_of::<u64>() as u32 {
             bail!(
@@ -827,17 +827,16 @@ fn common_read(
 /// FwCfg MMIO Device use for AArch64 platform
 #[cfg(target_arch = "aarch64")]
 pub struct FwCfgMem {
+    base: SysBusDevBase,
     fwcfg: FwCfgCommon,
-    /// System Resource of device.
-    res: SysRes,
 }
 
 #[cfg(target_arch = "aarch64")]
 impl FwCfgMem {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgMem {
+            base: SysBusDevBase::new(SysBusDevType::FwCfg),
             fwcfg: FwCfgCommon::new(sys_mem),
-            res: SysRes::default(),
         }
     }
 
@@ -908,7 +907,7 @@ fn read_bytes(
         1 => data[0] = value as u8,
         2 => BigEndian::write_u16(data, value as u16),
         4 => BigEndian::write_u32(data, value as u32),
-        8 => BigEndian::write_u64(data, value as u64),
+        8 => BigEndian::write_u64(data, value),
         _ => {}
     }
     true
@@ -922,7 +921,26 @@ impl FwCfgOps for FwCfgMem {
 }
 
 #[cfg(target_arch = "aarch64")]
+impl Device for FwCfgMem {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
     }
@@ -933,7 +951,7 @@ impl SysBusDevOps for FwCfgMem {
             1 => data[0] as u64,
             2 => BigEndian::read_u16(data) as u64,
             4 => BigEndian::read_u32(data) as u64,
-            8 => BigEndian::read_u64(data) as u64,
+            8 => BigEndian::read_u64(data),
             _ => 0,
         };
         match offset {
@@ -963,7 +981,7 @@ impl SysBusDevOps for FwCfgMem {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn set_sys_resource(
@@ -971,19 +989,14 @@ impl SysBusDevOps for FwCfgMem {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
-        let mut res = self.get_sys_resource().unwrap();
+    ) -> Result<()> {
+        let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
     }
 
-    /// Get device type.
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::FwCfg
-    }
-
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
@@ -992,28 +1005,32 @@ impl SysBusDevOps for FwCfgMem {
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "x86_64")]
 pub struct FwCfgIO {
+    base: SysBusDevBase,
     fwcfg: FwCfgCommon,
-    /// System Resource of device.
-    res: SysRes,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl FwCfgIO {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgIO {
-            fwcfg: FwCfgCommon::new(sys_mem),
-            res: SysRes {
-                region_base: FW_CFG_IO_BASE,
-                region_size: FW_CFG_IO_SIZE,
-                irq: -1,
+            base: SysBusDevBase {
+                base: DeviceBase::default(),
+                dev_type: SysBusDevType::FwCfg,
+                res: SysRes {
+                    region_base: FW_CFG_IO_BASE,
+                    region_size: FW_CFG_IO_SIZE,
+                    irq: -1,
+                },
+                ..Default::default()
             },
+            fwcfg: FwCfgCommon::new(sys_mem),
         }
     }
 
     pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
-        let region_base = self.res.region_base;
-        let region_size = self.res.region_size;
+        let region_base = self.base.res.region_base;
+        let region_size = self.base.res.region_size;
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
@@ -1086,7 +1103,26 @@ impl FwCfgOps for FwCfgIO {
 }
 
 #[cfg(target_arch = "x86_64")]
+impl Device for FwCfgIO {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
     }
@@ -1130,7 +1166,7 @@ impl SysBusDevOps for FwCfgIO {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 
     fn set_sys_resource(
@@ -1138,18 +1174,14 @@ impl SysBusDevOps for FwCfgIO {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::Result<()> {
-        let mut res = self.get_sys_resource().unwrap();
+    ) -> Result<()> {
+        let res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         Ok(())
     }
 
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::FwCfg
-    }
-
-    fn reset(&mut self) -> sysbus::Result<()> {
+    fn reset(&mut self) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
@@ -1237,8 +1269,8 @@ impl AmlBuilder for FwCfgMem {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlMemory32Fixed::new(
             AmlReadAndWrite::ReadWrite,
-            self.res.region_base as u32,
-            self.res.region_size as u32,
+            self.base.res.region_base as u32,
+            self.base.res.region_size as u32,
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
@@ -1256,10 +1288,10 @@ impl AmlBuilder for FwCfgIO {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlIoResource::new(
             AmlIoDecode::Decode16,
-            self.res.region_base as u16,
-            self.res.region_base as u16,
+            self.base.res.region_base as u16,
+            self.base.res.region_base as u16,
             0x01,
-            self.res.region_size as u8,
+            self.base.res.region_size as u8,
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
@@ -1270,8 +1302,8 @@ impl AmlBuilder for FwCfgIO {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
     use address_space::{AddressSpace, HostMemMapping, Region};
-    use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(

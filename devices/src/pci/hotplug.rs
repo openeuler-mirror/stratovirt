@@ -12,8 +12,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{PciBus, PciDevOps};
 use anyhow::{bail, Context, Result};
+
+use crate::pci::{PciBus, PciDevOps};
 
 pub trait HotplugOps: Send {
     /// Plug device, usually called when hot plug device in device_add.

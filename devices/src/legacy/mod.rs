@@ -25,23 +25,24 @@
 //! - `x86_64`
 //! - `aarch64`
 
-mod chardev;
 pub mod error;
+
 mod fwcfg;
 mod pflash;
 #[cfg(target_arch = "aarch64")]
 mod pl011;
 #[cfg(target_arch = "aarch64")]
 mod pl031;
-#[cfg(all(not(target_env = "musl"), target_arch = "aarch64"))]
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 mod ramfb;
 #[cfg(target_arch = "x86_64")]
 mod rtc;
 mod serial;
+
+pub use anyhow::Result;
+
 #[cfg(target_arch = "x86_64")]
 pub use self::rtc::{RTC, RTC_PORT_INDEX};
-pub use anyhow::Result;
-pub use chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 pub use error::LegacyError;
 #[cfg(target_arch = "x86_64")]
 pub use fwcfg::FwCfgIO;
@@ -53,7 +54,6 @@ pub use pflash::PFlash;
 pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
 pub use pl031::{PL031, RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
-#[cfg(target_arch = "aarch64")]
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 pub use ramfb::Ramfb;
 pub use serial::{Serial, SERIAL_ADDR};

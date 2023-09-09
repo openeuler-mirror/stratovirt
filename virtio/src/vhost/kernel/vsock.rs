@@ -15,24 +15,23 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
+use super::super::{VhostNotify, VhostOps};
+use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
+use crate::{
+    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
+};
 use address_space::AddressSpace;
-use byteorder::{ByteOrder, LittleEndian};
 use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-
-use super::super::{VhostNotify, VhostOps};
-use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
-use crate::{
-    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_TYPE_VSOCK,
-};
 
 /// Number of virtqueues.
 const QUEUE_NUM_VSOCK: usize = 3;
@@ -195,9 +194,10 @@ impl VirtioDevice for Vsock {
 
     fn init_config_features(&mut self) -> Result<()> {
         let backend = self.backend.as_ref().unwrap();
-        self.base.device_features = backend
+        let features = backend
             .get_features()
             .with_context(|| "Failed to get features for vsock")?;
+        self.base.device_features = features & !(1_u64 << VIRTIO_F_ACCESS_PLATFORM);
         Ok(())
     }
 

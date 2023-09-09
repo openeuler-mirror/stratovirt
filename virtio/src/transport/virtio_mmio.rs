@@ -13,25 +13,26 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use crate::error::VirtioError;
-use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
-#[cfg(target_arch = "x86_64")]
-use machine_manager::config::{BootSource, Param};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
-use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::error::VirtioError;
 use crate::{
     virtio_has_feature, Queue, VirtioBaseState, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, NOTIFY_REG_OFFSET,
     QUEUE_TYPE_PACKED_VRING, VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
+use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use devices::{Device, DeviceBase};
+#[cfg(target_arch = "x86_64")]
+use machine_manager::config::{BootSource, Param};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
+use util::byte_code::ByteCode;
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
@@ -76,6 +77,17 @@ const QUEUE_AVAIL_HIGH_REG: u64 = 0x94;
 const QUEUE_USED_LOW_REG: u64 = 0xa0;
 /// The high 32bit of queue's Used Ring address.
 const QUEUE_USED_HIGH_REG: u64 = 0xa4;
+/// Shared memory region id.
+#[allow(unused)]
+const SHM_SEL: u64 = 0xac;
+/// Shared memory region 64 bit long length. 64 bits in two halves.
+const SHM_LEN_LOW: u64 = 0xb0;
+const SHM_LEN_HIGH: u64 = 0xb4;
+/// Shared memory region 64 bit long physical address. 64 bits in two halves.
+#[allow(unused)]
+const SHM_BASE_LOW: u64 = 0xb8;
+#[allow(unused)]
+const SHM_BASE_HIGH: u64 = 0xbc;
 /// Configuration atomicity value.
 const CONFIG_GENERATION_REG: u64 = 0xfc;
 
@@ -84,13 +96,13 @@ const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
 
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
-pub struct HostNotifyInfo {
+struct HostNotifyInfo {
     /// Eventfds which notify backend to use the avail ring.
     events: Vec<Arc<EventFd>>,
 }
 
 impl HostNotifyInfo {
-    pub fn new(queue_num: usize) -> Self {
+    fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
             events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
@@ -110,16 +122,13 @@ pub struct VirtioMmioState {
 
 /// virtio-mmio device structure.
 pub struct VirtioMmioDevice {
+    base: SysBusDevBase,
     // The entity of low level device.
     pub device: Arc<Mutex<dyn VirtioDevice>>,
-    // EventFd used to send interrupt to VM
-    interrupt_evt: Arc<EventFd>,
     // HostNotifyInfo used for guest notifier
     host_notify_info: HostNotifyInfo,
     // System address space.
     mem_space: Arc<AddressSpace>,
-    // System Resource of device.
-    res: SysRes,
     /// The function for interrupt triggering.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
 }
@@ -130,11 +139,15 @@ impl VirtioMmioDevice {
         let queue_num = device_clone.lock().unwrap().queue_num();
 
         VirtioMmioDevice {
+            base: SysBusDevBase {
+                base: DeviceBase::default(),
+                dev_type: SysBusDevType::VirtioMmio,
+                res: SysRes::default(),
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+            },
             device,
-            interrupt_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             host_notify_info: HostNotifyInfo::new(queue_num),
             mem_space: mem_space.clone(),
-            res: SysRes::default(),
             interrupt_cb: None,
         }
     }
@@ -167,7 +180,7 @@ impl VirtioMmioDevice {
                 "{}@0x{:08x}:{}",
                 region_size,
                 region_base,
-                dev.lock().unwrap().res.irq
+                dev.lock().unwrap().base.res.irq
             ),
         });
         Ok(dev)
@@ -222,8 +235,7 @@ impl VirtioMmioDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let interrupt_evt = self.interrupt_evt.clone();
-
+        let interrupt_evt = self.base.interrupt_evt.clone();
         let locked_dev = self.device.lock().unwrap();
         let virtio_base = locked_dev.virtio_base();
         let device_status = virtio_base.device_status.clone();
@@ -248,7 +260,8 @@ impl VirtioMmioDevice {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt
+                let interrupt = interrupt_evt.as_ref().unwrap();
+                interrupt
                     .write(1)
                     .with_context(|| VirtioError::EventFdWrite)?;
 
@@ -288,6 +301,9 @@ impl VirtioMmioDevice {
             INTERRUPT_STATUS_REG => locked_device.interrupt_status(),
             STATUS_REG => locked_device.device_status(),
             CONFIG_GENERATION_REG => locked_device.config_generation() as u32,
+            // SHM_SEL is unimplemented. According to the Virtio v1.2 spec: Reading from a non-existent
+            // region(i.e. where the ID written to SHMSel is unused) results in a length of -1.
+            SHM_LEN_LOW | SHM_LEN_HIGH => u32::MAX,
             _ => {
                 return Err(anyhow!(VirtioError::MmioRegErr(offset)));
             }
@@ -369,7 +385,25 @@ impl VirtioMmioDevice {
     }
 }
 
+impl Device for VirtioMmioDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for VirtioMmioDevice {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
@@ -497,16 +531,8 @@ impl SysBusDevOps for VirtioMmioDevice {
         ret
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(self.interrupt_evt.as_ref())
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::VirtioMmio
+        Some(&mut self.base.res)
     }
 }
 
@@ -573,13 +599,12 @@ impl MigrationHook for VirtioMmioDevice {
 
 #[cfg(test)]
 mod tests {
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-
     use super::*;
     use crate::{
         check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
         VIRTIO_TYPE_BLOCK,
     };
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
@@ -912,7 +937,8 @@ mod tests {
         assert_eq!(virtio_device.lock().unwrap().hfeatures_sel(), 2);
 
         // write the device features
-        // false when the device status is CONFIG_STATUS_FEATURES_OK or CONFIG_STATUS_FAILED isn't CONFIG_STATUS_DRIVER
+        // false when the device status is CONFIG_STATUS_FEATURES_OK or CONFIG_STATUS_FAILED isn't
+        // CONFIG_STATUS_DRIVER
         virtio_device
             .lock()
             .unwrap()

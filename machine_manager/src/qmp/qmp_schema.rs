@@ -10,12 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use serde::{Deserialize, Serialize};
 pub use serde_json::Value as Any;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use strum_macros::{EnumIter, EnumString, EnumVariantNames};
 
-use super::Version;
-use crate::qmp::{Command, Empty, TimeStamp};
+use super::qmp_channel::TimeStamp;
+use super::qmp_response::{Empty, Version};
+use util::aio::AioEngine;
 
 /// A error enum for qmp
 #[allow(clippy::upper_case_acronyms)]
@@ -436,6 +439,12 @@ pub enum QmpCommand {
     },
 }
 
+/// Command trait for Deserialize and find back Response.
+trait Command: Serialize {
+    type Res: DeserializeOwned;
+    fn back(self) -> Self::Res;
+}
+
 /// qmp_capabilities
 ///
 /// Enable QMP capabilities.
@@ -462,7 +471,7 @@ impl Command for qmp_capabilities {
 ///
 /// This command will cause the StratoVirt process to exit gracefully. While every
 /// attempt is made to send the QMP response before terminating, this is not
-/// guaranteed.  When using this interface, a premature EOF would not be
+/// guaranteed. When using this interface, a premature EOF would not be
 /// unexpected.
 ///
 /// # Examples
@@ -716,6 +725,8 @@ impl Command for update_region {
 pub struct FileOptions {
     pub driver: String,
     pub filename: String,
+    #[serde(default)]
+    pub aio: AioEngine,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -2353,7 +2364,7 @@ pub struct SnapshotInfo {
 
 /// query-mem
 ///
-/// This command  
+/// This command
 ///
 /// # Examples
 ///
@@ -2375,6 +2386,22 @@ impl Command for query_mem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_qmp_event_msg() {
+        let event_json =
+            r#"{"event":"STOP","data":{},"timestamp":{"seconds":1575531524,"microseconds":91519}}"#;
+        let qmp_event: QmpEvent = serde_json::from_str(&event_json).unwrap();
+        match qmp_event {
+            QmpEvent::Stop {
+                data: _,
+                timestamp: _,
+            } => {
+                assert!(true);
+            }
+            _ => assert!(false),
+        }
+    }
 
     #[test]
     fn test_qmp_unexpected_arguments() {

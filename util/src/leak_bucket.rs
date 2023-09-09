@@ -15,13 +15,13 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::clock::get_current_time;
 use crate::loop_context::EventLoopContext;
 use crate::time::NANOSECONDS_PER_SECOND;
-use anyhow::Result;
 
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;
@@ -36,8 +36,8 @@ pub struct LeakBucket {
     prev_time: Instant,
     /// Indicate whether the timer started.
     timer_started: bool,
-    /// When bucket is ready for allowing more IO operation, the internal callback will write this FD.
-    /// This FD should be listened by IO thread.
+    /// When bucket is ready for allowing more IO operation, the internal callback will write this
+    /// FD. This FD should be listened by IO thread.
     timer_wakeup: Arc<EventFd>,
 }
 

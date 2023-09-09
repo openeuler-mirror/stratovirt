@@ -21,6 +21,20 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
+use crate::{
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
+    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk, VirtioError,
+    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
+    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
+    VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
+    VIRTIO_GPU_F_EDID, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
+    VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
+    VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
+};
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -46,21 +60,6 @@ use util::pixman::{
     virtio_gpu_unref_resource_callback,
 };
 
-use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR,
-    VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
-    VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
-    VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
-    VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE, VIRTIO_GPU_F_EDID,
-    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
-    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
-    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
-    VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
-};
-
 /// Number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
 /// Display changed event
@@ -68,6 +67,9 @@ const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
 
 /// The flag indicates that the frame buffer only used in windows.
 const VIRTIO_GPU_RES_WIN_FRAMEBUF: u32 = 0x80000000;
+/// The flag indicates that the frame buffer only used in special bios phase for windows.
+const VIRTIO_GPU_RES_EFI_FRAMEBUF: u32 = 0x40000000;
+const VIRTIO_GPU_RES_FRAMEBUF: u32 = VIRTIO_GPU_RES_WIN_FRAMEBUF | VIRTIO_GPU_RES_EFI_FRAMEBUF;
 
 #[derive(Debug)]
 struct GpuResource {
@@ -280,16 +282,36 @@ struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
-pub struct GpuOpts {
+struct GpuOpts {
     /// Status of the emulated physical outputs.
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Config space of the GPU device.
     config_space: Arc<Mutex<VirtioGpuConfig>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    /// Whether to use it in the bios phase.
+    enable_bar0: bool,
 }
 
 impl HardWareOperations for GpuOpts {
+    fn hw_update(&self, con: Arc<Mutex<DisplayConsole>>) {
+        // Only in the Bios phase and configured with enable_bar0 feature and need to
+        // use special modifications with edk2.
+        if !self.enable_bar0 || get_run_stage() != VmRunningStage::Bios {
+            return;
+        }
+
+        let locked_con = con.lock().unwrap();
+        if locked_con.surface.is_none() {
+            return;
+        }
+        let width = locked_con.width;
+        let height = locked_con.height;
+        drop(locked_con);
+        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, width, height)
+            .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
+    }
+
     fn hw_ui_info(&self, con: Arc<Mutex<DisplayConsole>>, width: u32, height: u32) {
         let con_id = con.lock().unwrap().con_id;
 
@@ -488,14 +510,14 @@ fn create_surface(
 }
 
 // simple formats for fbcon/X use
-pub const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
-pub const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
-pub const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
-pub const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
-pub const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
-pub const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
-pub const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
-pub const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
+const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
+const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
+const VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM: u32 = 4;
+const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
+const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
+const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
+const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
 pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
 
 pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
@@ -589,7 +611,7 @@ impl GpuIoHandler {
         resp: &mut T,
     ) -> Result<()> {
         if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
-            let mut header = resp.mut_ctrl_hdr();
+            let header = resp.mut_ctrl_hdr();
             header.flags |= VIRTIO_GPU_FLAG_FENCE;
             header.fence_id = req.header.fence_id;
             header.ctx_id = req.header.ctx_id;
@@ -600,7 +622,7 @@ impl GpuIoHandler {
             error!(
                 "GuestError: An incomplete response will be used instead of the expected: expected \
                  length is {}, actual length is {}. \
-                 Also, be aware that the virtual machine may suspended if response is too short to  \
+                 Also, be aware that the virtual machine may suspended if response is too short to \
                  carry the necessary information.",
                  size_of::<T>(), len,
             );
@@ -703,6 +725,29 @@ impl GpuIoHandler {
         scanout.cursor_visible = true;
     }
 
+    fn update_cursor(&mut self, info_cursor: &VirtioGpuUpdateCursor, hdr_type: u32) -> Result<()> {
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        match &mut scanout.mouse {
+            None => {
+                let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
+                scanout.mouse = Some(mouse);
+            }
+            Some(mouse) => {
+                if hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
+                    mouse.hot_x = info_cursor.hot_x;
+                    mouse.hot_y = info_cursor.hot_y;
+                }
+            }
+        }
+
+        if info_cursor.resource_id > 0 {
+            self.update_cursor_image(info_cursor);
+        }
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
+        Ok(())
+    }
+
     fn cmd_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_cursor = VirtioGpuUpdateCursor::default();
         self.get_request(req, &mut info_cursor)?;
@@ -736,24 +781,11 @@ impl GpuIoHandler {
                 }
                 display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
                 scanout.cursor_visible = false;
+            } else if info_cursor.resource_id > 0 && !scanout.cursor_visible {
+                self.update_cursor(&info_cursor, VIRTIO_GPU_CMD_MOVE_CURSOR)?;
             }
         } else if req.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
-            match &mut scanout.mouse {
-                None => {
-                    let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
-                    scanout.mouse = Some(mouse);
-                }
-                Some(mouse) => {
-                    mouse.hot_x = info_cursor.hot_x;
-                    mouse.hot_y = info_cursor.hot_y;
-                }
-            }
-
-            if info_cursor.resource_id > 0 {
-                self.update_cursor_image(&info_cursor);
-            }
-            let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
-            display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
+            self.update_cursor(&info_cursor, VIRTIO_GPU_CMD_UPDATE_CURSOR)?;
         } else {
             bail!("Wrong header type for cursor queue");
         }
@@ -956,7 +988,7 @@ impl GpuIoHandler {
         let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
-        let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+        let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 {
             res.iov[0].iov_base as *mut u32
         } else {
             unsafe { pixman_image_get_data(res.pixman_image) }
@@ -1086,7 +1118,7 @@ impl GpuIoHandler {
         }
 
         let res = &self.resources_list[res_idx.unwrap()];
-        if res.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF != 0 {
+        if res.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 {
             return (None, VIRTIO_GPU_RESP_OK_NODATA);
         }
         if !is_rect_in_resource(&info_transfer.rect, res) {
@@ -1416,7 +1448,7 @@ impl EventNotifierHelper for GpuIoHandler {
 }
 
 #[derive(Clone, Copy, Debug, ByteCode)]
-pub struct VirtioGpuConfig {
+struct VirtioGpuConfig {
     events_read: u32,
     events_clear: u32,
     num_scanouts: u32,
@@ -1466,6 +1498,13 @@ impl VirtioDevice for Gpu {
         &mut self.base
     }
 
+    fn device_quirk(&self) -> Option<VirtioDeviceQuirk> {
+        if self.cfg.enable_bar0 {
+            return Some(VirtioDeviceQuirk::VirtioGpuEnableBar0);
+        }
+        None
+    }
+
     fn realize(&mut self) -> Result<()> {
         if self.cfg.max_outputs > VIRTIO_GPU_MAX_OUTPUTS as u32 {
             bail!(
@@ -1483,6 +1522,7 @@ impl VirtioDevice for Gpu {
             output_states: self.output_states.clone(),
             config_space: self.config_space.clone(),
             interrupt_cb: None,
+            enable_bar0: self.cfg.enable_bar0,
         });
         for i in 0..self.cfg.max_outputs {
             let dev_name = format!("virtio-gpu{}", i);
@@ -1491,6 +1531,7 @@ impl VirtioDevice for Gpu {
             output_states[i as usize].con_id = con_ref.lock().unwrap().con_id;
             self.consoles.push(con);
         }
+
         drop(output_states);
 
         self.init_config_features()?;
@@ -1531,7 +1572,7 @@ impl VirtioDevice for Gpu {
         let config_cpy_slice = config_cpy.as_mut_bytes();
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
-        if config_space.events_clear != 0 {
+        if config_cpy.events_clear != 0 {
             config_space.events_read &= !config_cpy.events_clear;
         }
 
@@ -1557,6 +1598,7 @@ impl VirtioDevice for Gpu {
             output_states: self.output_states.clone(),
             config_space: self.config_space.clone(),
             interrupt_cb: Some(interrupt_cb.clone()),
+            enable_bar0: self.cfg.enable_bar0,
         });
         for con in &self.consoles {
             let con_ref = con.as_ref().unwrap().upgrade().unwrap();

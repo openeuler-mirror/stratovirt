@@ -10,6 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::{thread, time};
+
+use serde_json::json;
+
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::pci::*;
@@ -22,11 +28,6 @@ use mod_test::libdriver::virtio_block::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState};
 use mod_test::utils::{cleanup_img, create_img, read_le_u16, ImageType, TEST_IMAGE_SIZE};
-
-use serde_json::json;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::{thread, time};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1af4;
 const BLK_DEVICE_ID: u16 = 0x1042;
@@ -43,7 +44,6 @@ struct DemoDev {
 }
 
 fn fmt_demo_deves(cfg: DemoDev, num: u8) -> String {
-    // let mut dev_str = format!("-device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.{}", cfg.bus_num);
     let mut dev_str: String = String::new();
 
     for i in 1..num + 1 {
@@ -248,8 +248,8 @@ fn build_hotplug_blk_cmd(
     let add_blk_command = format!(
         "{{\"execute\": \"blockdev-add\", \
         \"arguments\": {{\"node-name\": \"drive-{}\", \"file\": {{\"driver\": \
-        \"file\", \"filename\": \"{}\"}}, \"cache\": {{\"direct\": true}}, \
-        \"read-only\": false}}}}",
+        \"file\", \"filename\": \"{}\", \"aio\": \"native\"}}, \
+        \"cache\": {{\"direct\": true}}, \"read-only\": false}}}}",
         hotplug_blk_id, hotplug_image_path
     );
 
@@ -1121,7 +1121,8 @@ fn test_pci_type0_config() {
         0xFFFF,
     );
 
-    // verify that the lower three bits of the command register of type0 device is readable and writable.
+    // verify that the lower three bits of the command register of type0 device is readable and
+    // writable.
     validate_config_perm_2byte(blk.borrow().pci_dev.clone(), PCI_COMMAND, 0x4, 0x4, 0x7);
 
     // verify that the interrupt status of the status register of type0 device is read-only.
@@ -2031,7 +2032,7 @@ fn test_pci_hotunplug_001() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    // Create root port whose  bdf is 0:1:0.
+    // Create root port whose bdf is 0:1:0.
     let root_port = Rc::new(RefCell::new(RootPort::new(
         machine.clone(),
         alloc.clone(),
@@ -2275,7 +2276,8 @@ fn test_pci_hotunplug_006() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
-/// Guest sets PIC/PCC twice during hotunplug, the device ignores the 2nd write to speed up hotunplug.
+/// Guest sets PIC/PCC twice during hotunplug, the device ignores the 2nd write to speed up
+/// hotunplug.
 #[test]
 fn test_pci_hotunplug_007() {
     let blk_nums = 1;
@@ -2329,7 +2331,7 @@ fn test_pci_hotunplug_008() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    // Create root port whose  bdf is 0:1:0.
+    // Create root port whose bdf is 0:1:0.
     let root_port = Rc::new(RefCell::new(RootPort::new(
         machine.clone(),
         alloc.clone(),
@@ -2910,7 +2912,7 @@ fn test_pci_root_port_exp_cap() {
 fn test_pci_combine_000() {
     let cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -2937,7 +2939,7 @@ fn test_pci_combine_000() {
 fn test_pci_combine_001() {
     let cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -3034,7 +3036,7 @@ fn test_pci_combine_002() {
 fn test_pci_combine_003() {
     let mut cfg = DemoDev {
         bar_num: 3,
-        bar_size: 0x100_0000, //16MB
+        bar_size: 0x100_0000, // 16MB
         bus_num: 0,
         dev_num: 5,
     };
@@ -3044,7 +3046,7 @@ fn test_pci_combine_003() {
     // the mmio space is 78MB, bar1 got over bounded
     assert!(bar_addr != INVALID_BAR_ADDR);
 
-    cfg.bar_size = 0x1000_0000; //2GB
+    cfg.bar_size = 0x1000_0000; // 2GB
     let (pci_dev, _) = init_demo_dev(cfg, 1);
     let bar_addr = pci_dev.borrow().io_map(0);
 

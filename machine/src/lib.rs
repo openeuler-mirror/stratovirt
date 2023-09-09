@@ -11,12 +11,18 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod error;
-mod micro_vm;
 pub mod standard_vm;
+
+mod micro_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
 
+pub use anyhow::Result;
+
 pub use crate::error::MachineError;
+pub use micro_vm::LightMachine;
+pub use standard_vm::StdMachine;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
@@ -24,72 +30,77 @@ use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
-#[cfg(not(target_env = "musl"))]
-use devices::misc::scream::Scream;
+use anyhow::{anyhow, bail, Context};
 use log::warn;
-#[cfg(not(target_env = "musl"))]
-use machine_manager::config::scream::parse_scream;
-use machine_manager::event_loop::EventLoop;
-#[cfg(not(target_env = "musl"))]
-use ui::console::{get_run_stage, VmRunningStage};
-use util::file::{clear_file, lock_file, unlock_file};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
-
-pub use micro_vm::LightMachine;
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{
     create_backend_mem, create_default_mem, AddressSpace, KvmMemoryListener, Region,
 };
-pub use anyhow::Result;
-use anyhow::{anyhow, bail, Context};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
+#[cfg(feature = "scream")]
+use devices::misc::scream::Scream;
+#[cfg(feature = "demo_device")]
+use devices::pci::demo_dev::DemoDev;
+use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
+use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
+#[cfg(feature = "usb_camera")]
+use devices::usb::camera::UsbCamera;
+#[cfg(feature = "usb_host")]
+use devices::usb::usbhost::UsbHost;
+use devices::usb::{
+    keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
+    UsbDeviceOps,
+};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-
-#[cfg(not(target_env = "musl"))]
-use devices::usb::{
-    camera::UsbCamera, keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet,
-    usbhost::UsbHost, xhci::xhci_pci::XhciPciDevice, UsbDeviceOps,
-};
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(feature = "demo_device")]
+use machine_manager::config::parse_demo_dev;
+#[cfg(feature = "virtio_gpu")]
+use machine_manager::config::parse_gpu;
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::parse_usb_camera;
+#[cfg(feature = "usb_host")]
+use machine_manager::config::parse_usb_host;
+#[cfg(feature = "scream")]
+use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
-    parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio,
-    parse_vhost_user_blk_pci, parse_virtio_serial, parse_virtserialport, parse_vsock,
-    BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
-    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk_pci,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, DriveFile, Incoming,
+    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig,
+    PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
-#[cfg(not(target_env = "musl"))]
 use machine_manager::config::{
-    parse_gpu, parse_usb_camera, parse_usb_host, parse_usb_keyboard, parse_usb_storage,
-    parse_usb_tablet, parse_xhci,
+    parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
-use pci::{demo_dev::DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
-pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType};
+#[cfg(feature = "windows_emu_pid")]
+use ui::console::{get_run_stage, VmRunningStage};
+use util::file::{clear_file, lock_file, unlock_file};
 use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
@@ -468,7 +479,7 @@ pub trait MachineOps {
             // Micro_vm.
             for dev in self.get_sys_bus().devices.iter() {
                 let locked_busdev = dev.lock().unwrap();
-                if locked_busdev.get_type() == SysBusDevType::VirtioMmio {
+                if locked_busdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
                     let virtio_mmio_dev = locked_busdev
                         .as_any()
                         .downcast_ref::<VirtioMmioDevice>()
@@ -642,7 +653,6 @@ pub trait MachineOps {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
@@ -662,14 +672,14 @@ pub trait MachineOps {
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
-            // Because device_del needs an id when removing a device, it's necessary to ensure that the id is unique.
+            // Because device_del needs an id when removing a device, it's necessary to ensure that
+            // the id is unique.
             if name.is_empty() {
                 bail!("Device id is empty");
             }
             if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
                 bail!("Device id {} existed", name);
             }
-            #[cfg(not(target_env = "musl"))]
             if self.check_id_existed_in_xhci(name).unwrap_or_default() {
                 bail!("Device id {} existed in xhci", name);
             }
@@ -992,7 +1002,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1197,7 +1207,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let device_cfg = parse_xhci(cfg_args)?;
@@ -1216,7 +1225,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - scream configuration.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "scream")]
     fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
@@ -1289,7 +1298,6 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `usb_dev` - Usb device.
-    #[cfg(not(target_env = "musl"))]
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1314,7 +1322,6 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `id` - id of the usb device.
-    #[cfg(not(target_env = "musl"))]
     fn detach_usb_from_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1338,7 +1345,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Keyboard Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
         // SAFETY: id is already checked not none in parse_usb_keyboard().
@@ -1355,7 +1361,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Tablet Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
         // SAFETY: id is already checked not none in parse_usb_tablet().
@@ -1374,7 +1379,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Camera Configuration.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "usb_camera")]
     fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
         let camera = UsbCamera::new(device_cfg)?;
@@ -1390,7 +1395,6 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - USB Storage Configuration.
-    #[cfg(not(target_env = "musl"))]
     fn add_usb_storage(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
         let storage = UsbStorage::new(device_cfg, self.get_drive_files());
@@ -1408,7 +1412,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - USB Host Configuration.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "usb_host")]
     fn add_usb_host(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_host(cfg_args)?;
         let usbhost = UsbHost::new(device_cfg)?;
@@ -1507,42 +1511,39 @@ pub trait MachineOps {
                 "vhost-user-fs-pci" | "vhost-user-fs-device" => {
                     self.add_virtio_fs(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-kbd" => {
                     self.add_usb_keyboard(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "usb_camera")]
                 "usb-camera" => {
                     self.add_usb_camera(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
                 "usb-storage" => {
                     self.add_usb_storage(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "usb_host")]
                 "usb-host" => {
                     self.add_usb_host(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "virtio_gpu")]
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "ramfb")]
                 "ramfb" => {
                     self.add_ramfb(cfg_args)?;
                 }
+                #[cfg(feature = "demo_device")]
                 "pcie-demo-dev" => {
                     self.add_demo_dev(vm_config, cfg_args)?;
                 }
-                #[cfg(not(target_env = "musl"))]
+                #[cfg(feature = "scream")]
                 "ivshmem-scream" => {
                     self.add_ivshmem_scream(vm_config, cfg_args)?;
                 }
@@ -1567,6 +1568,7 @@ pub trait MachineOps {
         bail!("Display is not supported.");
     }
 
+    #[cfg(feature = "demo_device")]
     fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
@@ -1851,7 +1853,7 @@ pub trait MachineOps {
     }
 }
 
-/// Normal run or resume virtual machine from migration/snapshot  .
+/// Normal run or resume virtual machine from migration/snapshot.
 ///
 /// # Arguments
 ///
@@ -1936,7 +1938,7 @@ fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
     ])
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "windows_emu_pid")]
 fn check_windows_emu_pid(
     pid_path: String,
     powerdown_req: Arc<EventFd>,

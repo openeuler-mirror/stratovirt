@@ -11,27 +11,36 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::max;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::prelude::RawFd;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-
-use address_space::{AddressSpace, Region};
-use log::debug;
-use machine_manager::config::XhciConfig;
-use pci::config::{
-    PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
-    PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
-};
-use pci::msix::update_dev_id;
-use pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevOps};
+use log::{debug, error};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use super::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
 };
+use crate::pci::config::{
+    PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
+    PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
+};
+use crate::pci::msix::update_dev_id;
+use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDeviceOps;
+use crate::{Device, DeviceBase};
+use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
+use machine_manager::config::XhciConfig;
+use machine_manager::event_loop::register_event_helper;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;
@@ -58,17 +67,17 @@ const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
 
 /// Registers offset.
 /// 0x0    0x40    0x440    0x1000    0x2000      0x3000   0x4000
-/// | cap  | oper  | port   | runtime | doorbell  | MSIX   |      
+/// | cap  | oper  | port   | runtime | doorbell  | MSIX   |
 
 /// XHCI pci device which can be attached to PCI bus.
 pub struct XhciPciDevice {
-    pci_config: PciConfig,
-    devfn: u8,
+    base: PciDevBase,
     pub xhci: Arc<Mutex<XhciDevice>>,
     dev_id: Arc<AtomicU16>,
-    name: String,
-    parent_bus: Weak<Mutex<PciBus>>,
     mem_region: Region,
+    doorbell_fd: Arc<EventFd>,
+    delete_evts: Vec<RawFd>,
+    iothread: Option<String>,
 }
 
 impl XhciPciDevice {
@@ -79,30 +88,33 @@ impl XhciPciDevice {
         mem_space: &Arc<AddressSpace>,
     ) -> Self {
         Self {
-            pci_config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
-            devfn,
+            base: PciDevBase {
+                base: DeviceBase::new(config.id.clone().unwrap(), true),
+                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
+                devfn,
+                parent_bus,
+            },
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
-            name: config.id.clone().unwrap(),
-            parent_bus,
             mem_region: Region::init_container_region(
                 XHCI_PCI_CONFIG_LENGTH as u64,
                 "XhciPciContainer",
             ),
+            doorbell_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            delete_evts: Vec::new(),
+            iothread: config.iothread.clone(),
         }
     }
 
-    fn mem_region_init(&mut self) -> pci::Result<()> {
+    fn mem_region_init(&mut self) -> Result<()> {
         let cap_region = Region::init_io_region(
             XHCI_PCI_CAP_LENGTH as u64,
             build_cap_ops(&self.xhci),
             "XhciPciCapRegion",
         );
-        pci::Result::with_context(
-            self.mem_region
-                .add_subregion(cap_region, XHCI_PCI_CAP_OFFSET as u64),
-            || "Failed to register cap region.",
-        )?;
+        self.mem_region
+            .add_subregion(cap_region, XHCI_PCI_CAP_OFFSET as u64)
+            .with_context(|| "Failed to register cap region.")?;
 
         let mut oper_region = Region::init_io_region(
             XHCI_PCI_OPER_LENGTH as u64,
@@ -110,11 +122,9 @@ impl XhciPciDevice {
             "XhciPciOperRegion",
         );
         oper_region.set_access_size(4);
-        pci::Result::with_context(
-            self.mem_region
-                .add_subregion(oper_region, XHCI_PCI_OPER_OFFSET as u64),
-            || "Failed to register oper region.",
-        )?;
+        self.mem_region
+            .add_subregion(oper_region, XHCI_PCI_OPER_OFFSET as u64)
+            .with_context(|| "Failed to register oper region.")?;
 
         let port_num = self.xhci.lock().unwrap().usb_ports.len();
         for i in 0..port_num {
@@ -125,9 +135,9 @@ impl XhciPciDevice {
                 "XhciPciPortRegion",
             );
             let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
-            pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
-                "Failed to register port region."
-            })?;
+            self.mem_region
+                .add_subregion(port_region, offset)
+                .with_context(|| "Failed to register port region.")?;
         }
 
         let mut runtime_region = Region::init_io_region(
@@ -136,23 +146,30 @@ impl XhciPciDevice {
             "XhciPciRuntimeRegion",
         );
         runtime_region.set_access_size(4);
-        pci::Result::with_context(
-            self.mem_region
-                .add_subregion(runtime_region, XHCI_PCI_RUNTIME_OFFSET as u64),
-            || "Failed to register runtime region.",
-        )?;
+        self.mem_region
+            .add_subregion(runtime_region, XHCI_PCI_RUNTIME_OFFSET as u64)
+            .with_context(|| "Failed to register runtime region.")?;
 
         let doorbell_region = Region::init_io_region(
             XHCI_PCI_DOORBELL_LENGTH as u64,
             build_doorbell_ops(&self.xhci),
             "XhciPciDoorbellRegion",
         );
-        pci::Result::with_context(
-            self.mem_region
-                .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64),
-            || "Failed to register doorbell region.",
-        )?;
+        doorbell_region.set_ioeventfds(&self.ioeventfds());
+
+        self.mem_region
+            .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64)
+            .with_context(|| "Failed to register doorbell region.")?;
         Ok(())
+    }
+
+    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+        vec![RegionIoEventFd {
+            fd: self.doorbell_fd.clone(),
+            addr_range: AddressRange::from((0, 4u64)),
+            data_match: false,
+            data: 0,
+        }]
     }
 
     pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
@@ -196,68 +213,129 @@ impl XhciPciDevice {
     }
 }
 
+impl Device for XhciPciDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
+struct DoorbellHandler {
+    xhci: Arc<Mutex<XhciDevice>>,
+    fd: Arc<EventFd>,
+}
+
+impl DoorbellHandler {
+    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
+        DoorbellHandler { xhci, fd }
+    }
+}
+
+impl EventNotifierHelper for DoorbellHandler {
+    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_io_handler = io_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            let locked_handler = cloned_io_handler.lock().unwrap();
+            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
+
+            if !locked_xhci.running() {
+                error!("Failed to write doorbell, XHCI is not running");
+                return None;
+            }
+            if let Err(e) = locked_xhci.handle_command() {
+                error!("Failed to handle command: {:?}", e);
+                locked_xhci.host_controller_error();
+            }
+
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            io_handler.lock().unwrap().fd.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
+    }
+}
+
 impl PciDevOps for XhciPciDevice {
-    fn init_write_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_mask()
+    fn pci_base(&self) -> &PciDevBase {
+        &self.base
     }
 
-    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
-        self.pci_config.init_common_write_clear_mask()
+    fn pci_base_mut(&mut self) -> &mut PciDevBase {
+        &mut self.base
     }
 
-    fn realize(mut self) -> pci::Result<()> {
-        self.init_write_mask()?;
-        self.init_write_clear_mask()?;
+    fn realize(mut self) -> Result<()> {
+        self.init_write_mask(false)?;
+        self.init_write_clear_mask(false)?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             VENDOR_ID as usize,
             PCI_VENDOR_ID_REDHAT,
         )?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             DEVICE_ID as usize,
             PCI_DEVICE_ID_REDHAT_XHCI,
         )?;
-        le_write_u16(&mut self.pci_config.config, REVISION_ID, 0x3_u16)?;
+        le_write_u16(&mut self.base.config.config, REVISION_ID, 0x3_u16)?;
         le_write_u16(
-            &mut self.pci_config.config,
+            &mut self.base.config.config,
             SUB_CLASS_CODE as usize,
             PCI_CLASS_SERIAL_USB,
         )?;
-        self.pci_config.config[PCI_CLASS_PI as usize] = 0x30;
+        self.base.config.config[PCI_CLASS_PI as usize] = 0x30;
 
         #[cfg(target_arch = "aarch64")]
-        self.pci_config.set_interrupt_pin();
+        self.base.config.set_interrupt_pin();
 
-        self.pci_config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
-        self.pci_config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
+        self.base.config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
+        self.base.config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
-        self.pci_config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
+        self.base.config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
             PCI_NO_FRAME_LENGTH_TIMING_CAP;
-        self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
+        self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
         self.mem_region_init()?;
+
+        let handler = Arc::new(Mutex::new(DoorbellHandler::new(
+            self.xhci.clone(),
+            self.doorbell_fd.clone(),
+        )));
+
+        register_event_helper(
+            EventNotifierHelper::internal_notifiers(handler),
+            self.iothread.as_ref(),
+            &mut self.delete_evts,
+        )?;
 
         let intrs_num = self.xhci.lock().unwrap().intrs.len() as u32;
         init_msix(
             0_usize,
             intrs_num,
-            &mut self.pci_config,
+            &mut self.base.config,
             self.dev_id.clone(),
-            &self.name,
+            &self.base.base.id,
             Some(&self.mem_region),
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
         init_intx(
-            self.name.clone(),
-            &mut self.pci_config,
-            self.parent_bus.clone(),
-            self.devfn,
+            self.name(),
+            &mut self.base.config,
+            self.base.parent_bus.clone(),
+            self.base.devfn,
         )?;
 
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
-        self.pci_config.register_bar(
+        self.base.config.register_bar(
             0_usize,
             self.mem_region.clone(),
             RegionType::Mem64Bit,
@@ -265,10 +343,10 @@ impl PciDevOps for XhciPciDevice {
             mem_region_size,
         )?;
 
-        let devfn = self.devfn;
+        let devfn = self.base.devfn;
         // It is safe to unwrap, because it is initialized in init_msix.
-        let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
-        let cloned_intx = self.pci_config.intx.as_ref().unwrap().clone();
+        let cloned_msix = self.base.config.msix.as_ref().unwrap().clone();
+        let cloned_intx = self.base.config.intx.as_ref().unwrap().clone();
         let cloned_dev_id = self.dev_id.clone();
         // Registers the msix to the xhci device for interrupt notification.
         self.xhci
@@ -288,7 +366,7 @@ impl PciDevOps for XhciPciDevice {
             }));
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
-        let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
+        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
@@ -303,24 +381,16 @@ impl PciDevOps for XhciPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> pci::Result<()> {
+    fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn devfn(&self) -> Option<u8> {
-        Some(self.devfn)
-    }
-
-    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        self.pci_config.read(offset, data);
-    }
-
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
-        let parent_bus = self.parent_bus.upgrade().unwrap();
+        update_dev_id(&self.base.parent_bus, self.base.devfn, &self.dev_id);
+        let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
 
-        self.pci_config.write(
+        self.base.config.write(
             offset,
             data,
             self.dev_id.clone().load(Ordering::Acquire),
@@ -330,14 +400,10 @@ impl PciDevOps for XhciPciDevice {
         );
     }
 
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.xhci.lock().unwrap().reset();
 
-        self.pci_config.reset()?;
+        self.base.config.reset()?;
 
         Ok(())
     }

@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cmp, mem};
+
 use crate::{
     pixman::{bytes_per_pixel, get_image_data, get_image_stride},
     vnc::{
@@ -17,7 +19,6 @@ use crate::{
         write_pixel,
     },
 };
-use std::{cmp, mem};
 use util::pixman::pixman_image_t;
 
 /// Size of subrectangle.
@@ -125,7 +126,7 @@ fn compress_each_tile<'a>(
                 client_dpm,
                 &mut tmp_buf,
             );
-            //If the length becomes longer after compression, give up compression.
+            // If the length becomes longer after compression, give up compression.
             if tmp_buf.len() > (sub_rect.h * sub_rect.w * client_dpm.pf.pixel_bytes as i32) as usize
             {
                 flag = RAW;
@@ -175,7 +176,7 @@ fn compress_each_tile<'a>(
 /// * `data_ptr` - pointer to the data of image.
 /// * `bg` - background of current tile.
 /// * `fg` - foreground of current tile.
-/// * `stride` -  stride of image.
+/// * `stride` - stride of image.
 /// * `buf` - send buffer.
 fn subrectangle_of_foreground(
     sub_rect: &Rectangle,
@@ -213,10 +214,10 @@ fn subrectangle_of_foreground(
 /// # Arguments
 ///
 /// * `sub_rect` - area of tile.
-/// * `data_ptr` -  pointer to the data of image.
+/// * `data_ptr` - pointer to the data of image.
 /// * `bg` - background of current tile.
 /// * `stride` - stride of image.
-/// * `client_dpm` -  Output mode information of client display.
+/// * `client_dpm` - Output mode information of client display.
 /// * `buf` - send buffer.
 fn subrectangle_with_pixel_value(
     sub_rect: &Rectangle,

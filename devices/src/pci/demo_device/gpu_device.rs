@@ -19,14 +19,17 @@
 // Set dirty for target area of the surface 、
 // Update the cursor image.
 
-use address_space::{AddressSpace, GuestAddress};
-use anyhow::{bail, Result};
-use byteorder::{ByteOrder, LittleEndian};
-use log::info;
 use std::{
     ptr,
     sync::{Arc, Mutex, Weak},
 };
+
+use anyhow::{bail, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::info;
+
+use crate::pci::demo_dev::DeviceTypeOperation;
+use address_space::{AddressSpace, GuestAddress};
 use ui::{
     console::{
         console_close, console_init, display_cursor_define, display_graphic_update,
@@ -38,8 +41,8 @@ use ui::{
     },
 };
 use util::pixman::pixman_format_code_t;
+
 pub const UPDATE_FACTOR: [u8; 7] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40];
-use crate::demo_dev::DeviceTypeOperation;
 
 #[derive(Debug)]
 pub enum GpuEvent {

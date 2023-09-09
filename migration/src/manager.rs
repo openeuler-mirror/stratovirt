@@ -17,13 +17,13 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
+use anyhow::{Context, Result};
 use log::info;
 use once_cell::sync::Lazy;
 
 use crate::general::translate_id;
 use crate::migration::DirtyBitmap;
 use crate::protocol::{DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer};
-use anyhow::{Context, Result};
 use machine_manager::config::VmConfig;
 use machine_manager::machine::MachineLifecycle;
 use util::byte_code::ByteCode;
@@ -50,8 +50,8 @@ pub trait MigrationHook: StateTransfer {
     ///
     /// # Arguments
     ///
-    /// * `id` - This unique id to represent a single device. It can be treated
-    ///          as `object_id` in `InstanceId`.
+    /// * `id` - This unique id to represent a single device. It can be treated as `object_id` in
+    ///   `InstanceId`.
     /// * `fd` - The `Write` trait object to save device data.
     fn save_device(&self, id: u64, fd: &mut dyn Write) -> Result<()> {
         let state_data = self

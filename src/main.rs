@@ -15,15 +15,17 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use thiserror::Error;
+
 use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::MachineType,
     config::VmConfig,
     event_loop::EventLoop,
-    qmp::QmpChannel,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_socket::Socket,
     signal_handler::{exit_with_code, register_kill_signal, VM_EXIT_GENE_ERR},
-    socket::Socket,
     temp_cleaner::TempCleaner,
     test_server::TestSock,
 };
@@ -31,10 +33,8 @@ use util::loop_context::EventNotifierHelper;
 use util::test_helper::{is_test_enabled, set_test_enabled};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
-use thiserror::Error;
-
 #[derive(Error, Debug)]
-pub enum MainError {
+enum MainError {
     #[error("Manager")]
     Manager {
         #[from]
@@ -57,7 +57,7 @@ pub enum MainError {
     },
 }
 
-pub trait ExitCode {
+trait ExitCode {
     /// Returns the value to use as the exit status.
     fn code(self) -> i32;
 }

@@ -78,13 +78,14 @@ pub const VIRTIO_SCSI_T_TMF_QUERY_TASK_SET: u32 = 7;
 /// Command-specific response values.
 /// The request was completed and the status byte if filled with a SCSI status code.
 const VIRTIO_SCSI_S_OK: u8 = 0;
-/// If the content of the CDB(such as the allocation length, parameter length or transfer size) requires
-/// more data than is available in the datain and dataout buffers.
+/// If the content of the CDB(such as the allocation length, parameter length or transfer size)
+/// requires more data than is available in the datain and dataout buffers.
 const VIRTIO_SCSI_S_OVERRUN: u8 = 1;
 /// The request was never processed because the target indicated by lun does not exist.
 const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
-/// Other host or driver error. In particular, if neither dataout nor datain is empty, and the VIRTIO_SCSI_F_INOUT
-/// feature has not been negotiated, the request will be immediately returned with a response equal to VIRTIO_SCSI_S_FAILURE.
+/// Other host or driver error. In particular, if neither dataout nor datain is empty, and the
+/// VIRTIO_SCSI_F_INOUT feature has not been negotiated, the request will be immediately returned
+/// with a response equal to VIRTIO_SCSI_S_FAILURE.
 const VIRTIO_SCSI_S_FAILURE: u8 = 9;
 
 #[repr(C, packed)]
@@ -353,7 +354,7 @@ impl ByteCode for VirtioScsiCtrlAnResp {}
 
 #[repr(C, packed)]
 #[derive(Default, Clone, Copy)]
-pub struct VirtioScsiCmdReq {
+struct VirtioScsiCmdReq {
     /// Logical Unit Number.
     lun: [u8; 8],
     /// Command identifier.
@@ -370,7 +371,7 @@ impl ByteCode for VirtioScsiCmdReq {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct VirtioScsiCmdResp {
+struct VirtioScsiCmdResp {
     /// Sense data length.
     sense_len: u32,
     /// Resudual bytes in data buffer.
@@ -532,9 +533,9 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
             .with_context(|| "Failed to write the scsi response")?;
 
         let mut queue_lock = self.queue.lock().unwrap();
-        // Note: U(response) is the header part of in_iov and self.data_len is the rest part of the in_iov or
-        // the out_iov. in_iov and out_iov total len is no more than DESC_CHAIN_MAX_TOTAL_LEN(1 << 32). So,
-        // it will not overflow here.
+        // Note: U(response) is the header part of in_iov and self.data_len is the rest part of the
+        // in_iov or the out_iov. in_iov and out_iov total len is no more than
+        // DESC_CHAIN_MAX_TOTAL_LEN(1 << 32). So, it will not overflow here.
         queue_lock
             .vring
             .add_used(
@@ -566,7 +567,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
     }
 }
 
-pub struct ScsiCtrlQueueHandler {
+struct ScsiCtrlQueueHandler {
     /// The ctrl virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the ctrl virtqueue.
@@ -626,7 +627,8 @@ impl ScsiCtrlQueueHandler {
                     )?;
                     info!("incomplete tmf req, subtype {}!", tmf.req.subtype);
                     // Scsi Task Management Function is not supported.
-                    // So, do nothing when stratovirt receives TMF request except responding guest scsi drivers.
+                    // So, do nothing when stratovirt receives TMF request except responding guest
+                    // scsi drivers.
                     tmf.resp.response = VIRTIO_SCSI_S_OK;
                     tmf.complete()?;
                 }
@@ -675,7 +677,7 @@ impl EventNotifierHelper for ScsiCtrlQueueHandler {
     }
 }
 
-pub struct ScsiEventQueueHandler {
+struct ScsiEventQueueHandler {
     /// The Event virtqueue.
     _queue: Arc<Mutex<Queue>>,
     /// EventFd for the Event virtqueue.
@@ -739,7 +741,7 @@ fn virtio_scsi_get_lun_id(lun: [u8; 8]) -> u16 {
     (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
 }
 
-pub struct ScsiCmdQueueHandler {
+struct ScsiCmdQueueHandler {
     /// The scsi controller.
     scsibus: Arc<Mutex<ScsiBus>>,
     /// The Cmd virtqueue.
@@ -887,7 +889,8 @@ impl ScsiCmdQueueHandler {
             Box::new(qrequest.clone()),
         );
         if scsi_req.is_err() {
-            // Wrong scsi cdb. Response CHECK_CONDITION / SCSI_SENSE_INVALID_OPCODE to guest scsi drivers.
+            // Wrong scsi cdb. Response CHECK_CONDITION / SCSI_SENSE_INVALID_OPCODE to guest scsi
+            // drivers.
             qrequest.resp.set_scsi_sense(SCSI_SENSE_INVALID_OPCODE);
             qrequest.resp.status = CHECK_CONDITION;
             qrequest.complete()?;

@@ -14,10 +14,9 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use util::byte_code::ByteCode;
-
 use super::config::*;
 use super::UsbDevice;
+use util::byte_code::ByteCode;
 
 pub const USB_MAX_INTERFACES: u32 = 16;
 const USB_DESCRIPTOR_TYPE_SHIFT: u32 = 8;
@@ -555,7 +554,7 @@ impl UsbDescriptorOps for UsbDevice {
                     == USB_DIRECTION_DEVICE_TO_HOST;
                 let ep = iface.endpoints[e as usize].endpoint_desc.bEndpointAddress
                     & USB_ENDPOINT_ADDRESS_NUMBER_MASK;
-                let mut usb_ep = self.get_mut_endpoint(in_direction, ep);
+                let usb_ep = self.get_mut_endpoint(in_direction, ep);
                 usb_ep.ep_type = iface.endpoints[e as usize].endpoint_desc.bmAttributes
                     & USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK;
             }

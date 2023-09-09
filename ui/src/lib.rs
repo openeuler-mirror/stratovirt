@@ -10,11 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "console")]
 pub mod console;
-mod data;
 pub mod error;
+#[cfg(feature = "gtk")]
 pub mod gtk;
 pub mod input;
+#[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod utils;
+#[cfg(feature = "vnc")]
 pub mod vnc;
+
+mod data;

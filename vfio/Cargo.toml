@@ -20,4 +20,4 @@ once_cell = "1.18.0"
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
 util = { path = "../util" }
-pci = { path = "../pci" }
+devices = { path = "../devices" }

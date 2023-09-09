@@ -17,16 +17,18 @@
 // Currently, the supported operations are:
 // Get surface size, Get cursor image size, Get Surface data, Get cursor image data.
 
-use crate::demo_dev::DeviceTypeOperation;
-use address_space::{AddressSpace, GuestAddress};
-use anyhow::{bail, Ok, Result};
-use byteorder::{ByteOrder, LittleEndian};
-use log::error;
-use once_cell::sync::Lazy;
 use std::{
     ptr,
     sync::{Arc, Mutex},
 };
+
+use anyhow::{bail, Ok, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::error;
+use once_cell::sync::Lazy;
+
+use crate::pci::demo_dev::DeviceTypeOperation;
+use address_space::{AddressSpace, GuestAddress};
 use ui::{
     console::{
         register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayMouse,

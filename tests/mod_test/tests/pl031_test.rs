@@ -10,11 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
-use mod_test::libtest::{test_init, TestState};
-use rand::{thread_rng, Rng};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use rand::{thread_rng, Rng};
+
+use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
+use mod_test::libtest::{test_init, TestState};
 
 const RTC_ADDR_BASE: u64 = 0x0901_0000;
 
@@ -47,7 +49,6 @@ fn set_up() -> TestState {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn check_time() {
     let mut ts = set_up();
 
@@ -69,7 +70,6 @@ fn check_time() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn set_time() {
     let mut ts = set_up();
     let time1 = pl031_read_time(&ts);
@@ -87,7 +87,6 @@ fn set_time() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn rtc_enable() {
     let mut ts = set_up();
 
@@ -96,7 +95,6 @@ fn rtc_enable() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn set_mask() {
     let mut ts = set_up();
 
@@ -107,7 +105,6 @@ fn set_mask() {
 }
 
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn reg_fuzz() {
     let mut ts = set_up();
     let mut rng = thread_rng();

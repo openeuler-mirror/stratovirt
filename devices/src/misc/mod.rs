@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(not(target_env = "musl"))]
-mod ivshmem;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "scream")]
 pub mod scream;
+
+#[cfg(feature = "scream")]
+mod ivshmem;

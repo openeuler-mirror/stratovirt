@@ -13,8 +13,9 @@
 use std::fs::File;
 use std::os::unix::prelude::IntoRawFd;
 
-use crate::syscall;
 use anyhow::{Context, Result};
+
+use crate::syscall;
 
 const ROOT_DIR_NAME: &str = "/";
 const OLD_ROOT_DIR_NAME: &str = "old_root";

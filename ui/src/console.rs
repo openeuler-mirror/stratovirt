@@ -22,14 +22,13 @@ use anyhow::Result;
 use log::error;
 use once_cell::sync::Lazy;
 
-use machine_manager::event_loop::EventLoop;
-use util::pixman::{pixman_format_code_t, pixman_image_t};
-
 use crate::pixman::{
     create_pixman_image, get_image_data, get_image_height, get_image_stride, get_image_width,
     pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, ColorNames,
     COLOR_TABLE_RGB,
 };
+use machine_manager::event_loop::EventLoop;
+use util::pixman::{pixman_format_code_t, pixman_image_t};
 
 static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
     Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));
@@ -70,9 +69,9 @@ pub enum VmRunningStage {
 }
 
 #[derive(Default)]
-pub struct UiInfo {
-    pub last_width: u32,
-    pub last_height: u32,
+struct UiInfo {
+    last_width: u32,
+    last_height: u32,
 }
 
 /// Image data defined in display.
@@ -195,7 +194,7 @@ pub struct DisplayConsole {
     pub con_type: ConsoleType,
     pub width: i32,
     pub height: i32,
-    pub ui_info: UiInfo,
+    ui_info: UiInfo,
     pub surface: Option<DisplaySurface>,
     pub console_list: Weak<Mutex<ConsoleList>>,
     pub dev_opts: Arc<dyn HardWareOperations>,
@@ -228,11 +227,11 @@ impl DisplayConsole {
 }
 
 /// The state of console layer.
-pub struct DisplayState {
+struct DisplayState {
     /// Running stage.
-    pub run_stage: VmRunningStage,
+    run_stage: VmRunningStage,
     /// Refresh interval, which can be dynamic changed.
-    pub interval: u64,
+    interval: u64,
     /// Whether there is a refresh task.
     is_refresh: bool,
     /// A list of DisplayChangeListeners.
@@ -241,8 +240,8 @@ pub struct DisplayState {
     refresh_num: i32,
 }
 
-// SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
-// and only be saved in the single thread. So implement Send is safe.
+// SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
+// initialization process, and only be saved in the single thread. So implement Send is safe.
 unsafe impl Send for DisplayState {}
 
 impl DisplayState {
@@ -284,8 +283,10 @@ pub struct ConsoleList {
 }
 
 // SAFETY:
-// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
-// 2. The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during initialization process,
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image
+//    by this pointer.
+// 2. The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
+//    initialization process,
 // and only be saved in the single thread.
 // So implement Send is safe.
 unsafe impl Send for ConsoleList {}
@@ -339,7 +340,7 @@ pub fn get_run_stage() -> VmRunningStage {
 }
 
 /// Refresh display image.
-pub fn display_refresh() {
+fn display_refresh() {
     let mut dcl_interval: u64;
     let mut interval: u64 = DISPLAY_UPDATE_INTERVAL_MAX;
 
@@ -378,7 +379,7 @@ pub fn display_refresh() {
 
 /// Register the timer to execute the scheduled
 /// refresh task.
-pub fn setup_refresh(update_interval: u64) {
+fn setup_refresh(update_interval: u64) {
     let func = Box::new(move || {
         display_refresh();
     });
@@ -672,6 +673,7 @@ pub fn console_init(
     );
     display_replace_surface(&Some(con.clone()), surface)
         .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    set_run_stage(VmRunningStage::Bios);
     Some(con)
 }
 

@@ -10,11 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
-use crate::OzoneError;
-use crate::{capability, namespace, syscall};
-use anyhow::{anyhow, bail, Context, Result};
-
 use std::process::Command;
 use std::{
     fs::{canonicalize, read_dir},
@@ -23,6 +18,11 @@ use std::{
     process::Stdio,
 };
 
+use anyhow::{anyhow, bail, Context, Result};
+
+use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
+use crate::OzoneError;
+use crate::{capability, namespace, syscall};
 use util::arg_parser::ArgMatches;
 
 const BASE_OZONE_PATH: &str = "/srv/ozone";
@@ -191,7 +191,7 @@ impl OzoneHandler {
         Ok(())
     }
 
-    /// Get  exec file name.
+    /// Get exec file name.
     fn exec_file_name(&self) -> Result<String> {
         if let Some(file_name) = self.exec_file_path.file_name() {
             return Ok(file_name.to_string_lossy().into());

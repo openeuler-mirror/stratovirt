@@ -13,21 +13,23 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use super::error::LegacyError;
-use acpi::AmlBuilder;
-use address_space::GuestAddress;
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
+use vmm_sys_util::eventfd::EventFd;
+
+use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
+use acpi::AmlBuilder;
+use address_space::GuestAddress;
 use migration::{
     snapshot::PL031_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::write_data_u32;
-use vmm_sys_util::eventfd::EventFd;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -54,7 +56,7 @@ const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0x
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PL031State {
+struct PL031State {
     /// Match register value.
     mr: u32,
     /// Load register value.
@@ -68,21 +70,19 @@ pub struct PL031State {
 #[allow(clippy::upper_case_acronyms)]
 /// PL031 structure.
 pub struct PL031 {
+    base: SysBusDevBase,
     /// State of device PL031.
     state: PL031State,
     /// The duplicate of Load register value.
     tick_offset: u32,
     /// Record the real time.
     base_time: Instant,
-    /// Interrupt eventfd.
-    interrupt_evt: Option<EventFd>,
-    /// System resource.
-    res: SysRes,
 }
 
 impl Default for PL031 {
     fn default() -> Self {
         Self {
+            base: SysBusDevBase::new(SysBusDevType::Rtc),
             state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
@@ -90,8 +90,6 @@ impl Default for PL031 {
                 .expect("time wrong")
                 .as_secs() as u32,
             base_time: Instant::now(),
-            interrupt_evt: None,
-            res: SysRes::default(),
         }
     }
 }
@@ -103,7 +101,7 @@ impl PL031 {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
+        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 
@@ -135,7 +133,25 @@ impl PL031 {
     }
 }
 
+impl Device for PL031 {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for PL031 {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if (0xFE0..0x1000).contains(&offset) {
@@ -164,11 +180,11 @@ impl SysBusDevOps for PL031 {
 
         match offset {
             RTC_MR => {
-                // TODO: The MR register is used for implementing the RTC alarm. A RTC alarm is a feature
-                // that can be used to allow a computer to 'wake up' after shut down to execute tasks
-                // every day or on a certain day. It can sometimes be found in the 'Power Management'
-                // section of motherboard's BIOS setup. This RTC alarm function is not implemented yet,
-                // here is a reminder just in case.
+                // TODO: The MR register is used for implementing the RTC alarm. A RTC alarm is a
+                // feature that can be used to allow a computer to 'wake up' after shut down to
+                // execute tasks every day or on a certain day. It can sometimes be found in the
+                // 'Power Management' section of motherboard's BIOS setup. This RTC alarm function
+                // is not implemented yet, here is a reminder just in case.
                 self.state.mr = value;
             }
             RTC_LR => {
@@ -190,16 +206,8 @@ impl SysBusDevOps for PL031 {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Rtc
+        Some(&mut self.base.res)
     }
 }
 

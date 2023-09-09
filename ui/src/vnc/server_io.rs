@@ -10,6 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{
+    cell::RefCell,
+    cmp,
+    collections::HashMap,
+    net::{SocketAddr, TcpListener, TcpStream},
+    os::unix::prelude::{AsRawFd, RawFd},
+    ptr,
+    rc::Rc,
+    sync::{Arc, Mutex, Weak},
+};
+
+use anyhow::{anyhow, Result};
+use log::{error, info};
+use vmm_sys_util::epoll::EventSet;
+
 use crate::{
     console::{DisplayChangeListener, DisplayMouse},
     error::VncError,
@@ -26,21 +41,9 @@ use crate::{
         VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
 };
-use anyhow::{anyhow, Result};
-use log::{error, info};
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
-};
-use std::{
-    cell::RefCell,
-    cmp,
-    collections::HashMap,
-    net::{SocketAddr, TcpListener, TcpStream},
-    os::unix::prelude::{AsRawFd, RawFd},
-    ptr,
-    rc::Rc,
-    sync::{Arc, Mutex, Weak},
 };
 use util::{
     bitmap::Bitmap,
@@ -49,7 +52,6 @@ use util::{
     },
     pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_t},
 };
-use vmm_sys_util::epoll::EventSet;
 
 const CONNECTION_LIMIT: usize = 1;
 
@@ -76,8 +78,10 @@ pub struct VncServer {
 }
 
 // SAFETY:
-// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
-// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in single thread.
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image
+//    by this pointer.
+// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in
+//    single thread.
 // So implement Send and Sync is safe.
 unsafe impl Send for VncServer {}
 unsafe impl Sync for VncServer {}
@@ -147,7 +151,7 @@ impl EventNotifierHelper for VncConnHandler {
 
 /// Info of image.
 /// stride is not always equal to stride because of memory alignment.
-pub struct ImageInfo {
+struct ImageInfo {
     /// The start pointer to image.
     data: *mut u8,
     /// The memory size of each line for image.

@@ -26,17 +26,15 @@ use v4l2_sys_mit::{
 };
 use vmm_sys_util::epoll::EventSet;
 
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::aio::Iovec;
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
-
+use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
     CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::aio::Iovec;
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
 use util::v4l2::{new_init, V4l2Backend};
-
-use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 
 const BUFFER_CNT: usize = 4;
 
@@ -70,7 +68,7 @@ pub struct V4l2CameraBackend {
     notify_cb: Option<CameraNotifyCallback>,
     /// Callback to used to notify the broken.
     broken_cb: Option<CameraNotifyCallback>,
-    /// If the video stream is on or not.  
+    /// If the video stream is on or not.
     running: bool,
     /// If the backend fd is listening or not.
     listening: bool,
@@ -453,7 +451,7 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
     Ok(fmt)
 }
 
-pub struct V4l2IoHandler {
+struct V4l2IoHandler {
     sample: Arc<Mutex<Sample>>,
     backend: Arc<V4l2Backend>,
     notify_cb: Option<CameraNotifyCallback>,
@@ -461,7 +459,7 @@ pub struct V4l2IoHandler {
 }
 
 impl V4l2IoHandler {
-    pub fn new(
+    fn new(
         sample: &Arc<Mutex<Sample>>,
         backend: &Arc<V4l2Backend>,
         cb: Option<CameraNotifyCallback>,
@@ -536,7 +534,8 @@ impl EventNotifierHelper for V4l2IoHandler {
             NotifierOperation::AddShared,
             v4l2_handler.lock().unwrap().backend.as_raw_fd(),
             None,
-            EventSet::IN | EventSet::EDGE_TRIGGERED | EventSet::HANG_UP, // For unexpected device removal.
+            // For unexpected device removal.
+            EventSet::IN | EventSet::EDGE_TRIGGERED | EventSet::HANG_UP,
             vec![handler],
         )]
     }

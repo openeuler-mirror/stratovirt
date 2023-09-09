@@ -33,7 +33,7 @@ pub enum StandardVmError {
     #[error("")]
     PciErr {
         #[from]
-        source: pci::error::PciError,
+        source: devices::pci::error::PciError,
     },
     #[error("")]
     Acpi {

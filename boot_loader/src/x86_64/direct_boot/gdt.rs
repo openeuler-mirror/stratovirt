@@ -12,13 +12,15 @@
 
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
+use kvm_bindings::kvm_segment;
+
 use super::super::BootGdtSegment;
 use super::super::{
     BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS,
 };
 use address_space::{AddressSpace, GuestAddress};
-use anyhow::{Context, Result};
-use kvm_bindings::kvm_segment;
+
 // /*
 //  * Constructor for a conventional segment GDT (or LDT) entry.
 //  * This is a macro so it can be used in initializers.
@@ -30,10 +32,10 @@ use kvm_bindings::kvm_segment;
 //      (((base)  & _AC(0x00ffffff,ULL)) << 16) |  \
 //      (((limit) & _AC(0x0000ffff,ULL))))
 //
-pub struct GdtEntry(pub u64);
+struct GdtEntry(pub u64);
 
 impl GdtEntry {
-    pub fn new(flags: u64, base: u64, limit: u64) -> Self {
+    fn new(flags: u64, base: u64, limit: u64) -> Self {
         let base = (base & 0xff00_0000) << (56 - 24) | (base & 0x00ff_ffff) << 16;
         let limit = (limit & 0x000f_0000) << (48 - 16) | (limit & 0x0000_ffff);
         let flags = (flags & 0x0000_f0ff) << 40;
@@ -136,8 +138,9 @@ pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use kvm_bindings::kvm_segment;
+
+    use super::*;
 
     #[test]
     fn test_gdt_entry() {

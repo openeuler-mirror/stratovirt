@@ -13,14 +13,21 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context, Result};
+use log::{debug, error};
+use vmm_sys_util::eventfd::EventFd;
+
+use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
     AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use chardev_backend::chardev::{Chardev, InputReceiver};
 use hypervisor::kvm::KVM_FDS;
-use log::error;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
@@ -29,14 +36,9 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use vmm_sys_util::eventfd::EventFd;
 
-use super::chardev::{Chardev, InputReceiver};
-use super::error::LegacyError;
-use anyhow::{bail, Context, Result};
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
 const UART_IER_RDI: u8 = 0x01;
@@ -68,7 +70,7 @@ const RECEIVER_BUFF_SIZE: usize = 1024;
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct SerialState {
+struct SerialState {
     /// Receiver buffer state.
     rbr_value: [u8; 1024],
     /// Length of rbr.
@@ -113,14 +115,11 @@ impl SerialState {
 
 /// Contain registers status and operation methods of serial.
 pub struct Serial {
+    base: SysBusDevBase,
     /// Receiver buffer register.
     rbr: VecDeque<u8>,
     /// State of Device Serial.
     state: SerialState,
-    /// Interrupt event file descriptor.
-    interrupt_evt: Option<EventFd>,
-    /// System resource.
-    res: SysRes,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
 }
@@ -128,10 +127,9 @@ pub struct Serial {
 impl Serial {
     pub fn new(cfg: SerialConfig) -> Self {
         Serial {
+            base: SysBusDevBase::new(SysBusDevType::Serial),
             rbr: VecDeque::new(),
             state: SerialState::new(),
-            interrupt_evt: None,
-            res: SysRes::default(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         }
     }
@@ -147,7 +145,7 @@ impl Serial {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
+        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 
@@ -165,7 +163,7 @@ impl Serial {
             value: format!("uart,mmio,0x{:08x}", region_base),
         });
         let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
@@ -344,7 +342,7 @@ impl Serial {
 }
 
 impl InputReceiver for Serial {
-    fn input_handle(&mut self, data: &[u8]) {
+    fn receive(&mut self, data: &[u8]) {
         if self.state.mcr & UART_MCR_LOOP == 0 {
             let len = self.rbr.len();
             if len >= RECEIVER_BUFF_SIZE {
@@ -361,40 +359,55 @@ impl InputReceiver for Serial {
         }
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
+    fn remain_size(&mut self) -> usize {
         RECEIVER_BUFF_SIZE
     }
 }
 
+impl Device for Serial {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for Serial {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = self.read_internal(offset);
         true
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        self.write_internal(offset, data[0]).is_ok()
+        if let Err(e) = self.write_internal(offset, data[0]) {
+            debug!("Failed to write serial device {}: {:?}", self.name(), e);
+            false
+        } else {
+            true
+        }
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
-    }
-
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
+    fn set_irq(&mut self, _sysbus: &mut SysBus) -> Result<i32> {
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
             irq = UART_IRQ;
-            KVM_FDS.load().register_irqfd(e, irq as u32)?;
+            KVM_FDS.load().register_irqfd(&e, irq as u32)?;
         }
         Ok(irq)
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Serial
+        Some(&mut self.base.res)
     }
 }
 
@@ -408,17 +421,17 @@ impl AmlBuilder for Serial {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlIoResource::new(
             AmlIoDecode::Decode16,
-            self.res.region_base as u16,
-            self.res.region_base as u16,
+            self.base.res.region_base as u16,
+            self.base.res.region_base as u16,
             0x00,
-            self.res.region_size as u8,
+            self.base.res.region_size as u8,
         ));
         res.append_child(AmlExtendedInterrupt::new(
             AmlResourceUsage::Consumer,
             AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![self.res.irq as u32],
+            vec![self.base.res.irq as u32],
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
@@ -483,7 +496,7 @@ mod test {
 
         // test receive method
         let data = [0x01, 0x02];
-        usart.input_handle(&data);
+        usart.receive(&data);
         assert_eq!(usart.rbr.is_empty(), false);
         assert_eq!(usart.rbr.len(), 2);
         assert_eq!(usart.rbr.front(), Some(&0x01));

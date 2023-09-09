@@ -13,17 +13,17 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use address_space::Region;
+use anyhow::{anyhow, Context, Result};
 use log::{error, warn};
 
-use crate::intx::Intx;
-use crate::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
-use crate::{
+use crate::pci::intx::Intx;
+use crate::pci::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
+use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
-    pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
+    pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
 };
-use crate::{ranges_overlap, PciError};
-use anyhow::{anyhow, Context, Result};
+use address_space::Region;
+use util::num_ops::ranges_overlap;
 
 /// Size in bytes of the configuration space of legacy PCI device.
 pub const PCI_CONFIG_SPACE_SIZE: usize = 256;
@@ -63,8 +63,8 @@ pub const MEMORY_BASE: u8 = 0x20;
 pub const PREF_MEMORY_BASE: u8 = 0x24;
 /// Prefetchable memory limit register.
 pub const PREF_MEMORY_LIMIT: u8 = 0x26;
-pub const ROM_ADDRESS_ENDPOINT: usize = 0x30;
-pub const ROM_ADDRESS_BRIDGE: usize = 0x38;
+const ROM_ADDRESS_ENDPOINT: usize = 0x30;
+const ROM_ADDRESS_BRIDGE: usize = 0x38;
 
 /// 64-bit prefetchable memory addresses.
 pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
@@ -102,9 +102,9 @@ pub const STATUS: u8 = 0x06;
 /// PCI Interrupt Status.
 pub const STATUS_INTERRUPT: u8 = 0x08;
 const CACHE_LINE_SIZE: u8 = 0x0c;
-pub const PRIMARY_BUS_NUM: u8 = 0x18;
-pub const IO_LIMIT: u8 = 0x1d;
-pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
+const PRIMARY_BUS_NUM: u8 = 0x18;
+const IO_LIMIT: u8 = 0x1d;
+const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
 pub const INTERRUPT_PIN: u8 = 0x3d;
@@ -142,13 +142,13 @@ pub const BAR_MEM_64BIT: u8 = 0x04;
 const BAR_PREFETCH: u8 = 0x08;
 pub const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
 /// The maximum Bar ID numbers of a Type 0 device
-pub const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
+const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
 /// The maximum Bar ID numbers of a Type 1 device
-pub const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
+const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
 /// mmio bar's minimum size shall be 4KB
 pub const MINIMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
 /// pio bar's minimum size shall be 4B
-pub const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
+const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
 /// PCI Express capability registers, same as kernel defines
 
@@ -246,9 +246,9 @@ pub const PCI_EXP_SLTSTA: u16 = 26;
 /// Attention Button Pressed
 pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
 /// Power Fault Detected
-pub const PCI_EXP_SLTSTA_PFD: u16 = 0x0002;
+const PCI_EXP_SLTSTA_PFD: u16 = 0x0002;
 /// MRL Sensor Changed
-pub const PCI_EXP_SLTSTA_MRLSC: u16 = 0x0004;
+const PCI_EXP_SLTSTA_MRLSC: u16 = 0x0004;
 /// Presence Detect Changed
 pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
 /// Command Completed
@@ -300,7 +300,7 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
 
-/* Device classes and subclasses */
+// Device classes and subclasses
 pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
@@ -521,7 +521,8 @@ impl PciConfig {
         }
 
         let size = buf.len();
-        if ranges_overlap(offset, size, STATUS as usize, 1) {
+        // SAFETY: checked in "validate_config_boundary".
+        if ranges_overlap(offset, size, STATUS as usize, 1).unwrap() {
             if let Some(intx) = &self.intx {
                 if intx.lock().unwrap().level == 1 {
                     self.config[STATUS as usize] |= STATUS_INTERRUPT;
@@ -535,13 +536,6 @@ impl PciConfig {
     }
 
     fn validate_config_boundary(&self, offset: usize, data: &[u8]) -> Result<()> {
-        if offset + data.len() > self.config.len() {
-            return Err(anyhow!(PciError::InvalidConf(
-                "config size".to_string(),
-                format!("offset {} with len {}", offset, data.len())
-            )));
-        }
-
         // According to pcie specification 7.2.2.2 PCI Express Device Requirements:
         if data.len() > 4 {
             return Err(anyhow!(PciError::InvalidConf(
@@ -549,6 +543,16 @@ impl PciConfig {
                 format!("{}", data.len())
             )));
         }
+
+        offset
+            .checked_add(data.len())
+            .filter(|&end| end <= self.config.len())
+            .with_context(|| {
+                PciError::InvalidConf(
+                    "config size".to_string(),
+                    format!("offset {} with len {}", offset, data.len()),
+                )
+            })?;
 
         Ok(())
     }
@@ -588,10 +592,11 @@ impl PciConfig {
         };
 
         let size = data.len();
-        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1);
+        // SAFETY: checked in "validate_config_boundary".
+        let cmd_overlap = ranges_overlap(old_offset, size, COMMAND as usize, 1).unwrap();
         if cmd_overlap
-            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num)
-            || ranges_overlap(old_offset, size, rom_addr, 4)
+            || ranges_overlap(old_offset, size, BAR_0 as usize, REG_SIZE * bar_num).unwrap()
+            || ranges_overlap(old_offset, size, rom_addr, 4).unwrap()
         {
             if let Err(e) = self.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
@@ -653,7 +658,8 @@ impl PciConfig {
         le_write_u16(&mut self.config, offset, old_command & !writable_command)
     }
 
-    /// Reset bits that's writable in the common configuration fields for both type0 and type1 devices.
+    /// Reset bits that's writable in the common configuration fields for both type0 and type1
+    /// devices.
     pub fn reset_common_regs(&mut self) -> Result<()> {
         self.reset_single_writable_reg(COMMAND as usize)?;
         self.reset_single_writable_reg(STATUS as usize)?;
@@ -1186,9 +1192,8 @@ impl PciConfig {
 
 #[cfg(test)]
 mod tests {
-    use address_space::{AddressSpace, GuestAddress, RegionOps};
-
     use super::*;
+    use address_space::{AddressSpace, GuestAddress, RegionOps};
 
     const MSI_CAP_ID: u8 = 0x05;
     const MSIX_CAP_ID: u8 = 0x11;

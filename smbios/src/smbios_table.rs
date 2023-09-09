@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
+
 use machine_manager::config::{
     MachineConfig, SmbiosConfig, SmbiosType0Config, SmbiosType17Config, SmbiosType1Config,
     SmbiosType2Config, SmbiosType3Config, SmbiosType4Config,
 };
-use std::mem::size_of;
 use util::byte_code::ByteCode;
 
 const TYPE0_HANDLE: u16 = 0x0;
@@ -41,7 +42,7 @@ struct SmbiosHeader {
 }
 
 impl SmbiosHeader {
-    pub fn new(type_num: u8, len: u8, handle: u16) -> SmbiosHeader {
+    fn new(type_num: u8, len: u8, handle: u16) -> SmbiosHeader {
         SmbiosHeader {
             type_num,
             len,
@@ -55,8 +56,8 @@ impl SmbiosHeader {
 #[derive(Default, Copy, Clone)]
 struct SmbiosType0 {
     header: SmbiosHeader,
-    pub vendor_idx: u8,
-    pub bios_version_idx: u8,
+    vendor_idx: u8,
+    bios_version_idx: u8,
     bios_starting_addr_seg: [u8; 2],
     bios_release_date_idx: u8,
     bios_rom_size: u8,
@@ -71,7 +72,7 @@ struct SmbiosType0 {
 impl ByteCode for SmbiosType0 {}
 
 impl SmbiosType0 {
-    pub fn new() -> SmbiosType0 {
+    fn new() -> SmbiosType0 {
         SmbiosType0 {
             header: SmbiosHeader::new(0_u8, size_of::<SmbiosType0>() as u8, TYPE0_HANDLE),
             bios_starting_addr_seg: 0xE800_u16.to_le_bytes(),
@@ -92,7 +93,7 @@ struct SmbiosType0Table {
 }
 
 impl SmbiosType0Table {
-    pub fn new() -> SmbiosType0Table {
+    fn new() -> SmbiosType0Table {
         SmbiosType0Table {
             header: SmbiosType0::new(),
             body: Vec::new(),
@@ -100,13 +101,13 @@ impl SmbiosType0Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -120,9 +121,9 @@ impl SmbiosType0Table {
 #[derive(Default, Copy, Clone)]
 struct SmbiosType1 {
     header: SmbiosHeader,
-    pub manufacturer: u8,
-    pub product_name: u8,
-    pub version: u8,
+    manufacturer: u8,
+    product_name: u8,
+    version: u8,
     serial_num: u8,
     uuid: [u8; 16],
     wake_up_type: u8,
@@ -133,7 +134,7 @@ struct SmbiosType1 {
 impl ByteCode for SmbiosType1 {}
 
 impl SmbiosType1 {
-    pub fn new() -> SmbiosType1 {
+    fn new() -> SmbiosType1 {
         SmbiosType1 {
             header: SmbiosHeader::new(1_u8, size_of::<SmbiosType1>() as u8, TYPE1_HANDLE),
             wake_up_type: 0x6_u8,
@@ -150,7 +151,7 @@ struct SmbiosType1Table {
 }
 
 impl SmbiosType1Table {
-    pub fn new() -> SmbiosType1Table {
+    fn new() -> SmbiosType1Table {
         SmbiosType1Table {
             header: SmbiosType1::new(),
             body: Vec::new(),
@@ -158,13 +159,13 @@ impl SmbiosType1Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -193,7 +194,7 @@ struct SmbiosType2 {
 impl ByteCode for SmbiosType2 {}
 
 impl SmbiosType2 {
-    pub fn new() -> SmbiosType2 {
+    fn new() -> SmbiosType2 {
         SmbiosType2 {
             header: SmbiosHeader::new(2_u8, size_of::<SmbiosType2>() as u8, TYPE2_HANDLE),
             feature_flags: 1_u8,
@@ -212,7 +213,7 @@ struct SmbiosType2Table {
 }
 
 impl SmbiosType2Table {
-    pub fn new() -> SmbiosType2Table {
+    fn new() -> SmbiosType2Table {
         SmbiosType2Table {
             header: SmbiosType2::new(),
             body: Vec::new(),
@@ -220,13 +221,13 @@ impl SmbiosType2Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -260,7 +261,7 @@ struct SmbiosType3 {
 impl ByteCode for SmbiosType3 {}
 
 impl SmbiosType3 {
-    pub fn new() -> SmbiosType3 {
+    fn new() -> SmbiosType3 {
         SmbiosType3 {
             header: SmbiosHeader::new(3_u8, size_of::<SmbiosType3>() as u8, TYPE3_HANDLE),
             type_id: 0x1_u8,
@@ -281,7 +282,7 @@ struct SmbiosType3Table {
 }
 
 impl SmbiosType3Table {
-    pub fn new() -> SmbiosType3Table {
+    fn new() -> SmbiosType3Table {
         SmbiosType3Table {
             header: SmbiosType3::new(),
             body: Vec::new(),
@@ -289,13 +290,13 @@ impl SmbiosType3Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -341,7 +342,7 @@ struct SmbiosType4 {
 impl ByteCode for SmbiosType4 {}
 
 impl SmbiosType4 {
-    pub fn new(instance: u16) -> SmbiosType4 {
+    fn new(instance: u16) -> SmbiosType4 {
         SmbiosType4 {
             header: SmbiosHeader::new(
                 4_u8,
@@ -370,7 +371,7 @@ struct SmbiosType4Table {
 }
 
 impl SmbiosType4Table {
-    pub fn new(instance: u16) -> SmbiosType4Table {
+    fn new(instance: u16) -> SmbiosType4Table {
         SmbiosType4Table {
             header: SmbiosType4::new(instance),
             body: Vec::new(),
@@ -378,13 +379,13 @@ impl SmbiosType4Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -410,7 +411,7 @@ struct SmbiosType16 {
 impl ByteCode for SmbiosType16 {}
 
 impl SmbiosType16 {
-    pub fn new(cnt: u16) -> SmbiosType16 {
+    fn new(cnt: u16) -> SmbiosType16 {
         SmbiosType16 {
             header: SmbiosHeader::new(16_u8, size_of::<SmbiosType16>() as u8, TYPE16_HANDLE),
             location: 0x01,
@@ -430,14 +431,14 @@ struct SmbiosType16Table {
 }
 
 impl SmbiosType16Table {
-    pub fn new(cnt: u16) -> SmbiosType16Table {
+    fn new(cnt: u16) -> SmbiosType16Table {
         SmbiosType16Table {
             header: SmbiosType16::new(cnt),
             body: Vec::new(),
         }
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.body.append(&mut vec![0; 2]);
     }
 }
@@ -474,7 +475,7 @@ struct SmbiosType17 {
 impl ByteCode for SmbiosType17 {}
 
 impl SmbiosType17 {
-    pub fn new(ins: u16) -> SmbiosType17 {
+    fn new(ins: u16) -> SmbiosType17 {
         SmbiosType17 {
             header: SmbiosHeader::new(17_u8, size_of::<SmbiosType17>() as u8, TYPE17_HANDLE + ins),
             physical_memory_array_handle: 0x1000_u16.to_le_bytes(),
@@ -497,7 +498,7 @@ struct SmbiosType17Table {
 }
 
 impl SmbiosType17Table {
-    pub fn new(ins: u16) -> SmbiosType17Table {
+    fn new(ins: u16) -> SmbiosType17Table {
         SmbiosType17Table {
             header: SmbiosType17::new(ins),
             body: Vec::new(),
@@ -505,13 +506,13 @@ impl SmbiosType17Table {
         }
     }
 
-    pub fn set_str(&mut self, str: String) {
+    fn set_str(&mut self, str: String) {
         self.str_index += 1;
         self.body.append(&mut str.as_bytes().to_vec());
         self.body.append(&mut vec![0]);
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         if self.str_index == 0 {
             self.body.append(&mut vec![0; 2]);
         } else {
@@ -536,7 +537,7 @@ struct SmbiosType19 {
 impl ByteCode for SmbiosType19 {}
 
 impl SmbiosType19 {
-    pub fn new(ins: u16) -> SmbiosType19 {
+    fn new(ins: u16) -> SmbiosType19 {
         SmbiosType19 {
             header: SmbiosHeader::new(19_u8, size_of::<SmbiosType19>() as u8, TYPE19_HANDLE + ins),
             memory_array_handle: 0x1000_u16.to_le_bytes(),
@@ -553,14 +554,14 @@ struct SmbiosType19Table {
 }
 
 impl SmbiosType19Table {
-    pub fn new(ins: u16) -> SmbiosType19Table {
+    fn new(ins: u16) -> SmbiosType19Table {
         SmbiosType19Table {
             header: SmbiosType19::new(ins),
             body: Vec::new(),
         }
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.body.append(&mut vec![0; 2]);
     }
 }
@@ -577,7 +578,7 @@ struct SmbiosType32 {
 impl ByteCode for SmbiosType32 {}
 
 impl SmbiosType32 {
-    pub fn new() -> SmbiosType32 {
+    fn new() -> SmbiosType32 {
         SmbiosType32 {
             header: SmbiosHeader::new(32_u8, size_of::<SmbiosType32>() as u8, TYPE32_HANDLE),
             ..Default::default()
@@ -592,14 +593,14 @@ struct SmbiosType32Table {
 }
 
 impl SmbiosType32Table {
-    pub fn new() -> SmbiosType32Table {
+    fn new() -> SmbiosType32Table {
         SmbiosType32Table {
             header: SmbiosType32::new(),
             body: Vec::new(),
         }
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.body.append(&mut vec![0; 2]);
     }
 }
@@ -612,7 +613,7 @@ struct SmbiosType127 {
 }
 
 impl SmbiosType127 {
-    pub fn new() -> SmbiosType127 {
+    fn new() -> SmbiosType127 {
         SmbiosType127 {
             header: SmbiosHeader::new(127_u8, size_of::<SmbiosType127>() as u8, TYPE127_HANDLE),
         }
@@ -628,14 +629,14 @@ struct SmbiosType127Table {
 }
 
 impl SmbiosType127Table {
-    pub fn new() -> SmbiosType127Table {
+    fn new() -> SmbiosType127Table {
         SmbiosType127Table {
             header: SmbiosType127::new(),
             body: Vec::new(),
         }
     }
 
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.body.append(&mut vec![0; 2]);
     }
 }
@@ -1039,7 +1040,7 @@ struct SmbiosEntryPoint30 {
 
 impl ByteCode for SmbiosEntryPoint30 {}
 impl SmbiosEntryPoint30 {
-    pub fn new(table_len: u32) -> SmbiosEntryPoint30 {
+    fn new(table_len: u32) -> SmbiosEntryPoint30 {
         let anchor: [u8; 5] = [b'_', b'S', b'M', b'3', b'_'];
         SmbiosEntryPoint30 {
             anchor_str: anchor,

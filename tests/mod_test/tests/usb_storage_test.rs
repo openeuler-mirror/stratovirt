@@ -23,7 +23,6 @@ use devices::usb::{
     xhci::{TRBCCode, TRB_SIZE},
     UsbDeviceRequest,
 };
-
 use mod_test::libdriver::usb::{
     TestIovec, TestUsbBuilder, TestXhciPciDevice, CONTROL_ENDPOINT_ID, PRIMARY_INTERRUPTER_ID,
     STORAGE_DEVICE_IN_ENDPOINT_ID, STORAGE_DEVICE_OUT_ENDPOINT_ID,

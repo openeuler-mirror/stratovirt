@@ -17,10 +17,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use address_space::AddressSpace;
-use devices::legacy::{FwCfgEntryType, FwCfgOps};
+use anyhow::{bail, Context, Result};
 use log::{error, info};
-use util::byte_code::ByteCode;
 
 use self::elf::load_elf_kernel;
 use super::bootparam::RealModeKernelHeader;
@@ -29,7 +27,9 @@ use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::error::BootLoaderError;
 use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED, UEFI_OVMF_ID};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
-use anyhow::{bail, Context, Result};
+use address_space::AddressSpace;
+use devices::legacy::{FwCfgEntryType, FwCfgOps};
+use util::byte_code::ByteCode;
 
 fn load_image(
     image: &mut File,
@@ -66,7 +66,7 @@ fn load_kernel_image(
     setup_size = (setup_size + 1) << 9;
 
     let mut setup_data = vec![0_u8; setup_size as usize];
-    kernel_image.seek(SeekFrom::Start(0))?;
+    kernel_image.rewind()?;
     kernel_image.read_exact(setup_data.as_mut_slice())?;
 
     let kernel_size = kernel_image.metadata().unwrap().len() - setup_size;

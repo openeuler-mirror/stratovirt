@@ -13,14 +13,14 @@
 use std::io::Write;
 
 use libc::{c_int, c_void, siginfo_t};
-use util::set_termi_canon_mode;
 use vmm_sys_util::signal::register_signal_handler;
 
 use crate::{
     event,
-    qmp::{qmp_schema, QmpChannel},
+    qmp::{qmp_channel::QmpChannel, qmp_schema},
     temp_cleaner::TempCleaner,
 };
+use util::set_termi_canon_mode;
 
 const VM_EXIT_SUCCESS: i32 = 0;
 pub const VM_EXIT_GENE_ERR: i32 = 1;

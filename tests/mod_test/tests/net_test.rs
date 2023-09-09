@@ -10,16 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use rand::Rng;
-use serde_json::json;
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::process::Command;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time;
-use util::byte_code::ByteCode;
-use util::offset_of;
+
+use rand::Rng;
+use serde_json::json;
 
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
@@ -30,6 +29,8 @@ use mod_test::libdriver::virtio::{
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::{test_init, TestState};
+use util::byte_code::ByteCode;
+use util::offset_of;
 
 /// Device handles packets with partial checksum.
 const VIRTIO_NET_F_CSUM: u32 = 0;
@@ -96,12 +97,6 @@ pub const VIRTIO_NET_CTRL_VLAN_DEL: u8 = 1;
 pub const VIRTIO_NET_CTRL_MQ: u8 = 4;
 /// Driver configure the command before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
-/// The minimum pairs of multiple queue.
-pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
-/// The maximum pairs of multiple queue.
-pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
-/// Support more than one virtqueue.
-pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 const QUEUE_SIZE_NET: u16 = 256;
 
@@ -978,8 +973,7 @@ fn write_net_config_check(net: Rc<RefCell<TestVirtioPciDev>>, offset: u64, value
 /// Write value to virtio net configure, and check the write result.
 /// TestStep:
 ///   1. Init device.
-///   2. Write value to virtio net configure which can not be changed
-///      except mac in some conditions.
+///   2. Write value to virtio net configure which can not be changed except mac in some conditions.
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.

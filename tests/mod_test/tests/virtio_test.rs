@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use rand::Rng;
-use serde_json::json;
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::rc::Rc;
-use util::offset_of;
+
+use rand::Rng;
+use serde_json::json;
 
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{
@@ -32,6 +32,7 @@ use mod_test::libdriver::virtio_block::{
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::TestState;
 use mod_test::utils::{ImageType, TEST_IMAGE_SIZE};
+use util::offset_of;
 
 fn add_request(
     test_state: Rc<RefCell<TestState>>,
@@ -229,8 +230,7 @@ fn do_event_idx_with_flag(flag: u16) {
     assert_eq!(status, VIRTIO_BLK_S_OK);
 
     // DEFAULT_IO_REQS write requests:
-    //   Write "TEST" to sector 0 to DEFAULT_IO_REQS.
-    //let mut req_addr = 0_u64;
+    // Write "TEST" to sector 0 to DEFAULT_IO_REQS.
     for i in 1..DEFAULT_IO_REQS {
         (_, req_addr) = add_request(
             test_state.clone(),
@@ -428,7 +428,7 @@ fn virtio_feature_vertion_1() {
 /// and succeed to do the I/O request.
 /// TestStep:
 ///   1. Init device.
-///   2. Do the I/O request(indirect and  indirect + normal).
+///   2. Do the I/O request(indirect and indirect + normal).
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
@@ -561,7 +561,7 @@ fn virtio_feature_event_idx() {
 /// and succeed to do the I/O request(normal + indirect) which has opened the event idx.
 /// TestStep:
 ///   1. Init device.
-///   2. Do the I/O request(indirect and  indirect + normal).
+///   2. Do the I/O request(indirect and indirect + normal).
 ///     1) create 5 request(with indirect), and modify avail->used_event to 5.
 ///     2) If the event idx works, we will not get the interrupt from device.
 ///     3) create 5 request, and use the right avail->used_event.
@@ -691,8 +691,8 @@ fn virtio_feature_indirect_and_event_idx() {
 /// TestStep:
 ///   1. Init device.
 ///     1) set device status: special status and random status.
-///     2) ACKNOWLEDGE -> DRIVER -> DRIVER -> negotiate_features -> FEATURES_OK
-///        -> setup_virtqueue -> DRIVER_OK.
+///     2) ACKNOWLEDGE -> DRIVER -> DRIVER -> negotiate_features -> FEATURES_OK -> setup_virtqueue
+///        -> DRIVER_OK.
 ///   2. Do the I/O request.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
@@ -1089,13 +1089,13 @@ fn virtio_init_device_abnormal_vring_info() {
 /// Init device out of order test 1.
 /// TestStep:
 ///   1. Abnormal init device.
-///		1.1->1.3->1.2->1.4->1.5->1.6->1.7->1.8
-///		1.1->1.2->1.4->1.3->1.5->1.6->1.7->1.8
-///		1.1->1.2->1.3->1.5->1.4->1.6->1.7->1.8
-///		1.1->1.2->1.3->1.4->1.6->1.5->1.7->1.8
-///		1.1->1.2->1.3->1.4->1.7->1.6->1.5->1.8
-///	  2. Normal init device.
-///	  3. Write and read.
+/// 		1.1->1.3->1.2->1.4->1.5->1.6->1.7->1.8
+/// 		1.1->1.2->1.4->1.3->1.5->1.6->1.7->1.8
+/// 		1.1->1.2->1.3->1.5->1.4->1.6->1.7->1.8
+/// 		1.1->1.2->1.3->1.4->1.6->1.5->1.7->1.8
+/// 		1.1->1.2->1.3->1.4->1.7->1.6->1.5->1.8
+/// 	  2. Normal init device.
+/// 	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
 ///   1/2: success or failed, stratovirt process status is normal.
@@ -1148,13 +1148,13 @@ fn virtio_init_device_out_of_order_1() {
 /// Init device out of order test 2.
 /// TestStep:
 ///   1. Abnormal init device.
-///		1.1->1.2->1.3->1.4->1.8->1.6->1.7->1.5
-///		1.1->1.3->1.4->1.5->1.6->1.7->1.8
-///		1.1->1.2->1.4->1.5->1.6->1.7->1.8
-///		1.1->1.2->1.3->1.4->1.6->1.7->1.8
-///		1.1->1.2->1.3->1.4->1.5->1.6->1.8
-///	  2. Normal init device.
-///	  3. Write and read.
+/// 		1.1->1.2->1.3->1.4->1.8->1.6->1.7->1.5
+/// 		1.1->1.3->1.4->1.5->1.6->1.7->1.8
+/// 		1.1->1.2->1.4->1.5->1.6->1.7->1.8
+/// 		1.1->1.2->1.3->1.4->1.6->1.7->1.8
+/// 		1.1->1.2->1.3->1.4->1.5->1.6->1.8
+/// 	  2. Normal init device.
+/// 	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
 ///   1/2: success or failed, stratovirt process status is normal.
@@ -1207,13 +1207,13 @@ fn virtio_init_device_out_of_order_2() {
 /// Init device out of order test 3.
 /// TestStep:
 ///   1. Abnormal init device.
-///		1.1->1.2->1.3->1.4->1.5->1.6->1.7
-///		1.1->1.2->1.3->1.4->1.9
-///		1.1->1.2->1.3->1.5->1.8
-///		1.1->1.2->1.3->1.4->1.9(FAILED)->normal init process
-///		1.1->1.2->1.3->1.4->1.9(FAILED)->1.2->1.3->1.4->1.5->1.6->1.7->1.8
-///	  2. Normal init device.
-///	  3. Write and read.
+/// 		1.1->1.2->1.3->1.4->1.5->1.6->1.7
+/// 		1.1->1.2->1.3->1.4->1.9
+/// 		1.1->1.2->1.3->1.5->1.8
+/// 		1.1->1.2->1.3->1.4->1.9(FAILED)->normal init process
+/// 		1.1->1.2->1.3->1.4->1.9(FAILED)->1.2->1.3->1.4->1.5->1.6->1.7->1.8
+/// 	  2. Normal init device.
+/// 	  3. Write and read.
 ///   4. Destroy device.
 /// Expect:
 ///   1/2: success or failed, stratovirt process status is normal.
@@ -1403,8 +1403,8 @@ fn virtio_io_abnormal_desc_addr() {
 ///     2) 0x5000 with 1 request 3 desc elems;
 ///     3) u32::MAX with 1 request 3 desc elems;
 ///     4) u32::MAX with 2 request to test overflow;
-///     5) total length of all desc is bigger than (1 << 32):
-///         ((1 << 32) / 64) with indirect request which has 65 desc elems;
+///     5) total length of all desc is bigger than (1 << 32): ((1 << 32) / 64) with indirect request
+///        which has 65 desc elems;
 ///     6) test the invalid length of the indirect desc.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
@@ -1571,8 +1571,8 @@ fn virtio_io_abnormal_desc_flags_1() {
 /// Setting abnormal desc flag in IO request, testcase 2.
 /// TestStep:
 ///   1. Init device, negotiate INDIRECT_DESC feature.
-///   2. Do the I/O request with abnormal desc[i]->flags:
-///      add VRING_DESC_F_INDIRECT to flags in indirect desc table.
+///   2. Do the I/O request with abnormal desc[i]->flags: add VRING_DESC_F_INDIRECT to flags in
+///      indirect desc table.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
 /// Expect:
@@ -1638,9 +1638,9 @@ fn virtio_io_abnormal_desc_flags_2() {
 /// Setting abnormal desc flag in IO request, testcase 3.
 /// TestStep:
 ///   1. Init device, negotiate INDIRECT_DESC feature.
-///   2. Do the I/O request with abnormal desc[i]->flags:
-///      add VRING_DESC_F_INDIRECT | VRING_DESC_F_WRITE to flags in indirect desc table,
-///      and the device will ignore the VRING_DESC_F_WRITE flag.
+///   2. Do the I/O request with abnormal desc[i]->flags: add VRING_DESC_F_INDIRECT |
+///      VRING_DESC_F_WRITE to flags in indirect desc table, and the device will ignore the
+///      VRING_DESC_F_WRITE flag.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
 /// Expect:
@@ -1669,7 +1669,7 @@ fn virtio_io_abnormal_desc_flags_3() {
         let free_head = vqs[0]
             .borrow_mut()
             .add(test_state.clone(), req_addr, 8, false);
-        //vqs[0].borrow().set_desc_flag(free_head, VRING_DESC_F_NEXT);
+
         let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
@@ -1789,8 +1789,7 @@ fn virtio_io_abnormal_desc_next() {
 /// Setting desc elems in abnormal place in IO request.
 /// TestStep:
 ///   1. Init device.
-///   2. Do the I/O request with writable desc elem before
-///      readable desc elem.
+///   2. Do the I/O request with writable desc elem before readable desc elem.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
 /// Expect:
@@ -1847,8 +1846,7 @@ fn virtio_io_abnormal_desc_elem_place() {
 /// Setting (queue_size + 1) indirect desc elems in IO request.
 /// TestStep:
 ///   1. Init device with INDIRECT feature.
-///   2. Do the I/O request with (queue_size + 1) desc elems in
-///      indirect desc table.
+///   2. Do the I/O request with (queue_size + 1) desc elems in indirect desc table.
 ///   3. Send qmp to StratoVirt.
 ///   4. Destroy device.
 /// Expect:

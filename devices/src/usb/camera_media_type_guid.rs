@@ -12,8 +12,9 @@
 
 //! Media Type GUID. referred with uvc.h in linux kernel.
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+
+use once_cell::sync::Lazy;
 
 use crate::camera_backend::FmtType;
 

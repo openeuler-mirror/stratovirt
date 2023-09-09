@@ -16,21 +16,21 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use log::info;
-use util::byte_code::ByteCode;
-use util::num_ops::write_data_u32;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
-use acpi::{AcpiError, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUpdateRule};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
-    AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldUnit, AmlIndex, AmlInteger,
-    AmlMethod, AmlName, AmlNameDecl, AmlOpRegion, AmlPackage, AmlReturn, AmlScopeBuilder, AmlStore,
-    AmlString, AmlZero,
+    AcpiError, AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldAccessType,
+    AmlFieldLockRule, AmlFieldUnit, AmlFieldUpdateRule, AmlIndex, AmlInteger, AmlMethod, AmlName,
+    AmlNameDecl, AmlOpRegion, AmlPackage, AmlReturn, AmlScopeBuilder, AmlStore, AmlString, AmlZero,
 };
 use address_space::GuestAddress;
 use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysRes};
+use util::byte_code::ByteCode;
+use util::num_ops::write_data_u32;
 
 const AML_ACAD_REG: &str = "ADPM";
 const AML_ACAD_ONLINE: &str = "ADPO";
@@ -65,7 +65,7 @@ const BAT_SYSFS_DIR: &str = "/sys/class/power_supply/Battery";
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PowerDevState {
+struct PowerDevState {
     last_acad_st: u32,
     last_bat_st: u32,
     last_bat_lvl: u32,
@@ -73,16 +73,16 @@ pub struct PowerDevState {
 
 #[derive(Clone)]
 pub struct PowerDev {
+    base: SysBusDevBase,
     regs: Vec<u32>,
     state: PowerDevState,
     ged: Arc<Mutex<Ged>>,
-    /// System resource.
-    res: SysRes,
 }
 
 impl PowerDev {
     pub fn new(ged_dev: Arc<Mutex<Ged>>) -> Self {
         Self {
+            base: SysBusDevBase::default(),
             regs: vec![0; POWERDEV_REGS_SIZE],
             state: PowerDevState {
                 last_acad_st: 1,
@@ -90,7 +90,6 @@ impl PowerDev {
                 last_bat_lvl: 0xffffffff,
             },
             ged: ged_dev,
-            res: SysRes::default(),
         }
     }
 
@@ -113,9 +112,8 @@ impl PowerDev {
                     sprop
                 )
             })?;
-            /* All the values except "online" property is multiplicated by 1000
-             * Only "online" property starts with 'o' character
-             */
+            // All the values except "online" property is multiplicated by 1000.
+            // Only "online" property starts with 'o' character.
             pdev_props[i] = if sysfs_props[i].starts_with('o') {
                 prop.unsigned_abs() as u32
             } else {
@@ -135,7 +133,7 @@ impl PowerDev {
         Ok(())
     }
 
-    pub fn power_status_read(&mut self) -> Result<()> {
+    fn power_status_read(&mut self) -> Result<()> {
         let acad_props = vec!["online"];
         let bat_sysfs_props = vec!["online", "current_now", "energy_now", "voltage_now"];
         let mut props: Vec<u32> = vec![0; bat_sysfs_props.len()];
@@ -159,7 +157,7 @@ impl PowerDev {
         Ok(())
     }
 
-    pub fn power_load_static_status(&mut self) {
+    fn power_load_static_status(&mut self) {
         info!("Load static power devices status");
         self.regs[REG_IDX_ACAD_ON] = 1;
         self.regs[REG_IDX_BAT_DCAP] = 0xffffffff;
@@ -230,7 +228,25 @@ impl MigrationHook for PowerDev {
     }
 }
 
+impl Device for PowerDev {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for PowerDev {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let reg_idx: u64 = offset / 4;
         if reg_idx >= self.regs.len() as u64 {
@@ -245,7 +261,7 @@ impl SysBusDevOps for PowerDev {
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
+        Some(&mut self.base.res)
     }
 }
 
@@ -257,7 +273,7 @@ impl AmlBuilder for PowerDev {
         acpi_acad_dev.append_child(AmlOpRegion::new(
             AML_ACAD_REG,
             AmlAddressSpaceType::SystemMemory,
-            self.res.region_base,
+            self.base.res.region_base,
             AML_ACAD_REG_SZ,
         ));
 
@@ -290,8 +306,8 @@ impl AmlBuilder for PowerDev {
         acpi_bat_dev.append_child(AmlOpRegion::new(
             AML_BAT0_REG,
             AmlAddressSpaceType::SystemMemory,
-            self.res.region_base + AML_ACAD_REG_SZ,
-            self.res.region_size - AML_ACAD_REG_SZ,
+            self.base.res.region_base + AML_ACAD_REG_SZ,
+            self.base.res.region_size - AML_ACAD_REG_SZ,
         ));
 
         field = AmlField::new(
@@ -384,7 +400,7 @@ impl AmlBuilder for PowerDev {
     }
 }
 
-pub fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
+fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
     let cdev = dev.clone();
     let update_func = Box::new(move || {
         power_status_update(&cdev);

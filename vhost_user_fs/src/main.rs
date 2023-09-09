@@ -42,7 +42,7 @@ use util::arg_parser::ArgMatches;
 use util::{arg_parser, logger, seccomp::SeccompOpt};
 
 #[derive(Error, Debug)]
-pub enum MainError {
+enum MainError {
     #[error("VhostUserFs")]
     VhostUserFs {
         #[from]
@@ -60,7 +60,7 @@ pub enum MainError {
     },
 }
 
-pub trait ExitCode {
+trait ExitCode {
     /// Returns the value to use as the exit status.
     fn code(self) -> i32;
 }

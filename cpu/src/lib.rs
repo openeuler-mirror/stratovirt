@@ -27,16 +27,13 @@
 //! - `x86_64`
 //! - `aarch64`
 
-#[cfg(target_arch = "aarch64")]
+pub mod error;
+
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
-
-pub mod error;
-use anyhow::{anyhow, Context, Result};
-pub use error::CpuError;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
@@ -52,9 +49,7 @@ pub use aarch64::ArmCPUTopology as CPUTopology;
 pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
-use machine_manager::qmp::qmp_schema;
-#[cfg(target_arch = "x86_64")]
-use x86_64::caps::X86CPUCaps as CPUCaps;
+pub use error::CpuError;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
@@ -68,17 +63,20 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{anyhow, Context, Result};
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
+use vmm_sys_util::signal::{register_signal_handler, Killable};
+
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
-use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
-
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
-use vmm_sys_util::signal::{register_signal_handler, Killable};
+#[cfg(target_arch = "x86_64")]
+use x86_64::caps::X86CPUCaps as CPUCaps;
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
@@ -458,7 +456,7 @@ impl CPUInterface for CPU {
         }
 
         if QmpChannel::is_connected() {
-            let shutdown_msg = schema::Shutdown {
+            let shutdown_msg = qmp_schema::Shutdown {
                 guest: true,
                 reason: "guest-shutdown".to_string(),
             };
@@ -862,13 +860,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use super::*;
     use hypervisor::kvm::{KVMFds, KVM_FDS};
     use machine_manager::machine::{
         KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
     };
-    use serial_test::serial;
-
-    use super::*;
 
     struct TestVm {
         #[cfg(target_arch = "x86_64")]
@@ -932,7 +928,6 @@ mod tests {
     impl MachineInterface for TestVm {}
 
     #[test]
-    #[serial]
     #[allow(unused)]
     fn test_cpu_lifecycle() {
         let kvm_fds = KVMFds::new();

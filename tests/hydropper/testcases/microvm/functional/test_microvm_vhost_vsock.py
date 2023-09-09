@@ -37,7 +37,7 @@ def _check_vsock_enable(microvm):
             return False
 
     status, _ = microvm.serial_cmd(_cmd)
-    assert  status == 0
+    assert status == 0
     return True
 
 

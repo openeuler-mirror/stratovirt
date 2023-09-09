@@ -80,9 +80,11 @@ impl Qcow2ClusterType {
 }
 
 pub struct Qcow2Table {
-    pub cluster_bits: u64,
-    pub cluster_size: u64,
+    cluster_bits: u64,
+    cluster_size: u64,
     pub l1_table: Vec<u64>,
+    l1_table_offset: u64,
+    l1_size: u32,
     pub l2_table_cache: Qcow2Cache,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     l2_bits: u64,
@@ -96,6 +98,8 @@ impl Qcow2Table {
             cluster_bits: 0,
             cluster_size: 0,
             l1_table: Vec::new(),
+            l1_table_offset: 0,
+            l1_size: 0,
             l2_table_cache: Qcow2Cache::default(),
             l2_bits: 0,
             l2_size: 0,
@@ -131,23 +135,25 @@ impl Qcow2Table {
         self.l2_bits = header.cluster_bits as u64 - ENTRY_BITS;
         self.l2_size = header.cluster_size() / ENTRY_SIZE;
         self.l2_table_cache = l2_table_cache;
-        self.load_l1_table(header)
+        self.l1_table_offset = header.l1_table_offset;
+        self.l1_size = header.l1_size;
+        self.load_l1_table()
             .with_context(|| "Failed to load l1 table")?;
         Ok(())
     }
 
-    fn load_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn load_l1_table(&mut self) -> Result<()> {
         self.l1_table = self
             .sync_aio
             .borrow_mut()
-            .read_ctrl_cluster(header.l1_table_offset, header.l1_size as u64)?;
+            .read_ctrl_cluster(self.l1_table_offset, self.l1_size as u64)?;
         Ok(())
     }
 
-    pub fn save_l1_table(&mut self, header: &QcowHeader) -> Result<()> {
+    pub fn save_l1_table(&mut self) -> Result<()> {
         self.sync_aio
             .borrow_mut()
-            .write_ctrl_cluster(header.l1_table_offset, &self.l1_table)
+            .write_ctrl_cluster(self.l1_table_offset, &self.l1_table)
     }
 
     pub fn get_l1_table_index(&self, guest_offset: u64) -> u64 {
@@ -176,18 +182,39 @@ impl Qcow2Table {
         }
     }
 
+    /// Get max data remaining size after the offset which indexed by l2 table.
+    pub fn get_l2_table_max_remain_size(&self, guest_offset: u64, offset_in_cluster: u64) -> u64 {
+        (self.l2_size - self.get_l2_table_index(guest_offset)) * self.cluster_size
+            - offset_in_cluster
+    }
+
     pub fn update_l1_table(&mut self, l1_index: usize, l2_address: u64) {
         self.l1_table[l1_index] = l2_address;
     }
 
-    pub fn update_l2_table(&mut self, l2_table_entry: Rc<RefCell<CacheTable>>) -> Result<()> {
+    pub fn update_l2_table(
+        &mut self,
+        table: Rc<RefCell<CacheTable>>,
+        index: usize,
+        entry: u64,
+    ) -> Result<()> {
+        let is_dirty = table.borrow().dirty_info.is_dirty;
+        table.borrow_mut().set_entry_map(index, entry)?;
+        if !is_dirty {
+            self.l2_table_cache.add_dirty_table(table);
+        }
+
+        Ok(())
+    }
+
+    pub fn cache_l2_table(&mut self, l2_table_entry: Rc<RefCell<CacheTable>>) -> Result<()> {
         let l2_entry_addr = l2_table_entry.borrow().addr;
-        if self.l2_table_cache.contains_keys(l2_entry_addr as u64) {
+        if self.l2_table_cache.contains_keys(l2_entry_addr) {
             self.l2_table_cache.cache_map.remove(&l2_entry_addr);
         }
         if let Some(replaced_entry) = self
             .l2_table_cache
-            .lru_replace(l2_entry_addr as u64, l2_table_entry)
+            .lru_replace(l2_entry_addr, l2_table_entry)
         {
             let borrowed_entry = replaced_entry.borrow();
             // Flush the dirty entry.
@@ -203,24 +230,71 @@ impl Qcow2Table {
         Ok(())
     }
 
-    pub fn flush_l2_table_cache(&self) -> Result<()> {
-        for (_idx, entry) in self.l2_table_cache.iter() {
-            let mut borrowed_entry = entry.borrow_mut();
-            if !borrowed_entry.dirty_info.is_dirty {
-                continue;
-            }
-            self.sync_aio.borrow_mut().write_dirty_info(
-                borrowed_entry.addr,
-                borrowed_entry.get_value(),
-                borrowed_entry.dirty_info.start,
-                borrowed_entry.dirty_info.end,
-            )?;
-            borrowed_entry.dirty_info.clear();
-        }
-        Ok(())
+    pub fn flush(&mut self) -> Result<()> {
+        self.l2_table_cache.flush(self.sync_aio.clone())
     }
 
-    pub fn flush(&mut self) -> Result<()> {
-        self.flush_l2_table_cache()
+    pub fn drop_dirty_caches(&mut self) {
+        self.l2_table_cache.clean_up_dirty_cache();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        cell::RefCell,
+        io::{Read, Seek, SeekFrom},
+        rc::Rc,
+    };
+
+    use crate::qcow2::{
+        cache::{CacheTable, ENTRY_SIZE_U64},
+        test::create_qcow2,
+    };
+
+    #[test]
+    fn test_update_l2_table() {
+        let path = "/tmp/block_backend_test_update_l2_table.qcow2";
+        let (mut image, mut qcow2) = create_qcow2(path);
+        let cluster_size = qcow2.header.cluster_size() as usize;
+        let addr = qcow2.alloc_cluster(1, true).unwrap();
+        let l2_cluster: Vec<u8> = vec![0_u8; cluster_size];
+        let l2_table = Rc::new(RefCell::new(
+            CacheTable::new(addr, l2_cluster.clone(), ENTRY_SIZE_U64).unwrap(),
+        ));
+        qcow2.table.cache_l2_table(l2_table.clone()).unwrap();
+
+        let test_val1 = 0xff00ff00_u64;
+        qcow2
+            .table
+            .update_l2_table(l2_table.clone(), 0, test_val1)
+            .unwrap();
+        let res = l2_table.borrow_mut().get_entry_map(0).unwrap();
+        assert_eq!(res, test_val1);
+
+        image.file.seek(SeekFrom::Start(addr)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [0_u8; ENTRY_SIZE_U64]);
+
+        let test_val2 = 0x00ff00ff_u64;
+        qcow2
+            .table
+            .update_l2_table(l2_table.clone(), 8191, test_val2)
+            .unwrap();
+        let res = l2_table.borrow_mut().get_entry_map(8191).unwrap();
+        assert_eq!(res, test_val2);
+
+        qcow2.table.flush().unwrap();
+        image.file.seek(SeekFrom::Start(addr)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, test_val1.to_be_bytes());
+
+        let offset = addr + ENTRY_SIZE_U64 as u64 * 8191;
+        image.file.seek(SeekFrom::Start(offset)).unwrap();
+        let mut buf = vec![0_u8; ENTRY_SIZE_U64];
+        image.file.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, test_val2.to_be_bytes());
     }
 }

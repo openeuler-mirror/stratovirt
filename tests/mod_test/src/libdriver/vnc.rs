@@ -10,12 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{
-    libdriver::vnc::EncodingType::*,
-    libtest::{test_init, TestState},
-};
-use anyhow::{bail, Result};
-use core::time;
 use std::{
     cell::RefCell,
     cmp,
@@ -26,6 +20,9 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+
+use anyhow::{bail, Result};
+use core::time;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
 use super::{
@@ -33,6 +30,10 @@ use super::{
     malloc::GuestAllocator,
     pci::{PCIBarAddr, TestPciDev, PCI_VENDOR_ID},
     pci_bus::TestPciBus,
+};
+use crate::{
+    libdriver::vnc::EncodingType::*,
+    libtest::{test_init, TestState},
 };
 
 const EPOLL_DEFAULT_TIMEOUT: i32 = 1000;
@@ -803,7 +804,8 @@ impl VncClient {
 
         match sec_type {
             TestAuthType::VncAuthNone => {
-                // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share mode.
+                // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share
+                // mode.
                 self.read_msg(&mut buf, 4)?;
                 if buf[..4].to_vec() != [0_u8; 4].to_vec() {
                     bail!("Reject by vnc server");

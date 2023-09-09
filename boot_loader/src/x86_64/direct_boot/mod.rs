@@ -20,9 +20,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use log::info;
 
-use address_space::{AddressSpace, GuestAddress};
-use util::byte_code::ByteCode;
-
 use self::gdt::setup_gdt;
 use self::mptable::setup_isa_mptable;
 use super::bootparam::{BootParams, RealModeKernelHeader, UNDEFINED_ID};
@@ -32,6 +29,8 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
+use address_space::{AddressSpace, GuestAddress};
+use util::byte_code::ByteCode;
 
 /// Load bzImage linux kernel to Guest Memory.
 ///
@@ -63,7 +62,7 @@ fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
     boot_hdr.type_of_loader = UNDEFINED_ID;
 
     if let Err(e) = boot_hdr.check_valid_kernel() {
-        kernel_image.seek(SeekFrom::Start(0))?;
+        kernel_image.rewind()?;
         return Err(e);
     }
 
@@ -276,13 +275,14 @@ pub fn load_linux(
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use super::super::BOOT_GDT_MAX;
-    use address_space::*;
     use kvm_bindings::kvm_segment;
+
+    use super::super::BOOT_GDT_MAX;
+    use super::*;
+    use address_space::*;
 
     #[test]
     fn test_x86_bootloader_and_kernel_cmdline() {
@@ -337,7 +337,7 @@ mod test {
         let mut boot_hdr = RealModeKernelHeader::new();
         assert!(setup_boot_params(&config, &space, &boot_hdr).is_ok());
 
-        //test setup_gdt function
+        // test setup_gdt function
         let c_seg = kvm_segment {
             base: 0,
             limit: 1048575,
@@ -386,7 +386,7 @@ mod test {
         assert_eq!(arr[2], 0xaf9b000000ffff);
         assert_eq!(arr[3], 0xcf93000000ffff);
 
-        //test setup_kernel_cmdline function
+        // test setup_kernel_cmdline function
         let cmd_len: u64 = config.kernel_cmdline.len() as u64;
         let mut read_buffer: [u8; 30] = [0; 30];
         assert!(setup_kernel_cmdline(&config, &space, &mut boot_hdr).is_ok());

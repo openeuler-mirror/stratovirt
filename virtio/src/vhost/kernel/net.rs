@@ -14,13 +14,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
-use machine_manager::config::NetworkInterfaceConfig;
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
-use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
@@ -36,6 +30,12 @@ use crate::{
     VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
+use address_space::AddressSpace;
+use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::byte_code::ByteCode;
+use util::loop_context::EventNotifierHelper;
+use util::tap::Tap;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
@@ -45,8 +45,8 @@ const VHOST_NET_F_VIRTIO_NET_HDR: u32 = 27;
 trait VhostNetBackend {
     /// Attach virtio net ring to a raw socket, or tap device.
     /// The socket must be already bound to an ethernet device, this device will be
-    /// used for transmit.  Pass fd -1 to unbind from the socket and the transmit
-    /// device.  This can be used to stop the ring (e.g. for migration).
+    /// used for transmit. Pass fd -1 to unbind from the socket and the transmit
+    /// device. This can be used to stop the ring (e.g. for migration).
     ///
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
@@ -414,10 +414,11 @@ impl VirtioDevice for Net {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use super::*;
     use address_space::*;
     use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
-    use std::fs::File;
 
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
 

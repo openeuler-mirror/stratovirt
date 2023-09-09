@@ -1,3 +1,6 @@
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
 // PSL v2.
 // You may obtain a copy of Mulan PSL v2 at:
@@ -7,20 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-// Demo keyboard-pointer device is a simple pci device. It can be used to test whether
-// VNC can correctly receive the input from the client and transmit it to the keyboard and pointer device
-// Users can write a rom address in the mmio configuration space of the device.
-// Then if an input event occurs, the event information will be recorded to the corresponding memory by this device.
+// Demo keyboard-pointer device is a simple pci device. It can be used to test whether VNC can
+// correctly receive the input from the client and transmit it to the keyboard and pointer device.
+// Users can write a rom address in the mmio configuration space of the device. Then if an input
+// event occurs, the event information will be recorded to the corresponding memory by this device.
 
-use address_space::{AddressSpace, GuestAddress};
-use byteorder::{ByteOrder, LittleEndian};
-use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
-use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
 
 use anyhow::{bail, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use once_cell::sync::Lazy;
 
-use crate::demo_dev::DeviceTypeOperation;
+use crate::pci::demo_dev::DeviceTypeOperation;
+use address_space::{AddressSpace, GuestAddress};
+use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
+
 static MEM_ADDR: Lazy<Arc<Mutex<MemSpace>>> = Lazy::new(|| {
     Arc::new(Mutex::new(MemSpace {
         sys_mem: None,
@@ -34,7 +38,7 @@ pub struct MemSpace {
 }
 
 impl MemSpace {
-    pub fn send_kbdmouse_message(&mut self, msg: &PointerMessage) -> Result<()> {
+    fn send_kbdmouse_message(&mut self, msg: &PointerMessage) -> Result<()> {
         let sys_mem = match &self.sys_mem {
             Some(m) => m,
             None => {

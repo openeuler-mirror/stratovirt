@@ -12,13 +12,19 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::{error::ConfigError, get_cameradev_by_id, UnsignedInteger};
+use super::error::ConfigError;
+#[cfg(feature = "usb_camera")]
+use super::get_cameradev_by_id;
+#[cfg(feature = "usb_host")]
+use super::UnsignedInteger;
 use crate::config::{
-    check_arg_nonexist, check_arg_too_long, CamBackendType, CameraDevConfig, CmdParser,
-    ConfigCheck, ScsiDevConfig, VmConfig,
+    check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, ScsiDevConfig, VmConfig,
 };
+#[cfg(feature = "usb_camera")]
+use crate::config::{CamBackendType, CameraDevConfig};
 use util::aio::AioEngine;
 
+#[cfg(feature = "usb_host")]
 const USBHOST_ADDR_MAX: u8 = 127;
 
 /// XHCI controller configuration.
@@ -29,6 +35,7 @@ pub struct XhciConfig {
     pub p2: Option<u8>,
     // number of usb3.0 ports
     pub p3: Option<u8>,
+    pub iothread: Option<String>,
 }
 
 impl XhciConfig {
@@ -37,6 +44,7 @@ impl XhciConfig {
             id: None,
             p2: None,
             p3: None,
+            iothread: None,
         }
     }
 
@@ -66,6 +74,9 @@ impl XhciConfig {
 impl ConfigCheck for XhciConfig {
     fn check(&self) -> Result<()> {
         check_id(self.id.clone(), "xhci controller")?;
+        if let Some(iothread) = self.iothread.as_ref() {
+            check_arg_too_long(iothread, "iothread name")?;
+        }
         self.check_ports()
     }
 }
@@ -78,18 +89,14 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
         .push("bus")
         .push("addr")
         .push("p2")
-        .push("p3");
+        .push("p3")
+        .push("iothread");
     cmd_parser.parse(conf)?;
     let mut dev = XhciConfig::new();
     dev.id = cmd_parser.get_value::<String>("id")?;
-
-    if let Some(p2) = cmd_parser.get_value::<u8>("p2")? {
-        dev.p2 = Some(p2);
-    }
-
-    if let Some(p3) = cmd_parser.get_value::<u8>("p3")? {
-        dev.p3 = Some(p3);
-    }
+    dev.p2 = cmd_parser.get_value::<u8>("p2")?;
+    dev.p3 = cmd_parser.get_value::<u8>("p3")?;
+    dev.iothread = cmd_parser.get_value::<String>("iothread")?;
 
     dev.check()?;
     Ok(dev)
@@ -151,6 +158,7 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     Ok(dev)
 }
 
+#[cfg(feature = "usb_camera")]
 pub fn parse_usb_camera(vm_config: &mut VmConfig, conf: &str) -> Result<UsbCameraConfig> {
     let mut cmd_parser = CmdParser::new("usb-camera");
     cmd_parser
@@ -188,6 +196,7 @@ pub fn check_id(id: Option<String>, device: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "usb_camera")]
 #[derive(Clone, Debug)]
 pub struct UsbCameraConfig {
     pub id: Option<String>,
@@ -197,6 +206,7 @@ pub struct UsbCameraConfig {
     pub drive: CameraDevConfig,
 }
 
+#[cfg(feature = "usb_camera")]
 impl UsbCameraConfig {
     pub fn new() -> Self {
         UsbCameraConfig {
@@ -209,12 +219,14 @@ impl UsbCameraConfig {
     }
 }
 
+#[cfg(feature = "usb_camera")]
 impl Default for UsbCameraConfig {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "usb_camera")]
 impl ConfigCheck for UsbCameraConfig {
     fn check(&self) -> Result<()> {
         check_id(self.id.clone(), "usb-camera")?;
@@ -299,6 +311,7 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg(feature = "usb_host")]
 pub struct UsbHostConfig {
     /// USB Host device id.
     pub id: Option<String>,
@@ -316,6 +329,7 @@ pub struct UsbHostConfig {
     pub iso_urb_count: u32,
 }
 
+#[cfg(feature = "usb_host")]
 impl UsbHostConfig {
     fn check_range(&self) -> Result<()> {
         if self.hostaddr > USBHOST_ADDR_MAX {
@@ -325,6 +339,7 @@ impl UsbHostConfig {
     }
 }
 
+#[cfg(feature = "usb_host")]
 impl ConfigCheck for UsbHostConfig {
     fn check(&self) -> Result<()> {
         check_id(self.id.clone(), "usb-host")?;
@@ -332,6 +347,7 @@ impl ConfigCheck for UsbHostConfig {
     }
 }
 
+#[cfg(feature = "usb_host")]
 pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
     let mut cmd_parser = CmdParser::new("usb-host");
     cmd_parser

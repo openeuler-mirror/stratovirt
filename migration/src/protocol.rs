@@ -15,12 +15,13 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_ioctls::Kvm;
 use serde::{Deserialize, Serialize};
 
 use crate::MigrationError;
-use anyhow::{anyhow, bail, Context, Result};
 use util::byte_code::ByteCode;
+
 /// This status for migration in migration process.
 ///
 /// # Notes
@@ -884,13 +885,10 @@ pub mod tests {
 
     #[test]
     fn test_desc_basic_padding() {
-        /*
-         * This test makes two version of a device.
-         * Those devices's difference is appending a new field `mcr` in
-         * device state.
-         * Add_padding can solve this change in descriptor of device state.
-         * Test can verify this function works.
-         */
+        // This test makes two version of a device. Those devices's difference is appending a new
+        // field `mcr` in device state.
+        // Add_padding can solve this change in descriptor of device state.
+        // Test can verify this function works.
 
         let mut device_v1 = DeviceV1 {
             state: DeviceV1State::default(),
@@ -931,13 +929,10 @@ pub mod tests {
 
     #[test]
     fn test_desc_data_type_padding() {
-        /*
-         * This test makes two version of a device.
-         * Those devices's difference is appending all fields data value changed from
-         * u8 to u64.
-         * Add_padding can solve this change in descriptor of device state.
-         * Test can verify this function works.
-         */
+        // This test makes two version of a device. Those devices's difference is appending all
+        // fields data value changed from u8 to u64.
+        // Add_padding can solve this change in descriptor of device state.
+        // Test can verify this function works.
         let mut device_v2 = DeviceV2 {
             state: DeviceV2State::default(),
         };
@@ -977,13 +972,10 @@ pub mod tests {
 
     #[test]
     fn test_desc_field_name_padding() {
-        /*
-         * This test makes two version of a device.
-         * Those devices's difference is appending all fields name changed from
-         * u8 to u64.
-         * Add_padding can solve this change in descriptor of device state.
-         * Test can verify this function works.
-         */
+        // This test makes two version of a device. Those devices's difference is appending all
+        // fields name changed from u8 to u64.
+        // Add_padding can solve this change in descriptor of device state.
+        // Test can verify this function works.
         let mut device_v3 = DeviceV3 {
             state: DeviceV3State::default(),
         };
@@ -1023,13 +1015,10 @@ pub mod tests {
 
     #[test]
     fn test_desc_field_delete_padding() {
-        /*
-         * This test makes two version of a device.
-         * Those devices's difference is appending all fields name changed from
-         * u8 to u64.
-         * Add_padding can solve this change in descriptor of device state.
-         * Test can verify this function works.
-         */
+        // This test makes two version of a device. Those devices's difference is appending all
+        // fields name changed from u8 to u64.
+        // Add_padding can solve this change in descriptor of device state.
+        // Test can verify this function works.
         let mut device_v4 = DeviceV4 {
             state: DeviceV4State::default(),
         };
@@ -1066,12 +1055,9 @@ pub mod tests {
 
     #[test]
     fn test_desc_jump_version_padding() {
-        /*
-         * This test makes two version of a device.
-         * Those devices jump from v2 to v5 once.
-         * Add_padding can solve this change in descriptor of device state.
-         * Test can verify this function works.
-         */
+        // This test makes two version of a device. Those devices jump from v2 to v5 once.
+        // Add_padding can solve this change in descriptor of device state.
+        // Test can verify this function works.
         let mut device_v2 = DeviceV2 {
             state: DeviceV2State::default(),
         };

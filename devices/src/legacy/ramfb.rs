@@ -21,13 +21,14 @@ use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::legacy::Result;
+use crate::sysbus::{Result as SysBusResult, SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
-use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use ui::console::{
-    console_init, display_graphic_update, display_replace_surface, set_run_stage, ConsoleType,
-    DisplayConsole, DisplaySurface, HardWareOperations, VmRunningStage,
+    console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
+    DisplaySurface, HardWareOperations,
 };
 use ui::input::{key_event, KEYCODE_RET};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
@@ -69,7 +70,6 @@ impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         let ramfb_opts = Arc::new(RamfbInterface {});
         let con = console_init("ramfb".to_string(), ConsoleType::Graphic, ramfb_opts);
-        set_run_stage(VmRunningStage::Bios);
         Self {
             surface: None,
             con,
@@ -225,12 +225,14 @@ impl HardWareOperations for RamfbInterface {
 }
 
 pub struct Ramfb {
+    base: SysBusDevBase,
     pub ramfb_state: RamfbState,
 }
 
 impl Ramfb {
     pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
         Ramfb {
+            base: SysBusDevBase::new(SysBusDevType::Ramfb),
             ramfb_state: RamfbState::new(sys_mem, install),
         }
     }
@@ -242,7 +244,25 @@ impl Ramfb {
     }
 }
 
+impl Device for Ramfb {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for Ramfb {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be read!");
         false
@@ -251,10 +271,6 @@ impl SysBusDevOps for Ramfb {
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be written!");
         false
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::Ramfb
     }
 
     fn reset(&mut self) -> SysBusResult<()> {

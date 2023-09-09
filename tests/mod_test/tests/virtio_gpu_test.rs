@@ -10,6 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::time::{Duration, Instant};
+use std::vec;
+
 use mod_test::libdriver::virtio::VirtioDeviceOps;
 use mod_test::libdriver::virtio_gpu::{
     current_curosr_check, current_surface_check, get_display_info, get_edid, invalid_cmd_test,
@@ -21,8 +24,6 @@ use mod_test::libdriver::virtio_gpu::{
     VirtioGpuSetScanout, VirtioGpuTransferToHost2d,
 };
 use mod_test::libdriver::virtio_gpu::{set_up, tear_down};
-use std::time::{Duration, Instant};
-use std::vec;
 use util::byte_code::ByteCode;
 use virtio::{
     get_image_hostmem, get_pixman_format, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,

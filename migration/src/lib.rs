@@ -21,16 +21,18 @@ pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
+pub use anyhow::Result;
+
+pub use error::MigrationError;
+pub use manager::{MigrationHook, MigrationManager};
+pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
+
 use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
-pub use anyhow::Result;
 use log::error;
 
-pub use error::MigrationError;
-use machine_manager::qmp::{qmp_schema, Response};
-pub use manager::{MigrationHook, MigrationManager};
-pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
+use machine_manager::qmp::{qmp_response::Response, qmp_schema};
 
 /// Start to snapshot VM.
 ///

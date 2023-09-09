@@ -12,12 +12,14 @@
 
 mod split;
 
-use address_space::{AddressSpace, GuestAddress, RegionCache};
-use anyhow::{bail, Result};
+pub use split::*;
+
 use std::sync::Arc;
+
+use anyhow::{bail, Result};
 use vmm_sys_util::eventfd::EventFd;
 
-pub use split::*;
+use address_space::{AddressSpace, GuestAddress, RegionCache};
 
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;

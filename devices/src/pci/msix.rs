@@ -19,6 +19,12 @@ use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::pci::config::{
+    CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
+};
+use crate::pci::{
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+};
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{
@@ -27,14 +33,8 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::{
     byte_code::ByteCode,
-    num_ops::round_up,
+    num_ops::{ranges_overlap, round_up},
     test_helper::{add_msix_msg, is_test_enabled},
-};
-
-use crate::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
-use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
-    ranges_overlap, PciBus,
 };
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
@@ -52,7 +52,7 @@ pub const MSIX_CAP_FUNC_MASK: u16 = 0x4000;
 pub const MSIX_CAP_SIZE: u8 = 12;
 pub const MSIX_CAP_ID: u8 = 0x11;
 pub const MSIX_CAP_TABLE: u8 = 0x04;
-pub const MSIX_CAP_PBA: u8 = 0x08;
+const MSIX_CAP_PBA: u8 = 0x08;
 
 /// MSI-X message structure.
 #[derive(Copy, Clone)]
@@ -178,6 +178,13 @@ impl Msix {
         let pending_bit: u64 = !(1 << (vector as u64 % 64));
         let old_val = le_read_u64(&self.pba, offset).unwrap();
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
+    }
+
+    pub fn clear_pending_vectors(&mut self) {
+        let max_vector_nr = self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE;
+        for v in 0..max_vector_nr {
+            self.clear_pending_vector(v);
+        }
     }
 
     fn update_irq_routing(&mut self, vector: u16, is_masked: bool) -> Result<()> {
@@ -456,7 +463,9 @@ impl Msix {
         let len = data.len();
         let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
         // Only care about the bits Masked(14) & Enabled(15) in msix control register.
-        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1) {
+        // SAFETY: msix_cap_control_off is less than u16::MAX.
+        // Offset and len have been checked in call function PciConfig::write.
+        if !ranges_overlap(offset, len, msix_cap_control_off + 1, 1).unwrap() {
             return;
         }
 
@@ -619,7 +628,8 @@ fn send_msix(msg: Message, dev_id: u16) {
 /// * `dev_id` - Dev id.
 /// * `_id` - MSI-X id used in MigrationManager.
 /// * `parent_region` - Parent region which the MSI-X region registered. If none, registered in BAR.
-/// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the table_offset and pba_offset together.
+/// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the
+///   table_offset and pba_offset together.
 pub fn init_msix(
     bar_id: usize,
     vector_nr: u32,
@@ -653,7 +663,9 @@ pub fn init_msix(
         table_size as usize,
         pba_offset as usize,
         pba_size as usize,
-    ) {
+    )
+    .unwrap()
+    {
         bail!("msix table and pba table overlapped.");
     }
     le_write_u32(&mut config.config, offset, table_offset | bar_id as u32)?;
@@ -710,7 +722,7 @@ pub fn update_dev_id(parent_bus: &Weak<Mutex<PciBus>>, devfn: u8, dev_id: &Arc<A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PCI_CONFIG_SPACE_SIZE;
+    use crate::pci::config::PCI_CONFIG_SPACE_SIZE;
 
     #[test]
     fn test_init_msix() {

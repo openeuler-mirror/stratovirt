@@ -18,8 +18,9 @@ use std::{
     process,
 };
 
-use crate::OzoneError;
 use anyhow::{bail, Context, Result};
+
+use crate::OzoneError;
 
 const MOUNT_DIR: &str = "/proc/mounts";
 const CGROUP_ALLOW_LIST: [&str; 2] = ["cpuset.cpus", "memory.limit_in_bytes"];
@@ -170,15 +171,16 @@ fn read_file_value(path: PathBuf) -> Result<String> {
 }
 
 // Reason for inherit configuration:
-// Ozone creates a new hierarchy: /sys/fs/cgroup/<controller>/<exec_file>/<name> in cgroup. As the value in
-// current hierarchy should be a sub-aggregate of its parent hierarchy, in other words: value in "..//<controller>
-// /<exec_file>/<name>/file" should be a sub-aggregate of that in "../<controller>/<exec_file>/file". However, When
-// creating the hierarchy "../<controller>/<exec_file>/<name>" values in "../<controller>/<exec_file>/file" always
-// be empty, which means that the attempts to set values in "../<controller>/<exec_file>/<name>/file" will fail.
-// In order to address this problem, Ozone inherit configuration from "../<controller>/file" to ""../<controller>
-// /<exec_file>/file".
-// IF many Ozones are launched with the same "exec_file", the first launched one will inherit configuration, other ones
-// will not do that.
+// Ozone creates a new hierarchy: /sys/fs/cgroup/<controller>/<exec_file>/<name> in cgroup. As the
+// value in current hierarchy should be a sub-aggregate of its parent hierarchy, in other words:
+// value in "..//<controller> /<exec_file>/<name>/file" should be a sub-aggregate of that in
+// "../<controller>/<exec_file>/file". However, When creating the hierarchy
+// "../<controller>/<exec_file>/<name>" values in "../<controller>/<exec_file>/file" always
+// be empty, which means that the attempts to set values in
+// "../<controller>/<exec_file>/<name>/file" will fail. In order to address this problem, Ozone
+// inherit configuration from "../<controller>/file" to ""../<controller> /<exec_file>/file".
+// If many Ozones are launched with the same "exec_file", the first launched one will inherit
+// configuration, other ones will not do that.
 fn inherit_config(path: &Path, file: &str) -> Result<()> {
     let upper_file = path.with_file_name(file);
     let value = read_file_value(upper_file.clone())?;

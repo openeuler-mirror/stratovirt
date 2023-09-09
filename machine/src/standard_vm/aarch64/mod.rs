@@ -14,24 +14,19 @@ mod pci_host_root;
 mod syscall;
 
 pub use crate::error::MachineError;
-use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
-use devices::acpi::power::PowerDev;
-use log::{error, info, warn};
-use machine_manager::config::ShutdownAction;
-#[cfg(not(target_env = "musl"))]
-use machine_manager::config::UiContext;
-use machine_manager::event_loop::EventLoop;
-use std::borrow::Borrow;
+
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
+
+use anyhow::{bail, Context, Result};
+use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
+use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
-
+use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
+use crate::MachineOps;
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -49,40 +44,45 @@ use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{
     CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuTopology, CPU, PMU_INTR, PPI_BASE,
 };
-#[cfg(not(target_env = "musl"))]
+use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
+use devices::acpi::power::PowerDev;
+#[cfg(feature = "ramfb")]
 use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
-
+use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
+use devices::sysbus::{SysBus, SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
+use machine_manager::config::ShutdownAction;
+#[cfg(feature = "gtk")]
+use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
     NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
-use pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
+#[cfg(feature = "gtk")]
+use ui::gtk::gtk_display_init;
+#[cfg(feature = "vnc")]
+use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
-
-use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
-use crate::MachineOps;
-use anyhow::{bail, Context, Result};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -212,7 +212,7 @@ impl StdMachine {
         Ok(StdMachine {
             cpu_topo,
             cpus: Vec::new(),
-            cpu_features: vm_config.machine_config.cpu_config.borrow().into(),
+            cpu_features: (&vm_config.machine_config.cpu_config).into(),
             irq_chip: None,
             sys_mem: sys_mem.clone(),
             sysbus,
@@ -280,7 +280,7 @@ impl StdMachine {
             .sys_mem
             .write(
                 &mut locked_vm.dtb_vec.as_slice(),
-                GuestAddress(fdt_addr as u64),
+                GuestAddress(fdt_addr),
                 locked_vm.dtb_vec.len() as u64,
             )
             .with_context(|| "Fail to write dtb into sysmem")?;
@@ -683,7 +683,7 @@ impl MachineOps for StdMachine {
                 .sys_mem
                 .write(
                     &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr as u64),
+                    GuestAddress(boot_cfg.fdt_addr),
                     fdt_vec.len() as u64,
                 )
                 .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
@@ -705,12 +705,11 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        #[cfg(not(target_env = "musl"))]
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "windows_emu_pid")]
         locked_vm.watch_windows_emu_pid(
             vm_config,
             locked_vm.power_button.clone(),
@@ -753,9 +752,10 @@ impl MachineOps for StdMachine {
     }
 
     /// Create display.
-    #[cfg(not(target_env = "musl"))]
+    #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
+        #[cfg(feature = "gtk")]
         match vm_config.display {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
@@ -772,12 +772,13 @@ impl MachineOps for StdMachine {
         };
 
         // VNC display init.
+        #[cfg(feature = "vnc")]
         vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "ramfb")]
     fn add_ramfb(&mut self, cfg_args: &str) -> Result<()> {
         let install = parse_ramfb(cfg_args)?;
         let fwcfg_dev = self
@@ -874,7 +875,7 @@ impl AcpiBuilder for StdMachine {
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
-        Ok(gtdt_begin as u64)
+        Ok(gtdt_begin)
     }
 
     fn build_iort_table(
@@ -917,7 +918,7 @@ impl AcpiBuilder for StdMachine {
 
         let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
             .with_context(|| "Fail to add IORT table to loader")?;
-        Ok(iort_begin as u64)
+        Ok(iort_begin)
     }
 
     fn build_spcr_table(
@@ -941,9 +942,9 @@ impl AcpiBuilder for StdMachine {
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            if locked_dev.get_type() == SysBusDevType::PL011 {
-                uart_irq = locked_dev.get_sys_resource().unwrap().irq as u32;
+            let locked_dev = dev.lock().unwrap();
+            if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
+                uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
                 break;
             }
         }
@@ -961,7 +962,7 @@ impl AcpiBuilder for StdMachine {
 
         let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
             .with_context(|| "Fail to add SPCR table to loader")?;
-        Ok(spcr_begin as u64)
+        Ok(spcr_begin)
     }
 
     fn build_dsdt_table(
@@ -993,7 +994,7 @@ impl AcpiBuilder for StdMachine {
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;
-        Ok(dsdt_begin as u64)
+        Ok(dsdt_begin)
     }
 
     fn build_madt_table(
@@ -1052,7 +1053,7 @@ impl AcpiBuilder for StdMachine {
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .with_context(|| "Fail to add MADT table to loader")?;
-        Ok(madt_begin as u64)
+        Ok(madt_begin)
     }
 
     fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
@@ -1113,7 +1114,7 @@ impl AcpiBuilder for StdMachine {
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
-        Ok(srat_begin as u64)
+        Ok(srat_begin)
     }
 
     fn build_pptt_table(
@@ -1126,7 +1127,7 @@ impl AcpiBuilder for StdMachine {
         self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
-        Ok(pptt_begin as u64)
+        Ok(pptt_begin)
     }
 }
 
@@ -1546,7 +1547,7 @@ impl CompileFDTHelper for StdMachine {
             if let Some(numa_nodes) = &self.numa_nodes {
                 for numa_index in 0..numa_nodes.len() {
                     let numa_node = numa_nodes.get(&(numa_index as u32));
-                    if numa_node.unwrap().cpus.contains(&(cpu_index as u8)) {
+                    if numa_node.unwrap().cpus.contains(&(cpu_index)) {
                         fdt.set_property_u32("numa-node-id", numa_index as u32)?;
                     }
                 }
@@ -1572,7 +1573,7 @@ impl CompileFDTHelper for StdMachine {
             let node = "memory";
             let memory_node_dep = fdt.begin_node(node)?;
             fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
             fdt.end_node(memory_node_dep)?;
 
             return Ok(());
@@ -1585,7 +1586,7 @@ impl CompileFDTHelper for StdMachine {
             let node = format!("memory@{:x}", mem_base);
             let memory_node_dep = fdt.begin_node(&node)?;
             fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
             fdt.set_property_u32("numa-node-id", id as u32)?;
             fdt.end_node(memory_node_dep)?;
             mem_base += mem_size;
@@ -1627,23 +1628,23 @@ impl CompileFDTHelper for StdMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            match locked_dev.get_type() {
+            let locked_dev = dev.lock().unwrap();
+            match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::Rtc => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_rtc_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::VirtioMmio => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                    generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::FwCfg => {
                     // SAFETY: Legacy devices guarantee is not empty.
-                    generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
+                    generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }
@@ -1695,7 +1696,7 @@ impl CompileFDTHelper for StdMachine {
             let distances = &node.1.distances;
             for i in existing_nodes.iter() {
                 matrix.push(id as u32);
-                matrix.push(*i as u32);
+                matrix.push(*i);
                 let dist: u32 = if id as u32 == *i {
                     10
                 } else if let Some(distance) = distances.get(i) {

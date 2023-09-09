@@ -134,8 +134,9 @@ fn version_to_u32(version_str: &str) -> u32 {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use syn::{parse_quote, ItemStruct};
+
+    use super::*;
 
     #[test]
     fn test_version_to_u32() {

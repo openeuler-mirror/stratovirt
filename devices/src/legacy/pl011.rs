@@ -12,16 +12,20 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::chardev::{Chardev, InputReceiver};
+use anyhow::{Context, Result};
+use log::{debug, error};
+use vmm_sys_util::eventfd::EventFd;
+
 use super::error::LegacyError;
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
     AmlInteger, AmlMemory32Fixed, AmlNameDecl, AmlReadAndWrite, AmlResTemplate, AmlResourceUsage,
     AmlScopeBuilder, AmlString, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::GuestAddress;
-use anyhow::{Context, Result};
-use log::{debug, error};
+use chardev_backend::chardev::{Chardev, InputReceiver};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
@@ -31,11 +35,9 @@ use migration::{
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_data_u32;
-use vmm_sys_util::eventfd::EventFd;
 
 const PL011_FLAG_TXFE: u8 = 0x80;
 const PL011_FLAG_RXFF: u8 = 0x40;
@@ -60,7 +62,7 @@ const PL011_FIFO_SIZE: usize = 16;
 #[repr(C)]
 #[derive(Clone, Copy, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
-pub struct PL011State {
+struct PL011State {
     /// Read FIFO. PL011_FIFO_SIZE is 16.
     rfifo: [u32; 16],
     /// Flag Register.
@@ -118,12 +120,9 @@ impl PL011State {
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct PL011 {
+    base: SysBusDevBase,
     /// Device state.
     state: PL011State,
-    /// Interrupt event file descriptor.
-    interrupt_evt: EventFd,
-    /// System Resource of device.
-    res: SysRes,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
 }
@@ -132,9 +131,13 @@ impl PL011 {
     /// Create a new `PL011` instance with default parameters.
     pub fn new(cfg: SerialConfig) -> Result<Self> {
         Ok(PL011 {
+            base: SysBusDevBase {
+                base: DeviceBase::default(),
+                dev_type: SysBusDevType::PL011,
+                res: SysRes::default(),
+                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+            },
             state: PL011State::new(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK)?,
-            res: SysRes::default(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         })
     }
@@ -144,7 +147,7 @@ impl PL011 {
 
         let flag = self.state.int_level & self.state.int_enabled;
         if flag & irq_mask != 0 {
-            if let Err(e) = self.interrupt_evt.write(1) {
+            if let Err(e) = self.interrupt_evt().unwrap().write(1) {
                 error!(
                     "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {:?}",
                     flag, e,
@@ -183,7 +186,7 @@ impl PL011 {
             PL011_SNAPSHOT_ID,
         );
         let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
@@ -194,7 +197,7 @@ impl PL011 {
 }
 
 impl InputReceiver for PL011 {
-    fn input_handle(&mut self, data: &[u8]) {
+    fn receive(&mut self, data: &[u8]) {
         self.state.flags &= !PL011_FLAG_RXFE as u32;
         for val in data {
             let mut slot = (self.state.read_pos + self.state.read_count) as usize;
@@ -210,17 +213,35 @@ impl InputReceiver for PL011 {
             self.state.flags |= PL011_FLAG_RXFF as u32;
         }
         if self.state.read_count >= self.state.read_trigger {
-            self.state.int_level |= INT_RX as u32;
+            self.state.int_level |= INT_RX;
             self.interrupt();
         }
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
+    fn remain_size(&mut self) -> usize {
         PL011_FIFO_SIZE - self.state.read_count as usize
     }
 }
 
+impl Device for PL011 {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base.base
+    }
+}
+
 impl SysBusDevOps for PL011 {
+    fn sysbusdev_base(&self) -> &SysBusDevBase {
+        &self.base
+    }
+
+    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
+        &mut self.base
+    }
+
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if data.len() > 4 {
             error!("Fail to read PL011, illegal data length {}", data.len());
@@ -245,7 +266,7 @@ impl SysBusDevOps for PL011 {
                     self.state.flags |= PL011_FLAG_RXFE as u32;
                 }
                 if self.state.read_count == self.state.read_trigger - 1 {
-                    self.state.int_level &= !(INT_RX as u32);
+                    self.state.int_level &= !INT_RX;
                 }
                 self.state.rsr = c >> 8;
                 self.interrupt();
@@ -318,17 +339,17 @@ impl SysBusDevOps for PL011 {
                 if let Some(output) = &mut self.chardev.lock().unwrap().output {
                     let mut locked_output = output.lock().unwrap();
                     if let Err(e) = locked_output.write_all(&[ch]) {
-                        error!("Failed to write to pl011 output fd, error is {:?}", e);
+                        debug!("Failed to write to pl011 output fd, error is {:?}", e);
                     }
                     if let Err(e) = locked_output.flush() {
-                        error!("Failed to flush pl011, error is {:?}", e);
+                        debug!("Failed to flush pl011, error is {:?}", e);
                     }
                 } else {
                     debug!("Failed to get output fd");
                     return false;
                 }
 
-                self.state.int_level |= INT_TX as u32;
+                self.state.int_level |= INT_TX;
                 self.interrupt();
             }
             1 => {
@@ -384,16 +405,8 @@ impl SysBusDevOps for PL011 {
         true
     }
 
-    fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(&self.interrupt_evt)
-    }
-
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.res)
-    }
-
-    fn get_type(&self) -> SysBusDevType {
-        SysBusDevType::PL011
+        Some(&mut self.base.res)
     }
 }
 
@@ -425,8 +438,8 @@ impl AmlBuilder for PL011 {
         let mut res = AmlResTemplate::new();
         res.append_child(AmlMemory32Fixed::new(
             AmlReadAndWrite::ReadWrite,
-            self.res.region_base as u32,
-            self.res.region_size as u32,
+            self.base.res.region_base as u32,
+            self.base.res.region_size as u32,
         ));
         // SPI start at interrupt number 32 on aarch64 platform.
         let irq_base = INTERRUPT_PPIS_COUNT + INTERRUPT_SGIS_COUNT;
@@ -435,7 +448,7 @@ impl AmlBuilder for PL011 {
             AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![self.res.irq as u32 + irq_base],
+            vec![self.base.res.irq as u32 + irq_base],
         ));
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
@@ -479,7 +492,7 @@ mod test {
         assert_eq!(pl011_dev.state.int_enabled, 0);
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
-        pl011_dev.input_handle(&data);
+        pl011_dev.receive(&data);
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.state.rfifo[i], data[i] as u32);

@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "scream_alsa")]
 mod alsa;
 mod audio_demo;
+#[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
 use std::{
@@ -23,21 +25,26 @@ use std::{
     thread,
 };
 
-use address_space::{GuestAddress, HostMemMapping, Region};
 use anyhow::{bail, Context, Result};
 use core::time;
 use log::{error, warn};
 
-use self::{alsa::AlsaStreamData, audio_demo::AudioDemo};
+#[cfg(feature = "scream_alsa")]
+use self::alsa::AlsaStreamData;
+use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
-use machine_manager::config::scream::ScreamConfig;
-use pci::{PciBus, PciDevOps};
-use pulseaudio::{PulseStreamData, TARGET_LATENCY_MS};
+use crate::pci::{PciBus, PciDevOps};
+use address_space::{GuestAddress, HostMemMapping, Region};
+use machine_manager::config::scream::{ScreamConfig, ScreamInterface};
+#[cfg(feature = "scream_pulseaudio")]
+use pulseaudio::PulseStreamData;
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
 
 pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
+
+pub const TARGET_LATENCY_MS: u32 = 50;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -280,7 +287,7 @@ impl StreamData {
 pub struct Scream {
     hva: u64,
     size: u64,
-    interface: String,
+    interface: ScreamInterface,
     playback: String,
     record: String,
 }
@@ -290,28 +297,24 @@ impl Scream {
         Self {
             hva: 0,
             size,
-            interface: dev_cfg.interface.clone(),
+            interface: dev_cfg.interface,
             playback: dev_cfg.playback.clone(),
             record: dev_cfg.record.clone(),
         }
     }
 
+    #[allow(unused_variables)]
     fn interface_init(&self, name: &str, dir: ScreamDirection) -> Arc<Mutex<dyn AudioInterface>> {
-        match self.interface.as_str() {
-            "ALSA" => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
-            "PulseAudio" => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
-            "Demo" => Arc::new(Mutex::new(AudioDemo::init(
+        match self.interface {
+            #[cfg(feature = "scream_alsa")]
+            ScreamInterface::Alsa => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
+            #[cfg(feature = "scream_pulseaudio")]
+            ScreamInterface::PulseAudio => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
+            ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
                 self.playback.clone(),
                 self.record.clone(),
             ))),
-            _ => {
-                error!(
-                    "Unsupported audio interface {}, falling back to ALSA",
-                    self.interface
-                );
-                Arc::new(Mutex::new(AlsaStreamData::init(name, dir)))
-            }
         }
     }
 

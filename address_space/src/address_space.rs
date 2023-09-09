@@ -10,26 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Context, Result};
-use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use migration::{migration::Migratable, MigrationManager};
-use util::aio::Iovec;
-use util::byte_code::ByteCode;
-use util::test_helper::is_test_enabled;
+use anyhow::{anyhow, Context, Result};
+use arc_swap::ArcSwap;
 
 use crate::{
     AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
     RegionIoEventFd, RegionType,
 };
+use migration::{migration::Migratable, MigrationManager};
+use util::aio::Iovec;
+use util::byte_code::ByteCode;
+use util::test_helper::is_test_enabled;
 
 /// Contains an array of `FlatRange`.
 #[derive(Default, Clone, Debug)]
-pub(crate) struct FlatView(pub Vec<FlatRange>);
+pub(crate) struct FlatView(pub(crate) Vec<FlatRange>);
 
 impl FlatView {
     fn find_flatrange(&self, addr: GuestAddress) -> Option<&FlatRange> {

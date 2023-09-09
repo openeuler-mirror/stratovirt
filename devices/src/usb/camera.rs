@@ -20,18 +20,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error, info};
-use strum::EnumCount;
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
-
-use machine_manager::config::UsbCameraConfig;
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::aio::{iov_discard_front_direct, Iovec};
-use util::byte_code::ByteCode;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
 
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
@@ -44,14 +34,21 @@ use crate::usb::descriptor::*;
 use crate::usb::{
     UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
+use machine_manager::config::UsbCameraConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use util::aio::{iov_discard_front_direct, Iovec};
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 // CRC16 of "STRATOVIRT"
 const UVC_VENDOR_ID: u16 = 0xB74C;
 // The first 4 chars of "VIDEO", 5 substitutes V.
 const UVC_PRODUCT_ID: u16 = 0x51DE;
 
-pub const INTERFACE_ID_CONTROL: u8 = 0;
-pub const INTERFACE_ID_STREAMING: u8 = 1;
+const INTERFACE_ID_CONTROL: u8 = 0;
+const INTERFACE_ID_STREAMING: u8 = 1;
 
 const TERMINAL_ID_INPUT_TERMINAL: u8 = 1;
 const TERMINAL_ID_OUTPUT_TERMINAL: u8 = 2;
@@ -61,9 +58,9 @@ const VS_INTERFACE_NUM: u8 = 1;
 
 // According to UVC specification 1.5
 // A.2. Video Interface Subclass Codes
-pub const SC_VIDEOCONTROL: u8 = 0x01;
-pub const SC_VIDEOSTREAMING: u8 = 0x02;
-pub const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
+const SC_VIDEOCONTROL: u8 = 0x01;
+const SC_VIDEOSTREAMING: u8 = 0x02;
+const SC_VIDEO_INTERFACE_COLLECTION: u8 = 0x03;
 // A.3. Video Interface Protocol Codes
 const PC_PROTOCOL_UNDEFINED: u8 = 0x0;
 // A.4. Video Class-Specific Descriptor Types
@@ -108,8 +105,9 @@ pub struct UsbCamera {
     delete_evts: Vec<RawFd>,
 }
 
-#[derive(Debug, EnumCountMacro, EnumIter)]
+#[derive(Debug)]
 enum UsbCameraStringIDs {
+    #[allow(unused)]
     Invalid = 0,
     Manufacture,
     Product,
@@ -119,12 +117,14 @@ enum UsbCameraStringIDs {
     VideoControl,
     InputTerminal,
     OutputTerminal,
+    #[allow(unused)]
     SelectUnit,
+    #[allow(unused)]
     ProcessingUnit,
     VideoStreaming,
 }
 
-const UVC_CAMERA_STRINGS: [&str; UsbCameraStringIDs::COUNT] = [
+const UVC_CAMERA_STRINGS: [&str; 12] = [
     "",
     "StratoVirt",
     "USB Camera",
@@ -1170,9 +1170,8 @@ fn gen_color_matching_desc() -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod test {
-    use crate::camera_backend::{CameraFormatList, CameraFrame, FmtType};
-
     use super::*;
+    use crate::camera_backend::{CameraFormatList, CameraFrame, FmtType};
 
     fn test_interface_table_data_len(interface: Arc<UsbDescIface>, size_offset: usize) {
         let descs = &interface.other_desc;
@@ -1236,8 +1235,9 @@ mod test {
 
     #[test]
     fn test_interfaces_table_data_len() {
-        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4 respectively in their data[0] vector.
-        // the rest data follow the same principle that the 1st element is the very data vector's length.
+        // VC and VS's header difference, their wTotalSize field's offset are the bit 5 and 4
+        // respectively in their data[0] vector. The rest data follow the same principle that the
+        // 1st element is the very data vector's length.
         test_interface_table_data_len(gen_desc_interface_camera_vc().unwrap(), 5);
         test_interface_table_data_len(gen_desc_interface_camera_vs(list_format()).unwrap(), 4);
     }

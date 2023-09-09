@@ -29,17 +29,12 @@
 //! - `aarch64`
 
 pub mod error;
-pub use error::MicroVmError;
-use machine_manager::config::DiskFormat;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::UpdateRegionArgument;
-use util::aio::{AioEngine, WriteZeroesState};
 
 mod mem_layout;
 mod syscall;
 
-use super::Result as MachineResult;
-use log::{error, info};
+pub use error::MicroVmError;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -48,6 +43,15 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 
+use anyhow::{anyhow, bail, Context, Result};
+#[cfg(target_arch = "x86_64")]
+use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use log::{error, info};
+
+use super::Result as MachineResult;
+use super::{error::MachineError, MachineOps};
+#[cfg(target_arch = "x86_64")]
+use crate::vm_state;
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 #[cfg(target_arch = "aarch64")]
@@ -60,31 +64,31 @@ use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
+use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+#[cfg(target_arch = "aarch64")]
+use devices::sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
-#[cfg(target_arch = "x86_64")]
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::{
-    config::{
-        parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
-        Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
-        DEFAULT_VIRTQUEUE_SIZE,
-    },
-    event,
-    machine::{
-        DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-        MachineInterface, MachineLifecycle, MigrateInterface,
-    },
-    qmp::{qmp_schema, QmpChannel, Response},
+use machine_manager::config::{
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DiskFormat,
+    DriveFile, Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
+    DEFAULT_VIRTQUEUE_SIZE,
+};
+use machine_manager::event;
+use machine_manager::event_loop::EventLoop;
+use machine_manager::machine::{
+    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
+    MachineInterface, MachineLifecycle, MigrateInterface,
+};
+use machine_manager::qmp::{
+    qmp_channel::QmpChannel, qmp_response::Response, qmp_schema, qmp_schema::UpdateRegionArgument,
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
-use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
-#[cfg(target_arch = "aarch64")]
-use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
+use util::aio::WriteZeroesState;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::{
@@ -94,11 +98,6 @@ use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
-
-use super::{error::MachineError, MachineOps};
-#[cfg(target_arch = "x86_64")]
-use crate::vm_state;
-use anyhow::{anyhow, bail, Context, Result};
 
 // The replaceable block device maximum count.
 const MMIO_REPLACEABLE_BLK_NR: usize = 4;
@@ -806,7 +805,7 @@ impl MachineOps for LightMachine {
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         let mut locked_vm = vm.lock().unwrap();
 
-        //trace for lightmachine
+        // trace for lightmachine
         trace_sysbus(&locked_vm.sysbus);
         trace_vm_state(&locked_vm.vm_state);
 
@@ -895,7 +894,7 @@ impl MachineOps for LightMachine {
                     .sys_mem
                     .write(
                         &mut fdt_vec.as_slice(),
-                        GuestAddress(boot_cfg.fdt_addr as u64),
+                        GuestAddress(boot_cfg.fdt_addr),
                         fdt_vec.len() as u64,
                     )
                     .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
@@ -1037,7 +1036,7 @@ impl DeviceInterface for LightMachine {
             _ => Default::default(),
         };
 
-        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
+        Response::create_response(serde_json::to_value(qmp_state).unwrap(), None)
     }
 
     fn query_cpus(&self) -> Response {
@@ -1125,7 +1124,7 @@ impl DeviceInterface for LightMachine {
     fn query_balloon(&self) -> Response {
         if let Some(actual) = qmp_query_balloon() {
             let ret = qmp_schema::BalloonInfo { actual };
-            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+            return Response::create_response(serde_json::to_value(ret).unwrap(), None);
         }
         Response::create_error_response(
             qmp_schema::QmpErrorClass::DeviceNotActive(
@@ -1222,12 +1221,7 @@ impl DeviceInterface for LightMachine {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            // TODO Add aio option by qmp, now we set it based on "direct".
-            aio: if direct {
-                AioEngine::Native
-            } else {
-                AioEngine::Off
-            },
+            aio: args.file.aio,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
@@ -1634,7 +1628,7 @@ impl CompileFDTHelper for LightMachine {
         let node = "memory";
         let memory_node_dep = fdt.begin_node(node)?;
         fdt.set_property_string("device_type", "memory")?;
-        fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+        fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
         fdt.end_node(memory_node_dep)?;
 
         Ok(())
@@ -1673,13 +1667,13 @@ impl CompileFDTHelper for LightMachine {
         fdt.end_node(psci_node_dep)?;
 
         for dev in self.sysbus.devices.iter() {
-            let mut locked_dev = dev.lock().unwrap();
-            let dev_type = locked_dev.get_type();
-            let sys_res = locked_dev.get_sys_resource().unwrap();
+            let locked_dev = dev.lock().unwrap();
+            let dev_type = locked_dev.sysbusdev_base().dev_type;
+            let sys_res = locked_dev.sysbusdev_base().res;
             match dev_type {
-                SysBusDevType::Serial => generate_serial_device_node(fdt, sys_res)?,
-                SysBusDevType::Rtc => generate_rtc_device_node(fdt, sys_res)?,
-                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, sys_res)?,
+                SysBusDevType::Serial => generate_serial_device_node(fdt, &sys_res)?,
+                SysBusDevType::Rtc => generate_rtc_device_node(fdt, &sys_res)?,
+                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, &sys_res)?,
                 _ => (),
             }
         }

@@ -10,14 +10,10 @@ description = "Emulation machines"
 kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
 log = "0.4"
 libc = "0.2"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 vmm-sys-util = "0.11.1"
-vfio-bindings = "0.3"
 thiserror = "1.0"
 anyhow = "1.0"
-strum = "0.24.1"
-strum_macros = "0.24.3"
 acpi = { path = "../acpi" }
 smbios = { path = "../smbios" }
 address_space = { path = "../address_space" }
@@ -28,17 +24,24 @@ hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
-pci = { path = "../pci" }
-sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
 block_backend = { path = "../block_backend" }
-
-[target.'cfg(not(target_env = "musl"))'.dependencies]
 ui = { path = "../ui" }
 
 [features]
-default = ["qmp"]
-qmp = []
+default = []
 boot_time = ["cpu/boot_time"]
+scream = ["devices/scream", "machine_manager/scream"]
+scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
+scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]
+demo_device = ["devices/demo_device", "machine_manager/demo_device"]
+usb_host = ["devices/usb_host", "machine_manager/usb_host"]
+usb_camera = ["devices/usb_camera", "machine_manager/usb_camera"]
+usb_camera_v4l2 = ["usb_camera", "devices/usb_camera_v4l2", "machine_manager/usb_camera_v4l2", "util/usb_camera_v4l2"]
+windows_emu_pid = ["ui/console", "machine_manager/windows_emu_pid"]
+gtk = ["windows_emu_pid", "ui/gtk", "machine_manager/gtk"]
+vnc = ["ui/vnc", "machine_manager/vnc"]
+ramfb = ["devices/ramfb", "machine_manager/ramfb"]
+virtio_gpu = ["virtio/virtio_gpu", "machine_manager/virtio_gpu"]

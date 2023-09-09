@@ -18,13 +18,13 @@ use std::thread;
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+
+use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
 use util::{
     syscall::mbind,
     unix::{do_mmap, host_page_size},
 };
-
-use crate::{AddressRange, GuestAddress, Region};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 /// Verify existing pages in the mapping.
@@ -41,6 +41,22 @@ pub struct FileBackend {
     pub offset: u64,
     /// Page size of this file.
     pub page_size: u64,
+}
+
+fn file_unlink(file_path: &str) {
+    let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
+
+    if unsafe { libc::unlink(fs_cstr) } != 0 {
+        error!(
+            "Failed to unlink file \"{}\", error: {:?}",
+            file_path,
+            std::io::Error::last_os_error()
+        );
+    }
+    // SAFETY: fs_cstr obtained by calling CString::into_raw.
+    unsafe {
+        drop(std::ffi::CString::from_raw(fs_cstr));
+    }
 }
 
 impl FileBackend {
@@ -73,6 +89,7 @@ impl FileBackend {
     /// * fail to set file length.
     pub fn new_mem(file_path: &str, file_len: u64) -> Result<FileBackend> {
         let path = std::path::Path::new(&file_path);
+        let mut need_unlink = false;
         let file = if path.is_dir() {
             // The last six characters of template file must be "XXXXXX" for `mkstemp`
             // function to create unique temporary file.
@@ -103,32 +120,14 @@ impl FileBackend {
             }
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
-            let not_existed = !path.exists();
+            need_unlink = !path.exists();
             // Open the file, if not exist, create it.
-            let file_ret = std::fs::OpenOptions::new()
+            std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .open(path)
-                .with_context(|| format!("Failed to open file: {}", file_path))?;
-
-            if not_existed {
-                let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
-
-                if unsafe { libc::unlink(fs_cstr) } != 0 {
-                    error!(
-                        "Failed to unlink file \"{}\", error: {:?}",
-                        file_path,
-                        std::io::Error::last_os_error()
-                    );
-                }
-                // SAFETY: fs_cstr obtained by calling CString::into_raw.
-                unsafe {
-                    drop(std::ffi::CString::from_raw(fs_cstr));
-                }
-            }
-
-            file_ret
+                .with_context(|| format!("Failed to open file: {}", file_path))?
         };
 
         // Safe because struct `statfs` only contains plain-data-type field,
@@ -142,8 +141,12 @@ impl FileBackend {
 
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
-            file.set_len(file_len)
-                .with_context(|| format!("Failed to set length of file: {}", file_path))?;
+            if file.set_len(file_len).is_err() {
+                if need_unlink {
+                    file_unlink(file_path);
+                }
+                bail!("Failed to set length of file: {}", file_path);
+            }
         } else if old_file_len < file_len {
             bail!(
             "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
@@ -204,7 +207,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
-pub fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
@@ -241,7 +244,12 @@ pub fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
 pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
-    if mem_config.mem_share {
+    if let Some(path) = &mem_config.mem_path {
+        f_back = Some(
+            FileBackend::new_mem(path, mem_config.mem_size)
+                .with_context(|| "Failed to create file that backs memory")?,
+        );
+    } else if mem_config.mem_share {
         let anon_mem_name = String::from("stratovirt_anon_mem");
 
         let anon_fd =
@@ -260,11 +268,6 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
             offset: 0,
             page_size: host_page_size(),
         });
-    } else if let Some(path) = &mem_config.mem_path {
-        f_back = Some(
-            FileBackend::new_mem(path, mem_config.mem_size)
-                .with_context(|| "Failed to create file that backs memory")?,
-        );
     }
     let block = Arc::new(HostMemMapping::new(
         GuestAddress(0),
@@ -342,10 +345,7 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
 ///
 /// * `mem_mappings` - The host virtual address of mapped memory information.
 /// * `zone` - Memory zone config info.
-pub fn set_host_memory_policy(
-    mem_mappings: &Arc<HostMemMapping>,
-    zone: &MemZoneConfig,
-) -> Result<()> {
+fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConfig) -> Result<()> {
     if zone.host_numa_nodes.is_none() {
         return Ok(());
     }
@@ -487,9 +487,11 @@ impl Drop for HostMemMapping {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::io::{Read, Seek, SeekFrom, Write};
+
     use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
 
     fn identify(ram: HostMemMapping, st: u64, end: u64) {
         assert_eq!(ram.start_address(), GuestAddress(st));
@@ -561,6 +563,7 @@ mod test {
             f_back.as_ref().unwrap().file.metadata().unwrap().len(),
             100u64
         );
+        std::fs::remove_file(file_path).unwrap();
     }
 
     #[test]
@@ -610,5 +613,6 @@ mod test {
         )
         .unwrap();
         mem_prealloc(host_addr, 0x10_0000, 2);
+        std::fs::remove_file(file_path).unwrap();
     }
 }

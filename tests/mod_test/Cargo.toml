@@ -14,9 +14,9 @@ serde_json = "1.0"
 libc = "0.2"
 byteorder = "1.4.3"
 serde = { version = "1.0", features = ["derive"] }
-devices = { path = "../../devices" }
+devices = { path = "../../devices", features = ["scream"]}
 util = { path = "../../util" }
 acpi = { path = "../../acpi" }
 smbios = { path = "../../smbios" }
 machine = { path = "../../machine" }
-virtio = { path = "../../virtio"}
+virtio = { path = "../../virtio", features = ["virtio_gpu"] }

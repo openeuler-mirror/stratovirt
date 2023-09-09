@@ -10,21 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, warn};
 use std::fmt;
 use std::fmt::Debug;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use migration::{migration::Migratable, MigrationManager};
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, warn};
 
 use crate::address_space::FlatView;
 use crate::{
     AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
     RegionOps,
 };
+use migration::{migration::Migratable, MigrationManager};
 
 /// Types of Region.
 #[allow(clippy::upper_case_acronyms)]
@@ -57,7 +57,8 @@ pub struct Region {
     size: Arc<AtomicU64>,
     /// Offset in parent Container-type region. It won't be changed once initialized.
     offset: Arc<Mutex<GuestAddress>>,
-    /// If not Ram, RomDevice, RamDevice Region type, `mem_mapping` is None. It won't be changed once initialized.
+    /// If not Ram, RomDevice, RamDevice Region type, `mem_mapping` is None. It won't be changed
+    /// once initialized.
     mem_mapping: Option<Arc<HostMemMapping>>,
     /// `ops` provides read/write function.
     ops: Option<RegionOps>,
@@ -67,7 +68,8 @@ pub struct Region {
     space: Arc<RwLock<Weak<AddressSpace>>>,
     /// Sub-regions array, keep sorted.
     subregions: Arc<RwLock<Vec<Region>>>,
-    /// This field is useful for RomDevice-type Region. If true, in read-only mode, otherwise in IO mode.
+    /// This field is useful for RomDevice-type Region. If true, in read-only mode, otherwise in IO
+    /// mode.
     rom_dev_romd: Arc<AtomicBool>,
     /// Max access size supported by the device.
     max_access_size: Option<u64>,
@@ -193,7 +195,8 @@ struct MultiOpsArgs {
 /// Read/Write for multi times.
 macro_rules! rw_multi_ops {
     ( $ops: ident, $slice: expr, $args: ident ) => {
-        // The data size is larger than the max access size, we split to read/write for multiple times.
+        // The data size is larger than the max access size, we split to read/write for multiple
+        // times.
         let base = $args.base;
         let offset = $args.offset;
         let cnt = $args.count;
@@ -215,11 +218,7 @@ macro_rules! rw_multi_ops {
         }
         // Unaligned memory access.
         if cnt % access_size > 0
-            && !$ops(
-                &mut $slice[pos as usize..cnt as usize],
-                base,
-                offset + pos,
-            )
+            && !$ops(&mut $slice[pos as usize..cnt as usize], base, offset + pos)
         {
             return Err(anyhow!(AddressSpaceError::IoAccess(
                 base.raw_value(),
@@ -456,8 +455,8 @@ impl Region {
         Ok(())
     }
 
-    /// Get read-only mode of RomDevice-type region. Return true if in read-only mode, otherwise return false.
-    /// Return None if it is not a RomDevice-type region.
+    /// Get read-only mode of RomDevice-type region. Return true if in read-only mode, otherwise
+    /// return false. Return None if it is not a RomDevice-type region.
     pub fn get_rom_device_romd(&self) -> Option<bool> {
         if self.region_type != RegionType::RomDevice {
             None
@@ -1139,7 +1138,7 @@ mod test {
         ram_region.set_offset(GuestAddress(0x11u64));
         assert_eq!(ram_region.offset(), GuestAddress(0x11u64));
 
-        //test read/write
+        // test read/write
         assert!(ram_region
             .write(&mut data.as_ref(), GuestAddress(0), 0, count)
             .is_ok());

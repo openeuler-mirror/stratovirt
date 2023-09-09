@@ -27,9 +27,26 @@
 
 pub mod device;
 pub mod error;
+pub mod vhost;
+
 mod queue;
 mod transport;
-pub mod vhost;
+
+pub use device::balloon::*;
+pub use device::block::{Block, BlockState, VirtioBlkConfig};
+#[cfg(feature = "virtio_gpu")]
+pub use device::gpu::*;
+pub use device::net::*;
+pub use device::rng::{Rng, RngState};
+pub use device::scsi_cntlr as ScsiCntlr;
+pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
+pub use error::VirtioError;
+pub use error::*;
+pub use queue::*;
+pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
+pub use transport::virtio_pci::VirtioPciDevice;
+pub use vhost::kernel as VhostKern;
+pub use vhost::user as VhostUser;
 
 use std::cmp;
 use std::io::Write;
@@ -47,22 +64,6 @@ use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
 use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
-
-pub use device::balloon::*;
-pub use device::block::{Block, BlockState, VirtioBlkConfig};
-#[cfg(not(target_env = "musl"))]
-pub use device::gpu::*;
-pub use device::net::*;
-pub use device::rng::{Rng, RngState};
-pub use device::scsi_cntlr as ScsiCntlr;
-pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
-pub use error::VirtioError;
-pub use error::*;
-pub use queue::*;
-pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
-pub use transport::virtio_pci::VirtioPciDevice;
-pub use vhost::kernel as VhostKern;
-pub use vhost::user as VhostUser;
 
 /// Check if the bit of features is configured.
 pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {
@@ -214,13 +215,14 @@ pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 /// A single request can include both device-readable and device-writable data buffers.
 pub const VIRTIO_SCSI_F_INOUT: u32 = 0;
-/// The host SHOULD enable reporting of hot-plug and hot-unplug events for LUNs and targets on the SCSI bus.
-/// The guest SHOULD handle hot-plug and hot-unplug events.
+/// The host SHOULD enable reporting of hot-plug and hot-unplug events for LUNs and targets on the
+/// SCSI bus. The guest SHOULD handle hot-plug and hot-unplug events.
 pub const VIRTIO_SCSI_F_HOTPLUG: u32 = 1;
 /// The host will report changes to LUN parameters via a VIRTIO_SCSI_T_PARAM_CHANGE event.
 /// The guest SHOULD handle them.
 pub const VIRTIO_SCSI_F_CHANGE: u32 = 2;
-/// The extended fields for T10 protection information (DIF/DIX) are included in the SCSI request header.
+/// The extended fields for T10 protection information (DIF/DIX) are included in the SCSI request
+/// header.
 pub const VIRTIO_SCSI_F_T10_PI: u32 = 3;
 
 /// The IO type of virtio block, refer to Virtio Spec.
@@ -263,7 +265,7 @@ pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 /// Detach backing pages from a resource.
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
-//// Retrieve the EDID data for a given scanout.
+/// Retrieve the EDID data for a given scanout.
 pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
 /// update cursor
 pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
@@ -318,6 +320,12 @@ pub enum VirtioInterruptType {
 
 pub type VirtioInterrupt =
     Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum VirtioDeviceQuirk {
+    VirtioGpuEnableBar0,
+    VirtioDeviceQuirkMax,
+}
 
 #[derive(Default)]
 pub struct VirtioBase {
@@ -496,6 +504,11 @@ pub trait VirtioDevice: Send + AsAny {
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         self.virtio_base().device_type
+    }
+
+    /// Get the virtio device customized modification.
+    fn device_quirk(&self) -> Option<VirtioDeviceQuirk> {
+        None
     }
 
     /// Get the count of virtio device queues.

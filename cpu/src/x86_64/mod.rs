@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod caps;
+
 mod cpuid;
 
 use std::sync::{Arc, Mutex};
@@ -23,14 +24,14 @@ use kvm_bindings::{
     KVM_MP_STATE_UNINITIALIZED,
 };
 use kvm_ioctls::{Kvm, VcpuFd};
+
+use self::cpuid::host_cpuid;
+use crate::CPU;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-
-use self::cpuid::host_cpuid;
-use crate::CPU;
 
 const ECX_EPB_SHIFT: u32 = 3;
 const X86_FEATURE_HYPERVISOR: u32 = 31;
@@ -612,11 +613,9 @@ mod test {
     use super::*;
     use hypervisor::kvm::{KVMFds, KVM_FDS};
     use kvm_bindings::kvm_segment;
-    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
-    #[serial]
     fn test_x86_64_cpu() {
         let kvm_fds = KVMFds::new();
         if kvm_fds.vm_fd.is_none() {
@@ -676,7 +675,7 @@ mod test {
         vm_fd.create_irq_chip().unwrap();
         let vcpu = Arc::new(vm_fd.create_vcpu(0).unwrap());
         let mut x86_cpu = X86CPUState::new(0, 1);
-        //test `set_boot_config` function
+        // test `set_boot_config` function
         assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
 
         // test setup special registers

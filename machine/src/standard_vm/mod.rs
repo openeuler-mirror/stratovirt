@@ -12,27 +12,16 @@
 
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
-#[cfg(target_arch = "x86_64")]
-mod x86_64;
-
 pub mod error;
-pub use error::StandardVmError;
+
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;
+
+pub use anyhow::Result;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
-use log::error;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
-use machine_manager::{config::get_cameradev_config, machine::MachineLifecycle};
-#[cfg(not(target_env = "musl"))]
-use ui::{
-    input::{key_event, point_event},
-    vnc::qmp_query_vnc,
-};
-use util::aio::{AioEngine, WriteZeroesState};
-use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
-use vmm_sys_util::epoll::EventSet;
-use vmm_sys_util::eventfd::EventFd;
+pub use error::StandardVmError;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -44,8 +33,17 @@ use std::rc::Rc;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context};
+use log::error;
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
+
+#[cfg(target_arch = "x86_64")]
+use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 use super::Result as MachineResult;
 use crate::MachineOps;
+#[cfg(target_arch = "aarch64")]
+use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -55,35 +53,37 @@ use acpi::{
 use address_space::{
     AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
-pub use anyhow::Result;
-use anyhow::{bail, Context};
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
+use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
+use devices::pci::PciBus;
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::get_cameradev_config;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
     NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
+use machine_manager::event_loop::EventLoop;
+use machine_manager::machine::MachineLifecycle;
 use machine_manager::machine::{DeviceInterface, KvmVmState};
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::MigrationManager;
-use pci::hotplug::{handle_plug, handle_unplug_pci_request};
-use pci::PciBus;
+use ui::input::{key_event, point_event};
+#[cfg(feature = "vnc")]
+use ui::vnc::qmp_query_vnc;
+use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
+use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use virtio::{
     qmp_balloon, qmp_query_balloon, Block, BlockState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     VhostKern, VhostUser, VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
-
-#[cfg(target_arch = "aarch64")]
-use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
-
-#[cfg(target_arch = "x86_64")]
-use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
@@ -1011,12 +1011,11 @@ impl StdMachine {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn plug_usb_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
-        let mut cfg_args = format!("id={}", args.id);
+        let cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
                 self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
@@ -1024,7 +1023,9 @@ impl StdMachine {
             "usb-tablet" => {
                 self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
             }
+            #[cfg(feature = "usb_camera")]
             "usb-camera" => {
+                let mut cfg_args = format!("id={}", args.id);
                 if let Some(cameradev) = &args.cameradev {
                     cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
                 }
@@ -1033,7 +1034,9 @@ impl StdMachine {
                 }
                 self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
             }
+            #[cfg(feature = "usb_host")]
             "usb-host" => {
+                let mut cfg_args = format!("id={}", args.id);
                 let default_value = "0".to_string();
                 let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
                 let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
@@ -1064,7 +1067,6 @@ impl StdMachine {
         Ok(())
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -1095,7 +1097,7 @@ impl StdMachine {
     }
 
     /// When windows emu exits, stratovirt should exits too.
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(feature = "windows_emu_pid")]
     fn watch_windows_emu_pid(
         &self,
         vm_config: &VmConfig,
@@ -1133,7 +1135,7 @@ impl DeviceInterface for StdMachine {
             _ => Default::default(),
         };
 
-        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
+        Response::create_response(serde_json::to_value(qmp_state).unwrap(), None)
     }
 
     fn query_cpus(&self) -> Response {
@@ -1194,7 +1196,7 @@ impl DeviceInterface for StdMachine {
     fn query_balloon(&self) -> Response {
         if let Some(actual) = qmp_query_balloon() {
             let ret = qmp_schema::BalloonInfo { actual };
-            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+            return Response::create_response(serde_json::to_value(ret).unwrap(), None);
         }
         Response::create_error_response(
             qmp_schema::QmpErrorClass::DeviceNotActive(
@@ -1210,7 +1212,7 @@ impl DeviceInterface for StdMachine {
     }
 
     fn query_vnc(&self) -> Response {
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "vnc")]
         if let Some(vnc_info) = qmp_query_vnc() {
             return Response::create_response(serde_json::to_value(vnc_info).unwrap(), None);
         }
@@ -1230,7 +1232,8 @@ impl DeviceInterface for StdMachine {
             );
         }
 
-        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following process.
+        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following
+        // process.
         let pci_bdf = match get_device_bdf(args.bus.clone(), args.addr.clone()) {
             Ok(bdf) => bdf,
             Err(e) => {
@@ -1292,7 +1295,6 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            #[cfg(not(target_env = "musl"))]
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
                     error!("{:?}", e);
@@ -1355,9 +1357,9 @@ impl DeviceInterface for StdMachine {
             return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();
-                    let dev_id = locked_dev.name();
+                    let dev_id = &locked_dev.name();
                     drop(locked_pci_host);
-                    self.del_bootindex_devices(&dev_id);
+                    self.del_bootindex_devices(dev_id);
                     let vm_config = self.get_vm_config();
                     let mut locked_config = vm_config.lock().unwrap();
                     locked_config.del_device_by_id(device_id);
@@ -1373,19 +1375,12 @@ impl DeviceInterface for StdMachine {
         drop(locked_pci_host);
 
         // The device is not a pci device, assume it is a usb device.
-        #[cfg(not(target_env = "musl"))]
-        return match self.handle_unplug_usb_request(device_id) {
+        match self.handle_unplug_usb_request(device_id) {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
             ),
-        };
-
-        #[cfg(target_env = "musl")]
-        {
-            let err_str = format!("Failed to remove device: id {} not found", &device_id);
-            Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
         }
     }
 
@@ -1529,6 +1524,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    #[cfg(feature = "usb_camera")]
     fn cameradev_add(&mut self, args: qmp_schema::CameraDevAddArgument) -> Response {
         let config = match get_cameradev_config(args) {
             Ok(conf) => conf,
@@ -1554,6 +1550,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    #[cfg(feature = "usb_camera")]
     fn cameradev_del(&mut self, id: String) -> Response {
         match self
             .get_vm_config()
@@ -1744,7 +1741,6 @@ impl DeviceInterface for StdMachine {
         Response::create_empty_response()
     }
 
-    #[cfg(not(target_env = "musl"))]
     fn input_event(&self, key: String, value: String) -> Response {
         match send_input_event(key, value) {
             Ok(()) => Response::create_empty_response(),
@@ -1840,7 +1836,8 @@ impl DeviceInterface for StdMachine {
                 }
 
                 let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
-                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we don't support.
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we
+                // don't support.
                 let vmstate_str = "None\r\n".to_string();
                 info_str += &vmstate_str;
 
@@ -1939,7 +1936,7 @@ impl DeviceInterface for StdMachine {
             .delete_snapshot(args.name.clone());
         match result {
             Ok(snap_info) => {
-                Response::create_response(serde_json::to_value(&snap_info).unwrap(), None)
+                Response::create_response(serde_json::to_value(snap_info).unwrap(), None)
             }
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(format!(
@@ -1959,8 +1956,7 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
         read_only: args.read_only.unwrap_or(false),
         direct: true,
         iops: args.iops,
-        // TODO Add aio option by qmp, now we set it based on "direct".
-        aio: AioEngine::Native,
+        aio: args.file.aio,
         media: "disk".to_string(),
         discard: false,
         write_zeroes: WriteZeroesState::Off,
@@ -2013,7 +2009,6 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     Ok(config)
 }
 
-#[cfg(not(target_env = "musl"))]
 fn send_input_event(key: String, value: String) -> Result<()> {
     match key.as_str() {
         "keyboard" => {

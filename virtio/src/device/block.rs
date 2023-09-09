@@ -38,7 +38,8 @@ use crate::{
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::{
-    create_block_backend, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
+    BlockProperty, BlockStatus,
 };
 use machine_manager::config::{BlkDevConfig, ConfigCheck, DriveFile, VmConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
@@ -319,12 +320,12 @@ impl Request {
         match request_type {
             VIRTIO_BLK_T_IN => {
                 locked_backend
-                    .read_vectored(&iovecs, offset, aiocompletecb)
+                    .read_vectored(iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for reading")?;
             }
             VIRTIO_BLK_T_OUT => {
                 locked_backend
-                    .write_vectored(&iovecs, offset, aiocompletecb)
+                    .write_vectored(iovecs, offset, aiocompletecb)
                     .with_context(|| "Failed to process block request for writing")?;
             }
             VIRTIO_BLK_T_FLUSH => {
@@ -475,9 +476,9 @@ struct BlockIoHandler {
     /// The block backend opened by the block device.
     block_backend: Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
     /// The align requirement of request(offset/len).
-    pub req_align: u32,
+    req_align: u32,
     /// The align requirement of buffer(iova_base).
-    pub buf_align: u32,
+    buf_align: u32,
     /// The number of sectors of the disk image.
     disk_sectors: u64,
     /// Serial number of the block device.
@@ -1113,6 +1114,9 @@ impl VirtioDevice for Block {
 
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
+        let drive_files = self.drive_files.lock().unwrap();
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
+        remove_block_backend(&drive_id);
         Ok(())
     }
 
@@ -1229,7 +1233,8 @@ impl VirtioDevice for Block {
         }
 
         if !is_plug {
-            // If it is an unplug operation, the block backend is set to none. Unregister aio before it.
+            // If it is an unplug operation, the block backend is set to none. Unregister aio before
+            // it.
             if let Some(block_backend) = self.block_backend.as_ref() {
                 block_backend.lock().unwrap().unregister_io_event()?;
             } else {
@@ -1326,13 +1331,15 @@ impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::{thread, time::Duration};
+
+    use vmm_sys_util::tempfile::TempFile;
+
     use super::*;
     use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::{thread, time::Duration};
-    use vmm_sys_util::tempfile::TempFile;
 
     const QUEUE_NUM_BLK: usize = 1;
     const CONFIG_SPACE_SIZE: usize = 60;
@@ -1434,7 +1441,7 @@ mod tests {
 
     // Test `get_device_features` and `set_driver_features`. The main contests include: If the
     // device feature is 0, all driver features are not supported; If both the device feature bit
-    // and the front-end driver feature bit are supported at the same time,  this driver feature
+    // and the front-end driver feature bit are supported at the same time, this driver feature
     // bit is supported.
     #[test]
     fn test_block_features() {
@@ -1457,7 +1464,7 @@ mod tests {
         assert_eq!(block.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
-        // supported at the same time,  this driver feature bit is supported.
+        // supported at the same time, this driver feature bit is supported.
         block.base.device_features =
             1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;

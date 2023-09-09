@@ -13,12 +13,11 @@
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 
+use anyhow::{bail, Result};
 use libc::{c_void, iovec};
-use util::unix::UnixSock;
 
 use super::message::{MAX_ATTACHED_FD_ENTRIES, VHOST_USER_MSG_MAX_SIZE};
-use anyhow::bail;
-use anyhow::Result;
+use util::unix::UnixSock;
 
 #[derive(Clone)]
 pub struct VhostUserSock {
@@ -76,9 +75,9 @@ impl VhostUserSock {
         if let Some(payload) = payload_opt {
             iovs.push(iovec {
                 iov_base: payload.as_ptr() as *const u8 as *mut c_void,
-                iov_len: payload.len() * size_of::<P>(),
+                iov_len: std::mem::size_of_val(payload),
             });
-            total_len += payload.len() * size_of::<P>();
+            total_len += std::mem::size_of_val(payload);
         }
 
         if (total_len - size_of::<D>()) > VHOST_USER_MSG_MAX_SIZE {
@@ -141,7 +140,7 @@ impl VhostUserSock {
         if let Some(payload) = payload_opt {
             iovs.push(iovec {
                 iov_base: payload.as_ptr() as *const u8 as *mut c_void,
-                iov_len: payload.len() * size_of::<P>(),
+                iov_len: std::mem::size_of_val(payload),
             });
         }
 

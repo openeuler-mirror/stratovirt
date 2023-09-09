@@ -21,7 +21,7 @@ use crate::config::{
     check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     MAX_PATH_LENGTH, MAX_VIRTIO_QUEUE,
 };
-use crate::qmp::{qmp_schema, QmpChannel};
+use crate::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
@@ -532,9 +532,8 @@ fn is_netdev_queues_valid(queues: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
-
     use super::*;
+    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
 
     #[test]
     fn test_network_config_cmdline_parser() {

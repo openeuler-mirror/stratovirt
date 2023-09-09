@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
 use mod_test::libtest::{test_init, TestState};
 
-use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
 pub const GED_ADDR_BASE: u64 = MEM_LAYOUT[LayoutEntryType::Ged as usize].0;
 const ADD_ADDRESS: u64 = 1;
 
@@ -48,13 +48,11 @@ fn set_up() -> TestState {
 /// Test the read and write functions of a ged device.
 ///
 /// Steps
-/// 1. Send qmp command "system_powerdown"
+/// 1. Send qmp command "system_powerdown".
 /// 2. Read ged event.
 /// 3. Read abnormal address, except 0.
-/// 4. Write event and read, excepy 0 because
-///    ged can't write.
+/// 4. Write event and read, excepy 0 because ged can't write.
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn test_shutdown() {
     let mut ts = set_up();
 
@@ -76,13 +74,10 @@ fn test_shutdown() {
 /// Verify that the restart function is normal.
 ///
 /// Steps
-/// 1. Send qmp command "system_powerdown" and
-///    "system_reset" to achieve "reboot"
+/// 1. Send qmp command "system_powerdown" and "system_reset" to achieve "reboot".
 /// 2. Read ged event.
-/// 3. Send qmp command "query-status" to get
-///    the status of vm, except "running".
+/// 3. Send qmp command "query-status" to get the status of vm, except "running".
 #[test]
-#[cfg(target_arch = "aarch64")]
 fn test_reboot() {
     let mut ts = set_up();
 

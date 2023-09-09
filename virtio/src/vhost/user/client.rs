@@ -19,17 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use address_space::{
-    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
-};
 use log::{error, info, warn};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
-use util::loop_context::{
-    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-use util::unix::do_mmap;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::super::VhostOps;
 use super::message::{
@@ -40,13 +31,21 @@ use super::sock::VhostUserSock;
 use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
+use address_space::{
+    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
+use util::loop_context::{
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
+use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
-pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
+const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -336,12 +335,12 @@ pub struct VhostUserInflight {
 /// Struct for saving inflight info, create this struct to save inflight info when
 /// vhost client start, use this struct to set inflight fd when vhost client reconnect.
 #[derive(Debug)]
-pub struct VhostInflight {
+struct VhostInflight {
     // The inflight file.
-    pub file: Arc<File>,
+    file: Arc<File>,
     // Fd mmap addr, used for migration.
-    pub addr: u64,
-    pub inner: VhostUserInflight,
+    _addr: u64,
+    inner: VhostUserInflight,
 }
 
 #[derive(PartialEq, Eq)]
@@ -451,7 +450,7 @@ impl VhostUserClient {
                 )?;
                 let inflight = VhostInflight {
                     file,
-                    addr: hva,
+                    _addr: hva,
                     inner: vhost_user_inflight,
                 };
                 self.inflight = Some(inflight);
@@ -511,7 +510,11 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            let last_avail_idx = queue.vring.get_avail_idx(&self.mem_space)?;
+            let last_avail_idx = if queue.vring.is_enabled() {
+                queue.vring.get_avail_idx(&self.mem_space)?
+            } else {
+                0
+            };
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
@@ -535,15 +538,20 @@ impl VhostUserClient {
                 })?;
         }
 
-        for (queue_index, queue) in self.queues.iter().enumerate() {
-            let enabled = queue.lock().unwrap().is_enabled();
-            self.set_vring_enable(queue_index, enabled)
-                .with_context(|| {
-                    format!(
-                        "Failed to set vring enable for vhost-user, index: {}",
-                        queue_index,
-                    )
-                })?;
+        if self.backend_type == VhostBackendType::TypeBlock {
+            // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
+            // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
+            // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
+            for (queue_index, queue) in self.queues.iter().enumerate() {
+                let enabled = queue.lock().unwrap().is_enabled();
+                self.set_vring_enable(queue_index, enabled)
+                    .with_context(|| {
+                        format!(
+                            "Failed to set vring enable for vhost-user, index: {}",
+                            queue_index,
+                        )
+                    })?;
+            }
         }
 
         Ok(())

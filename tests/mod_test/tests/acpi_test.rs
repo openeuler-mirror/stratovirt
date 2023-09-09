@@ -10,17 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, mem, rc::Rc};
+
+use byteorder::{ByteOrder, LittleEndian};
+
 use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicRedistributor, AcpiRsdp, AcpiSratGiccAffinity,
     AcpiSratMemoryAffinity, AcpiTableHeader, CacheHierarchyNode, ProcessorHierarchyNode,
 };
-use byteorder::{ByteOrder, LittleEndian};
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
+use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
-use std::{cell::RefCell, mem, rc::Rc};
-
-use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libtest::{test_init, TestState};
 
 // Now dsdt table data length is 3482.
@@ -156,7 +157,9 @@ fn check_iort(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[88..]), 1); // Cache of coherent device
     assert_eq!(data[95], 3); // Memory flags of coherent device
     assert_eq!(LittleEndian::read_u32(&data[112..]), 0xffff); // Identity RID mapping
-    assert_eq!(LittleEndian::read_u32(&data[120..]), 48); // Without SMMU, id mapping is the first node in ITS group node
+
+    // Without SMMU, id mapping is the first node in ITS group node
+    assert_eq!(LittleEndian::read_u32(&data[120..]), 48);
 }
 
 fn check_spcr(data: &[u8]) {
@@ -175,8 +178,11 @@ fn check_spcr(data: &[u8]) {
     assert_eq!(data[58], 3); // Set baud rate: 3 = 9600
     assert_eq!(data[60], 1); // Stop bit
     assert_eq!(data[61], 2); // Hardware flow control
-    assert_eq!(LittleEndian::read_u16(&data[64..]), 0xffff); // PCI Device ID: it is not a PCI device
-    assert_eq!(LittleEndian::read_u16(&data[66..]), 0xffff); // PCI Vendor ID: it is not a PCI device
+
+    // PCI Device ID: it is not a PCI device
+    assert_eq!(LittleEndian::read_u16(&data[64..]), 0xffff);
+    // PCI Vendor ID: it is not a PCI device
+    assert_eq!(LittleEndian::read_u16(&data[66..]), 0xffff);
 }
 
 fn check_mcfg(data: &[u8]) {
@@ -410,7 +416,6 @@ fn check_madt_of_two_gicr(
     );
 }
 
-#[cfg(target_arch = "aarch64")]
 #[test]
 fn test_acpi_virt() {
     let mut args = Vec::new();
@@ -461,7 +466,6 @@ fn test_acpi_virt() {
     test_state.borrow_mut().stop();
 }
 
-#[cfg(target_arch = "aarch64")]
 #[test]
 fn test_acpi_two_gicr() {
     let mut args = Vec::new();

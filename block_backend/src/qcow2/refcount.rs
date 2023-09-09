@@ -14,7 +14,6 @@ use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
-use util::aio::OpCode;
 
 use crate::{
     qcow2::{
@@ -25,6 +24,7 @@ use crate::{
     },
     BlockProperty,
 };
+use util::aio::OpCode;
 
 // The max refcount table size default is 4 clusters;
 const MAX_REFTABLE_NUM: u64 = 4;
@@ -157,6 +157,7 @@ impl RefCount {
             0,
             self.cluster_size,
         )?;
+        borrow_entry.dirty_info.clear();
 
         // Write new extended refcount table to disk.
         let size = self.refcount_table.len() + (self.cluster_size / ENTRY_SIZE) as usize;
@@ -222,7 +223,7 @@ impl RefCount {
         let mut i = 0;
         while i < clusters {
             let rt_idx = (first_cluster + i) >> self.refcount_blk_bits;
-            if rt_idx >= self.refcount_table_size as u64 {
+            if rt_idx >= self.refcount_table_size {
                 bail!("Invalid refcount table index {}", rt_idx);
             }
             let rb_addr = self.refcount_table[rt_idx as usize];
@@ -250,7 +251,7 @@ impl RefCount {
             bail!("Failed to set refcounts, recover {}", status);
         }
         if flush {
-            self.flush_refcount_block_cache()?;
+            self.flush()?;
         }
         Ok(())
     }
@@ -279,24 +280,8 @@ impl RefCount {
         rc_vec.len()
     }
 
-    pub fn flush_refcount_block_cache(&self) -> Result<()> {
-        for (_, entry) in self.refcount_blk_cache.iter() {
-            let mut borrowed_entry = entry.borrow_mut();
-            if !borrowed_entry.dirty_info.is_dirty {
-                continue;
-            }
-            let ret = self.sync_aio.borrow_mut().write_dirty_info(
-                borrowed_entry.addr,
-                borrowed_entry.get_value(),
-                borrowed_entry.dirty_info.start,
-                borrowed_entry.dirty_info.end,
-            );
-            if let Err(err) = ret {
-                error!("Flush refcount table cache failed, {}", err.to_string());
-            }
-            borrowed_entry.dirty_info.clear();
-        }
-        Ok(())
+    pub fn flush(&mut self) -> Result<()> {
+        self.refcount_blk_cache.flush(self.sync_aio.clone())
     }
 
     fn set_refcount(
@@ -322,6 +307,7 @@ impl RefCount {
 
         let mut rb_vec = Vec::new();
         let mut borrowed_entry = cache_entry.borrow_mut();
+        let is_dirty = borrowed_entry.dirty_info.is_dirty;
         for i in 0..clusters {
             let mut rc_value = borrowed_entry.get_entry_map(rb_idx as usize + i)? as u16;
             rc_value = if is_add {
@@ -361,6 +347,9 @@ impl RefCount {
         for (idx, rc_value) in rb_vec.iter().enumerate() {
             borrowed_entry.set_entry_map(rb_idx as usize + idx, *rc_value as u64)?;
         }
+        if !is_dirty {
+            self.refcount_blk_cache.add_dirty_table(cache_entry.clone());
+        }
 
         Ok(())
     }
@@ -368,7 +357,7 @@ impl RefCount {
     pub fn get_refcount(&mut self, offset: u64) -> Result<u16> {
         let cluster = offset >> self.cluster_bits;
         let rt_idx = cluster >> self.refcount_blk_bits;
-        if rt_idx >= self.refcount_table_size as u64 {
+        if rt_idx >= self.refcount_table_size {
             bail!(
                 "Invalid refcount table index {}, refcount table size {}",
                 rt_idx,
@@ -467,6 +456,7 @@ impl RefCount {
             0,
             self.cluster_size,
         )?;
+        borrow_entry.dirty_info.clear();
         drop(borrow_entry);
         if let Some(replaced_entry) = self.refcount_blk_cache.lru_replace(rt_idx, cache_entry) {
             self.save_refcount_block(&replaced_entry)?;
@@ -482,7 +472,7 @@ impl RefCount {
         while i < clusters {
             // Check if it needs to extend refcount table.
             let rt_idx = current_index >> self.refcount_blk_bits;
-            if rt_idx >= self.refcount_table_size as u64 {
+            if rt_idx >= self.refcount_table_size {
                 self.extend_refcount_table(header, current_index)?;
                 if current_index > self.free_cluster_index {
                     current_index = self.free_cluster_index;
@@ -497,7 +487,7 @@ impl RefCount {
             let rb_addr = self.refcount_table[rt_idx as usize];
             if rb_addr == 0 {
                 // Need to alloc refcount block.
-                self.alloc_refcount_block(rt_idx as u64, current_index)?;
+                self.alloc_refcount_block(rt_idx, current_index)?;
                 current_index += 1;
                 i = 0;
                 continue;
@@ -541,7 +531,8 @@ impl RefCount {
         }
         let addr = self.find_free_cluster(header, size)?;
         let clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
-        self.update_refcount(addr, clusters, 1, true, &Qcow2DiscardType::Other)?;
+        self.update_refcount(addr, clusters, 1, false, &Qcow2DiscardType::Other)?;
+
         Ok(addr)
     }
 
@@ -577,7 +568,7 @@ impl RefCount {
     }
 
     fn save_refcount_block(&mut self, entry: &Rc<RefCell<CacheTable>>) -> Result<()> {
-        let borrowed_entry = entry.borrow();
+        let mut borrowed_entry = entry.borrow_mut();
         if !borrowed_entry.dirty_info.is_dirty {
             return Ok(());
         }
@@ -592,7 +583,14 @@ impl RefCount {
             borrowed_entry.get_value(),
             borrowed_entry.dirty_info.start,
             borrowed_entry.dirty_info.end,
-        )
+        )?;
+        borrowed_entry.dirty_info.clear();
+
+        Ok(())
+    }
+
+    pub fn drop_dirty_caches(&mut self) {
+        self.refcount_blk_cache.clean_up_dirty_cache();
     }
 }
 
@@ -624,7 +622,7 @@ mod test {
             version: 3,
             backing_file_offset: 0,
             backing_file_size: 0,
-            cluster_bits: cluster_bits,
+            cluster_bits,
             size: 1 << img_bits,
             crypt_method: 0,
             l1_size: 1 << (img_bits - (cluster_bits * 2 - 3)),
@@ -708,6 +706,7 @@ mod test {
             3 + ((header.l1_size * ENTRY_SIZE as u32 + cluster_sz as u32 - 1) >> cluster_bits);
         let addr = qcow2.alloc_cluster(1, true).unwrap();
         assert_eq!(addr, cluster_sz * free_cluster_index as u64);
+        qcow2.flush().unwrap();
         // Check if the refcount of the cluster is updated to the disk.
         let mut rc_value = [0_u8; 2];
         cloned_file
@@ -742,6 +741,7 @@ mod test {
         for _ in 0..clusters + 1 {
             qcow2.alloc_cluster(2, true).unwrap();
         }
+        qcow2.flush().unwrap();
         let new_rct_offset = qcow2.header.refcount_table_offset;
         let new_rct_clusters = qcow2.header.refcount_table_clusters;
         assert_ne!(new_rct_offset, rct_offset);

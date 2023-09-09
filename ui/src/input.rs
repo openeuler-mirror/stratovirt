@@ -10,16 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::Result;
-use log::debug;
-use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use util::bitmap::Bitmap;
+
+use anyhow::Result;
+use log::debug;
+use once_cell::sync::Lazy;
 
 use crate::data::keycode::KEYSYM2KEYCODE;
+use util::bitmap::Bitmap;
 
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;
@@ -54,8 +55,8 @@ const KEYPAD_DECIMAL: u16 = 0xffae;
 const KEYCODE_KP_7: u16 = 0x47;
 const KEYCODE_KP_DECIMAL: u16 = 0x53;
 // Led (HID)
-pub const NUM_LOCK_LED: u8 = 0x1;
-pub const CAPS_LOCK_LED: u8 = 0x2;
+const NUM_LOCK_LED: u8 = 0x1;
+const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
 /// Input button state.
 pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;

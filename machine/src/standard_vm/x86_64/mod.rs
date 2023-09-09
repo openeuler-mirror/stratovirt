@@ -11,18 +11,26 @@
 // See the Mulan PSL v2 for more details.
 
 pub(crate) mod ich9_lpc;
+
 mod mch;
 mod syscall;
 
-use crate::error::MachineError;
-use log::{error, info};
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
+
+use anyhow::{bail, Context, Result};
+use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
+use self::ich9_lpc::SLEEP_CTRL_OFFSET;
+use super::error::StandardVmError;
+use super::{AcpiBuilder, StdMachineOps};
+use crate::error::MachineError;
+use crate::{vm_state, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
@@ -35,9 +43,10 @@ use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
+use devices::pci::{PciDevOps, PciHost};
+use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
@@ -49,23 +58,17 @@ use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface,
 };
-use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
-use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
 use syscall::syscall_whitelist;
+#[cfg(feature = "gtk")]
+use ui::gtk::gtk_display_init;
+#[cfg(feature = "vnc")]
+use ui::vnc::vnc_init;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
-
-use self::ich9_lpc::SLEEP_CTRL_OFFSET;
-use super::error::StandardVmError;
-use super::{AcpiBuilder, StdMachineOps};
-use crate::{vm_state, MachineOps};
-use anyhow::{bail, Context, Result};
-#[cfg(not(target_env = "musl"))]
-use ui::{gtk::gtk_display_init, vnc::vnc_init};
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -544,12 +547,11 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        #[cfg(not(target_env = "musl"))]
         locked_vm
             .display_init(vm_config)
             .with_context(|| "Fail to init display")?;
 
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(feature = "windows_emu_pid")]
         locked_vm.watch_windows_emu_pid(
             vm_config,
             locked_vm.shutdown_req.clone(),
@@ -601,7 +603,7 @@ impl MachineOps for StdMachine {
                 rom_region.set_priority(10);
                 self.sys_mem.root().add_subregion(rom_region, rom_base)?;
 
-                fd.seek(SeekFrom::Start(0))?;
+                fd.rewind()?
             }
 
             let sector_len: u32 = 1024 * 4;
@@ -630,9 +632,10 @@ impl MachineOps for StdMachine {
     }
 
     /// Create display.
-    #[cfg(not(target_env = "musl"))]
+    #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
+        #[cfg(feature = "gtk")]
         match vm_config.display {
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
@@ -649,6 +652,7 @@ impl MachineOps for StdMachine {
         };
 
         // VNC display init.
+        #[cfg(feature = "vnc")]
         vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
         Ok(())

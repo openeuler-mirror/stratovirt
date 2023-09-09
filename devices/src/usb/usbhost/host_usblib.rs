@@ -33,7 +33,10 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::{IsoTransfer, UsbHost, UsbHostRequest};
 use crate::usb::{UsbPacketStatus, USB_TOKEN_IN};
-use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use util::{
+    link_list::Node,
+    loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
+};
 
 const CONTROL_TIMEOUT: u32 = 10000; // 10s
 const BULK_TIMEOUT: u32 = 0;
@@ -67,10 +70,10 @@ macro_rules! try_unsafe {
     };
 }
 
-pub fn get_request_from_transfer(transfer: *mut libusb_transfer) -> Arc<Mutex<UsbHostRequest>> {
+pub fn get_node_from_transfer(transfer: *mut libusb_transfer) -> Box<Node<UsbHostRequest>> {
     // SAFETY: cast the raw pointer of transfer's user_data to the
-    // Arc<Mutex<UsbHostRequest>>.
-    unsafe { Arc::from_raw((*transfer).user_data.cast::<Mutex<UsbHostRequest>>()) }
+    // Box<Node<UsbHostRequest>>.
+    unsafe { Box::from_raw((*transfer).user_data.cast::<Node<UsbHostRequest>>()) }
 }
 
 pub fn get_iso_transfer_from_transfer(transfer: *mut libusb_transfer) -> Arc<Mutex<IsoTransfer>> {
@@ -194,15 +197,23 @@ pub fn alloc_host_transfer(iso_packets: c_int) -> *mut libusb_transfer {
 extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     // SAFETY: transfer is still valid because libusb just completed it
     // but we haven't told anyone yet. user_data remains valid because
-    // it is dropped only when the request is completed and removed from
-    // requests linked list.
-    let request = get_request_from_transfer(host_transfer);
-    let mut locked_request = request.lock().unwrap();
-    let packet = locked_request.packet.clone();
+    // it is dropped only when the request is completed and removed here.
+    let mut node = get_node_from_transfer(host_transfer);
+    let request = &mut node.value;
+    let requests = match request.requests.upgrade() {
+        Some(requests) => requests,
+        None => return,
+    };
+
+    // Before operating a node, lock requests to prevent multiple threads from operating
+    // the node at the same time.
+    let mut locked_requests = requests.lock().unwrap();
+    let packet = request.packet.clone();
     let mut locked_packet = packet.lock().unwrap();
 
     if !locked_packet.is_async {
-        locked_request.complete();
+        request.free();
+        locked_requests.unlink(&node);
         return;
     }
 
@@ -210,8 +221,8 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     let transfer_status = get_status_from_transfer(host_transfer);
     locked_packet.status = map_packet_status(transfer_status);
 
-    if locked_request.is_control {
-        locked_request.ctrl_transfer_packet(&mut locked_packet, actual_length as usize);
+    if request.is_control {
+        request.ctrl_transfer_packet(&mut locked_packet, actual_length as usize);
     } else if locked_packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
         let data = get_buffer_from_transfer(host_transfer, actual_length as usize);
         locked_packet.transfer_packet(data, actual_length as usize);
@@ -224,7 +235,8 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
         }
     }
 
-    locked_request.complete();
+    request.free();
+    locked_requests.unlink(&node);
 }
 
 extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
@@ -248,17 +260,13 @@ pub fn fill_transfer_by_type(
     transfer: *mut libusb_transfer,
     handle: Option<&mut DeviceHandle<Context>>,
     ep_number: u8,
-    request: Arc<Mutex<UsbHostRequest>>,
+    node: *mut Node<UsbHostRequest>,
     transfer_type: TransferType,
 ) {
-    let packet = request.lock().unwrap().packet.clone();
+    // SAFETY: node only deleted when request completed.
+    let packet = unsafe { (*node).value.packet.clone() };
+    let buffer_ptr = unsafe { (*node).value.buffer.as_mut_ptr() };
     let size = packet.lock().unwrap().get_iovecs_size();
-    let buffer_ptr = request.lock().unwrap().buffer.as_mut_ptr();
-
-    if handle.is_none() {
-        error!("Failed to fill bulk transfer, handle is none");
-        return;
-    }
 
     if transfer.is_null() {
         error!("Failed to fill bulk transfer, transfer is none");
@@ -274,7 +282,7 @@ pub fn fill_transfer_by_type(
                 handle.unwrap().as_raw(),
                 buffer_ptr,
                 req_complete,
-                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                node.cast::<libc::c_void>(),
                 CONTROL_TIMEOUT,
             );
         },
@@ -286,7 +294,7 @@ pub fn fill_transfer_by_type(
                 buffer_ptr,
                 size as i32,
                 req_complete,
-                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                node.cast::<libc::c_void>(),
                 BULK_TIMEOUT,
             );
         },
@@ -298,7 +306,7 @@ pub fn fill_transfer_by_type(
                 buffer_ptr,
                 size as i32,
                 req_complete,
-                (Arc::into_raw(request) as *mut Mutex<UsbHostRequest>).cast::<libc::c_void>(),
+                node.cast::<libc::c_void>(),
                 INTERRUPT_TIMEOUT,
             );
         },

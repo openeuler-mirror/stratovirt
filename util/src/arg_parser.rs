@@ -17,8 +17,9 @@ use std::env;
 use std::io::Write;
 use std::process;
 
-use crate::UtilError;
 use anyhow::{anyhow, bail, Result};
+
+use crate::UtilError;
 
 const PREFIX_CHARS_SHORT: &str = "-";
 const PREFIX_CHARS_LONG: &str = "-";
@@ -58,9 +59,7 @@ pub enum HelpType {
 ///     .author("example")
 ///     .version("0.0.1")
 ///     .about("Description for application")
-///     .arg(
-///         Arg::with_name("arg_name")
-///     )
+///     .arg(Arg::with_name("arg_name"))
 ///     .get_matches();
 /// ```
 #[derive(Clone, Debug, Default)]
@@ -705,8 +704,9 @@ fn split_arg(arg: &str, prefix_chars: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::{Cursor, Read, Seek, SeekFrom};
+
+    use super::*;
 
     #[derive(Default)]
     struct TestBuffer {

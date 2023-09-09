@@ -30,7 +30,7 @@ use crate::{
     VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
-use devices::legacy::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
+use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
     config::{ChardevType, VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
@@ -103,7 +103,7 @@ impl ByteCode for VirtioConsoleConfig {}
 
 impl VirtioConsoleConfig {
     /// Create configuration of virtio-serial devices.
-    pub fn new(max_nr_ports: u32) -> Self {
+    fn new(max_nr_ports: u32) -> Self {
         VirtioConsoleConfig {
             cols: 0_u16,
             rows: 0_u16,
@@ -342,6 +342,8 @@ pub struct SerialPort {
     nr: u32,
     /// Whether the port is a console port.
     pub is_console: bool,
+    /// Whether the guest activate the serial device.
+    device_activated: bool,
     /// Whether the guest open the serial port.
     guest_connected: bool,
     /// Whether the host open the serial socket.
@@ -352,7 +354,8 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn new(port_cfg: VirtioSerialPort) -> Self {
-        // Console is default host connected. And pty chardev has opened by default in realize() function.
+        // Console is default host connected. And pty chardev has opened by default in realize()
+        // function.
         let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
 
         SerialPort {
@@ -360,6 +363,7 @@ impl SerialPort {
             chardev: Arc::new(Mutex::new(Chardev::new(port_cfg.chardev))),
             nr: port_cfg.nr,
             is_console: port_cfg.is_console,
+            device_activated: false,
             guest_connected: false,
             host_connected,
             ctrl_handler: None,
@@ -372,7 +376,6 @@ impl SerialPort {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.chardev.lock().unwrap().deactivated = true;
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(self.chardev.clone()),
             None,
@@ -381,12 +384,12 @@ impl SerialPort {
     }
 
     fn activate(&mut self, handler: &Arc<Mutex<SerialPortHandler>>) {
-        self.chardev.lock().unwrap().set_input_callback(handler);
-        self.chardev.lock().unwrap().deactivated = false;
+        self.chardev.lock().unwrap().set_receiver(handler);
+        self.device_activated = true;
     }
 
     fn deactivate(&mut self) {
-        self.chardev.lock().unwrap().deactivated = true;
+        self.device_activated = false;
         self.guest_connected = false;
     }
 }
@@ -443,8 +446,8 @@ impl SerialPortHandler {
             }
             debug!("elem desc_unm: {}", elem.desc_num);
 
-            // Discard requests when there is no port using this queue or this port's socket is not connected.
-            // Popping elements without processing means discarding the request.
+            // Discard requests when there is no port using this queue or this port's socket is not
+            // connected. Popping elements without processing means discarding the request.
             if self.port.is_some() && self.port.as_ref().unwrap().lock().unwrap().host_connected {
                 let mut iovec = elem.out_iovec;
                 let mut iovec_size = Element::iovec_size(&iovec);
@@ -497,7 +500,8 @@ impl SerialPortHandler {
             let mut locked_output = output.lock().unwrap();
             // To do:
             // If the buffer is not fully written to chardev, the incomplete part will be discarded.
-            // This may occur when chardev is abnormal. Consider optimizing this logic in the future.
+            // This may occur when chardev is abnormal. Consider optimizing this logic in the
+            // future.
             if let Err(e) = locked_output.write_all(&buffer[..write_len]) {
                 error!("Failed to write msg to chardev: {:?}", e);
             }
@@ -609,7 +613,7 @@ impl EventNotifierHelper for SerialPortHandler {
 }
 
 impl InputReceiver for SerialPortHandler {
-    fn input_handle(&mut self, buffer: &[u8]) {
+    fn receive(&mut self, buffer: &[u8]) {
         self.input_handle_internal(buffer).unwrap_or_else(|e| {
             error!("Port handle input error: {:?}", e);
             report_virtio_error(
@@ -620,8 +624,13 @@ impl InputReceiver for SerialPortHandler {
         });
     }
 
-    fn get_remain_space_size(&mut self) -> usize {
-        BUF_SIZE
+    fn remain_size(&mut self) -> usize {
+        if let Some(port) = &self.port {
+            if port.lock().unwrap().device_activated {
+                return BUF_SIZE;
+            }
+        }
+        0
     }
 }
 

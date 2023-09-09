@@ -10,18 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use mod_test::libdriver::machine::TestStdMachine;
-use mod_test::libdriver::malloc::GuestAllocator;
-use mod_test::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
-use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
-use mod_test::libtest::{test_init, TestState};
-use serde_json::json;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::process::Command;
 use std::rc::Rc;
 use std::{thread, time};
+
+use serde_json::json;
+
+use mod_test::libdriver::machine::TestStdMachine;
+use mod_test::libdriver::malloc::GuestAllocator;
+use mod_test::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
+use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
+use mod_test::libtest::{test_init, TestState};
 use util::{byte_code::ByteCode, offset_of};
 
 const BALLOON_F_DEFLATE_ON_OOM_TEST: u32 = 2;

@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::anyhow;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -18,6 +17,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
+use anyhow::{anyhow, bail, Context, Result};
 use libc::{
     c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
     MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
@@ -25,7 +25,6 @@ use libc::{
 use log::error;
 
 use crate::UtilError;
-use anyhow::{bail, Context, Result};
 
 /// This function returns the caller's thread ID(TID).
 pub fn gettid() -> u64 {
@@ -268,17 +267,10 @@ impl UnixSock {
         // SAFETY: we checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SATETY: we checked the out_fds lens before.
-        let cmsg_len = unsafe { CMSG_LEN((size_of::<RawFd>() * out_fds.len()) as u32) };
+        let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
         // SAFETY: we checked the out_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * out_fds.len()) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
-
-        #[cfg(target_env = "musl")]
-        let iovecs_len = iovecs_len as i32;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_len = cmsg_len as usize;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_capacity = cmsg_capacity as usize;
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
@@ -286,14 +278,14 @@ impl UnixSock {
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
         msg.msg_iov = iovecs.as_mut_ptr();
-        msg.msg_iovlen = iovecs_len;
+        msg.msg_iovlen = iovecs_len as _;
         msg.msg_control = null_mut();
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
         if !out_fds.is_empty() {
             let cmsg = cmsghdr {
-                cmsg_len,
+                cmsg_len: cmsg_len as _,
                 #[cfg(target_env = "musl")]
                 __pad1: 0,
                 cmsg_level: SOL_SOCKET,
@@ -310,7 +302,7 @@ impl UnixSock {
             }
 
             msg.msg_control = cmsg_buffer.as_mut_ptr() as *mut c_void;
-            msg.msg_controllen = cmsg_capacity;
+            msg.msg_controllen = cmsg_capacity as _;
         }
 
         // Safe as msg parameters are valid.
@@ -348,13 +340,8 @@ impl UnixSock {
         // SAFETY: we check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: we check the in_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((size_of::<RawFd>() * in_fds.len()) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
-
-        #[cfg(target_env = "musl")]
-        let iovecs_len = iovecs_len as i32;
-        #[cfg(not(target_env = "musl"))]
-        let cmsg_capacity = cmsg_capacity as usize;
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
@@ -362,14 +349,14 @@ impl UnixSock {
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
         msg.msg_iov = iovecs.as_mut_ptr();
-        msg.msg_iovlen = iovecs_len;
+        msg.msg_iovlen = iovecs_len as _;
         msg.msg_control = null_mut();
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
         if !in_fds.is_empty() {
             msg.msg_control = cmsg_buffer.as_mut_ptr() as *mut c_void;
-            msg.msg_controllen = cmsg_capacity;
+            msg.msg_controllen = cmsg_capacity as _;
         }
 
         // Safe as msg parameters are valid.
@@ -407,12 +394,8 @@ impl UnixSock {
             let cmsg = unsafe { (cmsg_ptr as *mut cmsghdr).read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
-                #[cfg(not(target_env = "musl"))]
-                let fd_count =
-                    (cmsg.cmsg_len - unsafe { CMSG_LEN(0) } as usize) / size_of::<RawFd>();
-                #[cfg(target_env = "musl")]
-                let fd_count =
-                    (cmsg.cmsg_len as usize - unsafe { CMSG_LEN(0) } as usize) / size_of::<RawFd>();
+                let fd_count = (cmsg.cmsg_len as u64 - unsafe { CMSG_LEN(0) } as u64) as usize
+                    / size_of::<RawFd>();
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),
@@ -431,6 +414,7 @@ impl UnixSock {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
     use std::time::Duration;
 
@@ -474,6 +458,10 @@ mod tests {
 
         assert!(listener.accept().is_ok());
         assert_eq!(listener.is_accepted(), true);
+
+        if sock_path.exists() {
+            fs::remove_file("./test_socket1.sock").unwrap();
+        }
     }
 
     #[test]
@@ -508,5 +496,9 @@ mod tests {
         let (data_size, fd_size) = stream.recv_msg(&mut recv, &mut in_fd).unwrap();
         assert_eq!(data_size, buff.len());
         assert_eq!(fd_size, in_fd.len());
+
+        if sock_path.exists() {
+            fs::remove_file("./test_socket2.sock").unwrap();
+        }
     }
 }

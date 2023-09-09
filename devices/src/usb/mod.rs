@@ -10,41 +10,39 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod error;
-pub use anyhow::Result;
-pub use error::UsbError;
-use util::byte_code::ByteCode;
-
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 pub mod camera;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_camera")]
 pub mod camera_media_type_guid;
 pub mod config;
-mod descriptor;
-#[cfg(not(target_env = "musl"))]
+pub mod error;
 pub mod hid;
-
-#[cfg(not(target_env = "musl"))]
 pub mod keyboard;
-#[cfg(not(target_env = "musl"))]
 pub mod storage;
-#[cfg(not(target_env = "musl"))]
 pub mod tablet;
-#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "usb_host")]
 pub mod usbhost;
 pub mod xhci;
+
+mod descriptor;
+
+pub use anyhow::Result;
+
+pub use error::UsbError;
 
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context};
 use log::{debug, error};
-use util::aio::{mem_from_buf, mem_to_buf, Iovec};
 
 use self::descriptor::USB_MAX_INTERFACES;
+use crate::{Device, DeviceBase};
 use config::*;
 use descriptor::{UsbDescriptor, UsbDescriptorOps};
-use machine_manager::qmp::send_device_deleted_msg;
+use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
+use util::aio::{mem_from_buf, mem_to_buf, Iovec};
+use util::byte_code::ByteCode;
 use xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
@@ -98,7 +96,7 @@ impl UsbEndpoint {
         }
     }
 
-    fn set_max_packet_size(&mut self, raw: u16) {
+    pub fn set_max_packet_size(&mut self, raw: u16) {
         let size = raw & 0x7ff;
         let micro_frames: u32 = match (raw >> 11) & 3 {
             1 => 2,
@@ -112,7 +110,7 @@ impl UsbEndpoint {
 
 /// USB device common structure.
 pub struct UsbDevice {
-    pub id: String,
+    pub base: DeviceBase,
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
     pub addr: u8,
@@ -129,10 +127,20 @@ pub struct UsbDevice {
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
 }
 
+impl Device for UsbDevice {
+    fn device_base(&self) -> &DeviceBase {
+        &self.base
+    }
+
+    fn device_base_mut(&mut self) -> &mut DeviceBase {
+        &mut self.base
+    }
+}
+
 impl UsbDevice {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDevice {
-            id,
+            base: DeviceBase::new(id, false),
             port: None,
             speed: 0,
             addr: 0,
@@ -191,7 +199,7 @@ impl UsbDevice {
     }
 
     pub fn generate_serial_number(&self, prefix: &str) -> String {
-        format!("{}-{}", prefix, self.id)
+        format!("{}-{}", prefix, self.base.id)
     }
 
     /// Handle USB control request which is for descriptor.
@@ -326,7 +334,7 @@ impl UsbDevice {
 impl Drop for UsbDevice {
     fn drop(&mut self) {
         if self.unplugged {
-            send_device_deleted_msg(&self.id);
+            send_device_deleted_msg(&self.base.id);
         }
     }
 }
@@ -391,7 +399,7 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Unique device id.
     fn device_id(&self) -> &str {
-        &self.get_usb_device().id
+        &self.get_usb_device().base.id
     }
 
     /// Get the UsbDevice.

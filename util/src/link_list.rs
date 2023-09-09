@@ -128,7 +128,7 @@ impl<T> List<T> {
             self.head = node.next;
 
             match self.head {
-                None => self.head = None,
+                None => self.tail = None,
                 Some(mut h) => h.as_mut().prev = None,
             }
 

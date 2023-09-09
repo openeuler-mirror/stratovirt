@@ -16,6 +16,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 use log::{info, warn};
 
@@ -23,7 +24,6 @@ use crate::general::Lifecycle;
 use crate::manager::MIGRATION_MANAGER;
 use crate::protocol::{MemBlock, MigrationStatus, Request, Response, TransStatus};
 use crate::{MigrationError, MigrationManager};
-use anyhow::{anyhow, bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{get_pci_bdf, PciBdf, VmConfig};
 use util::unix::host_page_size;

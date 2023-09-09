@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::{cell::RefCell, mem::size_of, rc::Rc, slice::from_raw_parts, vec};
+
 use super::{
     machine::TestStdMachine,
     malloc::GuestAllocator,
@@ -19,8 +21,6 @@ use super::{
 use crate::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
 use crate::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use crate::libtest::{test_init, TestState};
-
-use std::{cell::RefCell, mem::size_of, rc::Rc, slice::from_raw_parts, vec};
 use util::byte_code::ByteCode;
 use virtio::{
     VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
@@ -399,7 +399,7 @@ impl TestVirtioGpu {
         Self {
             device: Rc::new(RefCell::new(TestVirtioPciDev::new(pci_bus))),
             allocator,
-            state: state,
+            state,
             ctrl_q: Rc::new(RefCell::new(TestVirtQueue::new())),
             cursor_q: Rc::new(RefCell::new(TestVirtQueue::new())),
         }

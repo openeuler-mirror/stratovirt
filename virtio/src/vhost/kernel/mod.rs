@@ -23,14 +23,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
-};
+use anyhow::{anyhow, Context, Result};
 use log::{debug, error};
-use util::byte_code::ByteCode;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
@@ -39,7 +33,13 @@ use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_
 use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
 use super::{VhostNotify, VhostOps};
 use crate::VirtioError;
-use anyhow::{anyhow, Context, Result};
+use address_space::{
+    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+};
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 /// Refer to VHOST_VIRTIO in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.

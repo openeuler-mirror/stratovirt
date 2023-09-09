@@ -40,21 +40,23 @@
 //! }
 //!
 //! fn main() {
-//!     println!("Description of DeviceState is {:?}", DeviceState::descriptor());
+//!     println!(
+//!         "Description of DeviceState is {:?}",
+//!         DeviceState::descriptor()
+//!     );
 //! }
-//!
 //! ```
 //!
 //! 2. The `ByteCode` derive to auto add `ByteCode` trait and its relying trait for
 //! struct, such as `Default`, `Sync`, `Send`.
 
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
-
 mod attr_parser;
 mod field_parser;
 mod struct_parser;
+
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{parse_macro_input, DeriveInput};
 
 /// Define a macro derive `Desc`.
 #[proc_macro_derive(Desc, attributes(desc_version, alias))]

@@ -351,7 +351,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```
 
-StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it. 
+StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it.
 
 You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
 
@@ -546,7 +546,7 @@ $ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 ### 2.4 Virtio-console
 
 Virtio console device is a simple device for data transfer between the guest and host. A console device may have
-one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux 
+one or more ports. These ports could be generic ports or console ports. Character devices /dev/vport\*p\* in linux
 guest will be created once setting a port (Whether it is a console port or not). Character devices at /dev/hvc0 to
 /dev/hvc7 in linux guest will be created once setting console port. To set the virtio console, chardev for
 redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
@@ -794,9 +794,10 @@ Three properties can be set for USB controller.
 * id: unique device id.
 * bus: bus number of the device.
 * addr: including slot number and function number.
+* iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
 
 ```shell
--device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>
+-device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>[,iothread=<iothread1>]
 ```
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
@@ -842,6 +843,8 @@ Video Camera Device that based on USB video class protocol. It should be attache
 ```
 
 Note: Only one camera can be configured.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-camera.
 
 #### 2.13.5 USB Storage
 USB storage device that base on classic bulk-only transport protocol. It should be attached to USB controller.
@@ -897,6 +900,8 @@ Pass through the host device identified by the vendor and product ID:
 Note:
 1. The combination of vendor and product ID takes precedence over the combination of bus number and physical port number.
 2. The combination of bus and physical port takes precedence over the combination of bus number and addr number.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-host.
 
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
@@ -985,6 +990,8 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable VNC.
+
 ### 2.17 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
@@ -1016,7 +1023,7 @@ Seven properties are supported for vhost_user_fs.
   - **chroot**: The program invokes `chroot(2)` to make the shared directory tree its root when it does not have permission to create namespaces itself.
   - **namespace**: The program invodes `pivot_root(2)` to make the shared directory tree its root.
 * modcaps: Add/delete capabilities, For example, `--modcaps=-LEASE,+KILL` stands for delete CAP_LEASE, add CAP_KILL. Capabilityes list do not need prefix `CAP_`.
-  
+
 *How to start vhost_user_fs process?*
 
 ```shell
@@ -1034,12 +1041,12 @@ host# stratovirt \
         -device virtio-blk-pci,drive=drive_id,bug=pcie.0,addr=1,id=blk -serial stdio -disable-seccomp \
         -chardev socket,id=virtio_fs,path=/tmp/shared/virtio_fs.sock,server,nowait \
         -device vhost-user-fs-pci,id=device_id,chardev=virtio_fs,tag=myfs,bus=pcie.0,addr=0x7
-        
+
 guest# mount -t virtiofs myfs /mnt
 ```
 
 ### 2.18 virtio-gpu
-virtio-gpu is an virtualized graphics card that lets virtual machines can display with it. 
+virtio-gpu is an virtualized graphics card that lets virtual machines can display with it.
 Usually used in conjunction with VNC, the final images is rendered to the VNC client.
 
 Sample Configuration：
@@ -1057,6 +1064,8 @@ Note:
 1. Only virtio-gpu 2D supported.
 2. Live migration is not supported.
 
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable virtio-gpu.
+
 ### 2.19 ivshmem-scream
 
 ivshmem-scream is a virtual sound card that relies on Intel-VM shared memory to transmit audio data.
@@ -1065,7 +1074,6 @@ Nine properties are supported for ivshmem-scream device.
 * id: unique device id.
 * memdev: configuration of the back-end memory device used by the ivshmem.
 * interface: configuring audio playback and recording interfaces, currently can be set to `ALSA`, `PulseAudio` or `Demo`.
-`ALSA` is used by default.
 * playback: Path for storing audio. When interface is set to Demo, playback is mandatory.
 * record: Path for obtaining audio. When interface is set to Demo, record is mandatory.
 * bus: bus number of the device.
@@ -1076,9 +1084,11 @@ Nine properties are supported for ivshmem-scream device.
 Sample Configuration:
 
 ```shell
--device ivshmem-scream,id=<scream_id>,memdev=<object_id>[,interface=<interfaces>][,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
+-device ivshmem-scream,id=<scream_id>,memdev=<object_id>,interface=<interfaces>[,playback=<playback path>][,record=<record path>],bus=pcie.0,addr=0x2.0x0
 -object memory-backend-ram,id=<object_id>,share=on,size=2M
 ```
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable scream.
 
 ### 2.20 ramfb
 Ramfb is a simple display device. It is used in the Windows system on aarch64.
@@ -1093,6 +1103,8 @@ Sample Configuration：
 ```
 
 Note: Only supported on aarch64.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable ramfb.
 
 ## 3. Trace
 
@@ -1245,7 +1257,7 @@ and 'bootindex' for virtio-blk; 'chassis' for pcie-root-port; 'sockets',
 'cores' and 'threads' for smp; 'accel' and 'usb' for machine; "format" for pflash device.
 
 ## 8. Debug boot time
-Currently, measurement of guest boot up time is supported. The guest kernel writes different 
+Currently, measurement of guest boot up time is supported. The guest kernel writes different
 values to specific IO/MMIO regions, and it will trap to `stratovirt`, we can record the timestamp
 of kernel start or kernel boot complete.
 
