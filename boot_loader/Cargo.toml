@@ -1,6 +1,6 @@
 [package]
 name = "boot_loader"
-version = "2.2.0"
+version = "2.3.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"
 license = "Mulan PSL v2"
