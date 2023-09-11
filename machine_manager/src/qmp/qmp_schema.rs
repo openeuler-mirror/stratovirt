@@ -1657,7 +1657,7 @@ impl Command for balloon {
 ///
 /// ```text
 /// -> { "execute": "query-version" }
-/// <- {"return":{"version":{"qemu":{"minor":1,"micro":0,"major":5},"package":"StratoVirt-2.2.0"},"capabilities":[]}}
+/// <- {"return":{"version":{"qemu":{"minor":1,"micro":0,"major":5},"package":"StratoVirt-2.3.0"},"capabilities":[]}}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_version {}
