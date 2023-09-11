@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "migration_derive"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "migration",
  "proc-macro2",
@@ -1018,7 +1018,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mod_test"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "acpi",
  "anyhow",
