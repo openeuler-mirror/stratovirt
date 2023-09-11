@@ -196,7 +196,7 @@ mod tests {
                             "minor": 0,
                             "major": 5
                         },
-                        "package": "StratoVirt-2.2.0"
+                        "package": "StratoVirt-2.3.0"
                     },
                     "capabilities": []
                 }
