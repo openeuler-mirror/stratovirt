@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "acpi"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "address_space",
  "anyhow",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "address_space"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -155,7 +155,7 @@ checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block_backend"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "boot_loader"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "address_space",
  "anyhow",
@@ -261,7 +261,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chardev_backend"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "cpu"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "hypervisor",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "devices"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -726,7 +726,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hypervisor"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -903,7 +903,7 @@ checksum = "518ef76f2f87365916b142844c16d8fefd85039bc5699050210a7778ee1cd1de"
 
 [[package]]
 name = "machine"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "machine_manager"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "hypervisor",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "ozone"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1495,7 +1495,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
 name = "smbios"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1544,7 +1544,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stratovirt"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "log",
@@ -1682,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "bitintr",
@@ -1734,7 +1734,7 @@ checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "util"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1781,7 +1781,7 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "vfio"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "address_space",
  "anyhow",
@@ -1807,7 +1807,7 @@ checksum = "43449b404c488f70507dca193debd4bea361fe8089869b947adc19720e464bce"
 
 [[package]]
 name = "vhost_user_fs"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "virtio"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "acpi",
  "address_space",
