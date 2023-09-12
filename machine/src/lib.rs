@@ -592,20 +592,12 @@ pub trait MachineOps {
         }
 
         if cfg_args.contains("vhost-user-fs-device") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
-                dev_cfg,
-                sys_mem.clone(),
-                false,
-            )));
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
             let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
             self.realize_virtio_mmio_device(virtio_mmio_device)
                 .with_context(|| "Failed to add vhost user fs device")?;
         } else if cfg_args.contains("vhost-user-fs-pci") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
-                dev_cfg,
-                sys_mem.clone(),
-                true,
-            )));
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;

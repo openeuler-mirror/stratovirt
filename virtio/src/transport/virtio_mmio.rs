@@ -218,13 +218,6 @@ impl VirtioMmioDevice {
             queue_evts.push(fd.clone());
         }
 
-        let mut events = Vec::new();
-        for _i in 0..locked_dev.queue_num() {
-            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
-        }
-
-        locked_dev.set_guest_notifiers(&events)?;
-
         if let Some(cb) = self.interrupt_cb.clone() {
             locked_dev.activate(self.mem_space.clone(), cb, queue_evts)?;
         } else {
