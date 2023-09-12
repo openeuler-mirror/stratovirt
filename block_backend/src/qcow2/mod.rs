@@ -249,7 +249,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         qcow2
             .load_header()
             .with_context(|| "Failed to load header")?;
-        qcow2.check().with_context(|| "Invalid header")?;
+        qcow2.header.check().with_context(|| "Invalid header")?;
         qcow2
             .table
             .init_table(&qcow2.header, &conf)
@@ -265,15 +265,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             .with_context(|| "Failed to load snapshot table")?;
 
         Ok(qcow2)
-    }
-
-    fn check(&self) -> Result<()> {
-        let file_sz = self
-            .driver
-            .meta_len()
-            .with_context(|| "Failed to get metadata len")?;
-        self.header.check(file_sz)?;
-        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {

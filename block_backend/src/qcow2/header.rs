@@ -12,7 +12,6 @@
 
 use anyhow::{bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
-use log::warn;
 
 use super::ENTRY_SIZE;
 use util::num_ops::div_round_up;
@@ -135,7 +134,7 @@ impl QcowHeader {
         0x1 << self.cluster_bits
     }
 
-    pub fn check(&self, file_sz: u64) -> Result<()> {
+    pub fn check(&self) -> Result<()> {
         if !(MIN_CLUSTER_BIT..=MAX_CLUSTER_BIT).contains(&self.cluster_bits) {
             bail!("Invalid cluster bits {}", self.cluster_bits);
         }
@@ -158,12 +157,6 @@ impl QcowHeader {
             bail!(
                 "Invalid refcount order {}, only support 4 now",
                 self.refcount_order
-            );
-        }
-        if self.size > file_sz {
-            warn!(
-                "Header size {} is large than the file size {}",
-                self.size, file_sz
             );
         }
         self.check_refcount_table()?;
@@ -423,7 +416,7 @@ mod test {
         for (buf, err) in list {
             match QcowHeader::from_vec(&buf) {
                 Ok(header) => {
-                    let e = header.check(0).err().unwrap();
+                    let e = header.check().err().unwrap();
                     assert!(e.to_string().contains(&err));
                 }
                 Err(e) => {
