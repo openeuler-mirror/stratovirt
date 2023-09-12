@@ -18,8 +18,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use super::super::{VhostNotify, VhostOps};
-use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
+use super::super::{VhostIoHandler, VhostNotify, VhostOps};
+use super::{VhostBackend, VhostVringFile, VHOST_NET_SET_BACKEND};
 use crate::read_config_default;
 use crate::{
     device::net::{build_device_config_space, create_tap, CtrlInfo, MAC_ADDR_LEN},
