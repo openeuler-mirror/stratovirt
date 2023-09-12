@@ -1,0 +1,136 @@
+# Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+#
+# StratoVirt is licensed under Mulan PSL v2.
+# You can use this software according to the terms and conditions of the Mulan
+# PSL v2.
+# You may obtain a copy of Mulan PSL v2 at:
+#         http://license.coscl.org.cn/MulanPSL2
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+# KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+# See the Mulan PSL v2 for more details.
+
+name: Build and release static stratovirt
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-stratovirt-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install musl-gcc
+        run: sudo apt install -y musl-tools
+
+      - name: Install rust toolchain (x86_64-unknown-linux-musl)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: "1.64.0"
+          target: x86_64-unknown-linux-musl
+
+      - name: Static build (x86_64)
+        uses: actions-rs/cargo@v1
+        with:
+          toolchain: "1.64.0"
+          command: build
+          args: --bin stratovirt --release --target=x86_64-unknown-linux-musl
+
+      - name: Build archive
+        shell: bash
+        run: |
+          mkdir archive
+          cd archive
+          cp "../target/x86_64-unknown-linux-musl/release/stratovirt" ./
+          tar -czf "stratovirt-static-x86_64.tar.gz" stratovirt
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: stratovirt-static-x86_64.tar.gz
+          path: archive/stratovirt-static-x86_64.tar.gz
+
+  build-stratovirt-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install musl-gcc
+        run: sudo apt install -y musl-tools
+
+      - name: Install rust toolchain (aarch64-unknown-linux-musl)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: "1.64.0"
+          target: aarch64-unknown-linux-musl
+          override: true
+
+      - name: Static build (aarch64)
+        uses: actions-rs/cargo@v1
+        with:
+          toolchain: "1.64.0"
+          command: build
+          use-cross: true
+          args: --bin stratovirt --release --target=aarch64-unknown-linux-musl
+
+      - name: Build archive
+        shell: bash
+        run: |
+          mkdir archive
+          cd archive
+          cp "../target/aarch64-unknown-linux-musl/release/stratovirt" ./
+          tar -czf "stratovirt-static-aarch64.tar.gz" stratovirt
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: stratovirt-static-aarch64.tar.gz
+          path: archive/stratovirt-static-aarch64.tar.gz
+
+  release-stratovirt:
+    name: release-stratovirt
+    needs: [build-stratovirt-x86_64, build-stratovirt-aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download artifact x86_64
+        uses: actions/download-artifact@v3
+        with:
+          name: stratovirt-static-x86_64.tar.gz
+          path: ./
+
+      - name: Download artifact aarch64
+        uses: actions/download-artifact@v3
+        with:
+          name: stratovirt-static-aarch64.tar.gz
+          path: ./
+
+      - name: Split tag name
+        env:
+          TAG: ${{ github.ref }}
+        id: split
+        run: echo "::set-output name=fragment::${TAG##*v}"
+
+      - name: Upload release asset x86_64
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./stratovirt-static-x86_64.tar.gz
+          asset_name: stratovirt-static-${{ steps.split.outputs.fragment }}-x86_64.tar.gz
+          asset_content_type: application/x-tgz
+
+      - name: Upload release asset aarch64
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./stratovirt-static-aarch64.tar.gz
+          asset_name: stratovirt-static-${{ steps.split.outputs.fragment }}-aarch64.tar.gz
+          asset_content_type: application/x-tgz
