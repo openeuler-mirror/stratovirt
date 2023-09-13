@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{error, warn};
+use log::{debug, error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
@@ -198,16 +198,20 @@ impl VirtioMmioDevice {
 
         let mut queues = Vec::with_capacity(queue_num);
         for q_config in queues_config.iter_mut() {
-            q_config.set_addr_cache(
-                self.mem_space.clone(),
-                self.interrupt_cb.clone().unwrap(),
-                features,
-                &broken,
-            );
+            if !q_config.ready {
+                debug!("queue is not ready, please check your init process");
+            } else {
+                q_config.set_addr_cache(
+                    self.mem_space.clone(),
+                    self.interrupt_cb.clone().unwrap(),
+                    features,
+                    &broken,
+                );
+            }
 
             let queue = Queue::new(*q_config, queue_type)?;
-            if !queue.is_valid(&self.mem_space) {
-                bail!("Invalid queue");
+            if q_config.ready && !queue.is_valid(&self.mem_space) {
+                bail!("Failed to activate device: Invalid queue");
             }
             queues.push(Arc::new(Mutex::new(queue)));
         }
