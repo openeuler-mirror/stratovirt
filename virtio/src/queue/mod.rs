@@ -161,6 +161,9 @@ pub trait VringOps {
     /// Get the avail index of the vring.
     fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
 
+    /// Get the used index of the vring.
+    fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+
     /// Get the region cache information of the SplitVring.
     fn get_cache(&self) -> &Option<RegionCache>;
 }
