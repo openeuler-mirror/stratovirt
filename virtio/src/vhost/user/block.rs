@@ -18,7 +18,8 @@ use vmm_sys_util::eventfd::EventFd;
 use super::client::VhostUserClient;
 use crate::vhost::VhostOps;
 use crate::VhostUser::client::{
-    VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
+    VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD,
+    VHOST_USER_PROTOCOL_F_MQ,
 };
 use crate::VhostUser::listen_guest_notifier;
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -45,6 +46,8 @@ pub struct Block {
     client: Option<Arc<Mutex<VhostUserClient>>>,
     /// Whether irqfd can be used.
     pub enable_irqfd: bool,
+    /// Vhost user protocol features.
+    protocol_features: u64,
 }
 
 impl Block {
@@ -59,6 +62,7 @@ impl Block {
             mem_space: mem_space.clone(),
             client: None,
             enable_irqfd: false,
+            protocol_features: 0_u64,
         }
     }
 
@@ -111,10 +115,12 @@ impl VirtioDevice for Block {
             let protocol_features = locked_client
                 .get_protocol_features()
                 .with_context(|| "Failed to get protocol features for vhost-user blk")?;
-            let supported_protocol_features =
-                1 << VHOST_USER_PROTOCOL_F_MQ | 1 << VHOST_USER_PROTOCOL_F_CONFIG;
+            let supported_protocol_features = 1 << VHOST_USER_PROTOCOL_F_MQ
+                | 1 << VHOST_USER_PROTOCOL_F_CONFIG
+                | 1 << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD;
+            self.protocol_features = supported_protocol_features & protocol_features;
             locked_client
-                .set_protocol_features(supported_protocol_features & protocol_features)
+                .set_protocol_features(self.protocol_features)
                 .with_context(|| "Failed to set protocol features for vhost-user blk")?;
 
             if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
@@ -207,6 +213,7 @@ impl VirtioDevice for Block {
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
         client.features = self.base.driver_features;
+        client.protocol_features = self.protocol_features;
         client.set_queues(&self.base.queues);
         client.set_queue_evts(&queue_evts);
 
