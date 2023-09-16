@@ -32,6 +32,13 @@ use util::{
     file::{lock_file, open_file, unlock_file},
 };
 
+enum SnapshotOperation {
+    Create,
+    Delete,
+    Apply,
+    List,
+}
+
 pub struct ImageFile {
     file: File,
     path: String,
@@ -251,8 +258,100 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     }
 }
 
-pub(crate) fn image_snapshot(_args: Vec<String>) -> Result<()> {
-    todo!()
+pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
+    let mut arg_parser =
+        ArgsParse::create(vec!["l", "h", "help"], vec!["f", "c", "d", "a"], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    let mut snapshot_name: String = String::from("");
+    let mut snapshot_operation: Option<SnapshotOperation> = None;
+    let mut disk_fmt: Option<DiskFormat> = None;
+    let err_msg = "Cannot mix '-l', '-a', '-c', '-d'".to_string();
+
+    if let Some(fmt) = arg_parser.opt_str("f") {
+        disk_fmt = Some(DiskFormat::from_str(&fmt)?);
+    }
+
+    if arg_parser.opt_present("l") {
+        snapshot_operation = Some(SnapshotOperation::List);
+    }
+
+    if let Some(name) = arg_parser.opt_str("c") {
+        if snapshot_operation.is_some() {
+            bail!("{}", err_msg);
+        }
+        snapshot_operation = Some(SnapshotOperation::Create);
+        snapshot_name = name;
+    }
+
+    if let Some(name) = arg_parser.opt_str("d") {
+        if snapshot_operation.is_some() {
+            bail!("{}", err_msg);
+        }
+        snapshot_operation = Some(SnapshotOperation::Delete);
+        snapshot_name = name;
+    }
+
+    if let Some(name) = arg_parser.opt_str("a") {
+        if snapshot_operation.is_some() {
+            bail!("{}", err_msg);
+        }
+        snapshot_operation = Some(SnapshotOperation::Apply);
+        snapshot_name = name;
+    }
+
+    // Parse image path.
+    let len = arg_parser.free.len();
+    let path = match len {
+        0 => bail!("Image snapshot requires path"),
+        1 => arg_parser.free[0].clone(),
+        _ => {
+            let param = arg_parser.free[1].clone();
+            bail!("Unexpected argument: {}", param);
+        }
+    };
+
+    // Detect the image fmt.
+    let image_file = ImageFile::create(&path, false)?;
+    let detect_fmt = image_file.detect_img_format()?;
+    let real_fmt = image_file.check_img_format(disk_fmt, detect_fmt)?;
+    if real_fmt != DiskFormat::Qcow2 {
+        bail!(
+            "Could not create snapshot '{}'(Operation not supported)",
+            snapshot_name
+        );
+    }
+
+    // Create qcow2 driver.
+    let mut qcow2_conf = BlockProperty::default();
+    qcow2_conf.format = DiskFormat::Qcow2;
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off).unwrap();
+    let mut qcow2_driver = Qcow2Driver::new(image_file.file.try_clone()?, aio, qcow2_conf.clone())?;
+    qcow2_driver.load_metadata(qcow2_conf)?;
+
+    match snapshot_operation {
+        Some(SnapshotOperation::Create) => {
+            qcow2_driver.create_snapshot(snapshot_name, 0)?;
+        }
+        Some(SnapshotOperation::List) => {
+            let info = qcow2_driver.list_snapshots();
+            println!("{}", info);
+        }
+        Some(SnapshotOperation::Delete) => {
+            qcow2_driver.delete_snapshot(snapshot_name)?;
+        }
+        Some(SnapshotOperation::Apply) => {
+            qcow2_driver.apply_snapshot(snapshot_name)?;
+        }
+        None => return Ok(()),
+    };
+
+    Ok(())
 }
 
 pub(crate) fn create_qcow2_driver_for_check(

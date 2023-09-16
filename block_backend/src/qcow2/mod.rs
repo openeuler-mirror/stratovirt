@@ -793,6 +793,68 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.snapshot.find_snapshot(name)
     }
 
+    fn qcow2_apply_snapshot(&mut self, name: String) -> Result<()> {
+        // Get target snapshot by name.
+        let snap_id = self.get_snapshot_by_name(&name);
+        if snap_id < 0 {
+            bail!("Failed to load snapshots {}", name);
+        }
+        let snap = self.snapshot.snapshots[snap_id as usize].clone();
+
+        // Validate snapshot table
+        if snap.l1_size as u64 > MAX_L1_SIZE / ENTRY_SIZE {
+            bail!("Snapshot L1 table too large");
+        }
+
+        if i64::MAX as u64 - snap.l1_size as u64 * ENTRY_SIZE < snap.l1_table_offset
+            || !is_aligned(self.header.cluster_size(), snap.l1_table_offset)
+        {
+            bail!("Snapshot L1 table offset invalid");
+        }
+
+        if snap.disk_size != self.virtual_disk_size() {
+            bail!("The virtual disk size has been changed");
+        }
+
+        // Apply the l1 table of snapshot to active l1 table.
+        let mut snap_l1_table = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(snap.l1_table_offset, snap.l1_size as u64)?;
+        snap_l1_table.resize(self.header.l1_size as usize, 0);
+
+        // Increase the refcount of all clusters searched by L1 table.
+        self.qcow2_update_snapshot_refcount(snap.l1_table_offset, 1)?;
+
+        let active_l1_bytes = self.header.l1_size as u64 * ENTRY_SIZE;
+        if self.check_overlap(
+            METADATA_OVERLAP_CHECK_ACTIVEL1,
+            self.header.l1_table_offset,
+            active_l1_bytes,
+        ) != 0
+        {
+            bail!("check overlap failed");
+        }
+
+        // Synchronous write back to disk.
+        self.sync_aio
+            .borrow_mut()
+            .write_ctrl_cluster(self.header.l1_table_offset, &snap_l1_table)?;
+
+        self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, -1)?;
+
+        // Update flag of QCOW2_OFFSET_COPIED in current active l1 table, as it has been changed.
+        self.table.l1_table = snap_l1_table;
+        self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 0)?;
+
+        self.table.save_l1_table()?;
+
+        // Discard unused clusters.
+        self.refcount.sync_process_discards(OpCode::Discard);
+
+        Ok(())
+    }
+
     fn qcow2_delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo> {
         let snapshot_idx = self.get_snapshot_by_name(&name);
         if snapshot_idx < 0 {
@@ -1287,6 +1349,7 @@ pub fn bytes_to_clusters(size: u64, cluster_sz: u64) -> Result<u64> {
 pub trait InternalSnapshotOps: Send + Sync {
     fn create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()>;
     fn delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo>;
+    fn apply_snapshot(&mut self, name: String) -> Result<()>;
     fn list_snapshots(&self) -> String;
     fn get_status(&self) -> Arc<Mutex<BlockStatus>>;
 }
@@ -1308,6 +1371,14 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
         // when deleting snapshot failed.
         self.flush()?;
         self.qcow2_delete_snapshot(name).map_err(|e| {
+            self.drop_dirty_caches();
+            e
+        })
+    }
+
+    fn apply_snapshot(&mut self, name: String) -> Result<()> {
+        self.flush()?;
+        self.qcow2_apply_snapshot(name).map_err(|e| {
             self.drop_dirty_caches();
             e
         })
