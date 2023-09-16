@@ -44,7 +44,10 @@ impl<T: Clone + 'static> RawDriver<T> {
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String> {
-        todo!()
+        let raw_options = options.raw()?;
+        self.driver.file.set_len(raw_options.img_size)?;
+        let image_info = format!("fmt=raw size={}", raw_options.img_size);
+        Ok(image_info)
     }
 
     fn check_image(&mut self, _res: &mut CheckResult, _quite: bool, _fix: u64) -> Result<()> {
