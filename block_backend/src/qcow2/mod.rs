@@ -34,7 +34,9 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use self::{cache::ENTRY_SIZE_U64, header::QCOW_MAGIC, refcount::Qcow2DiscardType};
+use self::{
+    cache::ENTRY_SIZE_U64, check::Qcow2Check, header::QCOW_MAGIC, refcount::Qcow2DiscardType,
+};
 use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::{
@@ -1455,7 +1457,24 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
     }
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()> {
-        todo!()
+        let cluster_size = self.header.cluster_size();
+        let refcount_order = self.header.refcount_order;
+        let entry_bytes = ((1 << refcount_order) / 8) as usize;
+        let file_len = self.driver.disk_size().unwrap();
+        let nb_clusters = div_round_up(file_len, cluster_size).unwrap();
+        let mut qcow2_check = Qcow2Check::new(fix, quite, entry_bytes, nb_clusters as usize);
+
+        self.check_read_snapshot_table(res, quite, fix)?;
+
+        let mut ret = self.check_refcounts(&mut qcow2_check);
+        if ret.is_err() {
+            res.merge_result(&qcow2_check.res);
+            return ret;
+        }
+
+        ret = self.check_fix_snapshot_table(res, quite, fix);
+        res.merge_result(&qcow2_check.res);
+        ret
     }
 
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
