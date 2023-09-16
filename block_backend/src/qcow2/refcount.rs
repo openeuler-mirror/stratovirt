@@ -65,18 +65,18 @@ impl DiscardTask {
 pub struct RefCount {
     pub refcount_table: Vec<u64>,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
-    refcount_blk_cache: Qcow2Cache,
+    pub(crate) refcount_blk_cache: Qcow2Cache,
     pub discard_list: Vec<DiscardTask>,
     /// Pass the discard operation if refcount of cluster decrease to 0.
     pub discard_passthrough: Vec<Qcow2DiscardType>,
     free_cluster_index: u64,
-    refcount_table_offset: u64,
-    refcount_table_clusters: u32,
+    pub(crate) refcount_table_offset: u64,
+    pub(crate) refcount_table_clusters: u32,
     /// Number of refcount table entries.
-    refcount_table_size: u64,
-    refcount_blk_bits: u32,
+    pub(crate) refcount_table_size: u64,
+    pub(crate) refcount_blk_bits: u32,
     /// Number of refcount block entries.
-    refcount_blk_size: u32,
+    pub(crate) refcount_blk_size: u32,
     refcount_max: u64,
     /// Cluster size in bytes.
     cluster_size: u64,
