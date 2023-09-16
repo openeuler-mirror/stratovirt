@@ -78,6 +78,75 @@ pub struct CreateOptions {
     pub conf: BlockProperty,
 }
 
+impl CreateOptions {
+    fn check(&self) -> Result<()> {
+        if self.img_size == 0 || self.img_size % SECTOR_SIZE != 0 {
+            bail!(
+                "Image size {} is invalid, it can't be zero and it must be multiple of {}",
+                self.img_size,
+                SECTOR_SIZE
+            );
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn raw(&self) -> Result<RawCreateOptions> {
+        self.check()?;
+        if self.cluster_size.is_some() {
+            bail!("Format raw does not support parameter 'cluster_size'");
+        }
+
+        if self.refcount_bits.is_some() {
+            bail!("Format raw does not support parameter 'refcount_bits'");
+        }
+
+        let options_raw = RawCreateOptions {
+            path: self.path.clone(),
+            img_size: self.img_size,
+        };
+        Ok(options_raw)
+    }
+
+    pub(crate) fn qcow2(&self) -> Result<Qcow2CreateOptions> {
+        self.check()?;
+        let mut cluster_size = DEFAULT_CLUSTER_SIZE;
+        if let Some(size) = self.cluster_size {
+            if !size.is_power_of_two() || !(CLUSTER_SIZE_MIN..=CLUSTER_SIZE_MAX).contains(&size) {
+                bail!(
+                    "Cluster size is {}, it should be power of 2 and within the range of [{}:{}]",
+                    size,
+                    CLUSTER_SIZE_MIN,
+                    CLUSTER_SIZE_MAX,
+                );
+            }
+            cluster_size = size;
+        }
+
+        let mut refcount_bits = DEFAULT_REFCOUNT_BITS;
+        if let Some(rc_bits) = self.refcount_bits {
+            if rc_bits > MAX_REFCOUNT_BITS || !rc_bits.is_power_of_two() {
+                bail!(
+                    "Refcount bis {} is invalid, it should be power of 2 and not exceed {} bits",
+                    rc_bits,
+                    MAX_REFCOUNT_BITS
+                );
+            }
+            refcount_bits = rc_bits;
+        }
+
+        let options_qcow2 = Qcow2CreateOptions {
+            path: self.path.clone(),
+            img_size: self.img_size,
+            version: DEFAULT_QCOW2_VERSION,
+            cluster_size,
+            refcount_bits,
+        };
+
+        Ok(options_qcow2)
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct DiskFragments {
     pub allocated_clusters: u64,
