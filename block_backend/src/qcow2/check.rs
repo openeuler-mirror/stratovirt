@@ -190,13 +190,91 @@ impl RefcountBlock {
 }
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
+    /// Read the snapshot table from the disk and verify it.
     pub(crate) fn check_read_snapshot_table(
         &mut self,
         res: &mut CheckResult,
         quite: bool,
         fix: u64,
     ) -> Result<()> {
-        todo!()
+        let mut extra_data_dropped: i32 = 0;
+        let mut nb_clusters_reduced: i32 = 0;
+        let mut nb_snapshots = self.header.nb_snapshots;
+
+        // Validate the number of snapshots.
+        if nb_snapshots as usize > QCOW2_MAX_SNAPSHOTS {
+            if fix & FIX_ERRORS == 0 {
+                res.err_num += 1;
+                bail!("You can force-remove all {} overhanging snapshots with \"stratovirt-img check -r all\"",nb_snapshots as usize - QCOW2_MAX_SNAPSHOTS);
+            }
+
+            output_msg!(
+                quite,
+                "Discarding {} overhanging snapshots",
+                nb_snapshots as usize - QCOW2_MAX_SNAPSHOTS
+            );
+            nb_clusters_reduced += (nb_snapshots as usize - QCOW2_MAX_SNAPSHOTS) as i32;
+            nb_snapshots = QCOW2_MAX_SNAPSHOTS as u32;
+        }
+
+        let snapshot_table_length = size_of::<QcowSnapshotHeader>() as u64;
+        let snapshot_table_offset = self.header.snapshots_offset;
+        // Validate snapshot table.
+        if (u64::MAX - nb_snapshots as u64 * snapshot_table_length) < snapshot_table_offset
+            || !is_aligned(self.header.cluster_size(), snapshot_table_offset)
+        {
+            res.err_num += 1;
+            self.header.snapshots_offset = 0;
+            self.header.nb_snapshots = 0;
+            bail!("Snapshot table can't exceeds the limit and it's offset must be aligned to cluster size {}", self.header.cluster_size());
+        }
+
+        match self.snapshot.load_snapshot_table(
+            snapshot_table_offset,
+            nb_snapshots,
+            fix & FIX_ERRORS != 0,
+        ) {
+            Ok((cluster_reduced, data_dropped)) => {
+                nb_clusters_reduced += cluster_reduced;
+                extra_data_dropped += data_dropped;
+            }
+            Err(e) => {
+                res.err_num += 1;
+                self.snapshot.snapshot_table_offset = 0;
+                self.snapshot.nb_snapshots = 0;
+                bail!("ERROR failed to read the snapshot table: {}", e);
+            }
+        }
+        res.corruptions += nb_clusters_reduced + extra_data_dropped;
+
+        // Update snapshot in header
+        // This operations will leaks clusters(extra clusters of snapshot table will be dropped), which will
+        // be fixed in function of check_refcounts later.
+        if nb_clusters_reduced > 0 {
+            let new_nb_snapshots = self.snapshot.nb_snapshots;
+            let buf = new_nb_snapshots.as_bytes().to_vec();
+            let offset = offset_of!(QcowHeader, nb_snapshots);
+            if let Err(e) = self
+                .sync_aio
+                .borrow_mut()
+                .write_buffer(offset as u64, &buf)
+                .with_context(|| {
+                    "Failed to update the snapshot count in the image header".to_string()
+                })
+            {
+                res.err_num += 1;
+                bail!(
+                    "Failed to update the snapshot count in the image header: {}",
+                    e
+                );
+            }
+
+            self.header.nb_snapshots = new_nb_snapshots;
+            res.corruptions_fixed += nb_clusters_reduced;
+            res.corruptions -= nb_clusters_reduced;
+        }
+
+        Ok(())
     }
 
     pub fn check_fix_snapshot_table(
@@ -205,7 +283,17 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         quite: bool,
         fix: u64,
     ) -> Result<()> {
-        todo!()
+        if res.corruptions != 0 && fix & FIX_ERRORS != 0 {
+            if let Err(e) = self.write_snapshots_to_disk() {
+                res.err_num += 1;
+                output_msg!(quite, "ERROR failed to update snapshot table {:?}", e);
+            }
+
+            res.corruptions_fixed += res.corruptions;
+            res.corruptions = 0;
+        }
+
+        Ok(())
     }
 
     /// Rebuild a new refcount table according to metadata, including active l1 table, active l2 table,
