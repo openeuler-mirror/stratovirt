@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod cache;
+pub mod check;
 pub mod header;
 pub mod refcount;
 pub mod snapshot;

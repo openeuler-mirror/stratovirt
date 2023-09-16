@@ -175,6 +175,78 @@ pub struct CheckResult {
     pub disk_frag: DiskFragments,
 }
 
+impl CheckResult {
+    pub fn merge_result(&mut self, res: &CheckResult) {
+        self.corruptions += res.corruptions;
+        self.leaks += res.leaks;
+        self.err_num += res.err_num;
+        self.corruptions_fixed += res.corruptions_fixed;
+        self.leaks_fixed += res.leaks_fixed;
+        self.image_end_offset = res.image_end_offset;
+        self.disk_frag = res.disk_frag;
+    }
+
+    pub fn collect_check_message(&self) -> String {
+        let mut message = String::from("");
+        if self.leaks_fixed != 0 || self.corruptions_fixed != 0 {
+            message.push_str(&format!(
+                "The following inconsistencies were found and repaired:\n\n\
+                \t{} leaked clusters\n\
+                \t{} corruptions\n\n\
+                Double checking the fixed image now..\n",
+                self.leaks_fixed, self.corruptions_fixed
+            ));
+        }
+
+        if self.corruptions == 0 && self.leaks == 0 && self.err_num == 0 {
+            message.push_str("No errors were found on the image.\n");
+        } else {
+            if self.corruptions != 0 {
+                message.push_str(&format!(
+                    "{} errors were found on the image.\n\
+                    Data may be corrupted, or further writes to the image may corrupt it.\n",
+                    self.corruptions
+                ));
+            }
+
+            if self.leaks != 0 {
+                message.push_str(&format!(
+                    "{} leaked clusters were found on the image.\n\
+                    This means waste of disk space, but no harm to data.\n",
+                    self.leaks
+                ));
+            }
+
+            if self.err_num != 0 {
+                message.push_str(&format!(
+                    "{} internal errors have occurred during the check.\n",
+                    self.err_num
+                ));
+            }
+        }
+
+        if self.disk_frag.total_clusters != 0 && self.disk_frag.allocated_clusters != 0 {
+            message.push_str(&format!(
+                "{}/{} = {:.2}% allocated, {:.2}% fragmented, {:.2}% compressed clusters\n",
+                self.disk_frag.allocated_clusters,
+                self.disk_frag.total_clusters,
+                self.disk_frag.allocated_clusters as f64 / self.disk_frag.total_clusters as f64
+                    * 100.0,
+                self.disk_frag.fragments as f64 / self.disk_frag.allocated_clusters as f64 * 100.0,
+                self.disk_frag.compressed_clusters as f64
+                    / self.disk_frag.allocated_clusters as f64
+                    * 100.0
+            ));
+        }
+
+        if self.image_end_offset != 0 {
+            message.push_str(&format!("Image end offset: {}\n", self.image_end_offset));
+        }
+
+        message
+    }
+}
+
 pub enum BlockStatus {
     Init,
     NormalIO,
