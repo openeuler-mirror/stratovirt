@@ -63,7 +63,7 @@ use machine_manager::config::get_cameradev_config;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, M, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::MachineLifecycle;
@@ -1995,12 +1995,12 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
         config.format = format.as_str().parse::<DiskFormat>()?;
     }
     if let Some(l2_cache) = args.l2_cache_size.as_ref() {
-        let sz = memory_unit_conversion(l2_cache)
+        let sz = memory_unit_conversion(l2_cache, M)
             .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
         config.l2_cache_size = Some(sz);
     }
     if let Some(rc_cache) = args.refcount_cache_size.as_ref() {
-        let sz = memory_unit_conversion(rc_cache)
+        let sz = memory_unit_conversion(rc_cache, M)
             .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
         config.refcount_cache_size = Some(sz);
     }

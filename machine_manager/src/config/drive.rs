@@ -357,12 +357,12 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         .unwrap_or(WriteZeroesState::Off);
 
     if let Some(l2_cache) = cmd_parser.get_value::<String>("l2-cache-size")? {
-        let sz = memory_unit_conversion(&l2_cache)
+        let sz = memory_unit_conversion(&l2_cache, M)
             .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
         drive.l2_cache_size = Some(sz);
     }
     if let Some(rc_cache) = cmd_parser.get_value::<String>("refcount-cache-size")? {
-        let sz = memory_unit_conversion(&rc_cache)
+        let sz = memory_unit_conversion(&rc_cache, M)
             .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
         drive.refcount_cache_size = Some(sz);
     }
