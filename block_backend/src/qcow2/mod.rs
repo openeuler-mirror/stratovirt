@@ -296,6 +296,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut buf = vec![0; QcowHeader::len()];
         self.sync_aio.borrow_mut().read_buffer(0, &mut buf)?;
         self.header = QcowHeader::from_vec(&buf)?;
+        if self.header.backing_file_size != 0 {
+            bail!("Backing file is not supported now");
+        }
         Ok(())
     }
 
