@@ -37,7 +37,7 @@ pub struct InternalSnapshot {
     pub snapshot_size: u64,
     pub snapshot_table_offset: u64,
     // Number of snapshot table entry.
-    nb_snapshots: u32,
+    pub(crate) nb_snapshots: u32,
 }
 
 impl InternalSnapshot {
@@ -221,7 +221,7 @@ impl QcowSnapshot {
         round_up(tmp_size as u64, 8).unwrap()
     }
 
-    fn gen_snapshot_table_entry(&self) -> Vec<u8> {
+    pub(crate) fn gen_snapshot_table_entry(&self) -> Vec<u8> {
         let id_str = self.id.to_string();
         let entry_size = size_of::<QcowSnapshotHeader>() + self.extra_data_size as usize;
         let mut buf = vec![0_u8; entry_size];

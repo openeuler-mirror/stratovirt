@@ -178,6 +178,11 @@ impl Qcow2Cache {
         Some(entry)
     }
 
+    pub fn clear_cache(&mut self) {
+        self.cache_map.clear();
+        self.dirty_tables.clear();
+    }
+
     pub fn lru_replace(
         &mut self,
         key: u64,
