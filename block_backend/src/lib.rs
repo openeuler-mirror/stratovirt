@@ -198,6 +198,10 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
         DiskFormat::Qcow2 => {
             let mut qcow2 = Qcow2Driver::new(file, aio, prop.clone())
                 .with_context(|| "Failed to create qcow2 driver")?;
+            qcow2
+                .load_metadata(prop.clone())
+                .with_context(|| "Failed to load metadata")?;
+
             let file_size = qcow2.disk_size()?;
             if file_size & (prop.req_align as u64 - 1) != 0 {
                 bail!(
