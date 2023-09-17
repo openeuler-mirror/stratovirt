@@ -257,38 +257,35 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     pub fn new(file: File, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
         let fd = file.as_raw_fd();
         let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(fd, conf.clone())?));
-        let mut qcow2 = Self {
-            driver: FileDriver::new(file, aio, conf.clone()),
+        Ok(Self {
+            driver: FileDriver::new(file, aio, conf),
             sync_aio: sync_aio.clone(),
             header: QcowHeader::default(),
             table: Qcow2Table::new(sync_aio.clone()),
             refcount: RefCount::new(sync_aio.clone()),
             snapshot: InternalSnapshot::new(sync_aio),
             status: Arc::new(Mutex::new(BlockStatus::Init)),
-        };
-        qcow2
-            .load_header()
+        })
+    }
+
+    pub fn load_metadata(&mut self, conf: BlockProperty) -> Result<()> {
+        self.load_header()
             .with_context(|| "Failed to load header")?;
-        qcow2.header.check().with_context(|| "Invalid header")?;
-        qcow2
-            .table
-            .init_table_info(&qcow2.header, &conf)
+        self.header.check().with_context(|| "Invalid header")?;
+        self.table
+            .init_table_info(&self.header, &conf)
             .with_context(|| "Failed to create qcow2 table")?;
-        qcow2
-            .table
+        self.table
             .load_l1_table()
             .with_context(|| "Failed to load l1 table")?;
-        qcow2.refcount.init_refcount_info(&qcow2.header, &conf);
-        qcow2
-            .load_refcount_table()
+        self.refcount.init_refcount_info(&self.header, &conf);
+        self.load_refcount_table()
             .with_context(|| "Failed to load refcount table")?;
-        qcow2.snapshot.set_cluster_size(qcow2.header.cluster_size());
-        qcow2
-            .snapshot
-            .load_snapshot_table(qcow2.header.snapshots_offset, qcow2.header.nb_snapshots)
+        self.snapshot.set_cluster_size(self.header.cluster_size());
+        self.snapshot
+            .load_snapshot_table(self.header.snapshots_offset, self.header.nb_snapshots)
             .with_context(|| "Failed to load snapshot table")?;
-
-        Ok(qcow2)
+        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -1608,7 +1605,9 @@ mod test {
                 util::aio::AioEngine::Off,
             )
             .unwrap();
-            Qcow2Driver::new(file, aio, conf).unwrap()
+            let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+            qcow2_driver.load_metadata(conf).unwrap();
+            qcow2_driver
         }
 
         /// Write full the disk with value disorderly.
@@ -1694,7 +1693,9 @@ mod test {
             refcount_cache_size: None,
         };
         image.file = file.try_clone().unwrap();
-        (image, Qcow2Driver::new(file, aio, conf).unwrap())
+        let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+        qcow2_driver.load_metadata(conf).unwrap();
+        (image, qcow2_driver)
     }
 
     fn qcow2_read(qcow2: &mut Qcow2Driver<()>, buf: &mut [u8], offset: usize) -> Result<()> {

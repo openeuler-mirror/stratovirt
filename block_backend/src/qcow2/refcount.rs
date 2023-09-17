@@ -797,7 +797,9 @@ mod test {
             refcount_cache_size: None,
         };
         let cloned_file = file.try_clone().unwrap();
-        (Qcow2Driver::new(file, aio, conf).unwrap(), cloned_file)
+        let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+        qcow2_driver.load_metadata(conf).unwrap();
+        (qcow2_driver, cloned_file)
     }
 
     #[test]
