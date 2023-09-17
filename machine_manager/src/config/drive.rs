@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check};
+use super::{error::ConfigError, pci_args_check, M};
 use crate::config::{
     check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, CmdParser, ConfigCheck,
     ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
@@ -125,6 +125,15 @@ impl FromStr for DiskFormat {
             "raw" => Ok(DiskFormat::Raw),
             "qcow2" => Ok(DiskFormat::Qcow2),
             _ => Err(anyhow!("Unknown format type")),
+        }
+    }
+}
+
+impl ToString for DiskFormat {
+    fn to_string(&self) -> String {
+        match *self {
+            DiskFormat::Raw => "raw".to_string(),
+            DiskFormat::Qcow2 => "qcow2".to_string(),
         }
     }
 }

@@ -10,16 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod cache;
-mod header;
-mod refcount;
-mod snapshot;
-mod table;
+pub mod cache;
+pub mod header;
+pub mod refcount;
+pub mod snapshot;
+pub mod table;
 
 use std::{
     cell::RefCell,
     collections::HashMap,
     fs::File,
+    io::{Seek, SeekFrom, Write},
     mem::size_of,
     os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
@@ -32,7 +33,7 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use self::{cache::ENTRY_SIZE_U64, refcount::Qcow2DiscardType};
+use self::{cache::ENTRY_SIZE_U64, header::QCOW_MAGIC, refcount::Qcow2DiscardType};
 use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::{
@@ -42,7 +43,7 @@ use crate::{
         snapshot::{InternalSnapshot, QcowSnapshot, QcowSnapshotExtraData, QCOW2_MAX_SNAPSHOTS},
         table::{Qcow2ClusterType, Qcow2Table},
     },
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
@@ -56,28 +57,32 @@ use util::{
 };
 
 // The L1/L2/Refcount table entry size.
-const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
-const ENTRY_BITS: u64 = 3;
-const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
-const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
-const REFCOUNT_TABLE_OFFSET_MASK: u64 = 0xffff_ffff_ffff_fe00;
-const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
+pub const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
+pub const ENTRY_BITS: u64 = 3;
+pub const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+pub const L1_RESERVED_MASK: u64 = 0x7f00_0000_0000_01ff;
+pub const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+pub const L2_STD_RESERVED_MASK: u64 = 0x3f00_0000_0000_01fe;
+pub const REFCOUNT_TABLE_OFFSET_MASK: u64 = 0xffff_ffff_ffff_fe00;
+pub const REFCOUNT_TABLE_RESERVED_MASK: u64 = 0x0000_0000_0000_01ff;
+pub const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
 const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
-const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
+pub const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
+const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 const DEFAULT_SECTOR_SIZE: u64 = 512;
+pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
 // The default flush interval is 30s.
 const DEFAULT_METADATA_FLUSH_INTERVAL: u64 = 30;
 
 const METADATA_OVERLAP_CHECK_MAINHEADER: u64 = 1 << 0;
 const METADATA_OVERLAP_CHECK_ACTIVEL1: u64 = 1 << 1;
-const METADATA_OVERLAP_CHECK_ACTIVEL2: u64 = 1 << 2;
+pub(crate) const METADATA_OVERLAP_CHECK_ACTIVEL2: u64 = 1 << 2;
 const METADATA_OVERLAP_CHECK_REFCOUNTTABLE: u64 = 1 << 3;
 const METADATA_OVERLAP_CHECK_REFCOUNTBLOCK: u64 = 1 << 4;
 const METADATA_OVERLAP_CHECK_SNAPSHOTTABLE: u64 = 1 << 5;
 const METADATA_OVERLAP_CHECK_INACTIVEL1: u64 = 1 << 6;
-#[allow(unused)]
-const METADATA_OVERLAP_CHECK_INACTIVEL2: u64 = 1 << 7;
+pub(crate) const METADATA_OVERLAP_CHECK_INACTIVEL2: u64 = 1 << 7;
 #[allow(unused)]
 const METADATA_OVERLAP_CHECK_BITMAPDIRECTORY: u64 = 1 << 8;
 
@@ -104,7 +109,7 @@ pub enum HostRange {
 pub struct SyncAioInfo {
     /// Aio for sync read/write metadata.
     aio: Aio<()>,
-    fd: RawFd,
+    pub(crate) fd: RawFd,
     pub prop: BlockProperty,
 }
 
@@ -121,7 +126,7 @@ impl SyncAioInfo {
         Ok(())
     }
 
-    fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
+    pub fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
         Ok(Self {
             aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off)?,
             fd,
@@ -165,7 +170,7 @@ impl SyncAioInfo {
         self.aio.submit_request(aiocb)
     }
 
-    fn write_buffer(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+    pub(crate) fn write_buffer(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         let ptr = buf.as_ptr() as u64;
         let cnt = buf.len() as u64;
         let aiocb = self.package_sync_aiocb(
@@ -177,12 +182,12 @@ impl SyncAioInfo {
         self.aio.submit_request(aiocb)
     }
 
-    fn write_ctrl_cluster(&mut self, addr: u64, buf: &[u64]) -> Result<()> {
+    pub(crate) fn write_ctrl_cluster(&mut self, addr: u64, buf: &[u64]) -> Result<()> {
         let output: Vec<u8> = buf.iter().flat_map(|val| val.to_be_bytes()).collect();
         self.write_buffer(addr, &output)
     }
 
-    fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
+    pub(crate) fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
         let mut buf = vec![0; sz as usize];
         let vec_len = size_of::<u64>() * sz as usize;
         let mut vec = vec![0_u8; vec_len];
@@ -193,7 +198,13 @@ impl SyncAioInfo {
         Ok(buf)
     }
 
-    fn write_dirty_info(&mut self, addr: u64, buf: &[u8], start: u64, end: u64) -> Result<()> {
+    pub(crate) fn write_dirty_info(
+        &mut self,
+        addr: u64,
+        buf: &[u8],
+        start: u64,
+        end: u64,
+    ) -> Result<()> {
         let start = round_down(start, DEFAULT_SECTOR_SIZE)
             .with_context(|| format!("Round down failed, value is {}", start))?;
         let end = round_up(end, DEFAULT_SECTOR_SIZE)
@@ -203,13 +214,13 @@ impl SyncAioInfo {
 }
 
 pub struct Qcow2Driver<T: Clone + 'static> {
-    driver: FileDriver<T>,
-    sync_aio: Rc<RefCell<SyncAioInfo>>,
-    header: QcowHeader,
-    table: Qcow2Table,
-    refcount: RefCount,
-    snapshot: InternalSnapshot,
-    status: Arc<Mutex<BlockStatus>>,
+    pub driver: FileDriver<T>,
+    pub sync_aio: Rc<RefCell<SyncAioInfo>>,
+    pub header: QcowHeader,
+    pub table: Qcow2Table,
+    pub refcount: RefCount,
+    pub snapshot: InternalSnapshot,
+    pub status: Arc<Mutex<BlockStatus>>,
 }
 
 impl<T: Clone + 'static> Drop for Qcow2Driver<T> {
@@ -261,8 +272,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         qcow2.header.check().with_context(|| "Invalid header")?;
         qcow2
             .table
-            .init_table(&qcow2.header, &conf)
+            .init_table_info(&qcow2.header, &conf)
             .with_context(|| "Failed to create qcow2 table")?;
+        qcow2
+            .table
+            .load_l1_table()
+            .with_context(|| "Failed to load l1 table")?;
         qcow2.refcount.init_refcount_info(&qcow2.header, &conf);
         qcow2
             .load_refcount_table()
@@ -292,7 +307,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         });
     }
 
-    fn load_header(&mut self) -> Result<()> {
+    pub fn load_header(&mut self) -> Result<()> {
         let mut buf = vec![0; QcowHeader::len()];
         self.sync_aio.borrow_mut().read_buffer(0, &mut buf)?;
         self.header = QcowHeader::from_vec(&buf)?;
@@ -302,7 +317,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
-    fn load_refcount_table(&mut self) -> Result<()> {
+    pub fn load_refcount_table(&mut self) -> Result<()> {
         let sz =
             self.header.refcount_table_clusters as u64 * (self.header.cluster_size() / ENTRY_SIZE);
         self.refcount.refcount_table = self
@@ -376,7 +391,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         ))
     }
 
-    fn host_offset_for_read(&mut self, guest_offset: u64, req_len: u64) -> Result<HostRange> {
+    pub fn host_offset_for_read(&mut self, guest_offset: u64, req_len: u64) -> Result<HostRange> {
         // Request not support cross l2 table.
         let l2_max_len = self
             .table
@@ -442,7 +457,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     /// If the corresponding entry didn't cache, it will be read from the disk synchronously.
     /// Input: guest offset.
     /// Output: target entry.
-    fn get_table_cluster(&mut self, guest_offset: u64) -> Result<Rc<RefCell<CacheTable>>> {
+    pub fn get_table_cluster(&mut self, guest_offset: u64) -> Result<Rc<RefCell<CacheTable>>> {
         let l1_index = self.table.get_l1_table_index(guest_offset);
         if l1_index >= self.header.l1_size as u64 {
             bail!("Need to grow l1 table size.");
@@ -643,7 +658,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         guest_offset & (self.header.cluster_size() - 1)
     }
 
-    fn load_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
+    pub(crate) fn load_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
         if !is_aligned(self.header.cluster_size(), addr) {
             bail!("Cluster address not aligned {}", addr);
         }
@@ -661,7 +676,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         std::cmp::min(cnt, self.header.cluster_size() - offset)
     }
 
-    fn alloc_cluster(&mut self, clusters: u64, write_zero: bool) -> Result<u64> {
+    pub fn alloc_cluster(&mut self, clusters: u64, write_zero: bool) -> Result<u64> {
         if !self.refcount.discard_list.is_empty() {
             self.refcount.sync_process_discards(OpCode::Discard);
         }
@@ -1042,7 +1057,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     // Check if there exist intersection between given address range and qcow2 metadata.
-    fn check_overlap(&self, ignore: u64, offset: u64, size: u64) -> i64 {
+    pub(crate) fn check_overlap(&self, ignore: u64, offset: u64, size: u64) -> i64 {
         let check = DEFAULT_QCOW2_METADATA_OVERLAP_CHECK & !ignore;
         if check == 0 {
             return 0;
@@ -1296,6 +1311,14 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
+    fn create_image(&mut self, options: &CreateOptions) -> Result<String> {
+        todo!()
+    }
+
+    fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()> {
+        todo!()
+    }
+
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
         let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)

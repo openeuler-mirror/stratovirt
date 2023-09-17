@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod file;
 pub mod qcow2;
-
-mod file;
-mod raw;
+pub mod raw;
 
 use std::{
     fs::File,
@@ -33,6 +32,79 @@ use util::aio::{Aio, Iovec, WriteZeroesState};
 
 /// Callback function which is called when aio handle failed.
 pub type BlockIoErrorCallback = Arc<dyn Fn() + Send + Sync>;
+
+pub const SECTOR_BITS: u64 = 9;
+pub const SECTOR_SIZE: u64 = 1 << SECTOR_BITS;
+pub const CLUSTER_SIZE_MIN: u64 = 1 << 9;
+pub const CLUSTER_SIZE_MAX: u64 = 1 << 21;
+pub const NO_FIX: u64 = 0;
+pub const FIX_LEAKS: u64 = 1;
+pub const FIX_ERRORS: u64 = 2;
+
+const DEFAULT_QCOW2_VERSION: u32 = 3;
+const DEFAULT_CLUSTER_BITS: u64 = 16;
+const DEFAULT_CLUSTER_SIZE: u64 = 1 << DEFAULT_CLUSTER_BITS;
+const DEFAULT_REFCOUNT_BITS: u64 = 16;
+const MAX_REFCOUNT_BITS: u64 = 64;
+
+#[macro_export]
+macro_rules! output_msg {
+    ($lvl:expr, $($arg:tt)*) => {
+        if !$lvl {
+            println!($($arg)*)
+        }
+    }
+}
+
+pub struct RawCreateOptions {
+    pub path: String,
+    pub img_size: u64,
+}
+
+pub struct Qcow2CreateOptions {
+    pub path: String,
+    pub img_size: u64,
+    pub version: u32,
+    pub cluster_size: u64,
+    pub refcount_bits: u64,
+}
+
+#[derive(Default)]
+pub struct CreateOptions {
+    pub path: String,
+    pub img_size: u64,
+    pub cluster_size: Option<u64>,
+    pub refcount_bits: Option<u64>,
+    pub conf: BlockProperty,
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct DiskFragments {
+    pub allocated_clusters: u64,
+    pub total_clusters: u64,
+    pub fragments: u64,
+    pub compressed_clusters: u64,
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct CheckResult {
+    /// Number of leaked clusters.
+    pub leaks: i32,
+    /// Number of leaked clusters that have been fixed.
+    pub leaks_fixed: i32,
+    /// Number of corruptions clusters.
+    pub corruptions: i32,
+    /// Number of corruptions clusters that have been fixed.
+    pub corruptions_fixed: i32,
+    /// File length of virtual disk.
+    pub image_end_offset: u64,
+    /// Whether the refcount block table needs to be rebuilt.
+    pub need_rebuild: bool,
+    /// Total number of errors during the check.
+    pub err_num: u64,
+    /// Statistics information for clusters of virtual disk.
+    pub disk_frag: DiskFragments,
+}
 
 pub enum BlockStatus {
     Init,
@@ -54,7 +126,28 @@ pub struct BlockProperty {
     pub refcount_cache_size: Option<u64>,
 }
 
+impl Default for BlockProperty {
+    fn default() -> Self {
+        Self {
+            id: "".to_string(),
+            format: DiskFormat::Raw,
+            iothread: None,
+            direct: false,
+            req_align: 1_u32,
+            buf_align: 1_u32,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: None,
+            refcount_cache_size: None,
+        }
+    }
+}
+
 pub trait BlockDriverOps<T: Clone>: Send {
+    fn create_image(&mut self, options: &CreateOptions) -> Result<String>;
+
+    fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()>;
+
     fn disk_size(&mut self) -> Result<u64>;
 
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()>;
