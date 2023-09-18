@@ -946,7 +946,30 @@ It determines the order of bootable devices which firmware will use for booting 
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-### 2.16 VNC
+### 2.16 Display
+
+Multiple display methods are supported by stratovirt, including `GTK` and `VNC`, which allows users to interact with virtual machine.
+
+#### 2.16.1 GTK
+
+Graphical interface drawn by gtk toolkits. Visit [GTK](https://www.gtk.org) for more details.
+
+Two properties can be set for GTK.
+
+* appname: string of the program name, which will be drawn on the titlebar of the window.
+* full-screen: if configured on, the initial window will cover the entire screen.
+
+Sample Configuration：
+
+```shell
+-display gtk[,appname=<application_name>,full-screen={on|off}]
+```
+
+Note: It should be ensured that gtk toolkits have been installed before using gtk.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable GTK.
+
+#### 2.16.2 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
 In order to use VNC, the ip and port value must be configured. The IP address can be set to a specified value or `0.0.0.0`, which means that all IP addresses on the host network card are monitored
