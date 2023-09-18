@@ -308,7 +308,7 @@ impl GtkDisplay {
             let first_radio = &self.gtk_menu.radio_group[0];
             gs_show_menu.join_group(Some(first_radio));
         } else {
-            gs_show_menu.activate();
+            note_book.set_current_page(Some(page_num));
         }
 
         self.gtk_menu.radio_group.push(gs_show_menu.clone());

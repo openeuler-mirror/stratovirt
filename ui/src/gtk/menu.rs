@@ -247,6 +247,8 @@ impl GtkMenu {
 
     /// Show window.
     pub(crate) fn show_window(&self, scale_mode: Rc<RefCell<ScaleMode>>, full_screen: bool) {
+        self.window.show_all();
+
         if full_screen {
             self.full_screen_item.activate();
         }
@@ -255,7 +257,6 @@ impl GtkMenu {
             self.zoom_fit.activate();
         }
 
-        self.window.show_all();
         self.menu_bar.hide();
     }
 }
