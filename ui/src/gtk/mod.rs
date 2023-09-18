@@ -226,7 +226,7 @@ impl GtkDisplay {
     fn create(gtk_menu: GtkMenu, gtk_cfg: &GtkConfig) -> Self {
         // Window scale mode.
         let scale_mode = Rc::new(RefCell::new(ScaleMode {
-            full_screen: gtk_cfg.full_screen,
+            full_screen: false,
             free_scale: true,
         }));
         // Mapping ASCII to keycode.
@@ -556,7 +556,7 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
         .with_context(|| "Gtk display init failed!")
         .unwrap();
 
-    gtk_menu.show_window(scale_mode);
+    gtk_menu.show_window(scale_mode, gtk_cfg.full_screen);
 }
 
 fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Result<()> {

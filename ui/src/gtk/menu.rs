@@ -246,8 +246,8 @@ impl GtkMenu {
     }
 
     /// Show window.
-    pub(crate) fn show_window(&self, scale_mode: Rc<RefCell<ScaleMode>>) {
-        if scale_mode.borrow().full_screen {
+    pub(crate) fn show_window(&self, scale_mode: Rc<RefCell<ScaleMode>>, full_screen: bool) {
+        if full_screen {
             self.full_screen_item.activate();
         }
 
