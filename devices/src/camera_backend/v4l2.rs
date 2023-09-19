@@ -28,7 +28,7 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
-    CamBasicFmt, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraHostdevOps,
+    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -230,7 +230,7 @@ impl V4l2CameraBackend {
     }
 }
 
-impl CameraHostdevOps for V4l2CameraBackend {
+impl CameraBackend for V4l2CameraBackend {
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
         info!("Camera {} set format {:?}", self.id, cam_fmt);
         if self.listening {

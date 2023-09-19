@@ -26,13 +26,13 @@ use vmm_sys_util::eventfd::EventFd;
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    camera_ops, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraBrokenCallback,
-    CameraFormatList, CameraFrame, CameraHostdevOps, CameraNotifyCallback, FmtType,
+    create_cam_backend, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraBackend,
+    CameraBrokenCallback, CameraFormatList, CameraFrame, CameraNotifyCallback, FmtType,
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
 use crate::usb::{
-    UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
+    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
 use machine_manager::config::UsbCameraConfig;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -93,14 +93,14 @@ const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 pub struct UsbCamera {
-    usb_device: UsbDevice,                        // general usb device object
-    vs_control: VideoStreamingControl,            // video stream control info
-    camera_fd: Arc<EventFd>,                      // camera io fd
-    camera_dev: Arc<Mutex<dyn CameraHostdevOps>>, // backend device
+    base: UsbDeviceBase,                           // general usb device object
+    vs_control: VideoStreamingControl,             // video stream control info
+    camera_fd: Arc<EventFd>,                       // camera io fd
+    camera_backend: Arc<Mutex<dyn CameraBackend>>, // backend device
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>, // packet to be processed
-    payload: Arc<Mutex<UvcPayload>>,              // uvc payload
-    listening: bool,                              // if the camera is listening or not
-    broken: Arc<AtomicBool>,                      // if the device broken or not
+    payload: Arc<Mutex<UvcPayload>>,               // uvc payload
+    listening: bool,                               // if the camera is listening or not
+    broken: Arc<AtomicBool>,                       // if the device broken or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
 }
@@ -491,12 +491,12 @@ impl VideoStreamingControl {
 
 impl UsbCamera {
     pub fn new(config: UsbCameraConfig) -> Result<Self> {
-        let camera = camera_ops(config.clone())?;
+        let camera = create_cam_backend(config.clone())?;
         Ok(Self {
-            usb_device: UsbDevice::new(config.id.unwrap(), USB_CAMERA_BUFFER_LEN),
+            base: UsbDeviceBase::new(config.id.unwrap(), USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
-            camera_dev: camera,
+            camera_backend: camera,
             packet_list: Arc::new(Mutex::new(LinkedList::new())),
             payload: Arc::new(Mutex::new(UvcPayload::new())),
             listening: false,
@@ -528,16 +528,16 @@ impl UsbCamera {
                 error!("Failed to notify camera fd {:?}", e);
             }
         });
-        let mut locked_camera = self.camera_dev.lock().unwrap();
+        let mut locked_camera = self.camera_backend.lock().unwrap();
         locked_camera.register_notify_cb(notify_cb);
         locked_camera.register_broken_cb(broken_cb);
     }
 
     fn activate(&mut self, fmt: &CamBasicFmt) -> Result<()> {
         info!("USB Camera {} activate", self.device_id());
-        self.camera_dev.lock().unwrap().reset();
+        self.camera_backend.lock().unwrap().reset();
         self.payload.lock().unwrap().reset();
-        let mut locked_camera = self.camera_dev.lock().unwrap();
+        let mut locked_camera = self.camera_backend.lock().unwrap();
         locked_camera.set_fmt(fmt)?;
         locked_camera.video_stream_on()?;
         drop(locked_camera);
@@ -552,7 +552,7 @@ impl UsbCamera {
         let cam_handler = Arc::new(Mutex::new(CameraIoHandler::new(
             &self.camera_fd,
             &self.packet_list,
-            &self.camera_dev,
+            &self.camera_backend,
             &self.payload,
             &self.broken,
         )));
@@ -572,10 +572,10 @@ impl UsbCamera {
                 "USB Camera {} broken when deactivate, reset it.",
                 self.device_id()
             );
-            self.camera_dev.lock().unwrap().reset();
+            self.camera_backend.lock().unwrap().reset();
             self.broken.store(false, Ordering::SeqCst);
         } else {
-            self.camera_dev.lock().unwrap().video_stream_off()?;
+            self.camera_backend.lock().unwrap().video_stream_off()?;
         }
         self.unregister_camera_fd()?;
         self.packet_list.lock().unwrap().clear();
@@ -600,8 +600,8 @@ impl UsbCamera {
         match device_req.request_type {
             USB_INTERFACE_IN_REQUEST => {
                 if device_req.request == USB_REQUEST_GET_STATUS {
-                    self.usb_device.data_buf[0] = 0;
-                    self.usb_device.data_buf[1] = 0;
+                    self.base.data_buf[0] = 0;
+                    self.base.data_buf[1] = 0;
                     packet.actual_length = 2;
                     return Ok(());
                 }
@@ -640,7 +640,7 @@ impl UsbCamera {
     ) -> Result<()> {
         match device_req.request {
             GET_INFO => {
-                self.usb_device.data_buf[0] = 1 | 2;
+                self.base.data_buf[0] = 1 | 2;
                 packet.actual_length = 1;
             }
             GET_CUR | GET_MIN | GET_MAX | GET_DEF => {
@@ -666,7 +666,7 @@ impl UsbCamera {
             bail!("Invalid VS Control Selector {}", cs);
         }
         let len = self.vs_control.as_bytes().len();
-        self.usb_device.data_buf[0..len].copy_from_slice(self.vs_control.as_bytes());
+        self.base.data_buf[0..len].copy_from_slice(self.vs_control.as_bytes());
         packet.actual_length = len as u32;
         Ok(())
     }
@@ -676,14 +676,14 @@ impl UsbCamera {
         let len = vs_control.as_mut_bytes().len();
         vs_control
             .as_mut_bytes()
-            .copy_from_slice(&self.usb_device.data_buf[0..len]);
+            .copy_from_slice(&self.base.data_buf[0..len]);
         let cs = (device_req.value >> 8) as u8;
         debug!("VideoStreamingControl {} {:?}", cs, vs_control);
         match device_req.request {
             SET_CUR => match cs {
                 VS_PROBE_CONTROL => {
                     let fmt = self
-                        .camera_dev
+                        .camera_backend
                         .lock()
                         .unwrap()
                         .get_format_by_index(vs_control.bFormatIndex, vs_control.bFrameIndex)?;
@@ -691,7 +691,7 @@ impl UsbCamera {
                 }
                 VS_COMMIT_CONTROL => {
                     let fmt = self
-                        .camera_dev
+                        .camera_backend
                         .lock()
                         .unwrap()
                         .get_format_by_index(vs_control.bFormatIndex, vs_control.bFrameIndex)?;
@@ -724,7 +724,7 @@ impl UsbCamera {
 
     fn reset_vs_control(&mut self) {
         let default_fmt = self
-            .camera_dev
+            .camera_backend
             .lock()
             .unwrap()
             .get_format_by_index(1, 1)
@@ -737,19 +737,26 @@ impl UsbCamera {
     }
 }
 
-impl UsbDeviceOps for UsbCamera {
-    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        let fmt_list = self.camera_dev.lock().unwrap().list_format()?;
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_SUPER;
+impl UsbDevice for UsbCamera {
+    fn usb_device_base(&self) -> &UsbDeviceBase {
+        &self.base
+    }
+
+    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
+        &mut self.base
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
+        let fmt_list = self.camera_backend.lock().unwrap().list_format()?;
+        self.base.reset_usb_endpoint();
+        self.base.speed = USB_SPEED_SUPER;
         let mut s: Vec<String> = UVC_CAMERA_STRINGS.iter().map(|&s| s.to_string()).collect();
         let prefix = &s[UsbCameraStringIDs::SerialNumber as usize];
-        s[UsbCameraStringIDs::SerialNumber as usize] =
-            self.usb_device.generate_serial_number(prefix);
+        s[UsbCameraStringIDs::SerialNumber as usize] = self.base.generate_serial_number(prefix);
         let iad = &s[UsbCameraStringIDs::Iad as usize];
         s[UsbCameraStringIDs::Iad as usize] = self.generate_iad(iad);
         let device_desc = gen_desc_device_camera(fmt_list)?;
-        self.usb_device.init_descriptor(device_desc, s)?;
+        self.base.init_descriptor(device_desc, s)?;
         self.register_cb();
 
         let camera = Arc::new(Mutex::new(self));
@@ -758,19 +765,19 @@ impl UsbDeviceOps for UsbCamera {
 
     fn unrealize(&mut self) -> Result<()> {
         info!("Camera {} unrealize", self.device_id());
-        self.camera_dev.lock().unwrap().reset();
+        self.camera_backend.lock().unwrap().reset();
         Ok(())
     }
 
     fn reset(&mut self) {
         info!("Camera {} device reset", self.device_id());
-        self.usb_device.addr = 0;
+        self.base.addr = 0;
         if let Err(e) = self.unregister_camera_fd() {
             error!("Failed to unregister fd when reset {:?}", e);
         }
         self.reset_vs_control();
         self.payload.lock().unwrap().reset();
-        self.camera_dev.lock().unwrap().reset();
+        self.camera_backend.lock().unwrap().reset();
         self.packet_list.lock().unwrap().clear();
         self.broken.store(false, Ordering::SeqCst);
     }
@@ -778,7 +785,7 @@ impl UsbDeviceOps for UsbCamera {
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         let mut locked_packet = packet.lock().unwrap();
         match self
-            .usb_device
+            .base
             .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
@@ -832,15 +839,7 @@ impl UsbDeviceOps for UsbCamera {
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.usb_device.get_endpoint(true, 1)
-    }
-
-    fn get_usb_device(&self) -> &UsbDevice {
-        &self.usb_device
-    }
-
-    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
-        &mut self.usb_device
+        self.base.get_endpoint(true, 1)
     }
 }
 
@@ -911,7 +910,7 @@ impl UvcPayload {
 
 /// Camere handler for copying frame data to usb packet.
 struct CameraIoHandler {
-    camera: Arc<Mutex<dyn CameraHostdevOps>>,
+    camera: Arc<Mutex<dyn CameraBackend>>,
     fd: Arc<EventFd>,
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
@@ -922,7 +921,7 @@ impl CameraIoHandler {
     fn new(
         fd: &Arc<EventFd>,
         list: &Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
-        camera: &Arc<Mutex<dyn CameraHostdevOps>>,
+        camera: &Arc<Mutex<dyn CameraBackend>>,
         payload: &Arc<Mutex<UvcPayload>>,
         broken: &Arc<AtomicBool>,
     ) -> Self {

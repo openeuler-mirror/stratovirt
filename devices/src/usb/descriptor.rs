@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use super::config::*;
-use super::UsbDevice;
+use super::UsbDeviceBase;
 use util::byte_code::ByteCode;
 
 pub const USB_MAX_INTERFACES: u32 = 16;
@@ -114,36 +114,6 @@ pub struct UsbEndpointDescriptor {
 }
 
 impl ByteCode for UsbEndpointDescriptor {}
-
-/// USB qualifier descriptor for transfer
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UsbQualifierDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub bcdUSB: u16,
-    pub bDeviceClass: u8,
-    pub bDeviceSubClass: u8,
-    pub bDeviceProtocol: u8,
-    pub bMaxPacketSize0: u8,
-    pub bNumConfigurations: u8,
-    pub bRESERVED: u8,
-}
-
-impl ByteCode for UsbQualifierDescriptor {}
-
-/// USB string descriptor for transfer
-#[allow(non_snake_case)]
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
-struct UsbStringDescriptor {
-    pub bLength: u8,
-    pub bDescriptorType: u8,
-    pub wData: [u16; 1],
-}
-
-impl ByteCode for UsbStringDescriptor {}
 
 /// USB binary device object store descriptor for transfer.
 #[allow(non_snake_case)]
@@ -473,7 +443,7 @@ pub trait UsbDescriptorOps {
     fn init_descriptor(&mut self, desc: Arc<UsbDescDevice>, str: Vec<String>) -> Result<()>;
 }
 
-impl UsbDescriptorOps for UsbDevice {
+impl UsbDescriptorOps for UsbDeviceBase {
     fn get_descriptor(&self, value: u32) -> Result<Vec<u8>> {
         let desc_type = value >> USB_DESCRIPTOR_TYPE_SHIFT;
         let index = value & USB_DESCRIPTOR_INDEX_MASK;

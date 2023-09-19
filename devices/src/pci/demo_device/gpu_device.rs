@@ -28,7 +28,7 @@ use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::info;
 
-use crate::pci::demo_dev::DeviceTypeOperation;
+use super::DeviceTypeOperation;
 use address_space::{AddressSpace, GuestAddress};
 use ui::{
     console::{

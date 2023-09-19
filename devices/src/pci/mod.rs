@@ -12,8 +12,6 @@
 
 pub mod config;
 #[cfg(feature = "demo_device")]
-pub mod demo_dev;
-#[cfg(feature = "demo_device")]
 pub mod demo_device;
 pub mod error;
 pub mod hotplug;
@@ -140,16 +138,6 @@ pub struct PciDevBase {
     pub devfn: u8,
     /// Primary Bus.
     pub parent_bus: Weak<Mutex<PciBus>>,
-}
-
-impl Device for PciDevBase {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base
-    }
 }
 
 pub trait PciDevOps: Device + Send + AsAny {

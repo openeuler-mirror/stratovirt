@@ -41,7 +41,7 @@ use crate::usb::{
     },
     descriptor::USB_MAX_INTERFACES,
     xhci::xhci_controller::XhciDevice,
-    UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
+    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
 use host_usblib::*;
 use machine_manager::{
@@ -332,6 +332,7 @@ impl IsoQueue {
 
 /// Abstract object of the host USB device.
 pub struct UsbHost {
+    base: UsbDeviceBase,
     config: UsbHostConfig,
     /// Libusb context.
     context: Context,
@@ -346,7 +347,6 @@ pub struct UsbHost {
     /// Configuration interface number.
     ifs_num: u8,
     ifs: [InterfaceStatus; USB_MAX_INTERFACES as usize],
-    usb_device: UsbDevice,
     /// Callback for release dev to Host after the vm exited.
     exit: Option<Arc<ExitNotifier>>,
     /// All pending asynchronous usb request.
@@ -378,7 +378,7 @@ impl UsbHost {
             libevt: Vec::new(),
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
-            usb_device: UsbDevice::new(id, USB_HOST_BUFFER_LEN),
+            base: UsbDeviceBase::new(id, USB_HOST_BUFFER_LEN),
             exit: None,
             requests: Arc::new(Mutex::new(List::new())),
             iso_queues: Arc::new(Mutex::new(LinkedList::new())),
@@ -517,7 +517,7 @@ impl UsbHost {
     }
 
     fn ep_update(&mut self) {
-        self.usb_device.reset_usb_endpoint();
+        self.base.reset_usb_endpoint();
         let conf = match self.libdev.as_ref().unwrap().active_config_descriptor() {
             Ok(conf) => conf,
             Err(_) => return,
@@ -531,8 +531,7 @@ impl UsbHost {
             if intf_desc.is_none() {
                 continue;
             }
-            let alt =
-                self.usb_device.altsetting[intf_desc.as_ref().unwrap().interface_number() as usize];
+            let alt = self.base.altsetting[intf_desc.as_ref().unwrap().interface_number() as usize];
             if alt != 0 {
                 if alt >= intf.descriptors().count() as u32 {
                     error!(
@@ -558,12 +557,11 @@ impl UsbHost {
                     return;
                 }
                 let in_direction = pid == USB_TOKEN_IN;
-                if self.usb_device.get_endpoint(in_direction, ep_num).ep_type
-                    != USB_ENDPOINT_ATTR_INVALID
+                if self.base.get_endpoint(in_direction, ep_num).ep_type != USB_ENDPOINT_ATTR_INVALID
                 {
                     error!("duplicate endpoint address")
                 }
-                let usb_ep = self.usb_device.get_mut_endpoint(in_direction, ep_num);
+                let usb_ep = self.base.get_mut_endpoint(in_direction, ep_num);
                 usb_ep.set_max_packet_size(ep.max_packet_size());
                 usb_ep.ep_type = ep_type;
                 usb_ep.ifnum = i as u8;
@@ -581,7 +579,7 @@ impl UsbHost {
 
         self.ep_update();
 
-        self.usb_device.speed = self.libdev.as_ref().unwrap().speed() as u32 - 1;
+        self.base.speed = self.libdev.as_ref().unwrap().speed() as u32 - 1;
         Ok(())
     }
 
@@ -613,7 +611,7 @@ impl UsbHost {
     }
 
     fn claim_interfaces(&mut self) -> UsbPacketStatus {
-        self.usb_device.altsetting = [0; USB_MAX_INTERFACES as usize];
+        self.base.altsetting = [0; USB_MAX_INTERFACES as usize];
         if self.detach_kernel().is_err() {
             return UsbPacketStatus::Stall;
         }
@@ -687,7 +685,7 @@ impl UsbHost {
             .set_alternate_setting(iface as u8, alt as u8)
         {
             Ok(_) => {
-                self.usb_device.altsetting[iface as usize] = alt as u32;
+                self.base.altsetting[iface as usize] = alt as u32;
                 self.ep_update();
             }
             Err(e) => {
@@ -704,7 +702,7 @@ impl UsbHost {
         if self.handle.as_mut().unwrap().clear_halt(index).is_err() {
             warn!("Failed to clear halt");
         }
-        self.usb_device
+        self.base
             .get_mut_endpoint(pid == USB_TOKEN_IN, index & 0x0f)
             .halted = false;
     }
@@ -780,7 +778,7 @@ impl UsbHost {
             let iso_queue = Arc::new(Mutex::new(IsoQueue::new(locked_packet.ep_number)));
             let cloned_iso_queue = iso_queue.clone();
             let ep = self
-                .usb_device
+                .base
                 .get_endpoint(in_direction, locked_packet.ep_number);
             let id = self.device_id().to_string();
             match iso_queue.lock().unwrap().realize(
@@ -805,7 +803,7 @@ impl UsbHost {
 
         let in_direction = locked_packet.pid == USB_TOKEN_IN as u32;
         let ep = self
-            .usb_device
+            .base
             .get_endpoint(in_direction, locked_packet.ep_number);
         drop(locked_packet);
 
@@ -911,8 +909,16 @@ impl EventNotifierHelper for UsbHost {
     }
 }
 
-impl UsbDeviceOps for UsbHost {
-    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
+impl UsbDevice for UsbHost {
+    fn usb_device_base(&self) -> &UsbDeviceBase {
+        &self.base
+    }
+
+    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
+        &mut self.base
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.libdev = self.find_libdev();
         if self.libdev.is_none() {
             bail!("Invalid USB host config: {:?}", self.config);
@@ -958,7 +964,7 @@ impl UsbDeviceOps for UsbHost {
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.usb_device.get_endpoint(true, 1)
+        self.base.get_endpoint(true, 1)
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
@@ -970,7 +976,7 @@ impl UsbDeviceOps for UsbHost {
         match device_req.request_type {
             USB_DEVICE_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_SET_ADDRESS {
-                    self.usb_device.addr = device_req.value as u8;
+                    self.base.addr = device_req.value as u8;
                     return;
                 } else if device_req.request == USB_REQUEST_SET_CONFIGURATION {
                     self.set_config(device_req.value as u8, &mut locked_packet);
@@ -1001,7 +1007,7 @@ impl UsbDeviceOps for UsbHost {
             true,
         )));
         node.value.setup_ctrl_buffer(
-            &self.usb_device.data_buf[..device_req.length as usize],
+            &self.base.data_buf[..device_req.length as usize],
             device_req,
         );
 
@@ -1028,7 +1034,7 @@ impl UsbDeviceOps for UsbHost {
         }
         let in_direction = locked_packet.pid as u8 == USB_TOKEN_IN;
         if self
-            .usb_device
+            .base
             .get_endpoint(in_direction, locked_packet.ep_number)
             .halted
         {
@@ -1040,11 +1046,7 @@ impl UsbDeviceOps for UsbHost {
         let mut ep_number = packet.lock().unwrap().ep_number;
         let host_transfer: *mut libusb_transfer;
 
-        match self
-            .usb_device
-            .get_endpoint(in_direction, ep_number)
-            .ep_type
-        {
+        match self.base.get_endpoint(in_direction, ep_number).ep_type {
             USB_ENDPOINT_ATTR_BULK => {
                 host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
                 let mut node = Box::new(Node::new(UsbHostRequest::new(
@@ -1103,14 +1105,6 @@ impl UsbDeviceOps for UsbHost {
             }
         };
         self.submit_host_transfer(host_transfer, packet);
-    }
-
-    fn get_usb_device(&self) -> &UsbDevice {
-        &self.usb_device
-    }
-
-    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
-        &mut self.usb_device
     }
 }
 

@@ -24,7 +24,7 @@ use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
-    notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
@@ -120,7 +120,7 @@ const DESC_STRINGS: [&str; 5] = [
 
 /// USB keyboard device.
 pub struct UsbKeyboard {
-    usb_device: UsbDevice,
+    base: UsbDeviceBase,
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
@@ -157,29 +157,36 @@ impl KeyboardOpts for UsbKeyboardAdapter {
         }
         drop(locked_kbd);
         let clone_kbd = self.usb_kbd.clone();
-        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDevice>>))
     }
 }
 
 impl UsbKeyboard {
     pub fn new(id: String) -> Self {
         Self {
-            usb_device: UsbDevice::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
+            base: UsbDeviceBase::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Keyboard),
             cntlr: None,
         }
     }
 }
 
-impl UsbDeviceOps for UsbKeyboard {
-    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDeviceOps>>> {
-        self.usb_device.reset_usb_endpoint();
-        self.usb_device.speed = USB_SPEED_FULL;
+impl UsbDevice for UsbKeyboard {
+    fn usb_device_base(&self) -> &UsbDeviceBase {
+        &self.base
+    }
+
+    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
+        &mut self.base
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
+        self.base.reset_usb_endpoint();
+        self.base.speed = USB_SPEED_FULL;
         let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
         let prefix = &s[STR_SERIAL_KEYBOARD_INDEX as usize];
-        s[STR_SERIAL_KEYBOARD_INDEX as usize] = self.usb_device.generate_serial_number(prefix);
-        self.usb_device
-            .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
+        s[STR_SERIAL_KEYBOARD_INDEX as usize] = self.base.generate_serial_number(prefix);
+        self.base.init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
         let id = self.device_id().to_string();
         let kbd = Arc::new(Mutex::new(self));
         let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
@@ -197,8 +204,8 @@ impl UsbDeviceOps for UsbKeyboard {
 
     fn reset(&mut self) {
         info!("Keyboard device reset");
-        self.usb_device.remote_wakeup = 0;
-        self.usb_device.addr = 0;
+        self.base.remote_wakeup = 0;
+        self.base.addr = 0;
         self.hid.reset();
     }
 
@@ -206,7 +213,7 @@ impl UsbDeviceOps for UsbKeyboard {
         debug!("handle_control request {:?}", device_req);
         let mut locked_packet = packet.lock().unwrap();
         match self
-            .usb_device
+            .base
             .handle_control_for_descriptor(&mut locked_packet, device_req)
         {
             Ok(handled) => {
@@ -221,24 +228,13 @@ impl UsbDeviceOps for UsbKeyboard {
                 return;
             }
         }
-        self.hid.handle_control_packet(
-            &mut locked_packet,
-            device_req,
-            &mut self.usb_device.data_buf,
-        );
+        self.hid
+            .handle_control_packet(&mut locked_packet, device_req, &mut self.base.data_buf);
     }
 
     fn handle_data(&mut self, p: &Arc<Mutex<UsbPacket>>) {
         let mut locked_p = p.lock().unwrap();
         self.hid.handle_data_packet(&mut locked_p);
-    }
-
-    fn get_usb_device(&self) -> &UsbDevice {
-        &self.usb_device
-    }
-
-    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
-        &mut self.usb_device
     }
 
     fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>) {
@@ -250,6 +246,6 @@ impl UsbDeviceOps for UsbKeyboard {
     }
 
     fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.usb_device.get_endpoint(true, 1)
+        self.base.get_endpoint(true, 1)
     }
 }

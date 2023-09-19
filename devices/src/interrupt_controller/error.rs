@@ -14,10 +14,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum InterruptError {
-    #[cfg(target_arch = "aarch64")]
     #[error("Invalid GIC config: {0}")]
     InvalidConfig(String),
-    #[cfg(target_arch = "aarch64")]
     #[error("Failed to create KVM device: {0:#?}.")]
     CreateKvmDevice(kvm_ioctls::Error),
 }
