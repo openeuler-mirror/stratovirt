@@ -441,9 +441,9 @@ impl SerialPortHandler {
             }
             debug!("elem desc_unm: {}", elem.desc_num);
 
-            // Discard requests when there is no port using this queue or this port's socket is not
-            // connected. Popping elements without processing means discarding the request.
-            if self.port.is_some() && self.port.as_ref().unwrap().lock().unwrap().host_connected {
+            // Discard requests when there is no port using this queue. Popping elements without
+            // processing means discarding the request.
+            if self.port.is_some() {
                 let mut iovec = elem.out_iovec;
                 let mut iovec_size = Element::iovec_size(&iovec);
                 while iovec_size > 0 {
@@ -490,8 +490,13 @@ impl SerialPortHandler {
     }
 
     fn write_chardev_msg(&self, buffer: &[u8], write_len: usize) {
-        let chardev = self.port.as_ref().unwrap().lock().unwrap();
-        if let Some(output) = &mut chardev.chardev.lock().unwrap().output {
+        let port_locked = self.port.as_ref().unwrap().lock().unwrap();
+        // Discard output buffer if this port's chardev is not connected.
+        if !port_locked.host_connected {
+            return;
+        }
+
+        if let Some(output) = &mut port_locked.chardev.lock().unwrap().output {
             let mut locked_output = output.lock().unwrap();
             // To do:
             // If the buffer is not fully written to chardev, the incomplete part will be discarded.
@@ -512,9 +517,12 @@ impl SerialPortHandler {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
         let count = buffer.len();
-        if count == 0
-            || self.port.is_some() && !self.port.as_ref().unwrap().lock().unwrap().guest_connected
-        {
+        let port = self.port.as_ref();
+        if count == 0 || port.is_none() {
+            return Ok(());
+        }
+        let port_locked = port.unwrap().lock().unwrap();
+        if !port_locked.guest_connected {
             return Ok(());
         }
 
