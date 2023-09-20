@@ -209,10 +209,6 @@ impl<T: Clone + 'static> FileDriver<T> {
         }
         Ok(())
     }
-
-    pub fn meta_len(&self) -> Result<u64> {
-        Ok(self.file.metadata()?.len())
-    }
 }
 
 struct FileIoHandler<T: Clone + 'static> {

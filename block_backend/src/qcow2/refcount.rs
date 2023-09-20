@@ -603,17 +603,12 @@ mod test {
         sync::Arc,
     };
 
-    use anyhow::Result;
     use byteorder::{BigEndian, ByteOrder};
 
     use crate::qcow2::*;
     use crate::qcow2::{header::*, refcount::Qcow2DiscardType};
     use machine_manager::config::DiskFormat;
-    use util::aio::{Aio, AioCb, WriteZeroesState};
-
-    fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
-        Ok(())
-    }
+    use util::aio::{Aio, WriteZeroesState};
 
     fn image_create(path: &str, img_bits: u32, cluster_bits: u32) -> File {
         let cluster_sz = 1 << cluster_bits;
@@ -675,7 +670,11 @@ mod test {
         cluster_bits: u32,
     ) -> (Qcow2Driver<()>, File) {
         let file = image_create(path, img_bits, cluster_bits);
-        let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
+        let aio = Aio::new(
+            Arc::new(SyncAioInfo::complete_func),
+            util::aio::AioEngine::Off,
+        )
+        .unwrap();
         let conf = BlockProperty {
             id: path.to_string(),
             format: DiskFormat::Qcow2,
