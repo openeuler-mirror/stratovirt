@@ -45,7 +45,7 @@ pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
-const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
+pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -100,7 +100,8 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
         vhost_user_reconnect(&cloned_client);
     });
 
-    info!("Try to reconnect vhost-user net.");
+    let dev_type = client.lock().unwrap().backend_type.to_string();
+    info!("Try to reconnect vhost-user {}.", dev_type);
     if let Err(_e) = client
         .lock()
         .unwrap()
@@ -121,9 +122,22 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     client.lock().unwrap().reconnecting = false;
     if let Err(e) = VhostUserClient::add_event(client) {
         error!("Failed to update event for client sock, {:?}", e);
+        return;
     }
 
-    if let Err(e) = client.lock().unwrap().activate_vhost_user() {
+    let mut locked_client = client.lock().unwrap();
+    let protocol_features = locked_client.protocol_features;
+    if protocol_features != 0 {
+        if let Err(e) = locked_client.set_protocol_features(protocol_features) {
+            error!(
+                "Failed to set protocol features for vhost-user {}, {:?}",
+                dev_type, e
+            );
+            return;
+        }
+    }
+
+    if let Err(e) = locked_client.activate_vhost_user() {
         error!("Failed to reactivate vhost-user net, {:?}", e);
     } else {
         info!("Reconnecting vhost-user net succeed.");
@@ -350,6 +364,16 @@ pub enum VhostBackendType {
     TypeFs,
 }
 
+impl ToString for VhostBackendType {
+    fn to_string(&self) -> String {
+        match self {
+            VhostBackendType::TypeNet => String::from("net"),
+            VhostBackendType::TypeBlock => String::from("block"),
+            VhostBackendType::TypeFs => String::from("fs"),
+        }
+    }
+}
+
 /// Struct for communication with the vhost user backend in userspace
 pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
@@ -363,6 +387,7 @@ pub struct VhostUserClient {
     reconnecting: bool,
     inflight: Option<VhostInflight>,
     backend_type: VhostBackendType,
+    pub protocol_features: u64,
 }
 
 impl VhostUserClient {
@@ -398,6 +423,7 @@ impl VhostUserClient {
             reconnecting: false,
             inflight: None,
             backend_type,
+            protocol_features: 0_u64,
         })
     }
 
@@ -501,8 +527,12 @@ impl VhostUserClient {
 
         for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
-            let queue_config = queue.vring.get_queue_config();
+            if !queue.vring.is_enabled() {
+                warn!("Queue {} is not enabled, skip it", queue_index);
+                continue;
+            }
 
+            let queue_config = queue.vring.get_queue_config();
             self.set_vring_addr(&queue_config, queue_index, 0)
                 .with_context(|| {
                     format!(
@@ -510,11 +540,9 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            let last_avail_idx = if queue.vring.is_enabled() {
-                queue.vring.get_avail_idx(&self.mem_space)?
-            } else {
-                0
-            };
+            // When spdk/ovs has been killed, stratovirt can not get the last avail
+            // index in spdk/ovs, it can only use used index as last avail index.
+            let last_avail_idx = queue.vring.get_used_idx(&self.mem_space)?;
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
@@ -542,15 +570,16 @@ impl VhostUserClient {
             // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
             // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
             // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
-            for (queue_index, queue) in self.queues.iter().enumerate() {
-                let enabled = queue.lock().unwrap().is_enabled();
-                self.set_vring_enable(queue_index, enabled)
-                    .with_context(|| {
-                        format!(
-                            "Failed to set vring enable for vhost-user, index: {}",
-                            queue_index,
-                        )
-                    })?;
+            for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
+                if !queue_mutex.lock().unwrap().is_enabled() {
+                    continue;
+                }
+                self.set_vring_enable(queue_index, true).with_context(|| {
+                    format!(
+                        "Failed to set vring enable for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
             }
         }
 
@@ -558,7 +587,10 @@ impl VhostUserClient {
     }
 
     pub fn reset_vhost_user(&mut self) -> Result<()> {
-        for (queue_index, _) in self.queues.iter().enumerate() {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
+            if !queue_mutex.lock().unwrap().vring.is_enabled() {
+                continue;
+            }
             self.set_vring_enable(queue_index, false)
                 .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
             self.get_vring_base(queue_index)

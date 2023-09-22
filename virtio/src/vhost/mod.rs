@@ -13,12 +13,20 @@
 pub mod kernel;
 pub mod user;
 
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use log::error;
+use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{Queue, QueueConfig};
+use super::{Queue, QueueConfig, VirtioInterrupt, VirtioInterruptType};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 
 /// Vhost vring call notify structure.
 pub struct VhostNotify {
@@ -98,5 +106,53 @@ pub trait VhostOps {
     /// * `_status` - Status of the virtqueue.
     fn set_vring_enable(&self, _queue_idx: usize, _status: bool) -> Result<()> {
         Ok(())
+    }
+}
+
+pub struct VhostIoHandler {
+    interrupt_cb: Arc<VirtioInterrupt>,
+    host_notifies: Vec<VhostNotify>,
+    device_broken: Arc<AtomicBool>,
+}
+
+impl EventNotifierHelper for VhostIoHandler {
+    fn internal_notifiers(vhost_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
+        let vhost = vhost_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            let locked_vhost_handler = vhost.lock().unwrap();
+            if locked_vhost_handler.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            for host_notify in locked_vhost_handler.host_notifies.iter() {
+                if host_notify.notify_evt.as_raw_fd() != fd {
+                    continue;
+                }
+                if let Err(e) = (locked_vhost_handler.interrupt_cb)(
+                    &VirtioInterruptType::Vring,
+                    Some(&host_notify.queue.lock().unwrap()),
+                    false,
+                ) {
+                    error!(
+                        "Failed to trigger interrupt for vhost device, error is {:?}",
+                        e
+                    );
+                }
+            }
+            None as Option<Vec<EventNotifier>>
+        });
+        for host_notify in vhost_handler.lock().unwrap().host_notifies.iter() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::AddShared,
+                host_notify.notify_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                vec![handler.clone()],
+            ));
+        }
+
+        notifiers
     }
 }

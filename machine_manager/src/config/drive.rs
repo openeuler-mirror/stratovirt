@@ -436,7 +436,7 @@ pub fn parse_blk(
     Ok(blkdevcfg)
 }
 
-pub fn parse_vhost_user_blk_pci(
+pub fn parse_vhost_user_blk(
     vm_config: &mut VmConfig,
     drive_config: &str,
     queues_auto: Option<u16>,

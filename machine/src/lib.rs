@@ -78,7 +78,7 @@ use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk_pci,
+    parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
     parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, DriveFile, Incoming,
     MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig,
     PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
@@ -323,7 +323,6 @@ pub trait MachineOps {
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         if cfg_args.contains("vhost-vsock-device") {
             let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
-            vsock.lock().unwrap().disable_irqfd = true;
             MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
@@ -592,20 +591,12 @@ pub trait MachineOps {
         }
 
         if cfg_args.contains("vhost-user-fs-device") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
-                dev_cfg,
-                sys_mem.clone(),
-                false,
-            )));
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
             let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
             self.realize_virtio_mmio_device(virtio_mmio_device)
                 .with_context(|| "Failed to add vhost user fs device")?;
         } else if cfg_args.contains("vhost-user-fs-pci") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
-                dev_cfg,
-                sys_mem.clone(),
-                true,
-            )));
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
@@ -937,7 +928,7 @@ pub trait MachineOps {
             vm_config.machine_config.nr_cpus,
             MAX_VIRTIO_QUEUE,
         ));
-        let device_cfg = parse_vhost_user_blk_pci(vm_config, cfg_args, queues_auto)?;
+        let device_cfg = parse_vhost_user_blk(vm_config, cfg_args, queues_auto)?;
         let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
             &device_cfg,
             self.get_sys_mem(),
@@ -956,6 +947,22 @@ pub trait MachineOps {
             }
         }
         self.reset_bus(&device_cfg.id)?;
+        Ok(())
+    }
+
+    fn add_vhost_user_blk_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let device_cfg = parse_vhost_user_blk(vm_config, cfg_args, None)?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
+            &device_cfg,
+            self.get_sys_mem(),
+        )));
+        let virtio_mmio_device = VirtioMmioDevice::new(self.get_sys_mem(), device);
+        self.realize_virtio_mmio_device(virtio_mmio_device)
+            .with_context(|| "Failed to add vhost user block device")?;
         Ok(())
     }
 
@@ -1504,6 +1511,9 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
+                }
+                "vhost-user-blk-device" => {
+                    self.add_vhost_user_blk_device(vm_config, cfg_args)?;
                 }
                 "vhost-user-blk-pci" => {
                     self.add_vhost_user_blk_pci(vm_config, cfg_args)?;
