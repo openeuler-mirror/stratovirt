@@ -109,12 +109,21 @@ pub struct SyncAioInfo {
 }
 
 impl SyncAioInfo {
-    fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
-        fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
-            Ok(())
+    pub fn complete_func(aio: &AioCb<()>, ret: i64) -> Result<()> {
+        if ret < 0 {
+            bail!(
+                "Failed to complete {:?} offset {} nbytes {}",
+                aio.opcode,
+                aio.offset,
+                aio.nbytes
+            );
         }
+        Ok(())
+    }
+
+    fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
         Ok(Self {
-            aio: Aio::new(Arc::new(stub_func), AioEngine::Off)?,
+            aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off)?,
             fd,
             prop,
         })
@@ -249,7 +258,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         qcow2
             .load_header()
             .with_context(|| "Failed to load header")?;
-        qcow2.check().with_context(|| "Invalid header")?;
+        qcow2.header.check().with_context(|| "Invalid header")?;
         qcow2
             .table
             .init_table(&qcow2.header, &conf)
@@ -265,15 +274,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             .with_context(|| "Failed to load snapshot table")?;
 
         Ok(qcow2)
-    }
-
-    fn check(&self) -> Result<()> {
-        let file_sz = self
-            .driver
-            .meta_len()
-            .with_context(|| "Failed to get metadata len")?;
-        self.header.check(file_sz)?;
-        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -1570,15 +1570,16 @@ mod test {
         }
 
         fn create_qcow2_driver(&self, conf: BlockProperty) -> Qcow2Driver<()> {
-            fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
-                Ok(())
-            }
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(&self.path)
                 .unwrap();
-            let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
+            let aio = Aio::new(
+                Arc::new(SyncAioInfo::complete_func),
+                util::aio::AioEngine::Off,
+            )
+            .unwrap();
             Qcow2Driver::new(file, aio, conf).unwrap()
         }
 
@@ -1641,15 +1642,16 @@ mod test {
 
     pub fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
         let mut image = TestImage::new(path, 30, 16);
-        fn stub_func(_: &AioCb<()>, _: i64) -> Result<()> {
-            Ok(())
-        }
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
             .unwrap();
-        let aio = Aio::new(Arc::new(stub_func), util::aio::AioEngine::Off).unwrap();
+        let aio = Aio::new(
+            Arc::new(SyncAioInfo::complete_func),
+            util::aio::AioEngine::Off,
+        )
+        .unwrap();
         let (req_align, buf_align) = get_file_alignment(&image.file, true);
         let conf = BlockProperty {
             id: path.to_string(),

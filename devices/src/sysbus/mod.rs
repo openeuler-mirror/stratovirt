@@ -228,16 +228,6 @@ pub struct SysBusDevBase {
     pub interrupt_evt: Option<Arc<EventFd>>,
 }
 
-impl Device for SysBusDevBase {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base
-    }
-}
-
 impl Default for SysBusDevBase {
     fn default() -> Self {
         SysBusDevBase {

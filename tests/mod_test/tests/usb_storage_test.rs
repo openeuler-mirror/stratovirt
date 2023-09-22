@@ -20,7 +20,7 @@ use devices::usb::{
         UsbMsdCswStatus, CBW_FLAG_IN, CBW_FLAG_OUT, CBW_SIGNATURE, CBW_SIZE, CSW_SIGNATURE,
         CSW_SIZE, GET_MAX_LUN, MASS_STORAGE_RESET,
     },
-    xhci::{TRBCCode, TRB_SIZE},
+    xhci::xhci_trb::{TRBCCode, TRB_SIZE},
     UsbDeviceRequest,
 };
 use mod_test::libdriver::usb::{

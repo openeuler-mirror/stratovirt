@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::pci::demo_dev::DeviceTypeOperation;
+use super::DeviceTypeOperation;
 use address_space::GuestAddress;
 
 /// BaseDevice is a simplest demo-pci-device. Its function is to

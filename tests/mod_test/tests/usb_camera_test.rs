@@ -17,7 +17,7 @@ use std::{fs::remove_file, fs::File, io::Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use devices::usb::xhci::TRBCCode;
+use devices::usb::xhci::xhci_trb::TRBCCode;
 use mod_test::libdriver::usb::{
     TestUsbBuilder, TestXhciPciDevice, CONTROL_ENDPOINT_ID, PRIMARY_INTERRUPTER_ID,
 };

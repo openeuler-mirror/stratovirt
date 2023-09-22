@@ -33,7 +33,7 @@ use crate::pci::config::{
 };
 use crate::pci::msix::update_dev_id;
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
-use crate::usb::UsbDeviceOps;
+use crate::usb::UsbDevice;
 use crate::{Device, DeviceBase};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::XhciConfig;
@@ -172,7 +172,7 @@ impl XhciPciDevice {
         }]
     }
 
-    pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
+    pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
         let mut locked_xhci = self.xhci.lock().unwrap();
         let usb_port = locked_xhci
             .assign_usb_port(dev)
@@ -204,7 +204,7 @@ impl XhciPciDevice {
         let mut locked_port = usb_port.lock().unwrap();
         let dev = locked_port.dev.as_ref().unwrap();
         let mut locked_dev = dev.lock().unwrap();
-        locked_dev.get_mut_usb_device().unplugged = true;
+        locked_dev.usb_device_base_mut().unplugged = true;
         locked_dev.unrealize()?;
         drop(locked_dev);
         locked_xhci.discharge_usb_port(&mut locked_port);
@@ -220,46 +220,6 @@ impl Device for XhciPciDevice {
 
     fn device_base_mut(&mut self) -> &mut DeviceBase {
         &mut self.base.base
-    }
-}
-
-struct DoorbellHandler {
-    xhci: Arc<Mutex<XhciDevice>>,
-    fd: Arc<EventFd>,
-}
-
-impl DoorbellHandler {
-    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
-        DoorbellHandler { xhci, fd }
-    }
-}
-
-impl EventNotifierHelper for DoorbellHandler {
-    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let cloned_io_handler = io_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
-            read_fd(fd);
-            let locked_handler = cloned_io_handler.lock().unwrap();
-            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
-
-            if !locked_xhci.running() {
-                error!("Failed to write doorbell, XHCI is not running");
-                return None;
-            }
-            if let Err(e) = locked_xhci.handle_command() {
-                error!("Failed to handle command: {:?}", e);
-                locked_xhci.host_controller_error();
-            }
-
-            None
-        });
-        vec![EventNotifier::new(
-            NotifierOperation::AddShared,
-            io_handler.lock().unwrap().fd.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![handler],
-        )]
     }
 }
 
@@ -406,5 +366,45 @@ impl PciDevOps for XhciPciDevice {
         self.base.config.reset()?;
 
         Ok(())
+    }
+}
+
+struct DoorbellHandler {
+    xhci: Arc<Mutex<XhciDevice>>,
+    fd: Arc<EventFd>,
+}
+
+impl DoorbellHandler {
+    fn new(xhci: Arc<Mutex<XhciDevice>>, fd: Arc<EventFd>) -> Self {
+        DoorbellHandler { xhci, fd }
+    }
+}
+
+impl EventNotifierHelper for DoorbellHandler {
+    fn internal_notifiers(io_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let cloned_io_handler = io_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            let locked_handler = cloned_io_handler.lock().unwrap();
+            let mut locked_xhci = locked_handler.xhci.lock().unwrap();
+
+            if !locked_xhci.running() {
+                error!("Failed to write doorbell, XHCI is not running");
+                return None;
+            }
+            if let Err(e) = locked_xhci.handle_command() {
+                error!("Failed to handle command: {:?}", e);
+                locked_xhci.host_controller_error();
+            }
+
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            io_handler.lock().unwrap().fd.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
     }
 }
