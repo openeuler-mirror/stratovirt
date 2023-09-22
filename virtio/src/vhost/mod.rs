@@ -127,6 +127,9 @@ impl EventNotifierHelper for VhostIoHandler {
                 return None;
             }
             for host_notify in locked_vhost_handler.host_notifies.iter() {
+                if host_notify.notify_evt.as_raw_fd() != fd {
+                    continue;
+                }
                 if let Err(e) = (locked_vhost_handler.interrupt_cb)(
                     &VirtioInterruptType::Vring,
                     Some(&host_notify.queue.lock().unwrap()),
