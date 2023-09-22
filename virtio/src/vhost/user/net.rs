@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::VhostOps;
-use super::{VhostBackendType, VhostUserClient};
+use super::{listen_guest_notifier, VhostBackendType, VhostUserClient};
 use crate::{
     device::net::{build_device_config_space, CtrlInfo, MAC_ADDR_LEN},
     read_config_default, virtio_has_feature, CtrlVirtio, NetCtrlHandler, VirtioBase, VirtioDevice,
@@ -46,8 +46,10 @@ pub struct Net {
     config_space: Arc<Mutex<VirtioNetConfig>>,
     /// System address space.
     mem_space: Arc<AddressSpace>,
-    /// Vhost user client
+    /// Vhost user client.
     client: Option<Arc<Mutex<VhostUserClient>>>,
+    /// Whether irqfd can be used.
+    enable_irqfd: bool,
 }
 
 impl Net {
@@ -66,6 +68,7 @@ impl Net {
             config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
+            enable_irqfd: false,
         }
     }
 
@@ -80,7 +83,7 @@ impl Net {
             }
             None => return Err(anyhow!("Failed to get client when stopping event")),
         };
-        if ((self.base.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && self.net_cfg.mq {
+        if !self.base.deactivate_evts.is_empty() {
             unregister_event_helper(
                 self.net_cfg.iothread.as_ref(),
                 &mut self.base.deactivate_evts,
@@ -201,8 +204,14 @@ impl VirtioDevice for Net {
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        let mut client = match &self.client {
+            Some(client) => client.lock().unwrap(),
+            None => return Err(anyhow!("Failed to get client for vhost-user net")),
+        };
+
         let queues = self.base.queues.clone();
         let queue_num = queues.len();
+        let mut call_fds_num = queue_num;
         let driver_features = self.base.driver_features;
         let has_control_queue =
             (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0);
@@ -227,21 +236,24 @@ impl VirtioDevice for Net {
                 self.net_cfg.iothread.as_ref(),
                 &mut self.base.deactivate_evts,
             )?;
-        }
 
-        let mut client = match &self.client {
-            Some(client) => client.lock().unwrap(),
-            None => return Err(anyhow!("Failed to get client for vhost-user net")),
-        };
-
-        let features = driver_features & !(1 << VIRTIO_NET_F_MAC);
-        client.features = features;
-        if has_control_queue {
+            call_fds_num -= 1;
             client.set_queues(&queues[..(queue_num - 1)]);
             client.set_queue_evts(&queue_evts[..(queue_num - 1)]);
         } else {
             client.set_queues(&queues);
             client.set_queue_evts(&queue_evts);
+        }
+        client.features = driver_features & !(1 << VIRTIO_NET_F_MAC);
+
+        if !self.enable_irqfd {
+            listen_guest_notifier(
+                &mut self.base,
+                &mut client,
+                self.net_cfg.iothread.as_ref(),
+                call_fds_num,
+                interrupt_cb,
+            )?;
         }
         client.activate_vhost_user()?;
         self.base.broken.store(false, Ordering::SeqCst);
@@ -250,6 +262,7 @@ impl VirtioDevice for Net {
     }
 
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
+        self.enable_irqfd = true;
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
             None => return Err(anyhow!("Failed to get client for vhost-user net")),

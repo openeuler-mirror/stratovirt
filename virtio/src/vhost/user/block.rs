@@ -20,6 +20,7 @@ use crate::vhost::VhostOps;
 use crate::VhostUser::client::{
     VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
 };
+use crate::VhostUser::listen_guest_notifier;
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::{
     check_config_space_rw, read_config_default, virtio_has_feature, VirtioBase, VirtioBlkConfig,
@@ -28,7 +29,7 @@ use crate::{
     VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use address_space::AddressSpace;
-use machine_manager::config::BlkDevConfig;
+use machine_manager::{config::BlkDevConfig, event_loop::unregister_event_helper};
 use util::byte_code::ByteCode;
 
 pub struct Block {
@@ -42,6 +43,8 @@ pub struct Block {
     mem_space: Arc<AddressSpace>,
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
+    /// Whether irqfd can be used.
+    pub enable_irqfd: bool,
 }
 
 impl Block {
@@ -55,18 +58,8 @@ impl Block {
             config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
+            enable_irqfd: false,
         }
-    }
-
-    fn delete_event(&mut self) -> Result<()> {
-        self.client
-            .as_ref()
-            .with_context(|| "Failed to get client when stopping event")?
-            .lock()
-            .unwrap()
-            .delete_event()
-            .with_context(|| "Failed to delete vhost-user blk event")?;
-        Ok(())
     }
 
     /// Connect with spdk and register update event.
@@ -206,7 +199,7 @@ impl VirtioDevice for Block {
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
-        _interrupt_cb: Arc<VirtioInterrupt>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut client = match &self.client {
@@ -216,7 +209,20 @@ impl VirtioDevice for Block {
         client.features = self.base.driver_features;
         client.set_queues(&self.base.queues);
         client.set_queue_evts(&queue_evts);
+
+        if !self.enable_irqfd {
+            let queue_num = self.base.queues.len();
+            listen_guest_notifier(
+                &mut self.base,
+                &mut client,
+                self.blk_cfg.iothread.as_ref(),
+                queue_num,
+                interrupt_cb,
+            )?;
+        }
+
         client.activate_vhost_user()?;
+
         Ok(())
     }
 
@@ -227,16 +233,29 @@ impl VirtioDevice for Block {
             .lock()
             .unwrap()
             .reset_vhost_user()?;
-        self.delete_event()
+        if !self.base.deactivate_evts.is_empty() {
+            unregister_event_helper(
+                self.blk_cfg.iothread.as_ref(),
+                &mut self.base.deactivate_evts,
+            )?;
+        }
+        Ok(())
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        self.delete_event()?;
+        self.client
+            .as_ref()
+            .with_context(|| "Failed to get client when stopping event")?
+            .lock()
+            .unwrap()
+            .delete_event()
+            .with_context(|| "Failed to delete vhost-user blk event")?;
         self.client = None;
         Ok(())
     }
 
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
+        self.enable_irqfd = true;
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),

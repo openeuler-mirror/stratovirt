@@ -40,6 +40,7 @@ use util::loop_context::EventNotifierHelper;
 pub fn listen_guest_notifier(
     base: &mut VirtioBase,
     client: &mut VhostUserClient,
+    ctx_name: Option<&String>,
     evts_num: usize,
     interrupt_cb: Arc<VirtioInterrupt>,
 ) -> Result<()> {
@@ -65,7 +66,7 @@ pub fn listen_guest_notifier(
         device_broken: base.broken.clone(),
     };
     let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-    register_event_helper(notifiers, None, &mut base.deactivate_evts)?;
+    register_event_helper(notifiers, ctx_name, &mut base.deactivate_evts)?;
 
     Ok(())
 }

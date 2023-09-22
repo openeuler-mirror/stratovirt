@@ -149,7 +149,7 @@ impl VirtioDevice for Fs {
 
         if !self.enable_irqfd {
             let queue_num = queues.len();
-            listen_guest_notifier(&mut self.base, &mut client, queue_num, interrupt_cb)?;
+            listen_guest_notifier(&mut self.base, &mut client, None, queue_num, interrupt_cb)?;
         }
 
         client.activate_vhost_user()?;
