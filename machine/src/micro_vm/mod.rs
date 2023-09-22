@@ -95,8 +95,8 @@ use util::{
     loop_context::EventLoopManager, num_ops::str_to_usize, seccomp::BpfRule, set_termi_canon_mode,
 };
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
-    VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VhostUser,
+    VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 
 // The replaceable block device maximum count.
@@ -758,9 +758,13 @@ impl MachineOps for LightMachine {
     ) -> MachineResult<()> {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         if device_cfg.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
-            net.lock().unwrap().disable_irqfd = true;
-            let device = VirtioMmioDevice::new(&self.sys_mem, net);
+            let device = if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
+                let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
+                VirtioMmioDevice::new(&self.sys_mem, net)
+            } else {
+                let net = Arc::new(Mutex::new(VhostUser::Net::new(&device_cfg, &self.sys_mem)));
+                VirtioMmioDevice::new(&self.sys_mem, net)
+            };
             self.realize_virtio_mmio_device(device)?;
         } else {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;

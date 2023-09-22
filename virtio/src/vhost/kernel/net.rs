@@ -90,8 +90,6 @@ pub struct Net {
     mem_space: Arc<AddressSpace>,
     /// Save irqfd used for vhost-net.
     call_events: Vec<Arc<EventFd>>,
-    /// Whether irqfd can be used.
-    pub disable_irqfd: bool,
 }
 
 impl Net {
@@ -112,7 +110,6 @@ impl Net {
             vhost_features: 0_u64,
             mem_space: mem_space.clone(),
             call_events: Vec::new(),
-            disable_irqfd: false,
         }
     }
 }
@@ -224,10 +221,6 @@ impl VirtioDevice for Net {
     }
 
     fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
-        if self.disable_irqfd {
-            return Err(anyhow!("The irqfd cannot be used on the current machine."));
-        }
-
         for fd in queue_evts.iter() {
             self.call_events.push(fd.clone());
         }
@@ -323,7 +316,7 @@ impl VirtioDevice for Net {
 
                 drop(queue);
 
-                let event = if self.disable_irqfd {
+                let event = if self.call_events.is_empty() {
                     let host_notify = VhostNotify {
                         notify_evt: Arc::new(
                             EventFd::new(libc::EFD_NONBLOCK)
@@ -360,7 +353,7 @@ impl VirtioDevice for Net {
                     })?;
             }
 
-            if self.disable_irqfd {
+            if self.call_events.is_empty() {
                 let handler = VhostIoHandler {
                     interrupt_cb: interrupt_cb.clone(),
                     host_notifies,
@@ -385,9 +378,7 @@ impl VirtioDevice for Net {
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
         )?;
-        if !self.disable_irqfd {
-            self.call_events.clear();
-        }
+        self.call_events.clear();
 
         Ok(())
     }
