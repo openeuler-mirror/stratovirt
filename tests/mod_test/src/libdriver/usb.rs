@@ -2101,8 +2101,8 @@ impl TestXhciPciDevice {
     }
 
     pub fn test_pointer_event(&mut self, slot_id: u32, test_state: Rc<RefCell<TestState>>) {
-        qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0);
-        qmp_send_pointer_event(test_state.borrow_mut(), 200, 100, 1);
+        qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0, true);
+        qmp_send_pointer_event(test_state.borrow_mut(), 200, 100, 1, true);
         self.queue_multi_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN, 2);
         self.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
@@ -2462,8 +2462,8 @@ pub fn qmp_send_multi_key_event(test_state: Rc<RefCell<TestState>>, key_list: &[
     }
 }
 
-pub fn qmp_send_pointer_event(test_state: RefMut<TestState>, x: i32, y: i32, btn: i32) {
-    let value_str = format!("{},{},{}", x, y, btn);
+pub fn qmp_send_pointer_event(test_state: RefMut<TestState>, x: i32, y: i32, btn: i32, down: bool) {
+    let value_str = format!("{},{},{},{}", x, y, btn, if down { 1 } else { 0 });
     let mut str =
         "{\"execute\": \"input_event\", \"arguments\": { \"key\": \"pointer\", \"value\":\""
             .to_string();
