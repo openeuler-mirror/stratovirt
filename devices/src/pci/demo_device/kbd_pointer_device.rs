@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 
 use super::DeviceTypeOperation;
 use address_space::{AddressSpace, GuestAddress};
-use ui::input::{register_keyboard, register_pointer, KeyboardOpts, PointerOpts};
+use ui::input::{register_keyboard, register_pointer, Axis, InputType, KeyboardOpts, PointerOpts};
 
 static MEM_ADDR: Lazy<Arc<Mutex<MemSpace>>> = Lazy::new(|| {
     Arc::new(Mutex::new(MemSpace {
@@ -78,7 +78,11 @@ impl DemoKbdMouse {
             kbd_name: "test-pci-keyboard".to_string(),
             pointer_name: "test-pci-pointer".to_string(),
             test_kbd: Arc::new(Mutex::new(TestPciKbd {})),
-            test_pointer: Arc::new(Mutex::new(TestPciPointer {})),
+            test_pointer: Arc::new(Mutex::new(TestPciPointer {
+                x: 0,
+                y: 0,
+                button: 0,
+            })),
         }
     }
 }
@@ -97,17 +101,45 @@ impl KeyboardOpts for TestPciKbd {
     }
 }
 
-pub struct TestPciPointer {}
+pub struct TestPciPointer {
+    pub x: u32,
+    pub y: u32,
+    pub button: u32,
+}
 
 impl PointerOpts for TestPciPointer {
-    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
+    fn update_point_state(&mut self, input_event: ui::input::InputEvent) -> Result<()> {
+        match input_event.input_type {
+            InputType::MoveEvent => match input_event.move_event.axis {
+                Axis::X => self.x = input_event.move_event.data,
+                Axis::Y => self.y = input_event.move_event.data,
+            },
+            InputType::ButtonEvent => {
+                if input_event.button_event.down {
+                    self.button |= input_event.button_event.button & 0x7;
+                } else {
+                    self.button &= !(input_event.button_event.button & 0x7);
+                }
+            }
+            _ => {
+                bail!("Input type: {:?} is unsupported", input_event.input_type);
+            }
+        }
+        Ok(())
+    }
+
+    fn sync(&mut self) -> Result<()> {
         let msg = PointerMessage {
             event_type: InputEvent::PointerEvent,
-            button,
-            x,
-            y,
+            button: self.button,
+            x: self.x,
+            y: self.y,
             ..Default::default()
         };
+        self.x = 0;
+        self.y = 0;
+        self.button = 0;
+
         MEM_ADDR.lock().unwrap().send_kbdmouse_message(&msg)
     }
 }
