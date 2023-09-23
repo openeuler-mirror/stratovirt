@@ -52,13 +52,13 @@ pub(crate) fn set_callback_for_draw_area(
     );
     draw_area.connect_button_press_event(
         glib::clone!(@weak gs => @default-return Inhibit(false), move |_, button_event| {
-            da_pointer_callback(&gs, button_event).unwrap_or_else(|e| error!("Press event: {}", e));
+            da_pointer_callback(button_event).unwrap_or_else(|e| error!("Press event: {}", e));
             Inhibit(false)
         }),
     );
     draw_area.connect_button_release_event(
         glib::clone!(@weak gs => @default-return Inhibit(false), move |_, button_event| {
-            da_pointer_callback(&gs, button_event).unwrap_or_else(|e| error!("Release event: {}", e));
+            da_pointer_callback(button_event).unwrap_or_else(|e| error!("Release event: {}", e));
             Inhibit(false)
         }),
     );
@@ -224,12 +224,8 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
     input_point_sync()
 }
 
-fn da_pointer_callback(
-    gs: &Rc<RefCell<GtkDisplayScreen>>,
-    button_event: &gdk::EventButton,
-) -> Result<()> {
-    let mut borrowed_gs = gs.borrow_mut();
-    borrowed_gs.click_state.button_mask = match button_event.button() {
+fn da_pointer_callback(button_event: &gdk::EventButton) -> Result<()> {
+    let button_mask = match button_event.button() {
         1 => INPUT_POINT_LEFT,
         2 => INPUT_POINT_RIGHT,
         3 => INPUT_POINT_MIDDLE,
@@ -238,16 +234,16 @@ fn da_pointer_callback(
 
     match button_event.event_type() {
         gdk::EventType::ButtonRelease => {
-            input_button(borrowed_gs.click_state.button_mask as u32, false)?;
+            input_button(button_mask as u32, false)?;
             input_point_sync()
         }
         gdk::EventType::ButtonPress => {
-            input_button(borrowed_gs.click_state.button_mask as u32, true)?;
+            input_button(button_mask as u32, true)?;
             input_point_sync()
         }
         gdk::EventType::DoubleButtonPress => {
-            press_mouse(borrowed_gs.click_state.button_mask as u32)?;
-            press_mouse(borrowed_gs.click_state.button_mask as u32)
+            press_mouse(button_mask as u32)?;
+            press_mouse(button_mask as u32)
         }
         _ => Ok(()),
     }
