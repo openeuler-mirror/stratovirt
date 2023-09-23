@@ -68,6 +68,56 @@ static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Input
 static LED_STATE: Lazy<Arc<Mutex<LedState>>> =
     Lazy::new(|| Arc::new(Mutex::new(LedState::default())));
 
+#[derive(Debug)]
+pub enum InputType {
+    KeyEvent,
+    MoveEvent,
+    ButtonEvent,
+}
+
+#[derive(Default)]
+pub enum Axis {
+    #[default]
+    X,
+    Y,
+}
+
+#[derive(Default)]
+pub struct MoveEvent {
+    pub axis: Axis,
+    pub data: u32,
+}
+
+#[derive(Default)]
+pub struct ButtonEvent {
+    pub button: u32,
+    pub down: bool,
+}
+
+#[derive(Default)]
+pub struct KeyEvent {
+    pub keycode: u16,
+    pub down: bool,
+}
+
+pub struct InputEvent {
+    pub input_type: InputType,
+    pub move_event: MoveEvent,
+    pub button_event: ButtonEvent,
+    pub key_event: KeyEvent,
+}
+
+impl InputEvent {
+    fn new(input_type: InputType) -> Self {
+        Self {
+            input_type,
+            move_event: MoveEvent::default(),
+            button_event: ButtonEvent::default(),
+            key_event: KeyEvent::default(),
+        }
+    }
+}
+
 // Keyboard Modifier State
 pub enum KeyboardModifier {
     KeyModNone = 0,
@@ -290,6 +340,40 @@ pub fn unregister_pointer(device: &str) {
     INPUTS.lock().unwrap().unregister_mouse(device);
 }
 
+pub fn input_move_abs(axis: Axis, data: u32) -> Result<()> {
+    let mut input_event = InputEvent::new(InputType::MoveEvent);
+    let move_event = MoveEvent { axis, data };
+    input_event.move_event = move_event;
+
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        m.lock().unwrap().update_point_state(input_event)?;
+    }
+
+    Ok(())
+}
+
+pub fn input_button(button: u32, down: bool) -> Result<()> {
+    let mut input_event = InputEvent::new(InputType::ButtonEvent);
+    let button_event = ButtonEvent { button, down };
+    input_event.button_event = button_event;
+
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        m.lock().unwrap().update_point_state(input_event)?;
+    }
+
+    Ok(())
+}
+
+pub fn input_point_sync() -> Result<()> {
+    let mouse = INPUTS.lock().unwrap().get_active_mouse();
+    if let Some(m) = mouse {
+        m.lock().unwrap().sync()?;
+    }
+    Ok(())
+}
+
 pub fn key_event(keycode: u16, down: bool) -> Result<()> {
     let kbd = INPUTS.lock().unwrap().get_active_kbd();
     if let Some(k) = kbd {
@@ -299,22 +383,11 @@ pub fn key_event(keycode: u16, down: bool) -> Result<()> {
 }
 
 /// A complete mouse click event.
-pub fn press_mouse(button: u32, x: u32, y: u32) -> Result<()> {
-    let mouse = INPUTS.lock().unwrap().get_active_mouse();
-    if let Some(m) = mouse {
-        let mut locked_mouse = m.lock().unwrap();
-        locked_mouse.do_point_event(button, x, y)?;
-        locked_mouse.do_point_event(0, x, y)?
-    }
-    Ok(())
-}
-
-pub fn point_event(button: u32, x: u32, y: u32) -> Result<()> {
-    let mouse = INPUTS.lock().unwrap().get_active_mouse();
-    if let Some(m) = mouse {
-        m.lock().unwrap().do_point_event(button, x, y)?;
-    }
-    Ok(())
+pub fn press_mouse(button: u32) -> Result<()> {
+    input_button(button, true)?;
+    input_point_sync()?;
+    input_button(button, false)?;
+    input_point_sync()
 }
 
 /// 1. Keep the key state in keyboard_state.
@@ -398,11 +471,14 @@ pub trait KeyboardOpts: Send {
 }
 
 pub trait PointerOpts: Send {
-    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()>;
+    fn update_point_state(&mut self, input_event: InputEvent) -> Result<()>;
+    fn sync(&mut self) -> Result<()>;
 }
 
 #[cfg(test)]
 mod tests {
+    use anyhow::bail;
+
     #[cfg(feature = "keycode")]
     use crate::keycode::KeyCode;
     static TEST_INPUT: Lazy<Arc<Mutex<TestInput>>> =
@@ -468,11 +544,27 @@ mod tests {
         x: u32,
         y: u32,
     }
+
     impl PointerOpts for TestTablet {
-        fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
-            self.button = button;
-            self.x = x;
-            self.y = y;
+        fn update_point_state(&mut self, input_event: InputEvent) -> Result<()> {
+            match input_event.input_type {
+                InputType::MoveEvent => match input_event.move_event.axis {
+                    Axis::X => self.x = input_event.move_event.data,
+                    Axis::Y => self.y = input_event.move_event.data,
+                },
+                InputType::ButtonEvent => {
+                    if input_event.button_event.down {
+                        self.button |= input_event.button_event.button;
+                    } else {
+                        self.button &= !(input_event.button_event.button & 0x7);
+                    }
+                }
+                _ => bail!("Input type: {:?} is unsupported", input_event.input_type),
+            }
+            Ok(())
+        }
+
+        fn sync(&mut self) -> Result<()> {
             Ok(())
         }
     }
@@ -493,7 +585,12 @@ mod tests {
         assert_eq!(test_mouse.lock().unwrap().x, 0);
         assert_eq!(test_mouse.lock().unwrap().y, 0);
         register_pointer("TestPointer", test_mouse.clone());
-        assert!(point_event(1, 54, 12).is_ok());
+
+        assert!(input_move_abs(Axis::X, 54).is_ok());
+        assert!(input_move_abs(Axis::Y, 12).is_ok());
+        assert!(input_button(1, true).is_ok());
+        assert!(input_point_sync().is_ok());
+
         assert_eq!(test_mouse.lock().unwrap().button, 1);
         assert_eq!(test_mouse.lock().unwrap().x, 54);
         assert_eq!(test_mouse.lock().unwrap().y, 12);

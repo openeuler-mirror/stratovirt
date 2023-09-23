@@ -13,7 +13,7 @@
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 
@@ -28,8 +28,9 @@ use super::{
     UsbPacket, UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use ui::input::{
-    register_pointer, unregister_pointer, PointerOpts, INPUT_BUTTON_WHEEL_DOWN,
-    INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP,
+    register_pointer, unregister_pointer, Axis, InputEvent, InputType, PointerOpts,
+    INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+    INPUT_BUTTON_WHEEL_UP,
 };
 
 const INPUT_BUTTON_MASK: u32 = 0x7;
@@ -133,7 +134,7 @@ pub struct UsbTabletAdapter {
 }
 
 impl PointerOpts for UsbTabletAdapter {
-    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
+    fn update_point_state(&mut self, input_event: InputEvent) -> Result<()> {
         let mut locked_tablet = self.tablet.lock().unwrap();
         if locked_tablet.hid.num >= QUEUE_LENGTH {
             debug!("Pointer queue is full!");
@@ -142,23 +143,68 @@ impl PointerOpts for UsbTabletAdapter {
         }
         let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
         let evt = &mut locked_tablet.hid.pointer.queue[index];
-        if button & INPUT_BUTTON_WHEEL_UP == INPUT_BUTTON_WHEEL_UP {
-            evt.v_wheel = 1;
-        } else if button & INPUT_BUTTON_WHEEL_DOWN == INPUT_BUTTON_WHEEL_DOWN {
-            evt.v_wheel = -1;
-        } else {
-            evt.v_wheel = 0;
+
+        match input_event.input_type {
+            InputType::ButtonEvent => {
+                let button_event = &input_event.button_event;
+                if button_event.down {
+                    if button_event.button & INPUT_BUTTON_WHEEL_LEFT != 0 {
+                        evt.h_wheel = -1;
+                    } else if button_event.button & INPUT_BUTTON_WHEEL_RIGHT != 0 {
+                        evt.h_wheel = 1;
+                    } else {
+                        evt.h_wheel = 0;
+                    }
+
+                    if button_event.button & INPUT_BUTTON_WHEEL_UP != 0 {
+                        evt.v_wheel = 1;
+                    } else if button_event.button & INPUT_BUTTON_WHEEL_DOWN != 0 {
+                        evt.v_wheel = -1;
+                    } else {
+                        evt.v_wheel = 0;
+                    }
+
+                    evt.button_state |= button_event.button & INPUT_BUTTON_MASK;
+                } else {
+                    evt.button_state &= !(button_event.button & INPUT_BUTTON_MASK);
+                }
+            }
+            InputType::MoveEvent => {
+                let move_event = &input_event.move_event;
+                match move_event.axis {
+                    Axis::X => evt.pos_x = min(move_event.data as u32, INPUT_COORDINATES_MAX),
+                    Axis::Y => evt.pos_y = min(move_event.data as u32, INPUT_COORDINATES_MAX),
+                }
+            }
+            _ => bail!(
+                "Input type: {:?} is unsupported by usb tablet!",
+                input_event.input_type
+            ),
+        };
+
+        Ok(())
+    }
+
+    fn sync(&mut self) -> Result<()> {
+        let mut locked_tablet = self.tablet.lock().unwrap();
+
+        // The last evt is used to save the latest button state,
+        // so the max number of events can be cached at one time is QUEUE_LENGTH - 1.
+        if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
+            return Ok(());
         }
-        if button & INPUT_BUTTON_WHEEL_LEFT == INPUT_BUTTON_WHEEL_LEFT {
-            evt.h_wheel = -1;
-        } else if button & INPUT_BUTTON_WHEEL_RIGHT == INPUT_BUTTON_WHEEL_RIGHT {
-            evt.h_wheel = 1;
-        } else {
-            evt.h_wheel = 0;
-        }
-        evt.button_state = button & INPUT_BUTTON_MASK;
-        evt.pos_x = min(x, INPUT_COORDINATES_MAX);
-        evt.pos_y = min(y, INPUT_COORDINATES_MAX);
+        let curr_index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
+        let next_index = (curr_index + 1) & QUEUE_MASK as usize;
+        let curr_evt = locked_tablet.hid.pointer.queue[curr_index];
+        let next_evt = &mut locked_tablet.hid.pointer.queue[next_index];
+
+        // Update the status of the next event in advance.
+        next_evt.v_wheel = 0;
+        next_evt.h_wheel = 0;
+        next_evt.button_state = curr_evt.button_state;
+        next_evt.pos_x = curr_evt.pos_x;
+        next_evt.pos_y = curr_evt.pos_y;
+
         locked_tablet.hid.num += 1;
         drop(locked_tablet);
         let clone_tablet = self.tablet.clone();
