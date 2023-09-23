@@ -37,7 +37,7 @@ use gtk::{
     },
     Application, ApplicationWindow, DrawingArea, HeaderBar, Label, RadioMenuItem,
 };
-use log::{debug, error};
+use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -97,13 +97,6 @@ pub enum ZoomOperate {
     ZoomIn,
     ZoomOut,
     BestFit,
-}
-
-#[derive(Default)]
-pub struct ClickState {
-    pub button_mask: u8,
-    pub last_x: f64,
-    pub last_y: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -358,7 +351,6 @@ pub struct GtkDisplayScreen {
     source_surface: DisplaySurface,
     transfer_surface: Option<DisplaySurface>,
     cairo_image: Option<ImageSurface>,
-    click_state: ClickState,
     con: Weak<Mutex<DisplayConsole>>,
     dcl: Weak<Mutex<DisplayChangeListener>>,
     scale_mode: Rc<RefCell<ScaleMode>>,
@@ -409,7 +401,6 @@ impl GtkDisplayScreen {
             source_surface: surface,
             transfer_surface: None,
             cairo_image,
-            click_state: ClickState::default(),
             con,
             dcl,
             scale_mode,
@@ -438,7 +429,7 @@ impl GtkDisplayScreen {
     /// 2. There may be unfilled areas between the window and the image.
     /// Input: relative coordinates of window.
     /// Output: relative coordinates of images.
-    fn convert_coord(&mut self, x: f64, y: f64) -> Result<(f64, f64)> {
+    fn convert_coord(&mut self, mut x: f64, mut y: f64) -> Result<(f64, f64)> {
         let (surface_width, surface_height) = match &self.cairo_image {
             Some(image) => (image.width(), image.height()),
             None => bail!("No display image."),
@@ -457,10 +448,10 @@ impl GtkDisplayScreen {
             None => bail!("No display window."),
         };
 
-        if x.lt(&0.0) || x.gt(&window_width) || y.lt(&0.0) || y.gt(&window_height) {
-            debug!("x {} or y {} out of range, use last value.", x, y);
-            return Ok((self.click_state.last_x, self.click_state.last_y));
-        }
+        x = x.max(0.0);
+        x = x.min(window_width);
+        y = y.max(0.0);
+        y = y.min(window_height);
 
         // There may be unfilled areas between the window and the image.
         let (mut mx, mut my) = (0.0, 0.0);
@@ -472,8 +463,6 @@ impl GtkDisplayScreen {
         }
         let real_x = ((x - mx) / self.scale_x) * scale_factor;
         let real_y = ((y - my) / self.scale_y) * scale_factor;
-        self.click_state.last_x = real_x;
-        self.click_state.last_y = real_y;
 
         Ok((real_x, real_y))
     }
