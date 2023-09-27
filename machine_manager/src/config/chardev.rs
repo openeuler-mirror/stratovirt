@@ -157,8 +157,11 @@ fn parse_file_chardev(chardev_id: String, cmd_parser: CmdParser) -> Result<Chard
         .get_value::<String>("path")?
         .with_context(|| ConfigError::FieldIsMissing("path".to_string(), "chardev".to_string()))?;
 
-    let canonical_path = std::fs::canonicalize(path)?;
-    let file_path = String::from(canonical_path.to_str().unwrap());
+    let default_value = path.clone();
+    let file_path = std::fs::canonicalize(path).map_or(default_value, |canonical_path| {
+        String::from(canonical_path.to_str().unwrap())
+    });
+
     Ok(ChardevConfig {
         id: chardev_id,
         backend: ChardevType::File(file_path),
@@ -193,6 +196,7 @@ fn parse_socket_chardev(chardev_id: String, cmd_parser: CmdParser) -> Result<Cha
         let socket_path = std::fs::canonicalize(path).map_or(default_value, |canonical_path| {
             String::from(canonical_path.to_str().unwrap())
         });
+
         return Ok(ChardevConfig {
             id: chardev_id,
             backend: ChardevType::UnixSocket {
@@ -584,13 +588,11 @@ mod tests {
     use super::*;
     use crate::config::parse_virtio_serial;
 
-    #[test]
-    fn test_mmio_console_config_cmdline_parser() {
+    fn test_mmio_console_config_cmdline_parser(chardev_cfg: &str, expected_chardev: ChardevType) {
         let mut vm_config = VmConfig::default();
         assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
-        assert!(vm_config
-            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
-            .is_ok());
+        assert!(vm_config.add_chardev(chardev_cfg).is_ok());
+
         let virt_console = parse_virtserialport(
             &mut vm_config,
             "virtconsole,chardev=test_console,id=console1,nr=1",
@@ -598,16 +600,10 @@ mod tests {
             0,
         );
         assert!(virt_console.is_ok());
+
         let console_cfg = virt_console.unwrap();
         assert_eq!(console_cfg.id, "console1");
-        assert_eq!(
-            console_cfg.chardev.backend,
-            ChardevType::UnixSocket {
-                path: "/path/to/socket".to_string(),
-                server: true,
-                nowait: true,
-            }
-        );
+        assert_eq!(console_cfg.chardev.backend, expected_chardev);
 
         let mut vm_config = VmConfig::default();
         assert!(
@@ -634,15 +630,34 @@ mod tests {
     }
 
     #[test]
-    fn test_pci_console_config_cmdline_parser() {
+    fn test_mmio_console_config_cmdline_parser_1() {
+        let chardev_cfg = "socket,id=test_console,path=/path/to/socket,server,nowait";
+        let expected_chardev = ChardevType::UnixSocket {
+            path: "/path/to/socket".to_string(),
+            server: true,
+            nowait: true,
+        };
+        test_mmio_console_config_cmdline_parser(chardev_cfg, expected_chardev)
+    }
+
+    #[test]
+    fn test_mmio_console_config_cmdline_parser_2() {
+        let chardev_cfg = "socket,id=test_console,host=127.0.0.1,port=9090,server,nowait";
+        let expected_chardev = ChardevType::TcpSocket {
+            host: "127.0.0.1".to_string(),
+            port: 9090,
+            server: true,
+            nowait: true,
+        };
+        test_mmio_console_config_cmdline_parser(chardev_cfg, expected_chardev)
+    }
+
+    fn test_pci_console_config_cmdline_parser(chardev_cfg: &str, expected_chardev: ChardevType) {
         let mut vm_config = VmConfig::default();
-        assert!(
-            parse_virtio_serial(&mut vm_config, "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2")
-                .is_ok()
-        );
-        assert!(vm_config
-            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
-            .is_ok());
+        let virtio_arg = "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2";
+        assert!(parse_virtio_serial(&mut vm_config, virtio_arg).is_ok());
+        assert!(vm_config.add_chardev(chardev_cfg).is_ok());
+
         let virt_console = parse_virtserialport(
             &mut vm_config,
             "virtconsole,chardev=test_console,id=console1,nr=1",
@@ -658,14 +673,7 @@ mod tests {
         let bdf = serial_info.pci_bdf.unwrap();
         assert_eq!(bdf.bus, "pcie.0");
         assert_eq!(bdf.addr, (1, 2));
-        assert_eq!(
-            console_cfg.chardev.backend,
-            ChardevType::UnixSocket {
-                path: "/path/to/socket".to_string(),
-                server: true,
-                nowait: true,
-            }
-        );
+        assert_eq!(console_cfg.chardev.backend, expected_chardev);
 
         let mut vm_config = VmConfig::default();
         assert!(parse_virtio_serial(
@@ -673,6 +681,29 @@ mod tests {
             "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2,multifunction=on"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn test_pci_console_config_cmdline_parser_1() {
+        let chardev_cfg = "socket,id=test_console,path=/path/to/socket,server,nowait";
+        let expected_chardev = ChardevType::UnixSocket {
+            path: "/path/to/socket".to_string(),
+            server: true,
+            nowait: true,
+        };
+        test_pci_console_config_cmdline_parser(chardev_cfg, expected_chardev)
+    }
+
+    #[test]
+    fn test_pci_console_config_cmdline_parser_2() {
+        let chardev_cfg = "socket,id=test_console,host=127.0.0.1,port=9090,server,nowait";
+        let expected_chardev = ChardevType::TcpSocket {
+            host: "127.0.0.1".to_string(),
+            port: 9090,
+            server: true,
+            nowait: true,
+        };
+        test_pci_console_config_cmdline_parser(chardev_cfg, expected_chardev)
     }
 
     #[test]
@@ -698,24 +729,63 @@ mod tests {
 
     #[test]
     fn test_chardev_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_chardev("socket,id=test_id,path=/path/to/socket")
-            .is_ok());
-        assert!(vm_config
-            .add_chardev("socket,id=test_id,path=/path/to/socket")
-            .is_err());
-        if let Some(char_dev) = vm_config.chardev.remove("test_id") {
-            assert_eq!(
-                char_dev.backend,
+        let check_argument = |arg: String, expect: ChardevType| {
+            let mut vm_config = VmConfig::default();
+            assert!(vm_config.add_chardev(&arg).is_ok());
+            assert!(vm_config.add_chardev(&arg).is_err());
+
+            let device_id = "test_id";
+            if let Some(char_dev) = vm_config.chardev.remove(device_id) {
+                assert_eq!(char_dev.backend, expect);
+            } else {
+                assert!(false);
+            }
+        };
+
+        check_argument("stdio,id=test_id".to_string(), ChardevType::Stdio);
+        check_argument("pty,id=test_id".to_string(), ChardevType::Pty);
+        check_argument(
+            "file,id=test_id,path=/some/file".to_string(),
+            ChardevType::File("/some/file".to_string()),
+        );
+
+        let extra_params = [
+            ("", false, false),
+            (",server", true, false),
+            (",nowait", false, true),
+            (",server,nowait", true, true),
+            (",nowait,server", true, true),
+        ];
+        for (param, server_state, nowait_state) in extra_params {
+            check_argument(
+                format!("{}{}", "socket,id=test_id,path=/path/to/socket", param),
                 ChardevType::UnixSocket {
                     path: "/path/to/socket".to_string(),
-                    server: false,
-                    nowait: false,
-                }
+                    server: server_state,
+                    nowait: nowait_state,
+                },
             );
-        } else {
-            assert!(false);
+            check_argument(
+                format!("{}{}", "socket,id=test_id,port=9090", param),
+                ChardevType::TcpSocket {
+                    host: "0.0.0.0".to_string(),
+                    port: 9090,
+                    server: server_state,
+                    nowait: nowait_state,
+                },
+            );
+            check_argument(
+                format!(
+                    "{}{}",
+                    "socket,id=test_id,host=172.56.16.12,port=7070", param
+                ),
+                ChardevType::TcpSocket {
+                    host: "172.56.16.12".to_string(),
+                    port: 7070,
+                    server: server_state,
+                    nowait: nowait_state,
+                },
+            );
         }
     }
 }
