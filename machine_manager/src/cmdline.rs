@@ -215,8 +215,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("chardev")
             .multiple(true)
             .long("chardev")
-            .value_name("socket,id=<str>,path=<socket_path>")
-            .help("set char device virtio console for vm")
+            .value_name("<parameters>")
+            .help("\n\t\tadd standard i/o device: -chardev stdio,id=<char_id>; \
+                   \n\t\tadd pseudo-terminal: -chardev pty,id=<char_id>; \
+                   \n\t\tadd file: -chardev file,id=<char_id>,path=<path>; \
+                   \n\t\tadd unix-socket: -chardev socket,id=<char_id>,path=<path>[,server][,nowait]; \
+                   \n\t\tadd tcp-socket: -chardev socket,id=<char_id>,port=<port>[,host=host][,server][,nowait];")
             .takes_values(true),
         )
         .arg(
@@ -253,8 +257,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("serial")
             .long("serial")
-            .value_name("backend[,path=<str>,server,nowait] or chardev:<char_id>")
-            .help("add serial and set chardev for it")
+            .value_name("<parameters>")
+            .help("\n\t\tuse chardev device: -serial chardev:<char_id>; \
+                   \n\t\tuse standard i/o device: -serial stdio; \
+                   \n\t\tuse pseudo-terminal: -serial pty; \
+                   \n\t\tuse file: -serial file,path=<path>; \
+                   \n\t\tuse unix-socket: -serial socket,path=<path>[,server][,nowait]; \
+                   \n\t\tuse tcp-socket: -serial socket,port=<port>[,host=<host>][,server][,nowait]; \
+                  ")
             .takes_value(true),
         )
         .arg(
@@ -634,7 +644,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
         }
 
         if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::Socket {
+            if let ChardevType::UnixSocket {
                 path,
                 server,
                 nowait,
@@ -648,7 +658,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
                 }
                 sock_paths.push(path);
             } else {
-                bail!("Only socket-type of chardev can be used for monitor");
+                bail!("Only chardev of unix-socket type can be used for monitor");
             }
         } else {
             bail!("No chardev found: {}", &chardev);

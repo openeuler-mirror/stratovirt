@@ -108,7 +108,7 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::Socket {
+            ChardevType::UnixSocket {
                 path,
                 server,
                 nowait,
@@ -131,6 +131,9 @@ impl Chardev {
                         path
                     )
                 })?;
+            }
+            ChardevType::TcpSocket { .. } => {
+                error!("tcp-socket backend not implemented")
             }
             ChardevType::File(path) => {
                 let file = Arc::new(Mutex::new(
@@ -246,7 +249,7 @@ fn get_notifier_handler(
             }
             None
         }),
-        ChardevType::Socket { .. } => Rc::new(move |_, _| {
+        ChardevType::UnixSocket { .. } => Rc::new(move |_, _| {
             let mut locked_chardev = chardev.lock().unwrap();
             let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
@@ -309,6 +312,10 @@ fn get_notifier_handler(
                 vec![inner_handler],
             )])
         }),
+        ChardevType::TcpSocket { .. } => Rc::new(move |_, _| {
+            error!("tcp-socket not implemented");
+            None
+        }),
         ChardevType::File(_) => Rc::new(move |_, _| None),
     }
 }
@@ -330,7 +337,7 @@ impl EventNotifierHelper for Chardev {
                     ));
                 }
             }
-            ChardevType::Socket { .. } => {
+            ChardevType::UnixSocket { .. } => {
                 if chardev.lock().unwrap().stream_fd.is_some() {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::Resume,
@@ -348,6 +355,9 @@ impl EventNotifierHelper for Chardev {
                         vec![get_notifier_handler(cloned_chardev, backend)],
                     ));
                 }
+            }
+            ChardevType::TcpSocket { .. } => {
+                error!("tcp-socket not implemented");
             }
             ChardevType::File(_) => (),
         }
