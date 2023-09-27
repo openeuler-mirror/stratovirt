@@ -13,7 +13,6 @@
 use std::fs::{read_link, File, OpenOptions};
 use std::io::{Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -33,6 +32,7 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::set_termi_raw_mode;
+use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
 
 /// Provide the trait that helps handle the input data.
@@ -59,8 +59,8 @@ pub struct Chardev {
     id: String,
     /// Type of backend device.
     backend: ChardevType,
-    /// UnixListener for socket-type chardev.
-    listener: Option<UnixListener>,
+    /// Socket listener for chardev of socket type.
+    listener: Option<SocketListener>,
     /// Chardev input.
     input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
@@ -116,24 +116,48 @@ impl Chardev {
                 if !*server || !*nowait {
                     bail!(
                         "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        path
+                        &self.id
                     );
                 }
+
                 clear_file(path.clone())?;
-                let sock = UnixListener::bind(path.clone())
-                    .with_context(|| format!("Failed to bind socket for chardev, path:{}", path))?;
-                self.listener = Some(sock);
+                let listener = SocketListener::bind_by_uds(path).with_context(|| {
+                    format!(
+                        "Failed to bind socket for chardev \'{}\', path: {}",
+                        &self.id, path
+                    )
+                })?;
+                self.listener = Some(listener);
+
                 // add file to temporary pool, so it could be cleaned when vm exit.
                 TempCleaner::add_path(path.clone());
                 limit_permission(path).with_context(|| {
                     format!(
-                        "Failed to change file permission for chardev, path:{}",
-                        path
+                        "Failed to change file permission for chardev \'{}\', path: {}",
+                        &self.id, path
                     )
                 })?;
             }
-            ChardevType::TcpSocket { .. } => {
-                error!("tcp-socket backend not implemented")
+            ChardevType::TcpSocket {
+                host,
+                port,
+                server,
+                nowait,
+            } => {
+                if !*server || !*nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                        &self.id
+                    );
+                }
+
+                let listener = SocketListener::bind_by_tcp(host, *port).with_context(|| {
+                    format!(
+                        "Failed to bind socket for chardev \'{}\', address: {}:{}",
+                        &self.id, host, port
+                    )
+                })?;
+                self.listener = Some(listener);
             }
             ChardevType::File(path) => {
                 let file = Arc::new(Mutex::new(
@@ -249,9 +273,9 @@ fn get_notifier_handler(
             }
             None
         }),
-        ChardevType::UnixSocket { .. } => Rc::new(move |_, _| {
+        ChardevType::UnixSocket { .. } | ChardevType::TcpSocket { .. } => Rc::new(move |_, _| {
             let mut locked_chardev = chardev.lock().unwrap();
-            let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
+            let stream = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
             let stream_fd = stream.as_raw_fd();
             locked_chardev.stream_fd = Some(stream_fd);
@@ -312,10 +336,6 @@ fn get_notifier_handler(
                 vec![inner_handler],
             )])
         }),
-        ChardevType::TcpSocket { .. } => Rc::new(move |_, _| {
-            error!("tcp-socket not implemented");
-            None
-        }),
         ChardevType::File(_) => Rc::new(move |_, _| None),
     }
 }
@@ -337,7 +357,7 @@ impl EventNotifierHelper for Chardev {
                     ));
                 }
             }
-            ChardevType::UnixSocket { .. } => {
+            ChardevType::UnixSocket { .. } | ChardevType::TcpSocket { .. } => {
                 if chardev.lock().unwrap().stream_fd.is_some() {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::Resume,
@@ -355,9 +375,6 @@ impl EventNotifierHelper for Chardev {
                         vec![get_notifier_handler(cloned_chardev, backend)],
                     ));
                 }
-            }
-            ChardevType::TcpSocket { .. } => {
-                error!("tcp-socket not implemented");
             }
             ChardevType::File(_) => (),
         }
@@ -381,10 +398,10 @@ pub trait CommunicatInInterface: std::marker::Send + std::os::unix::io::AsRawFd 
 /// Provide backend trait object processing the output from the guest.
 pub trait CommunicatOutInterface: std::io::Write + std::marker::Send {}
 
-impl CommunicatInInterface for UnixStream {}
+impl CommunicatInInterface for SocketStream {}
 impl CommunicatInInterface for File {}
 impl CommunicatInInterface for Stdin {}
 
-impl CommunicatOutInterface for UnixStream {}
+impl CommunicatOutInterface for SocketStream {}
 impl CommunicatOutInterface for File {}
 impl CommunicatOutInterface for Stdout {}
