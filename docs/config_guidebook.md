@@ -657,6 +657,7 @@ Or you can simply use `-serial dev` to bind serial with character device.
 -serial stdio
 -serial pty
 -serial socket,path=<socket_path>,server,nowait
+-serial socket,port=<port>[,host=<host>],server,nowait
 -serial file,path=<file_path>
 ```
 
@@ -773,19 +774,32 @@ See [VFIO](./vfio.md) for more details.
 ### 2.12 Chardev
 The type of chardev backend could be: stdio, pty, socket and file(output only).
 
-Five properties can be set for chardev.
-
+One property can be set for chardev of stdio or pty type.
 * id: unique chardev-id.
-* backend: the type of redirect method.
-* path: the path of backend in the host. This argument is only required for socket-type chardev and file-type chardev.
-* server: run as a server. This argument is only required for socket-type chardev.
-* nowait: do not wait for connection. This argument is only required for socket-type chardev.
+
+Four properties can be set for chardev of unix-socket type.
+* id: unique chardev-id.
+* path: path to the unix-socket file on the host.
+* server: run as a server.
+* nowait: do not wait for connection.
+
+Five properties can be set for chardev of tcp-socket type.
+* id: unique chardev-id.
+* host: host for binding on (in case of server mode) or connecting to (in case of non-server mode). Default value for binding is '0.0.0.0'.
+* port: port for binding on (in case of server mode) or connecting to (in case of non-server mode).
+* server: run as a server.
+* nowait: do not wait for connection.
+
+Two properties can be set for chardev of file type.
+* id: unique chardev-id.
+* path: path to the input data file on the host.
 
 ```shell
 # redirect methods
 -chardev stdio,id=<chardev_id>
 -chardev pty,id=<chardev_id>
 -chardev socket,id=<chardev_id>,path=<socket_path>[,server,nowait]
+-chardev socket,id=<chardev_id>,port=<port>[,host=<host>][,server,nowait]
 -chardev file,id=<chardev_id>,path=<file_path>
 ```
 
