@@ -955,7 +955,7 @@ impl StdMachine {
             .with_context(|| format!("Chardev: {:?} not found for character device", &chardev))?;
 
         let socket_path = match &char_dev.backend {
-            ChardevType::Socket {
+            ChardevType::UnixSocket {
                 path,
                 server,
                 nowait,
@@ -963,13 +963,13 @@ impl StdMachine {
                 if *server || *nowait {
                     bail!(
                         "Argument \'server\' or \'nowait\' is not needed for chardev \'{}\'",
-                        path
+                        &chardev
                     );
                 }
                 Some(path.clone())
             }
             _ => {
-                bail!("Chardev {:?} backend should be socket type.", &chardev);
+                bail!("Chardev {:?} backend should be unix-socket type.", &chardev);
             }
         };
 
