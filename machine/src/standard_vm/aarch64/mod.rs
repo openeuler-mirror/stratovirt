@@ -878,6 +878,89 @@ impl AcpiBuilder for StdMachine {
         Ok(gtdt_begin)
     }
 
+    fn build_dbg2_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::Result<u64> {
+        // Table format described at:
+        // https://learn.microsoft.com/en-us/windows-hardware/drivers/bringup/acpi-debug-port-table
+
+        let dev_name = "COM0";
+        let dev_name_length = dev_name.len() + 1;
+
+        let dbg2_table_size = 82 // Fixed size part of table
+            + dev_name_length;
+
+        let dbg2_info_size = 22 // BaseAddressRegister offset
+            + 12 // BaseAddressRegister
+            + 4 // AddressSize
+            + dev_name_length;
+
+        let mut dbg2 = AcpiTable::new(*b"DBG2", 0, *b"STRATO", *b"VIRTDBG2", 1);
+        dbg2.set_table_len(dbg2_table_size);
+
+        // Table 1. Debug Port Table 2 format
+        // OffsetDbgDeviceInfo
+        dbg2.set_field(36, 44_u32);
+        // NumberDbgDeviceInfo
+        dbg2.set_field(40, 1_u32);
+
+        // Table 2. Debug Device Information structure format
+        let offset = 44;
+        // Revision
+        dbg2.set_field(offset, 0_u8);
+        // Length
+        dbg2.set_field(offset + 1, dbg2_info_size as u16);
+        // NumberofGenericAddressRegisters
+        dbg2.set_field(offset + 3, 1_u8);
+        // NamespaceStringLength
+        dbg2.set_field(offset + 4, dev_name_length as u16);
+        // NamespaceStringOffset
+        dbg2.set_field(offset + 6, 38_u16);
+        // OemDataLength
+        dbg2.set_field(offset + 8, 0_u16);
+        // OemDataOffset
+        dbg2.set_field(offset + 10, 0_u16);
+        // Port Type: 0x8000 is serial
+        dbg2.set_field(offset + 12, 0x8000_u16);
+        // Port Subtype: 0x3 is ARM PL011 UART
+        dbg2.set_field(offset + 14, 0x3_u16);
+
+        // BaseAddressRegisterOffset
+        dbg2.set_field(offset + 18, 22_u16);
+        // AddressSizeOffset
+        dbg2.set_field(offset + 20, 34_u16);
+
+        let uart_memory_address = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
+        let uart_memory_size = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
+
+        // BaseAddressRegister: aml address space
+        dbg2.set_field(offset + 22, 0_u8);
+        // BaseAddressRegister: bit width
+        dbg2.set_field(offset + 23, 8_u8);
+        // BaseAddressRegister: bit offset
+        dbg2.set_field(offset + 24, 0_u8);
+        // BaseAddressRegister: access width
+        dbg2.set_field(offset + 25, 1_u8);
+        // BaseAddressRegister: address
+        dbg2.set_field(offset + 26, uart_memory_address as u64);
+        // AddressSize
+        dbg2.set_field(offset + 34, uart_memory_size as u32);
+
+        // NamespaceString
+        let mut offset = offset + 38;
+        for ch in dev_name.chars() {
+            dbg2.set_field(offset, ch as u8);
+            offset += 1;
+        }
+        dbg2.set_field(offset, 0_u8);
+
+        let dbg2_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dbg2)
+            .with_context(|| "Fail to add DBG2 table to loader")?;
+        Ok(dbg2_begin)
+    }
+
     fn build_iort_table(
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,

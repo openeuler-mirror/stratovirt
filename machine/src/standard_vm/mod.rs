@@ -129,6 +129,11 @@ trait StdMachineOps: AcpiBuilder {
                 .with_context(|| "Failed to build ACPI GTDT table")?;
             xsdt_entries.push(gtdt_addr);
 
+            let dbg2_addr = self
+                .build_dbg2_table(&acpi_tables, &mut loader)
+                .with_context(|| "Failed to build ACPI DBG2 table")?;
+            xsdt_entries.push(dbg2_addr);
+
             let iort_addr = self
                 .build_iort_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI IORT table")?;
@@ -384,6 +389,24 @@ trait AcpiBuilder {
         Self: Sized,
     {
         Ok(0)
+    }
+
+    /// Build ACPI DBG2 table, returns the offset of ACPI DBG2 table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_dbg2_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        bail!("Not implemented");
     }
 
     /// Build ACPI IORT table, returns the offset of ACPI IORT table in `acpi_data`.
