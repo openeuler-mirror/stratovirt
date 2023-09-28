@@ -664,7 +664,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         let size = clusters * self.header.cluster_size();
-        let addr = self.refcount.alloc_cluster(&mut self.header, size)?;
+        let addr = self
+            .refcount
+            .alloc_clusters_with_ref(&mut self.header, size)?;
         let ret = self.check_overlap(0, addr, size);
         if ret != 0 {
             bail!(
