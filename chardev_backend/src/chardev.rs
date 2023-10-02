@@ -337,10 +337,41 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             dev.lock().unwrap().chardev_notify(ChardevStatus::Open);
         }
 
-        let cloned_chardev = cloned_chardev.clone();
-        let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
-            if event == EventSet::IN {
-                let locked_chardev = cloned_chardev.lock().unwrap();
+        let handling_chardev = cloned_chardev.clone();
+        let close_connection = Rc::new(move || {
+            let mut locked_chardev = handling_chardev.lock().unwrap();
+            let notify_dev = locked_chardev.dev.clone();
+            locked_chardev.input = None;
+            locked_chardev.output = None;
+            locked_chardev.stream_fd = None;
+            info!(
+                "Chardev \'{}\' event, connection closed: {}",
+                &locked_chardev.id, connection_info
+            );
+            drop(locked_chardev);
+
+            if let Some(dev) = notify_dev {
+                dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
+            }
+
+            // Note: we use stream_arc variable here because we want to capture it and prolongate
+            // its lifetime with this notifier callback lifetime. It allows us to ensure
+            // that socket fd be valid until we unregister it from epoll_fd subscription.
+            let stream_fd = stream_arc.lock().unwrap().as_raw_fd();
+            Some(gen_delete_notifiers(&[stream_fd]))
+        });
+
+        let handling_chardev = cloned_chardev.clone();
+        let input_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+            let locked_chardev = handling_chardev.lock().unwrap();
+
+            let peer_disconnected = event & EventSet::HANG_UP == EventSet::HANG_UP;
+            if peer_disconnected && locked_chardev.receiver.is_none() {
+                return close_connection();
+            }
+
+            let input_ready = event & EventSet::IN == EventSet::IN;
+            if input_ready {
                 if locked_chardev.receiver.is_none() {
                     error!(
                         "Failed to read input data from chardev \'{}\', receiver is none",
@@ -359,43 +390,28 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                 }
 
                 let mut buffer = vec![0_u8; buff_size];
-                if let Ok(bytes_count) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                    locked_receiver.receive(&buffer[..bytes_count]);
+                let mut locked_input = input.lock().unwrap();
+                if let Ok(bytes_count) = locked_input.chr_read_raw(&mut buffer) {
+                    if bytes_count > 0 {
+                        locked_receiver.receive(&buffer[..bytes_count]);
+                    } else {
+                        drop(locked_receiver);
+                        drop(locked_input);
+                        return close_connection();
+                    }
                 } else {
                     let os_error = std::io::Error::last_os_error();
                     if os_error.kind() != std::io::ErrorKind::WouldBlock {
-                        let locked_chardev = cloned_chardev.lock().unwrap();
+                        let locked_chardev = handling_chardev.lock().unwrap();
                         error!(
                             "Failed to read input data from chardev \'{}\', {}",
                             &locked_chardev.id, &os_error
                         );
                     }
                 }
-                None
-            } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                let mut locked_chardev = cloned_chardev.lock().unwrap();
-                let notify_dev = locked_chardev.dev.clone();
-                locked_chardev.input = None;
-                locked_chardev.output = None;
-                locked_chardev.stream_fd = None;
-                info!(
-                    "Chardev \'{}\' event, connection closed: {}",
-                    &locked_chardev.id, connection_info
-                );
-                drop(locked_chardev);
-
-                if let Some(dev) = notify_dev {
-                    dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
-                }
-
-                // Note: we use stream_arc variable here because we want to capture it and prolongate
-                // its lifetime with this notifier callback lifetime. It allows us to ensure
-                // that socket fd be valid until we unregister it from epoll_fd subscription.
-                let stream_fd = stream_arc.lock().unwrap().as_raw_fd();
-                Some(gen_delete_notifiers(&[stream_fd]))
-            } else {
-                None
             }
+
+            None
         });
 
         Some(vec![EventNotifier::new(
@@ -403,7 +419,7 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             stream_fd,
             Some(listener_fd),
             EventSet::IN | EventSet::HANG_UP,
-            vec![inner_handler],
+            vec![input_handler],
         )])
     });
 
