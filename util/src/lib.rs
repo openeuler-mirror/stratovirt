@@ -32,6 +32,7 @@ pub mod offsetof;
 pub mod pixman;
 pub mod reader;
 pub mod seccomp;
+pub mod socket;
 pub mod syscall;
 pub mod tap;
 pub mod test_helper;
