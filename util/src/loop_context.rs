@@ -375,13 +375,24 @@ impl EventLoopContext {
         Ok(())
     }
 
-    /// change the callback for event
     fn modify_event(&mut self, mut event: EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
-                notifier.handlers.clear();
-                notifier.handlers.append(&mut event.handlers);
+                let events_specified = !event.event.is_empty();
+                if events_specified && event.event != notifier.event {
+                    self.epoll.ctl(
+                        ControlOperation::Modify,
+                        notifier.raw_fd,
+                        EpollEvent::new(event.event, &**notifier as *const _ as u64),
+                    )?;
+                    notifier.event = event.event;
+                }
+                let handlers_specified = !event.handlers.is_empty();
+                if handlers_specified {
+                    notifier.handlers.clear();
+                    notifier.handlers.append(&mut event.handlers);
+                }
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
