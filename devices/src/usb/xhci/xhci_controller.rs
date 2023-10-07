@@ -1087,7 +1087,7 @@ impl XhciDevice {
         dma_read_u32(
             &self.mem_space,
             GuestAddress(
-                // It is safe to plus here becuase we previously verify the address.
+                // It is safe to plus here because we previously verify the address.
                 ictx + SLOT_INPUT_CTX_OFFSET,
             ),
             slot_ctx.as_mut_dwords(),
@@ -1298,7 +1298,7 @@ impl XhciDevice {
             dma_read_u32(
                 &self.mem_space,
                 GuestAddress(
-                    // It is safe to plus here becuase we previously verify the address.
+                    // It is safe to plus here because we previously verify the address.
                     ictx + SLOT_INPUT_CTX_OFFSET,
                 ),
                 islot_ctx.as_mut_dwords(),
@@ -1319,7 +1319,7 @@ impl XhciDevice {
             dma_read_u32(
                 &self.mem_space,
                 GuestAddress(
-                    // It is safe to use plus here becuase we previously verify the address.
+                    // It is safe to use plus here because we previously verify the address.
                     ictx + EP_INPUT_CTX_OFFSET,
                 ),
                 iep_ctx.as_mut_dwords(),
@@ -1328,7 +1328,7 @@ impl XhciDevice {
             dma_read_u32(
                 &self.mem_space,
                 GuestAddress(
-                    // It is safe to use plus here becuase we previously verify the address.
+                    // It is safe to use plus here because we previously verify the address.
                     octx + EP_CTX_OFFSET,
                 ),
                 ep_ctx.as_mut_dwords(),
@@ -1336,7 +1336,7 @@ impl XhciDevice {
             ep_ctx.set_max_packet_size(iep_ctx.get_max_packet_size());
             dma_write_u32(
                 &self.mem_space,
-                // It is safe to use plus here becuase we previously verify the address.
+                // It is safe to use plus here because we previously verify the address.
                 GuestAddress(octx + EP_CTX_OFFSET),
                 ep_ctx.as_dwords(),
             )?;
@@ -1381,7 +1381,7 @@ impl XhciDevice {
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer
+            // It is safe to use plus here because we previously verify the address on the outer
             // layer.
             GuestAddress(input_ctx + EP_INPUT_CTX_OFFSET + entry_offset),
             ep_ctx.as_mut_dwords(),
@@ -1390,14 +1390,14 @@ impl XhciDevice {
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         epctx.epid = ep_id;
         epctx.enabled = true;
-        // It is safe to use plus here becuase we previously verify the address on the outer layer.
+        // It is safe to use plus here because we previously verify the address on the outer layer.
         epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx);
         epctx.set_ep_state(EP_RUNNING);
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= EP_RUNNING;
         dma_write_u32(
             &self.mem_space,
-            // It is safe to use plus here becuase we previously verify the address on the outer
+            // It is safe to use plus here because we previously verify the address on the outer
             // layer.
             GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
             ep_ctx.as_dwords(),
