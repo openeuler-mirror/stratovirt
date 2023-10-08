@@ -32,16 +32,32 @@ const FADT_TABLE_DATA_LENGTH: u32 = 276;
 const MADT_TABLE_DATA_LENGTH: u32 = 744;
 // Now gtdt table data length is 96.
 const GTDT_TABLE_DATA_LENGTH: u32 = 96;
+// Now dbg2 table data length is 87.
+const DBG2_TABLE_DATA_LENGTH: u32 = 87;
 // Now iort table data length is 128.
 const IORT_TABLE_DATA_LENGTH: u32 = 128;
 // Now spcr table data length is 80.
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 5974(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 5974;
-// Now acpi tables data length is 40415(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 40415;
+// Now acpi tables data length is 6069(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 6069;
+// Now acpi tables data length is 40510(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 40510;
+
+enum TABLE {
+    Dsdt,
+    Fadt,
+    Madt,
+    Gtdt,
+    Dbg2,
+    Iort,
+    Spcr,
+    Mcfg,
+    Srat,
+    Slit,
+    Pptt,
+}
 
 fn test_rsdp(test_state: &TestState, alloc: &mut GuestAllocator) -> u64 {
     let file_name = "etc/acpi/rsdp";
@@ -138,6 +154,11 @@ fn check_gtdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[68..]), 0); // Virtual timer flags
     assert_eq!(LittleEndian::read_u32(&data[72..]), 26); // Non secure EL2 interrupt
     assert_eq!(LittleEndian::read_u32(&data[76..]), 0); // Non secure EL2 flags
+}
+
+fn check_dbg2(data: &[u8]) {
+    assert_eq!(String::from_utf8_lossy(&data[..4]), "DBG2");
+    assert_eq!(LittleEndian::read_u32(&data[4..]), DBG2_TABLE_DATA_LENGTH); // Check length
 }
 
 fn check_iort(data: &[u8]) {
@@ -326,52 +347,57 @@ fn test_tables(test_state: &TestState, alloc: &mut GuestAllocator, xsdt_addr: us
     let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>() - 8;
 
     // Check DSDT
-    let mut offset = entry_addr;
+    let mut offset = entry_addr + TABLE::Dsdt as usize * 8;
     let dsdt_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_dsdt(&read_data[(dsdt_addr as usize)..]);
 
     // Check FADT
-    offset = entry_addr + 1 * 8;
+    offset = entry_addr + TABLE::Fadt as usize * 8;
     let fadt_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_fadt(&read_data[(fadt_addr as usize)..]);
 
     // Check MADT
-    offset = entry_addr + 2 * 8;
+    offset = entry_addr + TABLE::Madt as usize * 8;
     let madt_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_madt(&read_data[(madt_addr as usize)..], cpu);
 
     // Check GTDT
-    offset = entry_addr + 3 * 8;
+    offset = entry_addr + TABLE::Gtdt as usize * 8;
     let gtdt_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_gtdt(&read_data[(gtdt_addr as usize)..]);
 
+    // Check DBG2
+    offset = entry_addr + TABLE::Dbg2 as usize * 8;
+    let gtdt_addr = LittleEndian::read_u64(&read_data[offset..]);
+    check_dbg2(&read_data[(gtdt_addr as usize)..]);
+
     // Check IORT
-    offset = entry_addr + 4 * 8;
+    offset = entry_addr + TABLE::Iort as usize * 8;
     let iort_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_iort(&read_data[(iort_addr as usize)..]);
 
     // Check SPCR
-    offset = entry_addr + 5 * 8;
+    offset = entry_addr + TABLE::Spcr as usize * 8;
     let spcr_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_spcr(&read_data[(spcr_addr as usize)..]);
 
     // Check MCFG
-    offset = entry_addr + 6 * 8;
+    offset = entry_addr + TABLE::Mcfg as usize * 8;
     let mcfg_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_mcfg(&read_data[(mcfg_addr as usize)..]);
 
     // Check SRAT
-    offset = entry_addr + 7 * 8;
+    offset = entry_addr + TABLE::Srat as usize * 8;
     let srat_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_srat(&read_data[(srat_addr as usize)..]);
 
     // Check SLIT
-    offset = entry_addr + 8 * 8;
+    offset = entry_addr + TABLE::Slit as usize * 8;
     let slit_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_slit(&read_data[(slit_addr as usize)..]);
 
     // Check PPTT
-    offset = entry_addr + 9 * 8;
+    offset = entry_addr + TABLE::Pptt as usize * 8;
     let pptt_addr = LittleEndian::read_u64(&read_data[offset..]);
     check_pptt(&read_data[(pptt_addr as usize)..]);
 }
