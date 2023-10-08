@@ -4,11 +4,11 @@
 ## 1. Check Rust environment
 
 To build StratoVirt, make sure that Rust language environment and Cargo have already been installed.
-The recommended version of rustc is 1.51.0 or later, otherwise compilation may be failed.
+The recommended version of rustc is 1.64.0 or later, otherwise compilation may be failed.
 
 ```shell
 $ rustc --version
-rustc 1.51.0
+rustc 1.64.0
 ```
 
 If you want to deploy rust environment, the following link will help you:
@@ -25,7 +25,7 @@ $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-gnu
 
 # Build StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-gnu
+$ cargo build --workspace --bins --release --target ${arch}-unknown-linux-gnu
 ```
 
 Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-gnu/release/stratovirt`.
@@ -41,7 +41,7 @@ $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-musl
 
 # Build StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-musl
+$ cargo build --workspace --bins --release --target ${arch}-unknown-linux-musl
 ```
 
 Now you can find StratoVirt static binary file in `target/${arch}-unknown-linux-musl/release/stratovirt`.
@@ -62,7 +62,7 @@ List of optional features:
 - virtio_gpu: enable virtio-gpu virtualized graphics card
 
 ```shell
-$ cargo build --release --features "scream_alsa"
+$ cargo build --workspace --bins --release --features "scream_alsa"
 ```
 
 # Build static StratoVirt in containers
