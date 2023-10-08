@@ -54,9 +54,9 @@ Note:
 Start to send migration for the source VM:
 ```shell
 $ ncat -U path/to/socket1
--> {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-<- {"execute":"migrate", "arguments":{"uri":"tcp:192.168.0.1:4446"}}
--> {"return":{}}
+<- {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
+-> {"execute":"migrate", "arguments":{"uri":"tcp:192.168.0.1:4446"}}
+<- {"return":{}}
 ```
 
 Note:
@@ -71,9 +71,9 @@ migrated to the destination VM.
 If you want to cancel the live migration, executing the following command:
 ```shell
 $ ncat -U path/to/socket1
--> {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-<- {"execute":"migrate_cancel"}
--> {"return":{}}
+<- {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
+-> {"execute":"migrate_cancel"}
+<- {"return":{}}
 ```
 
 ## Query migration state
@@ -81,9 +81,9 @@ $ ncat -U path/to/socket1
 Use QMP command `query-migrate` to check migration state:
 ```shell
 $ ncat -U path/to/socket
--> {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-<- {"execute":"query-migrate"}
--> {"return":{"status":"completed"}}
+<- {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
+-> {"execute":"query-migrate"}
+<- {"return":{"status":"completed"}}
 ```
 
 Now there are 5 states during migration:

@@ -60,14 +60,14 @@ Refer to qmp.md for specific command line parameters.
 
 hot plug VFIO device:
 ```json
-<- {"execute":"device_add", "arguments":{"id":"vfio-0", "driver":"vfio-pci", "bus": "pcie.1", "addr":"0x0", "host": "0000:1a:00.3"}}
--> {"return": {}}
+-> {"execute":"device_add", "arguments":{"id":"vfio-0", "driver":"vfio-pci", "bus": "pcie.1", "addr":"0x0", "host": "0000:1a:00.3"}}
+<- {"return": {}}
 ```
 hot unplug VFIO device:
 ```json
-<- {"execute": "device_del", "arguments": {"id": "vfio-0"}}
--> {"event":"DEVICE_DELETED","data":{"device":"vfio-0","path":"vfio-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
--> {"return": {}}
+-> {"execute": "device_del", "arguments": {"id": "vfio-0"}}
+<- {"event":"DEVICE_DELETED","data":{"device":"vfio-0","path":"vfio-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
+<- {"return": {}}
 ```
 
 ## Unbind VFIO device
