@@ -106,7 +106,7 @@ impl Qcow2Table {
         }
     }
 
-    pub fn init_table(&mut self, header: &QcowHeader, conf: &BlockProperty) -> Result<()> {
+    pub fn init_table_info(&mut self, header: &QcowHeader, conf: &BlockProperty) -> Result<()> {
         let max_l2_entries =
             div_round_up(header.size, header.cluster_size()).with_context(|| {
                 format!(
@@ -137,8 +137,6 @@ impl Qcow2Table {
         self.l2_table_cache = l2_table_cache;
         self.l1_table_offset = header.l1_table_offset;
         self.l1_size = header.l1_size;
-        self.load_l1_table()
-            .with_context(|| "Failed to load l1 table")?;
         Ok(())
     }
 

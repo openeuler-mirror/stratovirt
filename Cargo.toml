@@ -18,6 +18,7 @@ util = { path = "util" }
 members = [
     "vhost_user_fs",
     "ozone",
+    "image",
     "tests/mod_test",
 ]
 

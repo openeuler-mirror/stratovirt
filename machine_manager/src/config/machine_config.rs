@@ -33,6 +33,7 @@ const MAX_NR_CPUS: u64 = 254;
 const MIN_NR_CPUS: u64 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 134_217_728;
+pub const K: u64 = 1024;
 pub const M: u64 = 1024 * 1024;
 pub const G: u64 = 1024 * 1024 * 1024;
 
@@ -284,9 +285,9 @@ impl VmConfig {
         cmd_parser.parse(mem_config)?;
 
         let mem = if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
-            memory_unit_conversion(&mem_size)?
+            memory_unit_conversion(&mem_size, M)?
         } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
-            memory_unit_conversion(&mem_size)?
+            memory_unit_conversion(&mem_size, M)?
         } else {
             return Err(anyhow!(ConfigError::FieldIsMissing(
                 "size".to_string(),
@@ -454,7 +455,7 @@ impl VmConfig {
 
     fn get_mem_zone_size(&self, cmd_parser: &CmdParser) -> Result<u64> {
         if let Some(mem) = cmd_parser.get_value::<String>("size")? {
-            let size = memory_unit_conversion(&mem)?;
+            let size = memory_unit_conversion(&mem, M)?;
             Ok(size)
         } else {
             Err(anyhow!(ConfigError::FieldIsMissing(
@@ -656,8 +657,21 @@ fn adjust_topology(
 /// # Arguments
 ///
 /// * `origin_value` - The origin memory value from user.
-pub fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
-    if (origin_value.ends_with('M') | origin_value.ends_with('m'))
+pub fn memory_unit_conversion(origin_value: &str, default_unit: u64) -> Result<u64> {
+    if (origin_value.ends_with('K') | origin_value.ends_with('k'))
+        && (origin_value.contains('K') ^ origin_value.contains('k'))
+    {
+        let value = origin_value.replacen('K', "", 1);
+        let value = value.replacen('k', "", 1);
+        get_inner(
+            value
+                .parse::<u64>()
+                .with_context(|| {
+                    ConfigError::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
+                })?
+                .checked_mul(K),
+        )
+    } else if (origin_value.ends_with('M') | origin_value.ends_with('m'))
         && (origin_value.contains('M') ^ origin_value.contains('m'))
     {
         let value = origin_value.replacen('M', "", 1);
@@ -688,7 +702,7 @@ pub fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             ConfigError::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
         })?;
 
-        let memory_size = size.checked_mul(M);
+        let memory_size = size.checked_mul(default_unit);
 
         get_inner(memory_size)
     }
@@ -745,82 +759,82 @@ mod tests {
     #[test]
     fn test_memory_unit_conversion() {
         let test_string = "6G";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_ok());
         let ret = ret.unwrap();
         assert_eq!(ret, 6 * 1024 * 1024 * 1024);
 
         let test_string = "6g";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_ok());
         let ret = ret.unwrap();
         assert_eq!(ret, 6 * 1024 * 1024 * 1024);
 
         let test_string = "6M";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_ok());
         let ret = ret.unwrap();
         assert_eq!(ret, 6 * 1024 * 1024);
 
         let test_string = "6m";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_ok());
         let ret = ret.unwrap();
         assert_eq!(ret, 6 * 1024 * 1024);
 
         // default unit is MiB
         let test_string = "6";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_ok());
         let ret = ret.unwrap();
         assert_eq!(ret, 6 * 1024 * 1024);
 
         let test_string = "G6";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "G6G";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "6Gg";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "6gG";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "g6G";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "G6g";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "M6";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "M6M";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "6Mm";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "6mM";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "m6M";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
 
         let test_string = "M6m";
-        let ret = memory_unit_conversion(test_string);
+        let ret = memory_unit_conversion(test_string, M);
         assert!(ret.is_err());
     }
 

@@ -15,11 +15,11 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::{
     file::{CombineRequest, FileDriver},
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
 };
 use util::aio::{get_iov_size, Aio, Iovec};
 
@@ -43,6 +43,17 @@ impl<T: Clone + 'static> RawDriver<T> {
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
+    fn create_image(&mut self, options: &CreateOptions) -> Result<String> {
+        let raw_options = options.raw()?;
+        self.driver.file.set_len(raw_options.img_size)?;
+        let image_info = format!("fmt=raw size={}", raw_options.img_size);
+        Ok(image_info)
+    }
+
+    fn check_image(&mut self, _res: &mut CheckResult, _quite: bool, _fix: u64) -> Result<()> {
+        bail!("This image format does not support checks");
+    }
+
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
         let nbytes = get_iov_size(&iovec);
         self.driver.read_vectored(

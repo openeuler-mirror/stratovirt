@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check};
+use super::{error::ConfigError, pci_args_check, M};
 use crate::config::{
     check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, CmdParser, ConfigCheck,
     ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
@@ -125,6 +125,15 @@ impl FromStr for DiskFormat {
             "raw" => Ok(DiskFormat::Raw),
             "qcow2" => Ok(DiskFormat::Qcow2),
             _ => Err(anyhow!("Unknown format type")),
+        }
+    }
+}
+
+impl ToString for DiskFormat {
+    fn to_string(&self) -> String {
+        match *self {
+            DiskFormat::Raw => "raw".to_string(),
+            DiskFormat::Qcow2 => "qcow2".to_string(),
         }
     }
 }
@@ -348,12 +357,12 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         .unwrap_or(WriteZeroesState::Off);
 
     if let Some(l2_cache) = cmd_parser.get_value::<String>("l2-cache-size")? {
-        let sz = memory_unit_conversion(&l2_cache)
+        let sz = memory_unit_conversion(&l2_cache, M)
             .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
         drive.l2_cache_size = Some(sz);
     }
     if let Some(rc_cache) = cmd_parser.get_value::<String>("refcount-cache-size")? {
-        let sz = memory_unit_conversion(&rc_cache)
+        let sz = memory_unit_conversion(&rc_cache, M)
             .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
         drive.refcount_cache_size = Some(sz);
     }
