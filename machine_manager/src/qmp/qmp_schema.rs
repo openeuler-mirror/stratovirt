@@ -53,404 +53,88 @@ impl QmpErrorClass {
     }
 }
 
-/// A enum to store all command struct
-#[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
-#[serde(tag = "execute")]
-#[serde(deny_unknown_fields)]
-pub enum QmpCommand {
-    #[serde(rename = "qmp_capabilities")]
-    qmp_capabilities {
-        #[serde(default)]
-        arguments: qmp_capabilities,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    quit {
-        #[serde(default)]
-        arguments: quit,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    stop {
-        #[serde(default)]
-        arguments: stop,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    cont {
-        #[serde(default)]
-        arguments: cont,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    system_powerdown {
-        #[serde(default)]
-        arguments: system_powerdown,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    system_reset {
-        #[serde(default)]
-        arguments: system_reset,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    device_add {
-        arguments: Box<device_add>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    device_del {
-        arguments: device_del,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "chardev-add")]
-    chardev_add {
-        arguments: chardev_add,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "chardev-remove")]
-    chardev_remove {
-        arguments: chardev_remove,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    netdev_add {
-        arguments: Box<netdev_add>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    netdev_del {
-        arguments: netdev_del,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    cameradev_add {
-        arguments: cameradev_add,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    cameradev_del {
-        arguments: cameradev_del,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-hotpluggable-cpus")]
-    #[strum(serialize = "query-hotpluggable-cpus")]
-    query_hotpluggable_cpus {
-        #[serde(default)]
-        arguments: query_hotpluggable_cpus,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-cpus")]
-    #[strum(serialize = "query-cpus")]
-    query_cpus {
-        #[serde(default)]
-        arguments: query_cpus,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-status")]
-    query_status {
-        #[serde(default)]
-        arguments: query_status,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    getfd {
-        arguments: getfd,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "blockdev-add")]
-    blockdev_add {
-        arguments: Box<blockdev_add>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "blockdev-del")]
-    blockdev_del {
-        arguments: blockdev_del,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "balloon")]
-    balloon {
-        #[serde(default)]
-        arguments: balloon,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-mem")]
-    query_mem {
-        #[serde(default)]
-        arguments: query_mem,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-mem-gpa")]
-    query_mem_gpa {
-        #[serde(default)]
-        arguments: query_mem_gpa,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-balloon")]
-    query_balloon {
-        #[serde(default)]
-        arguments: query_balloon,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-vnc")]
-    #[strum(serialize = "query-vnc")]
-    query_vnc {
-        #[serde(default)]
-        arguments: query_vnc,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "migrate")]
-    migrate {
-        arguments: migrate,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-migrate")]
-    query_migrate {
-        #[serde(default)]
-        arguments: query_migrate,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "migrate_cancel")]
-    cancel_migrate {
-        #[serde(default)]
-        arguments: cancel_migrate,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-version")]
-    query_version {
-        #[serde(default)]
-        arguments: query_version,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-commands")]
-    query_commands {
-        #[serde(default)]
-        arguments: query_commands,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-target")]
-    query_target {
-        #[serde(default)]
-        arguments: query_target,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-kvm")]
-    query_kvm {
-        #[serde(default)]
-        arguments: query_kvm,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-machines")]
-    query_machines {
-        #[serde(default)]
-        arguments: query_machines,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-events")]
-    #[strum(serialize = "query-events")]
-    query_events {
-        #[serde(default)]
-        arguments: query_events,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "qom-list-types")]
-    list_type {
-        #[serde(default)]
-        arguments: list_type,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "device-list-properties")]
-    device_list_properties {
-        #[serde(default)]
-        arguments: device_list_properties,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "block-commit")]
-    #[strum(serialize = "block-commit")]
-    block_commit {
-        #[serde(default)]
-        arguments: block_commit,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-tpm-models")]
-    query_tpm_models {
-        #[serde(default)]
-        arguments: query_tpm_models,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-tpm-types")]
-    query_tpm_types {
-        #[serde(default)]
-        arguments: query_tpm_types,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-command-line-options")]
-    query_command_line_options {
-        #[serde(default)]
-        arguments: query_command_line_options,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-migrate-capabilities")]
-    query_migrate_capabilities {
-        #[serde(default)]
-        arguments: query_migrate_capabilities,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-qmp-schema")]
-    query_qmp_schema {
-        #[serde(default)]
-        arguments: query_qmp_schema,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-sev-capabilities")]
-    query_sev_capabilities {
-        #[serde(default)]
-        arguments: query_sev_capabilities,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-chardev")]
-    #[strum(serialize = "query-chardev")]
-    query_chardev {
-        #[serde(default)]
-        arguments: query_chardev,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "qom-list")]
-    #[strum(serialize = "qom-list")]
-    qom_list {
-        #[serde(default)]
-        arguments: qom_list,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "qom_get")]
-    #[strum(serialize = "qom_get")]
-    qom_get {
-        #[serde(default)]
-        arguments: qom_get,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-block")]
-    #[strum(serialize = "query-block")]
-    query_block {
-        #[serde(default)]
-        arguments: query_block,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-named-block-nodes")]
-    #[strum(serialize = "query-named-block-nodes")]
-    query_named_block_nodes {
-        #[serde(default)]
-        arguments: query_named_block_nodes,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-blockstats")]
-    #[strum(serialize = "query-blockstats")]
-    query_blockstats {
-        #[serde(default)]
-        arguments: query_blockstats,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-block-jobs")]
-    #[strum(serialize = "query-block-jobs")]
-    query_block_jobs {
-        #[serde(default)]
-        arguments: query_block_jobs,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-gic-capabilities")]
-    #[strum(serialize = "query-gic-capabilities")]
-    query_gic_capabilities {
-        #[serde(default)]
-        arguments: query_gic_capabilities,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-iothreads")]
-    #[strum(serialize = "query-iothreads")]
-    query_iothreads {
-        #[serde(default)]
-        arguments: query_iothreads,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "update_region")]
-    #[strum(serialize = "update_region")]
-    update_region {
-        #[serde(default)]
-        arguments: update_region,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    input_event {
-        #[serde(default)]
-        arguments: input_event,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "human-monitor-command")]
-    human_monitor_command {
-        arguments: human_monitor_command,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "blockdev-snapshot-internal-sync")]
-    blockdev_snapshot_internal_sync {
-        arguments: blockdev_snapshot_internal,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "blockdev-snapshot-delete-internal-sync")]
-    blockdev_snapshot_delete_internal_sync {
-        arguments: blockdev_snapshot_internal,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
-    #[serde(rename = "query-vcpu-reg")]
-    query_vcpu_reg {
-        arguments: query_vcpu_reg,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-    },
+macro_rules! define_qmp_command_enum {
+    ($($command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),*) => {
+        /// A enum to store all command struct
+        #[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
+        #[serde(tag = "execute")]
+        #[serde(deny_unknown_fields)]
+        pub enum QmpCommand {
+            $(
+                #[serde(rename = $name)]
+                #[strum(serialize = $name)]
+                $command {
+                    $(#[serde($serde_default)])?
+                    arguments: $args_type,
+                    #[serde(default, skip_serializing_if = "Option::is_none")]
+                    id: Option<String>,
+                },
+            )*
+        }
+    };
 }
+
+// QMP command enum definition example: command("name", arguments, ..)
+define_qmp_command_enum!(
+    qmp_capabilities("qmp_capabilities", qmp_capabilities, default),
+    quit("quit", quit, default),
+    stop("stop", stop, default),
+    cont("cont", cont, default),
+    system_powerdown("system_powerdown", system_powerdown, default),
+    system_reset("system_reset", system_reset, default),
+    device_add("device_add", Box<device_add>),
+    device_del("device_del", device_del),
+    chardev_add("chardev-add", chardev_add),
+    chardev_remove("chardev-remove", chardev_remove),
+    netdev_add("netdev_add", Box<netdev_add>),
+    netdev_del("netdev_del", netdev_del),
+    cameradev_add("cameradev_add", cameradev_add),
+    cameradev_del("cameradev_del", cameradev_del),
+    query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
+    query_cpus("query-cpus", query_cpus, default),
+    query_status("query-status", query_status, default),
+    getfd("getfd", getfd),
+    blockdev_add("blockdev-add", Box<blockdev_add>),
+    blockdev_del("blockdev-del", blockdev_del),
+    balloon("balloon", balloon, default),
+    query_mem("query-mem", query_mem, default),
+    query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
+    query_balloon("query-balloon", query_balloon, default),
+    query_vnc("query-vnc", query_vnc, default),
+    migrate("migrate", migrate),
+    query_migrate("query-migrate", query_migrate, default),
+    cancel_migrate("migrate_cancel", cancel_migrate, default),
+    query_version("query-version", query_version, default),
+    query_commands("query-commands", query_commands, default),
+    query_target("query-target", query_target, default),
+    query_kvm("query-kvm", query_kvm, default),
+    query_machines("query-machines", query_machines, default),
+    query_events("query-events", query_events, default),
+    list_type("qom-list-types", list_type, default),
+    device_list_properties("device-list-properties", device_list_properties, default),
+    block_commit("block-commit", block_commit, default),
+    query_tpm_models("query-tpm-models", query_tpm_models, default),
+    query_tpm_types("query-tpm-types", query_tpm_types, default),
+    query_command_line_options("query-command-line-options", query_command_line_options, default),
+    query_migrate_capabilities("query-migrate-capabilities", query_migrate_capabilities, default),
+    query_qmp_schema("query-qmp-schema", query_qmp_schema, default),
+    query_sev_capabilities("query-sev-capabilities", query_sev_capabilities, default),
+    query_chardev("query-chardev", query_chardev, default),
+    qom_list("qom-list", qom_list, default),
+    qom_get("qom-get", qom_get, default),
+    query_block("query-block", query_block, default),
+    query_named_block_nodes("query-named-block-nodes", query_named_block_nodes, default),
+    query_blockstats("query-blockstats", query_blockstats, default),
+    query_block_jobs("query-block-jobs", query_block_jobs, default),
+    query_gic_capabilities("query-gic-capabilities", query_gic_capabilities, default),
+    query_iothreads("query-iothreads", query_iothreads, default),
+    update_region("update_region", update_region, default),
+    input_event("input_event", input_event, default),
+    human_monitor_command("human-monitor-command", human_monitor_command),
+    blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal),
+    blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal),
+    query_vcpu_reg("query-vcpu-reg", query_vcpu_reg)
+);
 
 /// Command trait for Deserialize and find back Response.
 trait Command: Serialize {
