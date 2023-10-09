@@ -1560,7 +1560,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
             self.driver.file.seek(SeekFrom::Start(offset))?;
             self.driver.file.write_all(&zero_buf.to_vec())?
         }
-        self.driver.file.seek(SeekFrom::Start(0))?;
+        self.driver.file.rewind()?;
         self.driver.file.write_all(&self.header.to_vec())?;
 
         // Refcount table.

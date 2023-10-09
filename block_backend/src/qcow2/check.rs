@@ -150,7 +150,7 @@ impl RefcountBlock {
         let mut cluster_idx = *first_free_cluster;
         let mut continue_clusters: usize = 0;
         while continue_clusters < total_counts as usize {
-            if self.get_refcount(cluster_idx as usize)? == 0 {
+            if self.get_refcount(cluster_idx)? == 0 {
                 continue_clusters += 1;
                 if first_update {
                     *first_free_cluster = cluster_idx;
@@ -468,7 +468,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let l1_table = self
             .sync_aio
             .borrow_mut()
-            .read_ctrl_cluster(l1_offset, l1_size as u64)?;
+            .read_ctrl_cluster(l1_offset, l1_size)?;
 
         // Entry in l1 table
         for idx in 0..l1_size {
@@ -670,10 +670,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             "ERROR".to_string()
         };
 
-        let reftable_size = self.refcount.refcount_table.len();
         let reftable = self.refcount.refcount_table.clone();
-        for idx in 0..reftable_size {
-            let reftable_entry = reftable[idx as usize];
+        for (idx, reftable_entry) in reftable.iter().enumerate() {
             let refblock_offset = reftable_entry & REFCOUNT_TABLE_OFFSET_MASK;
             let cluster_idx = refblock_offset >> cluster_bits;
             if reftable_entry & REFCOUNT_TABLE_RESERVED_MASK != 0 {
@@ -846,7 +844,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         };
 
         for l1_idx in 0..l1_size {
-            let l1_entry = self.table.l1_table[l1_idx as usize];
+            let l1_entry = self.table.l1_table[l1_idx];
             let l2_offset = l1_entry & L1_TABLE_OFFSET_MASK;
             if l2_offset == 0 {
                 continue;
@@ -868,7 +866,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                     } else {
                         l1_entry & !QCOW2_OFFSET_COPIED
                     };
-                    self.table.l1_table[l1_idx as usize] = new_l1_entry;
+                    self.table.l1_table[l1_idx] = new_l1_entry;
                     l1_dirty = true;
                     l1_corruptions -= 1;
                     l1_corruptions_fixed += 1;
@@ -966,7 +964,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut new_reftable: Vec<u64> = Vec::new();
         let mut reftable_clusters: u64 = 0;
         let cluster_bits = self.header.cluster_bits as u64;
-        let refblock_bits: u64 = (cluster_bits + 3 - self.header.refcount_order as u64) as u64;
+        let refblock_bits: u64 = cluster_bits + 3 - self.header.refcount_order as u64;
         let refblock_size: u64 = 1 << refblock_bits;
 
         // self.refblock.nb_clusters means the maximum number of clusters that can be represented by
@@ -991,7 +989,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             )?;
 
             // Extend the refcount table
-            if new_reftable.len() <= refblock_idx as usize {
+            if new_reftable.len() <= refblock_idx {
                 new_reftable.resize(refblock_idx + 1, 0);
                 // Need to reallocate clusters for new refcount table.
                 reftable_offset = 0;
@@ -1007,7 +1005,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                     bytes_to_clusters(reftable_size * ENTRY_SIZE, self.header.cluster_size())?;
                 reftable_offset = check.refblock.alloc_clusters(
                     reftable_clusters,
-                    cluster_bits as u64,
+                    cluster_bits,
                     &mut (first_free_cluster as usize),
                     self.sync_aio.clone(),
                 )?;
