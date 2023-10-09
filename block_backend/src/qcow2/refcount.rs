@@ -287,7 +287,7 @@ impl RefCount {
         let start_clusters = div_round_up(offset, self.cluster_size).unwrap();
         for i in start_clusters..start_clusters + clusters {
             let rt_idx = i >> self.refcount_blk_bits;
-            if rt_idx >= self.refcount_table_size as u64 {
+            if rt_idx >= self.refcount_table_size {
                 bail!("Invalid refcount table index {}", rt_idx);
             }
 
@@ -453,7 +453,7 @@ impl RefCount {
     pub fn get_refcount(&mut self, offset: u64) -> Result<u16> {
         let cluster = offset >> self.cluster_bits;
         let rt_idx = cluster >> self.refcount_blk_bits;
-        if rt_idx >= self.refcount_table_size as u64 {
+        if rt_idx >= self.refcount_table_size {
             return Ok(0);
         }
 
