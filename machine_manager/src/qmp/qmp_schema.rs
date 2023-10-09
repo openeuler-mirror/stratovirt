@@ -142,6 +142,18 @@ trait Command: Serialize {
     fn back(self) -> Self::Res;
 }
 
+macro_rules! generate_command_impl {
+    ($name:ident, $res_type:ty) => {
+        impl Command for $name {
+            type Res = $res_type;
+
+            fn back(self) -> Self::Res {
+                Default::default()
+            }
+        }
+    };
+}
+
 /// qmp_capabilities
 ///
 /// Enable QMP capabilities.
@@ -155,14 +167,7 @@ trait Command: Serialize {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct qmp_capabilities {}
-
-impl Command for qmp_capabilities {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(qmp_capabilities, Empty);
 
 /// quit
 ///
@@ -180,14 +185,7 @@ impl Command for qmp_capabilities {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct quit {}
-
-impl Command for quit {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(quit, Empty);
 
 /// stop
 ///
@@ -202,14 +200,7 @@ impl Command for quit {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct stop {}
-
-impl Command for stop {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(stop, Empty);
 
 /// cont
 ///
@@ -224,14 +215,7 @@ impl Command for stop {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct cont {}
-
-impl Command for cont {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(cont, Empty);
 
 /// system_powerdown
 ///
@@ -246,14 +230,7 @@ impl Command for cont {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct system_powerdown {}
-
-impl Command for system_powerdown {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(system_powerdown, Empty);
 
 /// system_reset
 ///
@@ -268,14 +245,7 @@ impl Command for system_powerdown {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct system_reset {}
-
-impl Command for system_reset {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(system_reset, Empty);
 
 /// device_add
 ///
@@ -350,14 +320,7 @@ pub struct device_add {
 }
 
 pub type DeviceAddArgument = device_add;
-
-impl Command for device_add {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(device_add, Empty);
 
 /// update_region
 ///
@@ -408,14 +371,7 @@ pub struct update_region {
 }
 
 pub type UpdateRegionArgument = update_region;
-
-impl Command for update_region {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(update_region, Empty);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -479,14 +435,7 @@ pub struct blockdev_add {
 }
 
 pub type BlockDevAddArgument = blockdev_add;
-
-impl Command for blockdev_add {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(blockdev_add, Empty);
 
 /// netdev_add
 ///
@@ -526,14 +475,7 @@ pub struct netdev_add {
 }
 
 pub type NetDevAddArgument = netdev_add;
-
-impl Command for netdev_add {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(netdev_add, Empty);
 
 /// cameradev_add
 ///
@@ -560,14 +502,7 @@ pub struct cameradev_add {
 }
 
 pub type CameraDevAddArgument = cameradev_add;
-
-impl Command for cameradev_add {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(cameradev_add, Empty);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -626,14 +561,7 @@ pub struct chardev_add {
 }
 
 pub type CharDevAddArgument = chardev_add;
-
-impl Command for chardev_add {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(chardev_add, Empty);
 
 /// chardev-remove
 ///
@@ -658,14 +586,7 @@ impl Command for chardev_add {
 pub struct chardev_remove {
     pub id: String,
 }
-
-impl Command for chardev_remove {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(chardev_remove, Empty);
 
 /// device_del
 ///
@@ -700,14 +621,7 @@ impl Command for chardev_remove {
 pub struct device_del {
     pub id: String,
 }
-
-impl Command for device_del {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(device_del, Empty);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -715,14 +629,7 @@ pub struct blockdev_del {
     #[serde(rename = "node-name")]
     pub node_name: String,
 }
-
-impl Command for blockdev_del {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(blockdev_del, Empty);
 
 /// netdev_del
 ///
@@ -747,14 +654,7 @@ impl Command for blockdev_del {
 pub struct netdev_del {
     pub id: String,
 }
-
-impl Command for netdev_del {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(netdev_del, Empty);
 
 /// cameradev_del
 ///
@@ -779,14 +679,7 @@ impl Command for netdev_del {
 pub struct cameradev_del {
     pub id: String,
 }
-
-impl Command for cameradev_del {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(cameradev_del, Empty);
 
 /// query-hotpluggable-cpus:
 ///
@@ -814,14 +707,7 @@ impl Command for cameradev_del {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_hotpluggable_cpus {}
-
-impl Command for query_hotpluggable_cpus {
-    type Res = Vec<HotpluggableCPU>;
-
-    fn back(self) -> Vec<HotpluggableCPU> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_hotpluggable_cpus, Vec<HotpluggableCPU>);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -897,14 +783,7 @@ pub struct CpuInstanceProperties {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_cpus {}
-
-impl Command for query_cpus {
-    type Res = Vec<CpuInfo>;
-
-    fn back(self) -> Vec<CpuInfo> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_cpus, Vec<CpuInfo>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuInfoCommon {
@@ -968,14 +847,7 @@ pub struct CpuInfoArm {}
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_status {}
-
-impl Command for query_status {
-    type Res = StatusInfo;
-
-    fn back(self) -> StatusInfo {
-        Default::default()
-    }
-}
+generate_command_impl!(query_status, StatusInfo);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct StatusInfo {
@@ -1038,42 +910,21 @@ pub struct migrate {
     #[serde(rename = "uri")]
     pub uri: String,
 }
-
-impl Command for migrate {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(migrate, Empty);
 
 /// query-migrate:
 ///
 /// Returns information about current migration.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_migrate {}
-
-impl Command for query_migrate {
-    type Res = MigrationInfo;
-
-    fn back(self) -> MigrationInfo {
-        Default::default()
-    }
-}
+generate_command_impl!(query_migrate, MigrationInfo);
 
 /// cancel-migrate:
 ///
 /// Cancel migrate the current VM.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct cancel_migrate {}
-
-impl Command for cancel_migrate {
-    type Res = MigrationInfo;
-
-    fn back(self) -> MigrationInfo {
-        Default::default()
-    }
-}
+generate_command_impl!(cancel_migrate, MigrationInfo);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MigrationInfo {
@@ -1101,14 +952,7 @@ pub struct getfd {
     #[serde(rename = "fdname")]
     pub fd_name: String,
 }
-
-impl Command for getfd {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(getfd, Empty);
 
 /// Shutdown
 ///
@@ -1245,12 +1089,7 @@ pub enum QmpEvent {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_balloon {}
-impl Command for query_balloon {
-    type Res = BalloonInfo;
-    fn back(self) -> BalloonInfo {
-        Default::default()
-    }
-}
+generate_command_impl!(query_balloon, BalloonInfo);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct BalloonInfo {
@@ -1281,12 +1120,7 @@ pub struct BalloonInfo {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_vnc {}
-impl Command for query_vnc {
-    type Res = VncInfo;
-    fn back(self) -> VncInfo {
-        Default::default()
-    }
-}
+generate_command_impl!(query_vnc, VncInfo);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct VncInfo {
@@ -1338,13 +1172,7 @@ pub struct balloon {
     #[serde(rename = "value")]
     pub value: u64,
 }
-
-impl Command for balloon {
-    type Res = Empty;
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(balloon, Empty);
 
 /// version:
 ///
@@ -1358,14 +1186,7 @@ impl Command for balloon {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_version {}
-
-impl Command for query_version {
-    type Res = Version;
-
-    fn back(self) -> Version {
-        Default::default()
-    }
-}
+generate_command_impl!(query_version, Version);
 
 /// Query commands:
 ///
@@ -1392,18 +1213,11 @@ impl Command for query_version {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_commands {}
+generate_command_impl!(query_commands, Vec<Cmd>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Cmd {
     pub name: String,
-}
-
-impl Command for query_commands {
-    type Res = Vec<Cmd>;
-
-    fn back(self) -> Vec<Cmd> {
-        Default::default()
-    }
 }
 
 /// Query target:
@@ -1423,18 +1237,11 @@ impl Command for query_commands {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_target {}
+generate_command_impl!(query_target, Target);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     pub arch: String,
-}
-
-impl Command for query_target {
-    type Res = Target;
-
-    fn back(self) -> Target {
-        Default::default()
-    }
 }
 
 /// Query machines:
@@ -1451,6 +1258,7 @@ impl Command for query_target {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_machines {}
+generate_command_impl!(query_machines, Vec<MachineInfo>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct MachineInfo {
@@ -1462,14 +1270,6 @@ pub struct MachineInfo {
     #[serde(rename = "cpu-max")]
     pub cpu_max: u8,
     pub deprecated: bool,
-}
-
-impl Command for query_machines {
-    type Res = Vec<MachineInfo>;
-
-    fn back(self) -> Vec<MachineInfo> {
-        Default::default()
-    }
 }
 
 /// Query events:
@@ -1491,14 +1291,7 @@ pub struct Events {
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_events {}
-
-impl Command for query_events {
-    type Res = Vec<Events>;
-
-    fn back(self) -> Vec<Events> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_events, Vec<Events>);
 
 /// Query KVM:
 ///
@@ -1512,19 +1305,12 @@ impl Command for query_events {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_kvm {}
+generate_command_impl!(query_kvm, KvmInfo);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct KvmInfo {
     pub enabled: bool,
     pub present: bool,
-}
-
-impl Command for query_kvm {
-    type Res = KvmInfo;
-
-    fn back(self) -> KvmInfo {
-        Default::default()
-    }
 }
 
 /// List all Qom type.
@@ -1540,6 +1326,7 @@ impl Command for query_kvm {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct list_type {}
+generate_command_impl!(list_type, Vec<TypeLists>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TypeLists {
@@ -1550,14 +1337,6 @@ pub struct TypeLists {
 impl TypeLists {
     pub fn new(name: String, parent: String) -> Self {
         TypeLists { name, parent }
-    }
-}
-
-impl Command for list_type {
-    type Res = Vec<TypeLists>;
-
-    fn back(self) -> Vec<TypeLists> {
-        Default::default()
     }
 }
 
@@ -1573,6 +1352,7 @@ impl Command for list_type {
 pub struct device_list_properties {
     pub typename: String,
 }
+generate_command_impl!(device_list_properties, Vec<DeviceProps>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceProps {
@@ -1581,24 +1361,9 @@ pub struct DeviceProps {
     pub prop_type: String,
 }
 
-impl Command for device_list_properties {
-    type Res = Vec<DeviceProps>;
-
-    fn back(self) -> Vec<DeviceProps> {
-        Default::default()
-    }
-}
-
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct block_commit {}
-
-impl Command for block_commit {
-    type Res = Vec<DeviceProps>;
-
-    fn back(self) -> Vec<DeviceProps> {
-        Default::default()
-    }
-}
+generate_command_impl!(block_commit, Vec<DeviceProps>);
 
 /// Query tpm models of StratoVirt.
 ///
@@ -1610,14 +1375,7 @@ impl Command for block_commit {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_tpm_models {}
-
-impl Command for query_tpm_models {
-    type Res = Vec<String>;
-
-    fn back(self) -> Vec<String> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_tpm_models, Vec<String>);
 
 /// Query target of StratoVirt.
 ///
@@ -1629,14 +1387,7 @@ impl Command for query_tpm_models {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_tpm_types {}
-
-impl Command for query_tpm_types {
-    type Res = Vec<String>;
-
-    fn back(self) -> Vec<String> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_tpm_types, Vec<String>);
 
 /// Query command line options.
 ///
@@ -1648,6 +1399,7 @@ impl Command for query_tpm_types {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_command_line_options {}
+generate_command_impl!(query_command_line_options, Vec<CmdLine>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CmdParameter {
@@ -1663,14 +1415,6 @@ pub struct CmdLine {
     pub option: String,
 }
 
-impl Command for query_command_line_options {
-    type Res = Vec<CmdLine>;
-
-    fn back(self) -> Vec<CmdLine> {
-        Default::default()
-    }
-}
-
 /// Query capabilities of migration.
 ///
 /// # Example
@@ -1681,19 +1425,12 @@ impl Command for query_command_line_options {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_migrate_capabilities {}
+generate_command_impl!(query_migrate_capabilities, Vec<MigrateCapabilities>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct MigrateCapabilities {
     pub state: bool,
     pub capability: String,
-}
-
-impl Command for query_migrate_capabilities {
-    type Res = Vec<MigrateCapabilities>;
-
-    fn back(self) -> Vec<MigrateCapabilities> {
-        Default::default()
-    }
 }
 
 /// Query target of StratoVirt.
@@ -1706,14 +1443,7 @@ impl Command for query_migrate_capabilities {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_qmp_schema {}
-
-impl Command for query_qmp_schema {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(query_qmp_schema, Empty);
 
 /// Query capabilities of sev.
 ///
@@ -1725,14 +1455,7 @@ impl Command for query_qmp_schema {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_sev_capabilities {}
-
-impl Command for query_sev_capabilities {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(query_sev_capabilities, Empty);
 
 /// List all Qom.
 ///
@@ -1744,20 +1467,13 @@ impl Command for query_sev_capabilities {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct qom_list {}
+generate_command_impl!(qom_list, Vec<PropList>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PropList {
     pub name: String,
     #[serde(rename = "type")]
     pub prop_type: String,
-}
-
-impl Command for qom_list {
-    type Res = Vec<PropList>;
-
-    fn back(self) -> Vec<PropList> {
-        Default::default()
-    }
 }
 
 /// Query char devices.
@@ -1770,6 +1486,7 @@ impl Command for qom_list {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_chardev {}
+generate_command_impl!(query_chardev, Vec<ChardevInfo>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ChardevInfo {
@@ -1777,14 +1494,6 @@ pub struct ChardevInfo {
     pub open: bool,
     pub filename: String,
     pub label: String,
-}
-
-impl Command for query_chardev {
-    type Res = Vec<ChardevInfo>;
-
-    fn back(self) -> Vec<ChardevInfo> {
-        Default::default()
-    }
 }
 
 /// Get qom properties.
@@ -1797,14 +1506,7 @@ impl Command for query_chardev {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct qom_get {}
-
-impl Command for qom_get {
-    type Res = bool;
-
-    fn back(self) -> bool {
-        Default::default()
-    }
-}
+generate_command_impl!(qom_get, bool);
 
 /// Query blocks of StratoVirt.
 ///
@@ -1816,14 +1518,7 @@ impl Command for qom_get {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_block {}
-
-impl Command for query_block {
-    type Res = Vec<Cmd>;
-
-    fn back(self) -> Vec<Cmd> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_block, Vec<Cmd>);
 
 /// Query named block node.
 ///
@@ -1835,14 +1530,7 @@ impl Command for query_block {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_named_block_nodes {}
-
-impl Command for query_named_block_nodes {
-    type Res = Vec<Cmd>;
-
-    fn back(self) -> Vec<Cmd> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_named_block_nodes, Vec<Cmd>);
 
 /// Query status of blocks.
 ///
@@ -1854,14 +1542,7 @@ impl Command for query_named_block_nodes {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_blockstats {}
-
-impl Command for query_blockstats {
-    type Res = Vec<Cmd>;
-
-    fn back(self) -> Vec<Cmd> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_blockstats, Vec<Cmd>);
 
 /// Query jobs of blocks.
 ///
@@ -1873,14 +1554,7 @@ impl Command for query_blockstats {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_block_jobs {}
-
-impl Command for query_block_jobs {
-    type Res = Vec<Cmd>;
-
-    fn back(self) -> Vec<Cmd> {
-        Default::default()
-    }
-}
+generate_command_impl!(query_block_jobs, Vec<Cmd>);
 
 /// Query capabilities of gic.
 ///
@@ -1892,20 +1566,13 @@ impl Command for query_block_jobs {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_gic_capabilities {}
+generate_command_impl!(query_gic_capabilities, Vec<GicCap>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct GicCap {
     emulated: bool,
     version: u32,
     kernel: bool,
-}
-
-impl Command for query_gic_capabilities {
-    type Res = Vec<GicCap>;
-
-    fn back(self) -> Vec<GicCap> {
-        Default::default()
-    }
 }
 
 /// Query information of iothreads.
@@ -1918,6 +1585,7 @@ impl Command for query_gic_capabilities {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_iothreads {}
+generate_command_impl!(query_iothreads, Vec<IothreadInfo>);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct IothreadInfo {
@@ -1932,13 +1600,6 @@ pub struct IothreadInfo {
     pub id: String,
 }
 
-impl Command for query_iothreads {
-    type Res = Vec<IothreadInfo>;
-
-    fn back(self) -> Vec<IothreadInfo> {
-        Default::default()
-    }
-}
 /// input_event
 ///
 /// # Arguments
@@ -1958,14 +1619,7 @@ pub struct input_event {
     pub key: String,
     pub value: String,
 }
-
-impl Command for input_event {
-    type Res = Vec<input_event>;
-
-    fn back(self) -> Vec<input_event> {
-        Default::default()
-    }
-}
+generate_command_impl!(input_event, Vec<input_event>);
 
 /// human-monitor-command
 ///
@@ -2072,13 +1726,7 @@ pub struct SnapshotInfo {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_mem {}
-impl Command for query_mem {
-    type Res = Empty;
-
-    fn back(self) -> Empty {
-        Default::default()
-    }
-}
+generate_command_impl!(query_mem, Empty);
 
 /// query-vcpu-reg
 ///
@@ -2119,7 +1767,6 @@ pub struct query_mem_gpa {
     #[serde(rename = "gpa")]
     pub gpa: String,
 }
-
 pub type QueryMemGpaArgument = query_mem_gpa;
 
 #[cfg(test)]
