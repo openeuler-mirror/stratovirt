@@ -41,7 +41,7 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 use super::Result as MachineResult;
-use crate::{MachineBase, MachineOps};
+use crate::MachineOps;
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
@@ -54,7 +54,6 @@ use address_space::{
     AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
-use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
@@ -85,9 +84,7 @@ use virtio::{
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
-trait StdMachineOps: AcpiBuilder {
-    fn machine_base(&self) -> &MachineBase;
-
+trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
 
     /// Build all ACPI tables and RSDP, and add them to FwCfg as file entries.
@@ -151,7 +148,7 @@ trait StdMachineOps: AcpiBuilder {
             .with_context(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
-        if let Some(numa_nodes) = self.get_guest_numa() {
+        if let Some(numa_nodes) = self.get_numa_nodes() {
             let srat_addr = self
                 .build_srat_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI SRAT table")?;
@@ -192,18 +189,6 @@ trait StdMachineOps: AcpiBuilder {
 
     fn add_fwcfg_device(&mut self, _nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
-    }
-
-    fn get_cpu_topo(&self) -> &CpuTopology {
-        &self.machine_base().cpu_topo
-    }
-
-    fn get_cpus(&self) -> &Vec<Arc<CPU>> {
-        &self.machine_base().cpus
-    }
-
-    fn get_guest_numa(&self) -> &Option<NumaNodes> {
-        &self.machine_base().numa_nodes
     }
 
     /// Register event notifier for reset of standard machine.

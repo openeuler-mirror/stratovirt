@@ -15,14 +15,12 @@ pub(crate) mod ich9_lpc;
 mod mch;
 mod syscall;
 
-use std::collections::HashMap;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -44,13 +42,11 @@ use devices::legacy::{
     SERIAL_ADDR,
 };
 use devices::pci::{PciDevOps, PciHost};
-use devices::sysbus::SysBus;
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, DriveFile, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -199,30 +195,6 @@ impl StdMachine {
         Ok(())
     }
 
-    fn arch_init() -> Result<()> {
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
-
-        vm_fd
-            .set_identity_map_address(identity_addr)
-            .with_context(|| MachineError::SetIdentityMapAddr)?;
-
-        // Page table takes 1 page, TSS takes the following 3 pages.
-        vm_fd
-            .set_tss_address((identity_addr + 0x1000) as usize)
-            .with_context(|| MachineError::SetTssErr)?;
-
-        let pit_config = kvm_pit_config {
-            flags: KVM_PIT_SPEAKER_DUMMY,
-            pad: Default::default(),
-        };
-        vm_fd
-            .create_pit2(pit_config)
-            .with_context(|| MachineError::CrtPitErr)?;
-        Ok(())
-    }
-
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
@@ -240,23 +212,12 @@ impl StdMachine {
         Ok(())
     }
 
-    pub fn mem_show(&self) {
-        self.base.sys_mem.memspace_show();
-        self.base.sys_io.memspace_show();
-        let machine_ram = self.get_vm_ram();
-        machine_ram.mtree(0_u32);
-    }
-
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
         None
     }
 }
 
 impl StdMachineOps for StdMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
     fn init_pci_host(&self) -> Result<()> {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
@@ -314,6 +275,10 @@ impl StdMachineOps for StdMachine {
 }
 
 impl MachineOps for StdMachine {
+    fn machine_base(&self) -> &MachineBase {
+        &self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let ram = self.get_vm_ram();
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -416,10 +381,6 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
-        self.base.drive_files.clone()
-    }
-
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
@@ -434,7 +395,7 @@ impl MachineOps for StdMachine {
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
-        StdMachine::arch_init()?;
+        locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
         locked_vm
             .init_pci_host()
@@ -608,55 +569,8 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(
-            paused,
-            &self.base.cpus,
-            &mut self.base.vm_state.0.lock().unwrap(),
-        )
-    }
-
-    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
-        &self.base.sys_mem
-    }
-
-    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
-        self.base.vm_config.clone()
-    }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.base.vm_state
-    }
-
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
-    }
-
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.base.sysbus
-    }
-
-    fn get_vm_ram(&self) -> &Arc<Region> {
-        &self.base.machine_ram
-    }
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.base.numa_nodes
-    }
-
-    fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
-        if let Some(fwcfg_dev) = &self.fwcfg_dev {
-            return Some(fwcfg_dev.clone());
-        }
-        None
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
