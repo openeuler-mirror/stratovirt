@@ -38,7 +38,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CPUTopology};
 use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
@@ -253,6 +253,10 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
+    fn machine_base(&self) -> &MachineBase {
+        &self.base
+    }
+
     fn init_pci_host(&self) -> Result<()> {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
@@ -306,18 +310,6 @@ impl StdMachineOps for StdMachine {
         self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
-    }
-
-    fn get_cpu_topo(&self) -> &CpuTopology {
-        &self.base.cpu_topo
-    }
-
-    fn get_cpus(&self) -> &Vec<Arc<CPU>> {
-        &self.base.cpus
-    }
-
-    fn get_guest_numa(&self) -> &Option<NumaNodes> {
-        &self.base.numa_nodes
     }
 }
 

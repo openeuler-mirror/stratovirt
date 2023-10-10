@@ -41,7 +41,7 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 use super::Result as MachineResult;
-use crate::MachineOps;
+use crate::{MachineBase, MachineOps};
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
@@ -86,6 +86,8 @@ use virtio::{
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 trait StdMachineOps: AcpiBuilder {
+    fn machine_base(&self) -> &MachineBase;
+
     fn init_pci_host(&self) -> Result<()>;
 
     /// Build all ACPI tables and RSDP, and add them to FwCfg as file entries.
@@ -192,11 +194,17 @@ trait StdMachineOps: AcpiBuilder {
         bail!("Not implemented");
     }
 
-    fn get_cpu_topo(&self) -> &CpuTopology;
+    fn get_cpu_topo(&self) -> &CpuTopology {
+        &self.machine_base().cpu_topo
+    }
 
-    fn get_cpus(&self) -> &Vec<Arc<CPU>>;
+    fn get_cpus(&self) -> &Vec<Arc<CPU>> {
+        &self.machine_base().cpus
+    }
 
-    fn get_guest_numa(&self) -> &Option<NumaNodes>;
+    fn get_guest_numa(&self) -> &Option<NumaNodes> {
+        &self.machine_base().numa_nodes
+    }
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -2011,7 +2019,11 @@ impl DeviceInterface for StdMachine {
             }
         };
 
-        match self.sys_mem.read_object::<u32>(GuestAddress(gpa)) {
+        match self
+            .machine_base()
+            .sys_mem
+            .read_object::<u32>(GuestAddress(gpa))
+        {
             Ok(val) => {
                 Response::create_response(serde_json::to_value(format!("{:X}", val)).unwrap(), None)
             }
