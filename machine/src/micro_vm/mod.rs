@@ -35,7 +35,6 @@ mod syscall;
 
 pub use error::MicroVmError;
 
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -44,8 +43,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
-#[cfg(target_arch = "x86_64")]
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use log::{error, info};
 
 use super::Result as MachineResult;
@@ -54,17 +51,18 @@ use super::{error::MachineError, MachineOps};
 use crate::vm_state;
 use crate::MachineBase;
 use address_space::{AddressSpace, GuestAddress, Region};
-use boot_loader::{load_linux, BootLoaderConfig};
-#[cfg(target_arch = "aarch64")]
-use cpu::CPUFeatures;
+#[cfg(target_arch = "x86_64")]
+use cpu::CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 use cpu::PMU_INTR;
-use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState};
+use cpu::{CPUTopology, CpuLifecycleState};
+#[cfg(target_arch = "x86_64")]
+use devices::legacy::FwCfgOps;
+use devices::legacy::Serial;
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::SERIAL_ADDR;
-use devices::legacy::{FwCfgOps, Serial};
 use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 #[cfg(target_arch = "aarch64")]
 use devices::sysbus::{SysBusDevType, SysRes};
@@ -73,9 +71,8 @@ use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GI
 #[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, ConfigCheck, DiskFormat, DriveFile,
-    Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, ConfigCheck, DiskFormat, MigrateMode,
+    NetworkInterfaceConfig, SerialConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -184,34 +181,6 @@ impl LightMachine {
             base,
             replaceable_info: MmioReplaceableInfo::new(),
         })
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn arch_init() -> MachineResult<()> {
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        vm_fd
-            .set_tss_address(0xfffb_d000_usize)
-            .with_context(|| MachineError::SetTssErr)?;
-
-        let pit_config = kvm_pit_config {
-            flags: KVM_PIT_SPEAKER_DUMMY,
-            pad: Default::default(),
-        };
-        vm_fd
-            .create_pit2(pit_config)
-            .with_context(|| MachineError::CrtPitErr)?;
-
-        Ok(())
-    }
-
-    pub fn mem_show(&self) {
-        self.base.sys_mem.memspace_show();
-        #[cfg(target_arch = "x86_64")]
-        self.base.sys_io.memspace_show();
-
-        let machine_ram = self.get_vm_ram();
-        machine_ram.mtree(0_u32);
     }
 
     fn create_replaceable_devices(&mut self) -> Result<()> {
@@ -418,21 +387,13 @@ impl LightMachine {
         }
         Ok(id.to_string())
     }
-
-    /// Must be called after the CPUs have been realized and GIC has been created.
-    #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
-        let features = vcpu_cfg.unwrap_or_default();
-        if features.pmu {
-            for cpu in self.base.cpus.iter() {
-                cpu.init_pmu()?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl MachineOps for LightMachine {
+    fn machine_base(&self) -> &MachineBase {
+        &self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 
@@ -527,6 +488,8 @@ impl MachineOps for LightMachine {
         &self,
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     ) -> MachineResult<CPUBootConfig> {
+        use boot_loader::{load_linux, BootLoaderConfig};
+
         let boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -563,32 +526,6 @@ impl MachineOps for LightMachine {
         })
     }
 
-    #[cfg(target_arch = "aarch64")]
-    fn load_boot_source(
-        &self,
-        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
-    ) -> MachineResult<CPUBootConfig> {
-        let mut boot_source = self.base.boot_source.lock().unwrap();
-        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
-
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-        };
-        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
-        if let Some(rd) = &mut boot_source.initrd {
-            rd.initrd_addr = layout.initrd_start;
-            rd.initrd_size = layout.initrd_size;
-        }
-
-        Ok(CPUBootConfig {
-            fdt_addr: layout.dtb_start,
-            boot_pc: layout.boot_pc,
-        })
-    }
-
     fn realize_virtio_mmio_device(
         &mut self,
         dev: VirtioMmioDevice,
@@ -606,38 +543,6 @@ impl MachineOps for LightMachine {
         .with_context(|| MicroVmError::RlzVirtioMmioErr)?;
         self.base.sysbus.min_free_base += region_size;
         Ok(realized_virtio_mmio_device)
-    }
-
-    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
-        &self.base.sys_mem
-    }
-
-    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
-        self.base.vm_config.clone()
-    }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.base.vm_state
-    }
-
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.base.sysbus
-    }
-
-    fn get_vm_ram(&self) -> &Arc<Region> {
-        &self.base.machine_ram
-    }
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.base.numa_nodes
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -742,10 +647,6 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
-        self.base.drive_files.clone()
-    }
-
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         let mut locked_vm = vm.lock().unwrap();
 
@@ -773,7 +674,7 @@ impl MachineOps for LightMachine {
         #[cfg(target_arch = "x86_64")]
         {
             locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
-            LightMachine::arch_init()?;
+            locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
             // Add mmio devices
             locked_vm
@@ -801,7 +702,10 @@ impl MachineOps for LightMachine {
         {
             let (boot_config, cpu_config) = if migrate_info.0 == MigrateMode::Unknown {
                 (
-                    Some(locked_vm.load_boot_source(None)?),
+                    Some(
+                        locked_vm
+                            .load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?,
+                    ),
                     Some(locked_vm.load_cpu_features(vm_config)?),
                 )
             } else {
@@ -857,14 +761,6 @@ impl MachineOps for LightMachine {
         }
 
         Ok(())
-    }
-
-    fn run(&self, paused: bool) -> MachineResult<()> {
-        self.vm_start(
-            paused,
-            &self.base.cpus,
-            &mut self.base.vm_state.0.lock().unwrap(),
-        )
     }
 }
 
@@ -994,13 +890,12 @@ impl DeviceInterface for LightMachine {
 
     fn query_cpus(&self) -> Response {
         let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
-        for cpu_index in 0..self.base.cpu_topo.max_cpus {
-            if self.base.cpu_topo.get_mask(cpu_index as usize) == 1 {
-                let thread_id = self.base.cpus[cpu_index as usize].tid();
-                let cpu_instance = self
-                    .base
-                    .cpu_topo
-                    .get_topo_instance_for_qmp(cpu_index as usize);
+        let cpu_topo = self.get_cpu_topo();
+        let cpus = self.get_cpus();
+        for cpu_index in 0..cpu_topo.max_cpus {
+            if cpu_topo.get_mask(cpu_index as usize) == 1 {
+                let thread_id = cpus[cpu_index as usize].tid();
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")

@@ -15,10 +15,9 @@ mod syscall;
 
 pub use crate::error::MachineError;
 
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
@@ -40,10 +39,8 @@ use acpi::{
     ROOT_COMPLEX_ENTRY_SIZE,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
-use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{
-    CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE,
-};
+use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
+
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
 use devices::acpi::power::PowerDev;
 #[cfg(feature = "ramfb")]
@@ -52,7 +49,7 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
-use devices::sysbus::{SysBus, SysBusDevType, SysRes};
+use devices::sysbus::{SysBusDevType, SysRes};
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "ramfb")]
@@ -61,8 +58,7 @@ use machine_manager::config::ShutdownAction;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, DriveFile, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -156,8 +152,6 @@ pub struct StdMachine {
     dtb_vec: Vec<u8>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// FwCfg device.
-    fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
 }
 
 impl StdMachine {
@@ -205,7 +199,6 @@ impl StdMachine {
             ),
             dtb_vec: Vec::new(),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
-            fwcfg_dev: None,
         })
     }
 
@@ -317,23 +310,6 @@ impl StdMachine {
         }
     }
 
-    /// Must be called after the CPUs have been realized and GIC has been created.
-    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
-        let features = vcpu_cfg.unwrap_or_default();
-        if features.pmu {
-            for cpu in self.base.cpus.iter() {
-                cpu.init_pmu()?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn mem_show(&self) {
-        self.base.sys_mem.memspace_show();
-        let machine_ram = self.get_vm_ram();
-        machine_ram.mtree(0_u32);
-    }
-
     pub fn get_vcpu_reg_val(&self, addr: u64, vcpu_index: usize) -> Option<u128> {
         if let Some(vcpu) = self.get_cpus().get(vcpu_index) {
             let (cpu_state, _) = vcpu.state();
@@ -357,10 +333,6 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
     fn init_pci_host(&self) -> StdResult<()> {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
@@ -430,13 +402,17 @@ impl StdMachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
         )
         .with_context(|| "Failed to realize fwcfg device")?;
-        self.fwcfg_dev = Some(fwcfg_dev.clone());
+        self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
     }
 }
 
 impl MachineOps for StdMachine {
+    fn machine_base(&self) -> &MachineBase {
+        &self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 
@@ -501,28 +477,6 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
-        let mut boot_source = self.base.boot_source.lock().unwrap();
-        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
-
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-        };
-        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
-        if let Some(rd) = &mut boot_source.initrd {
-            rd.initrd_addr = layout.initrd_start;
-            rd.initrd_size = layout.initrd_size;
-        }
-
-        Ok(CPUBootConfig {
-            fdt_addr: layout.dtb_start,
-            boot_pc: layout.boot_pc,
-        })
-    }
-
     fn add_rtc_device(&mut self) -> Result<()> {
         let rtc = PL031::default();
         PL031::realize(
@@ -579,10 +533,6 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
-        self.base.drive_files.clone()
-    }
-
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         use super::error::StandardVmError as StdErrorKind;
 
@@ -615,11 +565,15 @@ impl MachineOps for StdMachine {
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
-        } else {
-            None
-        };
+        let boot_config =
+            if migrate.0 == MigrateMode::Unknown {
+                Some(locked_vm.load_boot_source(
+                    fwcfg.as_ref(),
+                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+                )?)
+            } else {
+                None
+            };
         let cpu_config = if migrate.0 == MigrateMode::Unknown {
             Some(locked_vm.load_cpu_features(vm_config)?)
         } else {
@@ -764,55 +718,8 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(
-            paused,
-            &self.base.cpus,
-            &mut self.base.vm_state.0.lock().unwrap(),
-        )
-    }
-
-    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
-        &self.base.sys_mem
-    }
-
-    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
-        self.base.vm_config.clone()
-    }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.base.vm_state
-    }
-
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
-    }
-
     fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.base.sysbus
-    }
-
-    fn get_vm_ram(&self) -> &Arc<Region> {
-        &self.base.machine_ram
-    }
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.base.numa_nodes
-    }
-
-    fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
-        if let Some(fwcfg_dev) = &self.fwcfg_dev {
-            return Some(fwcfg_dev.clone());
-        }
-        None
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {

@@ -111,7 +111,7 @@ use virtio::{
 };
 
 /// Machine structure include base members.
-struct MachineBase {
+pub struct MachineBase {
     /// `vCPU` topology, support sockets, cores, threads.
     cpu_topo: CpuTopology,
     /// `vCPU` devices.
@@ -139,6 +139,8 @@ struct MachineBase {
     numa_nodes: Option<NumaNodes>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// FwCfg device.
+    fwcfg_dev: Option<Arc<Mutex<dyn FwCfgOps>>>,
     /// machine all backend memory region tree
     machine_ram: Arc<Region>,
 }
@@ -191,6 +193,7 @@ impl MachineBase {
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            fwcfg_dev: None,
             machine_ram: Arc::new(Region::init_container_region(
                 u64::max_value(),
                 "MachineRam",
@@ -200,6 +203,8 @@ impl MachineBase {
 }
 
 pub trait MachineOps {
+    fn machine_base(&self) -> &MachineBase;
+
     fn build_smbios(
         &self,
         fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
@@ -227,7 +232,37 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
+
+    #[cfg(target_arch = "aarch64")]
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+        mem_start: u64,
+    ) -> Result<CPUBootConfig> {
+        use boot_loader::{load_linux, BootLoaderConfig};
+
+        let mut boot_source = self.machine_base().boot_source.lock().unwrap();
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
+
+        let bootloader_config = BootLoaderConfig {
+            kernel: boot_source.kernel_file.clone(),
+            initrd,
+            mem_start,
+        };
+        let layout = load_linux(&bootloader_config, &self.machine_base().sys_mem, fwcfg)
+            .with_context(|| MachineError::LoadKernErr)?;
+        if let Some(rd) = &mut boot_source.initrd {
+            rd.initrd_addr = layout.initrd_start;
+            rd.initrd_size = layout.initrd_size;
+        }
+
+        Ok(CPUBootConfig {
+            fdt_addr: layout.dtb_start,
+            boot_pc: layout.boot_pc,
+        })
+    }
 
     #[cfg(target_arch = "aarch64")]
     fn load_cpu_features(&self, vmcfg: &VmConfig) -> Result<CPUFeatures> {
@@ -307,6 +342,13 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn mem_show(&self) {
+        self.machine_base().sys_mem.memspace_show();
+        #[cfg(target_arch = "x86_64")]
+        self.machine_base().sys_io.memspace_show();
+        self.get_vm_ram().mtree(0_u32);
+    }
+
     /// Init vcpu register with boot message.
     ///
     /// # Arguments
@@ -368,6 +410,47 @@ pub trait MachineOps {
         }
 
         Ok(cpus)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn arch_init(&self, identity_addr: u64) -> Result<()> {
+        use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+
+        vm_fd
+            .set_identity_map_address(identity_addr)
+            .with_context(|| MachineError::SetIdentityMapAddr)?;
+
+        // Page table takes 1 page, TSS takes the following 3 pages.
+        vm_fd
+            .set_tss_address((identity_addr + 0x1000) as usize)
+            .with_context(|| MachineError::SetTssErr)?;
+
+        let pit_config = kvm_pit_config {
+            flags: KVM_PIT_SPEAKER_DUMMY,
+            pad: Default::default(),
+        };
+        vm_fd
+            .create_pit2(pit_config)
+            .with_context(|| MachineError::CrtPitErr)
+    }
+
+    /// Must be called after the CPUs have been realized and GIC has been created.
+    ///
+    /// # Arguments
+    ///
+    /// * `CPUFeatures` - The features of vcpu.
+    #[cfg(target_arch = "aarch64")]
+    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
+        let features = vcpu_cfg.unwrap_or_default();
+        if features.pmu {
+            for cpu in self.machine_base().cpus.iter() {
+                cpu.init_pmu()?;
+            }
+        }
+        Ok(())
     }
 
     /// Add interrupt controller.
@@ -451,19 +534,43 @@ pub trait MachineOps {
         bail!("Virtio mmio devices not supported");
     }
 
-    fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
+    fn get_cpu_topo(&self) -> &CpuTopology {
+        &self.machine_base().cpu_topo
+    }
 
-    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>>;
+    fn get_cpus(&self) -> &Vec<Arc<CPU>> {
+        &self.machine_base().cpus
+    }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
+        &self.machine_base().sys_mem
+    }
 
-    fn get_vm_ram(&self) -> &Arc<Region>;
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
+        self.machine_base().vm_config.clone()
+    }
 
-    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.machine_base().vm_state
+    }
+
+    fn get_vm_ram(&self) -> &Arc<Region> {
+        &self.machine_base().machine_ram
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.machine_base().numa_nodes
+    }
 
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
-    fn get_migrate_info(&self) -> Incoming;
+    fn get_migrate_info(&self) -> Incoming {
+        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
+            return (*mode, path.to_string());
+        }
+
+        (MigrateMode::Unknown, String::new())
+    }
 
     /// Add net device.
     ///
@@ -703,10 +810,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn get_sys_bus(&mut self) -> &SysBus;
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.machine_base().sysbus
+    }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
-        None
+        self.machine_base().fwcfg_dev.clone()
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
@@ -1708,7 +1817,9 @@ pub trait MachineOps {
     }
 
     /// Get the drive backend files.
-    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>>;
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.machine_base().drive_files.clone()
+    }
 
     /// Fetch a cloned file from drive backend files.
     fn fetch_drive_file(&self, path: &str) -> Result<File> {
@@ -1788,7 +1899,13 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
-    fn run(&self, paused: bool) -> Result<()>;
+    fn run(&self, paused: bool) -> Result<()> {
+        self.vm_start(
+            paused,
+            &self.machine_base().cpus,
+            &mut self.machine_base().vm_state.0.lock().unwrap(),
+        )
+    }
 
     /// Start machine as `Running` or `Paused` state.
     ///

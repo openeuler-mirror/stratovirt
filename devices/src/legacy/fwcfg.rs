@@ -1187,7 +1187,7 @@ impl SysBusDevOps for FwCfgIO {
     }
 }
 
-pub trait FwCfgOps {
+pub trait FwCfgOps: Send + Sync {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon;
 
     /// Add an entry to FwCfg device, with Vector content.
