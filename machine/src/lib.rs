@@ -45,7 +45,7 @@ use address_space::{
 };
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
+use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(feature = "scream")]
 use devices::misc::scream::Scream;
@@ -79,9 +79,9 @@ use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
-    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, DriveFile, Incoming,
-    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig,
-    PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, BootSource, DriveFile,
+    Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes,
+    PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::config::{
     parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
@@ -109,6 +109,95 @@ use virtio::{
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
+
+/// Machine structure include base members.
+struct MachineBase {
+    /// `vCPU` topology, support sockets, cores, threads.
+    cpu_topo: CpuTopology,
+    /// `vCPU` devices.
+    cpus: Vec<Arc<CPU>>,
+    /// `vCPU` family and feature configuration. Only supports aarch64 currently.
+    #[cfg(target_arch = "aarch64")]
+    cpu_features: CPUFeatures,
+    /// Interrupt controller device.
+    #[cfg(target_arch = "aarch64")]
+    irq_chip: Option<Arc<InterruptController>>,
+    /// Memory address space.
+    sys_mem: Arc<AddressSpace>,
+    // IO address space.
+    #[cfg(target_arch = "x86_64")]
+    sys_io: Arc<AddressSpace>,
+    /// System bus.
+    sysbus: SysBus,
+    /// VM running state.
+    vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
+    /// Vm boot_source config.
+    boot_source: Arc<Mutex<BootSource>>,
+    /// All configuration information of virtual machine.
+    vm_config: Arc<Mutex<VmConfig>>,
+    /// List of guest NUMA nodes information.
+    numa_nodes: Option<NumaNodes>,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// machine all backend memory region tree
+    machine_ram: Arc<Region>,
+}
+
+impl MachineBase {
+    pub fn new(
+        vm_config: &VmConfig,
+        free_irqs: (i32, i32),
+        mmio_region: (u64, u64),
+    ) -> Result<Self> {
+        let cpu_topo = CpuTopology::new(
+            vm_config.machine_config.nr_cpus,
+            vm_config.machine_config.nr_sockets,
+            vm_config.machine_config.nr_dies,
+            vm_config.machine_config.nr_clusters,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.max_cpus,
+        );
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "SysMem"),
+            "sys_mem",
+        )
+        .with_context(|| MachineError::CrtIoSpaceErr)?;
+
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16, "SysIo"), "SysIo")
+            .with_context(|| MachineError::CrtIoSpaceErr)?;
+        let sysbus = SysBus::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            free_irqs,
+            mmio_region,
+        );
+
+        Ok(MachineBase {
+            cpu_topo,
+            cpus: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            cpu_features: (&vm_config.machine_config.cpu_config).into(),
+            #[cfg(target_arch = "aarch64")]
+            irq_chip: None,
+            sys_mem,
+            #[cfg(target_arch = "x86_64")]
+            sys_io,
+            sysbus,
+            vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
+            boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
+            vm_config: Arc::new(Mutex::new(vm_config.clone())),
+            numa_nodes: None,
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
+            machine_ram: Arc::new(Region::init_container_region(
+                u64::max_value(),
+                "MachineRam",
+            )),
+        })
+    }
+}
 
 pub trait MachineOps {
     fn build_smbios(
