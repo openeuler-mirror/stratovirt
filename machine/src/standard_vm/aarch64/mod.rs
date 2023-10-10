@@ -26,7 +26,7 @@ use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
-use crate::MachineOps;
+use crate::{MachineBase, MachineOps};
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -62,8 +62,8 @@ use machine_manager::config::ShutdownAction;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
-    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, DriveFile, Incoming, MigrateMode, NumaNode, NumaNodes,
+    PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -139,27 +139,12 @@ const IRQ_MAP: &[(i32, i32)] = &[
 
 /// Standard machine structure.
 pub struct StdMachine {
-    /// `vCPU` topology, support sockets, cores, threads.
-    cpu_topo: CpuTopology,
-    /// `vCPU` devices.
-    cpus: Vec<Arc<CPU>>,
-    cpu_features: CPUFeatures,
-    // Interrupt controller device.
-    irq_chip: Option<Arc<InterruptController>>,
-    /// Memory address space.
-    pub sys_mem: Arc<AddressSpace>,
-    /// System bus.
-    sysbus: SysBus,
+    /// Machine base members.
+    base: MachineBase,
     /// PCI/PCIe host bridge.
     pci_host: Arc<Mutex<PciHost>>,
-    /// VM running state.
-    vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
-    /// Vm boot_source config.
-    boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
     pub power_button: Arc<EventFd>,
-    /// All configuration information of virtual machine.
-    vm_config: Arc<Mutex<VmConfig>>,
     /// Shutdown request, handle VM `shutdown` event.
     shutdown_req: Arc<EventFd>,
     /// Reset request, handle VM `Reset` event.
@@ -170,53 +155,27 @@ pub struct StdMachine {
     resume_req: Arc<EventFd>,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
-    /// List of guest NUMA nodes information.
-    numa_nodes: Option<NumaNodes>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
-    /// Drive backend files.
-    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-    /// machine all backend memory region tree
-    machine_ram: Arc<Region>,
 }
 
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
-        let cpu_topo = CpuTopology::new(
-            vm_config.machine_config.nr_cpus,
-            vm_config.machine_config.nr_sockets,
-            vm_config.machine_config.nr_dies,
-            vm_config.machine_config.nr_clusters,
-            vm_config.machine_config.nr_cores,
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.max_cpus,
+        let free_irqs = (
+            IRQ_MAP[IrqEntryType::Sysbus as usize].0,
+            IRQ_MAP[IrqEntryType::Sysbus as usize].1,
         );
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "SysMem"),
-            "sys_mem",
-        )
-        .with_context(|| MachineError::CrtIoSpaceErr)?;
-        let sysbus = SysBus::new(
-            &sys_mem,
-            (
-                IRQ_MAP[IrqEntryType::Sysbus as usize].0,
-                IRQ_MAP[IrqEntryType::Sysbus as usize].1,
-            ),
-            (
-                MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
-                MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
-            ),
+        let mmio_region: (u64, u64) = (
+            MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
+            MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
         );
+        let base = MachineBase::new(vm_config, free_irqs, mmio_region)?;
+        let sys_mem = base.sys_mem.clone();
 
         Ok(StdMachine {
-            cpu_topo,
-            cpus: Vec::new(),
-            cpu_features: (&vm_config.machine_config.cpu_config).into(),
-            irq_chip: None,
-            sys_mem: sys_mem.clone(),
-            sysbus,
+            base,
             pci_host: Arc::new(Mutex::new(PciHost::new(
                 &sys_mem,
                 MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize],
@@ -225,13 +184,10 @@ impl StdMachine {
                 MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
                 IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
-            boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
-            vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
             ),
-            vm_config: Arc::new(Mutex::new(vm_config.clone())),
             shutdown_req: Arc::new(
                 EventFd::new(libc::EFD_NONBLOCK)
                     .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
@@ -249,14 +205,8 @@ impl StdMachine {
                     .with_context(|| MachineError::InitEventFdErr("resume_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),
-            numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
-            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
-            machine_ram: Arc::new(Region::init_container_region(
-                u64::max_value(),
-                "MachineRam",
-            )),
         })
     }
 
@@ -264,7 +214,7 @@ impl StdMachine {
         let mut locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
 
-        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+        for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
@@ -278,6 +228,7 @@ impl StdMachine {
         }
 
         locked_vm
+            .base
             .sys_mem
             .write(
                 &mut locked_vm.dtb_vec.as_slice(),
@@ -298,9 +249,9 @@ impl StdMachine {
             event!(Reset; reset_msg);
         }
 
-        locked_vm.irq_chip.as_ref().unwrap().reset()?;
+        locked_vm.base.irq_chip.as_ref().unwrap().reset()?;
 
-        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+        for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
@@ -309,7 +260,7 @@ impl StdMachine {
     }
 
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
-        for core in 0..self.cpu_topo.cores {
+        for core in 0..self.base.cpu_topo.cores {
             let mut priv_resources = vec![0; 3];
             priv_resources[0] = pptt.table_len() as u32;
             let mut cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L2);
@@ -321,13 +272,13 @@ impl StdMachine {
             cache_hierarchy_node = CacheHierarchyNode::new(priv_resources[0], CacheType::L1I);
             pptt.append_child(&cache_hierarchy_node.aml_bytes());
 
-            if self.cpu_topo.threads > 1 {
+            if self.base.cpu_topo.threads > 1 {
                 let core_offset = pptt.table_len();
                 let core_hierarchy_node =
                     ProcessorHierarchyNode::new(0x0, cluster_offset, core as u32, 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
                 processor_append_priv_res(pptt, priv_resources);
-                for _thread in 0..self.cpu_topo.threads {
+                for _thread in 0..self.base.cpu_topo.threads {
                     let thread_hierarchy_node =
                         ProcessorHierarchyNode::new(0xE, core_offset as u32, *uid, 0);
                     pptt.append_child(&thread_hierarchy_node.aml_bytes());
@@ -343,7 +294,7 @@ impl StdMachine {
     }
 
     fn build_pptt_clusters(&self, pptt: &mut AcpiTable, socket_offset: u32, uid: &mut u32) {
-        for cluster in 0..self.cpu_topo.clusters {
+        for cluster in 0..self.base.cpu_topo.clusters {
             let cluster_offset = pptt.table_len();
             let cluster_hierarchy_node =
                 ProcessorHierarchyNode::new(0x0, socket_offset, cluster as u32, 0);
@@ -353,7 +304,7 @@ impl StdMachine {
     }
 
     fn build_pptt_sockets(&self, pptt: &mut AcpiTable, uid: &mut u32) {
-        for socket in 0..self.cpu_topo.sockets {
+        for socket in 0..self.base.cpu_topo.sockets {
             let priv_resources = vec![pptt.table_len() as u32];
             let cache_hierarchy_node = CacheHierarchyNode::new(0, CacheType::L3);
             pptt.append_child(&cache_hierarchy_node.aml_bytes());
@@ -371,7 +322,7 @@ impl StdMachine {
     fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
         let features = vcpu_cfg.unwrap_or_default();
         if features.pmu {
-            for cpu in self.cpus.iter() {
+            for cpu in self.base.cpus.iter() {
                 cpu.init_pmu()?;
             }
         }
@@ -379,7 +330,7 @@ impl StdMachine {
     }
 
     pub fn mem_show(&self) {
-        self.sys_mem.memspace_show();
+        self.base.sys_mem.memspace_show();
         let machine_ram = self.get_vm_ram();
         machine_ram.mtree(0_u32);
     }
@@ -415,7 +366,8 @@ impl StdMachineOps for StdMachine {
             mmconfig_region_ops,
             "PcieEcamIo",
         );
-        self.sys_mem
+        self.base
+            .sys_mem
             .root()
             .add_subregion(
                 mmconfig_region,
@@ -432,16 +384,22 @@ impl StdMachineOps for StdMachine {
     }
 
     fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Option<Arc<Mutex<dyn FwCfgOps>>>> {
-        if self.vm_config.lock().unwrap().pflashs.is_none() {
+        if self.base.vm_config.lock().unwrap().pflashs.is_none() {
             return Ok(None);
         }
 
-        let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
+        let mut fwcfg = FwCfgMem::new(self.base.sys_mem.clone());
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
             .with_context(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
 
-        let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
+        let cmdline = self
+            .base
+            .boot_source
+            .lock()
+            .unwrap()
+            .kernel_cmdline
+            .to_string();
         fwcfg
             .add_data_entry(
                 FwCfgEntryType::CmdlineSize,
@@ -464,7 +422,7 @@ impl StdMachineOps for StdMachine {
 
         let fwcfg_dev = FwCfgMem::realize(
             fwcfg,
-            &mut self.sysbus,
+            &mut self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
         )
@@ -475,15 +433,15 @@ impl StdMachineOps for StdMachine {
     }
 
     fn get_cpu_topo(&self) -> &CpuTopology {
-        &self.cpu_topo
+        &self.base.cpu_topo
     }
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>> {
-        &self.cpus
+        &self.base.cpus
     }
 
     fn get_guest_numa(&self) -> &Option<NumaNodes> {
-        &self.numa_nodes
+        &self.base.numa_nodes
     }
 }
 
@@ -522,8 +480,8 @@ impl MachineOps for StdMachine {
             v3: Some(v3),
         };
         let irq_chip = InterruptController::new(&intc_conf)?;
-        self.irq_chip = Some(Arc::new(irq_chip));
-        self.irq_chip.as_ref().unwrap().realize()?;
+        self.base.irq_chip = Some(Arc::new(irq_chip));
+        self.base.irq_chip.as_ref().unwrap().realize()?;
         KVM_FDS
             .load()
             .irq_route_table
@@ -553,7 +511,7 @@ impl MachineOps for StdMachine {
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
-        let mut boot_source = self.boot_source.lock().unwrap();
+        let mut boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let bootloader_config = BootLoaderConfig {
@@ -561,7 +519,7 @@ impl MachineOps for StdMachine {
             initrd,
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
+        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
             .with_context(|| MachineError::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
@@ -578,7 +536,7 @@ impl MachineOps for StdMachine {
         let rtc = PL031::default();
         PL031::realize(
             rtc,
-            &mut self.sysbus,
+            &mut self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
@@ -587,11 +545,11 @@ impl MachineOps for StdMachine {
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
-        let battery_present = self.vm_config.lock().unwrap().machine_config.battery;
+        let battery_present = self.base.vm_config.lock().unwrap().machine_config.battery;
         let ged = Ged::default();
         let ged_dev = ged
             .realize(
-                &mut self.sysbus,
+                &mut self.base.sysbus,
                 self.power_button.clone(),
                 battery_present,
                 MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
@@ -601,7 +559,7 @@ impl MachineOps for StdMachine {
         if battery_present {
             let pdev = PowerDev::new(ged_dev);
             pdev.realize(
-                &mut self.sysbus,
+                &mut self.base.sysbus,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
             )
@@ -617,10 +575,10 @@ impl MachineOps for StdMachine {
         let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
         pl011
             .realize(
-                &mut self.sysbus,
+                &mut self.base.sysbus,
                 region_base,
                 region_size,
-                &self.boot_source,
+                &self.base.boot_source,
             )
             .with_context(|| "Failed to realize PL011")?;
         Ok(())
@@ -631,7 +589,7 @@ impl MachineOps for StdMachine {
     }
 
     fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
-        self.drive_files.clone()
+        self.base.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
@@ -653,10 +611,10 @@ impl MachineOps for StdMachine {
             .register_resume_event(locked_vm.resume_req.clone(), vm.clone())
             .with_context(|| "Fail to register resume event")?;
 
-        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
-            &locked_vm.sys_mem,
+            &locked_vm.base.sys_mem,
             nr_cpus,
         )?;
 
@@ -677,7 +635,7 @@ impl MachineOps for StdMachine {
             None
         };
 
-        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+        locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             nr_cpus,
             &CPUTopology::new(),
@@ -702,6 +660,7 @@ impl MachineOps for StdMachine {
             let fdt_vec = fdt_helper.finish()?;
             locked_vm.dtb_vec = fdt_vec.clone();
             locked_vm
+                .base
                 .sys_mem
                 .write(
                     &mut fdt_vec.as_slice(),
@@ -765,7 +724,7 @@ impl MachineOps for StdMachine {
 
             let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
                 .with_context(|| StdErrorKind::InitPflashErr)?;
-            PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size, fd)
+            PFlash::realize(pflash, &mut self.base.sysbus, flash_base, flash_size, fd)
                 .with_context(|| StdErrorKind::RlzPflashErr)?;
             flash_base += flash_size;
         }
@@ -810,24 +769,28 @@ impl MachineOps for StdMachine {
         let mut ramfb = Ramfb::new(sys_mem.clone(), install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize(&mut self.sysbus)?;
+        ramfb.realize(&mut self.base.sysbus)?;
         Ok(())
     }
 
     fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(
+            paused,
+            &self.base.cpus,
+            &mut self.base.vm_state.0.lock().unwrap(),
+        )
     }
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
-        &self.sys_mem
+        &self.base.sys_mem
     }
 
     fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
-        self.vm_config.clone()
+        self.base.vm_config.clone()
     }
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.vm_state
+        &self.base.vm_state
     }
 
     fn get_migrate_info(&self) -> Incoming {
@@ -843,15 +806,15 @@ impl MachineOps for StdMachine {
     }
 
     fn get_sys_bus(&mut self) -> &SysBus {
-        &self.sysbus
+        &self.base.sysbus
     }
 
     fn get_vm_ram(&self) -> &Arc<Region> {
-        &self.machine_ram
+        &self.base.machine_ram
     }
 
     fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.numa_nodes
+        &self.base.numa_nodes
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
@@ -1046,7 +1009,7 @@ impl AcpiBuilder for StdMachine {
         spcr.set_field(52, 1_u8 << 3);
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
-        for dev in self.sysbus.devices.iter() {
+        for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
                 uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
@@ -1078,7 +1041,7 @@ impl AcpiBuilder for StdMachine {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
-        let cpus_count = self.cpus.len() as u64;
+        let cpus_count = self.base.cpus.len() as u64;
         let mut sb_scope = AmlScope::new("\\_SB");
         for cpu_id in 0..cpus_count {
             let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
@@ -1095,7 +1058,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
         // 3. Info of devices attached to system bus.
-        dsdt.append_child(self.sysbus.aml_bytes().as_slice());
+        dsdt.append_child(self.base.sysbus.aml_bytes().as_slice());
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;
@@ -1119,9 +1082,13 @@ impl AcpiBuilder for StdMachine {
         madt.append_child(&gic_dist.aml_bytes());
 
         // 2. GIC CPU.
-        let cpus_count = self.cpus.len() as u64;
+        let cpus_count = self.base.cpus.len() as u64;
         for cpu_index in 0..cpus_count {
-            let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
+            let mpidr = self.base.cpus[cpu_index as usize]
+                .arch()
+                .lock()
+                .unwrap()
+                .mpidr();
             let mpidr_mask: u64 = 0x007f_ffff;
             let mut gic_cpu = AcpiGicCpu::default();
             gic_cpu.type_id = ACPI_MADT_GENERIC_CPU_INTERFACE;
@@ -1143,7 +1110,7 @@ impl AcpiBuilder for StdMachine {
         gic_redist.length = 16;
         madt.append_child(&gic_redist.aml_bytes());
         // SAFETY: ARM architecture must have interrupt controllers in user mode.
-        if self.irq_chip.as_ref().unwrap().get_redist_count() > 1 {
+        if self.base.irq_chip.as_ref().unwrap().get_redist_count() > 1 {
             gic_redist.range_length = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].1 as u32;
             gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].0;
             madt.append_child(&gic_redist.aml_bytes());
@@ -1212,7 +1179,7 @@ impl AcpiBuilder for StdMachine {
 
         let mut next_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
         // SAFETY: the SRAT table is created only when numa node configured.
-        for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
+        for (id, node) in self.base.numa_nodes.as_ref().unwrap().iter() {
             self.build_srat_cpu(*id, node, &mut srat);
             next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
         }
@@ -1256,7 +1223,7 @@ impl MachineLifecycle for StdMachine {
 
     fn destroy(&self) -> bool {
         let vmstate = {
-            let state = self.vm_state.deref().0.lock().unwrap();
+            let state = self.base.vm_state.deref().0.lock().unwrap();
             *state
         };
 
@@ -1283,7 +1250,8 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn get_shutdown_action(&self) -> ShutdownAction {
-        self.vm_config
+        self.base
+            .vm_config
             .lock()
             .unwrap()
             .machine_config
@@ -1300,9 +1268,9 @@ impl MachineLifecycle for StdMachine {
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
-            &self.cpus,
-            &self.irq_chip,
-            &mut self.vm_state.0.lock().unwrap(),
+            &self.base.cpus,
+            &self.base.irq_chip,
+            &mut self.base.vm_state.0.lock().unwrap(),
             old,
             new,
         ) {
@@ -1316,14 +1284,16 @@ impl MachineLifecycle for StdMachine {
 impl MachineAddressInterface for StdMachine {
     fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
         let length = data.len() as u64;
-        self.sys_mem
+        self.base
+            .sys_mem
             .read(&mut data, GuestAddress(addr), length)
             .is_ok()
     }
 
     fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
-        self.sys_mem
+        self.base
+            .sys_mem
             .write(&mut data, GuestAddress(addr), count)
             .is_ok()
     }
@@ -1357,7 +1327,7 @@ impl MachineTestInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
         *vmstate == KvmVmState::Shutdown
     }
 
@@ -1601,23 +1571,24 @@ impl CompileFDTHelper for StdMachine {
 
         // Generate CPU topology
         let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
-        for socket in 0..self.cpu_topo.sockets {
+        for socket in 0..self.base.cpu_topo.sockets {
             let sock_name = format!("cluster{}", socket);
             let sock_node_dep = fdt.begin_node(&sock_name)?;
-            for cluster in 0..self.cpu_topo.clusters {
+            for cluster in 0..self.base.cpu_topo.clusters {
                 let clster = format!("cluster{}", cluster);
                 let cluster_node_dep = fdt.begin_node(&clster)?;
 
-                for core in 0..self.cpu_topo.cores {
+                for core in 0..self.base.cpu_topo.cores {
                     let core_name = format!("core{}", core);
                     let core_node_dep = fdt.begin_node(&core_name)?;
 
-                    for thread in 0..self.cpu_topo.threads {
+                    for thread in 0..self.base.cpu_topo.threads {
                         let thread_name = format!("thread{}", thread);
                         let thread_node_dep = fdt.begin_node(&thread_name)?;
-                        let vcpuid = self.cpu_topo.threads * self.cpu_topo.cores * cluster
-                            + self.cpu_topo.threads * core
-                            + thread;
+                        let vcpuid =
+                            self.base.cpu_topo.threads * self.base.cpu_topo.cores * cluster
+                                + self.base.cpu_topo.threads * core
+                                + thread;
                         fdt.set_property_u32(
                             "cpu",
                             u32::from(vcpuid) + device_tree::CPU_PHANDLE_START,
@@ -1632,8 +1603,12 @@ impl CompileFDTHelper for StdMachine {
         }
         fdt.end_node(cpu_map_node_dep)?;
 
-        for cpu_index in 0..self.cpu_topo.nrcpus {
-            let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
+        for cpu_index in 0..self.base.cpu_topo.nrcpus {
+            let mpidr = self.base.cpus[cpu_index as usize]
+                .arch()
+                .lock()
+                .unwrap()
+                .mpidr();
 
             let node = format!("cpu@{:x}", mpidr);
             let mpidr_node_dep = fdt.begin_node(&node)?;
@@ -1643,13 +1618,13 @@ impl CompileFDTHelper for StdMachine {
             )?;
             fdt.set_property_string("device_type", "cpu")?;
             fdt.set_property_string("compatible", "arm,arm-v8")?;
-            if self.cpu_topo.max_cpus > 1 {
+            if self.base.cpu_topo.max_cpus > 1 {
                 fdt.set_property_string("enable-method", "psci")?;
             }
             fdt.set_property_u64("reg", mpidr & 0x007F_FFFF)?;
             fdt.set_property_u32("phandle", device_tree::FIRST_VCPU_PHANDLE)?;
 
-            if let Some(numa_nodes) = &self.numa_nodes {
+            if let Some(numa_nodes) = &self.base.numa_nodes {
                 for numa_index in 0..numa_nodes.len() {
                     let numa_node = numa_nodes.get(&(numa_index as u32));
                     if numa_node.unwrap().cpus.contains(&(cpu_index)) {
@@ -1663,7 +1638,7 @@ impl CompileFDTHelper for StdMachine {
 
         fdt.end_node(cpus_node_dep)?;
 
-        if self.cpu_features.pmu {
+        if self.base.cpu_features.pmu {
             generate_pmu_node(fdt)?;
         }
 
@@ -1671,9 +1646,9 @@ impl CompileFDTHelper for StdMachine {
     }
 
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        if self.numa_nodes.is_none() {
+        if self.base.numa_nodes.is_none() {
             let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-            let mem_size = self.sys_mem.memory_end_address().raw_value()
+            let mem_size = self.base.sys_mem.memory_end_address().raw_value()
                 - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
             let node = "memory";
             let memory_node_dep = fdt.begin_node(node)?;
@@ -1686,7 +1661,7 @@ impl CompileFDTHelper for StdMachine {
 
         // Set NUMA node information.
         let mut mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        for (id, node) in self.numa_nodes.as_ref().unwrap().iter().enumerate() {
+        for (id, node) in self.base.numa_nodes.as_ref().unwrap().iter().enumerate() {
             let mem_size = node.1.size;
             let node = format!("memory@{:x}", mem_base);
             let memory_node_dep = fdt.begin_node(&node)?;
@@ -1732,7 +1707,7 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_string("method", "hvc")?;
         fdt.end_node(psci_node_dep)?;
 
-        for dev in self.sysbus.devices.iter() {
+        for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
@@ -1764,7 +1739,7 @@ impl CompileFDTHelper for StdMachine {
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "chosen";
 
-        let boot_source = self.boot_source.lock().unwrap();
+        let boot_source = self.base.boot_source.lock().unwrap();
 
         let chosen_node_dep = fdt.begin_node(node)?;
         let cmdline = &boot_source.kernel_cmdline.to_string();
@@ -1787,7 +1762,7 @@ impl CompileFDTHelper for StdMachine {
     }
 
     fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        if self.numa_nodes.is_none() {
+        if self.base.numa_nodes.is_none() {
             return Ok(());
         }
 
@@ -1795,7 +1770,7 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_string("compatible", "numa-distance-map-v1")?;
 
         let mut matrix = Vec::new();
-        let numa_nodes = self.numa_nodes.as_ref().unwrap();
+        let numa_nodes = self.base.numa_nodes.as_ref().unwrap();
         let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
         for (id, node) in numa_nodes.iter().enumerate() {
             let distances = &node.1.distances;
@@ -1833,7 +1808,11 @@ impl device_tree::CompileFDT for StdMachine {
         self.generate_memory_node(fdt)?;
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
-        self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
+        self.base
+            .irq_chip
+            .as_ref()
+            .unwrap()
+            .generate_fdt_node(fdt)?;
         self.generate_distance_node(fdt)?;
         fdt.end_node(node_dep)?;
 
