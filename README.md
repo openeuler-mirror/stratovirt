@@ -6,8 +6,9 @@ three scenarios: virtual machines, containers, and serverless computing.
 StratoVirt has competitive advantages in light weight and low noise, software
 and hardware coordination, and Rust language-level security.
 
-StratoVirt reserves interface and design for importing more features, even
-evaluates to standard virtualization.
+StratoVirt reserves interfaces and design to support more features, now can support
+standard and lightweight virtualization together,
+as well as the ability to extend support for new heterogeneous devices.
 
 ## How to start
 
