@@ -954,125 +954,6 @@ pub struct getfd {
 }
 generate_command_impl!(getfd, Empty);
 
-/// Shutdown
-///
-/// Emitted when the virtual machine has shut down, indicating that StratoVirt is
-/// about to exit.
-///
-/// # Notes
-///
-/// If the command-line option "-no-shutdown" has been specified, StratoVirt
-/// will not exit, and a STOP event will eventually follow the SHUTDOWN event
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Shutdown {
-    /// If true, the shutdown was triggered by a guest request (such as
-    /// a guest-initiated ACPI shutdown request or other hardware-specific
-    /// action) rather than a host request (such as sending StratoVirt a SIGINT).
-    #[serde(rename = "guest")]
-    pub guest: bool,
-    pub reason: String,
-}
-
-/// Reset
-///
-/// Emitted when the virtual machine is reset
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Reset {
-    /// If true, the reset was triggered by a guest request (such as
-    /// a guest-initiated ACPI reboot request or other hardware-specific action
-    /// ) rather than a host request (such as the QMP command system_reset).
-    #[serde(rename = "guest")]
-    pub guest: bool,
-}
-
-/// Stop
-///
-/// Emitted when the virtual machine is stopped
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Stop {}
-
-/// Resume
-///
-/// Emitted when the virtual machine resumes execution
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Resume {}
-
-/// Powerdown
-///
-/// Emitted when the virtual machine powerdown execution
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Powerdown {}
-
-/// DeviceDeleted
-///
-/// Emitted whenever the device removal completion is acknowledged by the guest.
-/// At this point, it's safe to reuse the specified device ID. Device removal can
-/// be initiated by the guest or by HMP/QMP commands.
-///
-/// # Examples
-///
-/// ```text
-/// <- { "event": "DEVICE_DELETED",
-///      "data": { "device": "virtio-net-mmio-0",
-///                "path": "/machine/peripheral/virtio-net-mmio-0" },
-///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct DeviceDeleted {
-    /// Device name.
-    #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
-    /// Device path.
-    #[serde(rename = "path")]
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
-#[serde(tag = "event")]
-pub enum QmpEvent {
-    #[serde(rename = "SHUTDOWN")]
-    Shutdown {
-        data: Shutdown,
-        timestamp: TimeStamp,
-    },
-    #[serde(rename = "RESET")]
-    Reset { data: Reset, timestamp: TimeStamp },
-    #[serde(rename = "STOP")]
-    Stop {
-        #[serde(default)]
-        data: Stop,
-        timestamp: TimeStamp,
-    },
-    #[serde(rename = "RESUME")]
-    Resume {
-        #[serde(default)]
-        data: Resume,
-        timestamp: TimeStamp,
-    },
-    #[serde(rename = "POWERDOWN")]
-    Powerdown {
-        #[serde(default)]
-        data: Powerdown,
-        timestamp: TimeStamp,
-    },
-    #[serde(rename = "DEVICE_DELETED")]
-    DeviceDeleted {
-        data: DeviceDeleted,
-        timestamp: TimeStamp,
-    },
-    #[serde(rename = "BALLOON_CHANGED")]
-    BalloonChanged {
-        data: BalloonInfo,
-        timestamp: TimeStamp,
-    },
-}
-
 /// query-balloon:
 ///
 /// Query the actual size of memory of VM.
@@ -1768,6 +1649,115 @@ pub struct query_mem_gpa {
     pub gpa: String,
 }
 pub type QueryMemGpaArgument = query_mem_gpa;
+
+macro_rules! define_qmp_event_enum {
+    ($($event:ident($name:expr, $data_type:ty $(, $serde_default:ident)?)),*) => {
+        /// A enum to store all event struct
+        #[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
+        #[serde(tag = "event")]
+        pub enum QmpEvent {
+            $(
+                #[serde(rename = $name)]
+                #[strum(serialize = $name)]
+                $event {
+                    $(#[serde($serde_default)])?
+                    data: $data_type,
+                    timestamp: TimeStamp,
+                },
+            )*
+        }
+    };
+}
+
+// QMP event enum definition example: event("name", data, ..)
+define_qmp_event_enum!(
+    Shutdown("SHUTDOWN", Shutdown),
+    Reset("RESET", Reset),
+    Stop("STOP", Stop, default),
+    Resume("RESUME", Resume, default),
+    Powerdown("POWERDOWN", Powerdown, default),
+    DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
+    BalloonChanged("BALLOON_CHANGED", BalloonInfo)
+);
+
+/// Shutdown
+///
+/// Emitted when the virtual machine has shut down, indicating that StratoVirt is
+/// about to exit.
+///
+/// # Notes
+///
+/// If the command-line option "-no-shutdown" has been specified, StratoVirt
+/// will not exit, and a STOP event will eventually follow the SHUTDOWN event
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Shutdown {
+    /// If true, the shutdown was triggered by a guest request (such as
+    /// a guest-initiated ACPI shutdown request or other hardware-specific
+    /// action) rather than a host request (such as sending StratoVirt a SIGINT).
+    #[serde(rename = "guest")]
+    pub guest: bool,
+    pub reason: String,
+}
+
+/// Reset
+///
+/// Emitted when the virtual machine is reset
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Reset {
+    /// If true, the reset was triggered by a guest request (such as
+    /// a guest-initiated ACPI reboot request or other hardware-specific action
+    /// ) rather than a host request (such as the QMP command system_reset).
+    #[serde(rename = "guest")]
+    pub guest: bool,
+}
+
+/// Stop
+///
+/// Emitted when the virtual machine is stopped
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Stop {}
+
+/// Resume
+///
+/// Emitted when the virtual machine resumes execution
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Resume {}
+
+/// Powerdown
+///
+/// Emitted when the virtual machine powerdown execution
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Powerdown {}
+
+/// DeviceDeleted
+///
+/// Emitted whenever the device removal completion is acknowledged by the guest.
+/// At this point, it's safe to reuse the specified device ID. Device removal can
+/// be initiated by the guest or by HMP/QMP commands.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "DEVICE_DELETED",
+///      "data": { "device": "virtio-net-mmio-0",
+///                "path": "/machine/peripheral/virtio-net-mmio-0" },
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceDeleted {
+    /// Device name.
+    #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Device path.
+    #[serde(rename = "path")]
+    pub path: String,
+}
 
 #[cfg(test)]
 mod tests {
