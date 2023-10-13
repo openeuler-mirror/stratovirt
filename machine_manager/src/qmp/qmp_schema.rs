@@ -180,7 +180,7 @@ generate_command_impl!(qmp_capabilities, Empty);
 ///
 /// ```text
 /// -> { "execute": "quit" }
-/// <- { "return": {}}
+/// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,7 +189,7 @@ generate_command_impl!(quit, Empty);
 
 /// stop
 ///
-/// Stop all guest VCPU execution
+/// Stop all guest VCPU execution.
 ///
 /// # Examples
 ///
@@ -261,7 +261,7 @@ generate_command_impl!(system_reset, Empty);
 ///
 /// ```text
 /// -> { "execute": "device_add",
-///      "arguments": { "id": "net-0", "driver": "virtio-net-mmio", "addr": "0x0"}}
+///      "arguments": { "id": "net-0", "driver": "virtio-net-mmio", "addr": "0x0" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -342,7 +342,8 @@ generate_command_impl!(device_add, Empty);
 ///
 /// ```text
 /// -> { "execute": "update_region",
-///      "arguments": { "update_type": "add", "region_type": "io_region", "offset": 0, "size": 4096, "priority": 99 }}
+///      "arguments": { "update_type": "add", "region_type": "io_region",
+///                     "offset": 0, "size": 4096, "priority": 99 } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -405,9 +406,9 @@ pub struct CacheOptions {
 ///
 /// ```text
 /// -> { "execute": "blockdev_add",
-///      "arguments":  {"node-name": "drive-0",
-///                     "file": {"driver": "file", "filename": "/path/to/block"},
-///                     "cache": {"direct": true}, "read-only": false }}
+///      "arguments": { "node-name": "drive-0",
+///                     "file": { "driver": "file", "filename": "/path/to/block" },
+///                     "cache": { "direct": true }, "read-only": false } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -451,7 +452,7 @@ generate_command_impl!(blockdev_add, Empty);
 ///
 /// ```text
 /// -> { "execute": "netdev_add",
-///      "arguments":  {"id": "net-0", "ifname": "tap0", "fds": 123 }}
+///      "arguments": { "id": "net-0", "ifname": "tap0", "fds": 123 } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -485,12 +486,11 @@ generate_command_impl!(netdev_add, Empty);
 /// * `path` - the backend camera file, eg. /dev/video0.
 /// * `driver` - the backend type, eg. v4l2.
 ///
-///
 /// # Examples
 ///
 /// ```text
 /// -> { "execute": "cameradev_add",
-///      "arguments":  {"id": "cam0", "driver": "v4l2", "path": "/dev/video0" }}
+///      "arguments": { "id": "cam0", "driver": "v4l2", "path": "/dev/video0" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -549,8 +549,8 @@ pub struct BackendOptions {
 /// ```text
 /// -> { "execute": "chardev-add",
 ///      "arguments": { "id": "chardev_id", "backend": { "type": "socket", "data": {
-///            "addr": { "type": "unix", "data": { "path": "/path/to/socket" } },
-///            "server": false }}}}
+///          "addr": { "type": "unix", "data": { "path": "/path/to/socket" } },
+///          "server": false } } } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -573,7 +573,7 @@ generate_command_impl!(chardev_add, Empty);
 ///
 /// # Errors
 ///
-/// If `id` is not a valid chardev backend, DeviceNotFound
+/// If `id` is not a valid chardev backend, DeviceNotFound.
 ///
 /// # Examples
 ///
@@ -612,8 +612,7 @@ generate_command_impl!(chardev_remove, Empty);
 /// # Examples
 ///
 /// ```text
-/// -> { "execute": "device_del",
-///      "arguments": { "id": "net-0" } }
+/// -> { "execute": "device_del", "arguments": { "id": "net-0" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -623,6 +622,24 @@ pub struct device_del {
 }
 generate_command_impl!(device_del, Empty);
 
+/// blockdev-del
+///
+/// Remove a block device.
+///
+/// # Arguments
+///
+/// * `node_name` - The name of the device node to remove.
+///
+/// # Errors
+///
+/// If `node_name` is not a valid device, DeviceNotFound.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "blockdev-del", "arguments": { "node-name": "node0" } }
+/// <- { "return": {} }
+/// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct blockdev_del {
@@ -641,7 +658,7 @@ generate_command_impl!(blockdev_del, Empty);
 ///
 /// # Errors
 ///
-/// If `id` is not a valid network backend, DeviceNotFound
+/// If `id` is not a valid network backend, DeviceNotFound.
 ///
 /// # Examples
 ///
@@ -666,7 +683,7 @@ generate_command_impl!(netdev_del, Empty);
 ///
 /// # Errors
 ///
-/// If `id` is not a valid camera backend, DeviceNotFound
+/// If `id` is not a valid camera backend, DeviceNotFound.
 ///
 /// # Examples
 ///
@@ -681,7 +698,9 @@ pub struct cameradev_del {
 }
 generate_command_impl!(cameradev_del, Empty);
 
-/// query-hotpluggable-cpus:
+/// query-hotpluggable-cpus
+///
+/// Query which CPU types could be plugged.
 ///
 /// # Returns
 ///
@@ -692,17 +711,16 @@ generate_command_impl!(cameradev_del, Empty);
 /// For pc machine type started with -smp 1,maxcpus=2:
 /// ```text
 /// -> { "execute": "query-hotpluggable-cpus" }
-/// <- {"return": [
+/// <- { "return": [
 ///      {
 ///         "type": host-x-cpu", "vcpus-count": 1,
-///         "props": {"core-id": 0, "socket-id": 1, "thread-id": 0}
+///         "props": {"core-id": 0, "socket-id": 1, "thread-id": 0 }
 ///      },
 ///      {
 ///         "qom-path": "/machine/unattached/device[0]",
 ///         "type": "host-x-cpu", "vcpus-count": 1,
-///         "props": {"core-id": 0, "socket-id": 0, "thread-id": 0}
-///      }
-///    ]}
+///         "props": { "core-id": 0, "socket-id": 0, "thread-id": 0 }
+///      } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -744,7 +762,7 @@ pub struct CpuInstanceProperties {
     pub core_id: Option<isize>,
 }
 
-/// query-cpus:
+/// query-cpus
 ///
 /// This command causes vCPU threads to exit to userspace, which causes
 /// a small interruption to guest CPU execution. This will have a negative
@@ -776,9 +794,7 @@ pub struct CpuInstanceProperties {
 ///             "qom_path":"/machine/unattached/device[2]",
 ///             "arch":"x86",
 ///             "thread_id":3135
-///          }
-///       ]
-///    }
+///          } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -840,9 +856,7 @@ pub struct CpuInfoArm {}
 ///
 /// ```text
 /// -> { "execute": "query-status" }
-/// <- { "return": { "running": true,
-///                  "singlestep": false,
-///                  "status": "running" } }
+/// <- { "return": { "running": true, "singlestep": false, "status": "running" } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -905,6 +919,13 @@ pub enum RunState {
 /// # Arguments
 ///
 /// * `uri` - the Uniform Resource Identifier of the destination VM or file.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "migrate", "arguments": { "uri": "tcp:0:4446" } }
+/// <- { "return": {} }
+/// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct migrate {
     #[serde(rename = "uri")]
@@ -912,16 +933,30 @@ pub struct migrate {
 }
 generate_command_impl!(migrate, Empty);
 
-/// query-migrate:
+/// query-migrate
 ///
 /// Returns information about current migration.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-migrate" }
+/// <- { "return": {} }
+/// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_migrate {}
 generate_command_impl!(query_migrate, MigrationInfo);
 
-/// cancel-migrate:
+/// migrate_cancel
 ///
 /// Cancel migrate the current VM.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "migrate_cancel" }
+/// <- { "return": {} }
+/// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct cancel_migrate {}
 generate_command_impl!(cancel_migrate, MigrationInfo);
@@ -934,7 +969,7 @@ pub struct MigrationInfo {
 
 /// getfd
 ///
-/// Receive a file descriptor via SCM rights and assign it a name
+/// Receive a file descriptor via SCM rights and assign it a name.
 ///
 /// # Arguments
 ///
@@ -954,19 +989,19 @@ pub struct getfd {
 }
 generate_command_impl!(getfd, Empty);
 
-/// query-balloon:
+/// query-balloon
 ///
 /// Query the actual size of memory of VM.
 ///
 /// # Returns
 ///
-/// `BalloonInfo` includs the actual size of memory
+/// `BalloonInfo` includs the actual size of memory.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-balloon" }
-/// <- {"return":{"actual":8589934592}}
+/// <- { "return": { "actual": 8589934592 } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_balloon {}
@@ -977,7 +1012,8 @@ pub struct BalloonInfo {
     pub actual: u64,
 }
 
-/// query-vnc:
+/// query-vnc
+///
 /// Information about current VNC server.
 ///
 /// # Examples
@@ -985,7 +1021,7 @@ pub struct BalloonInfo {
 /// For pc machine type started with -vnc ip:port(for example: 0.0.0.0:0):
 /// ```text
 /// -> { "execute": "query-vnc" }
-/// <- {"return": {
+/// <- { "return": {
 ///         "enabled": true,
 ///         "host": "0.0.0.0",
 ///         "service": "50401",
@@ -995,9 +1031,7 @@ pub struct BalloonInfo {
 ///             "host": "127.0.0.1",
 ///             "service": "50401",
 ///             "family": "ipv4",
-///         ]
-///         }
-///     }
+///         ] } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_vnc {}
@@ -1029,7 +1063,7 @@ pub struct VncClientInfo {
     pub family: String,
 }
 
-/// balloon:
+/// balloon
 ///
 /// Advice VM to change memory size with the argument `value`.
 ///
@@ -1039,14 +1073,14 @@ pub struct VncClientInfo {
 ///
 /// # Notes
 ///
-/// This is only an advice instead of command to VM,
-/// therefore, the VM changes its memory according to `value` and its condation.
+/// This is only an advice instead of command to VM, therefore, the VM changes
+/// its memory according to `value` and its condation.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "balloon", "arguments": { "value": 589934492 } }
-/// <- {"return":{}}
+/// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct balloon {
@@ -1055,42 +1089,37 @@ pub struct balloon {
 }
 generate_command_impl!(balloon, Empty);
 
-/// version:
+/// query-version
 ///
 /// Query version of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-version" }
-/// <- {"return":{"version":{"qemu":{"minor":1,"micro":0,"major":5},"package":"StratoVirt-2.3.0"},"capabilities":[]}}
+/// <- { "return": {
+///         "version": { "qemu": { "minor": 1, "micro": 0, "major": 5 },
+///         "package": "StratoVirt-2.3.0" },
+///         "capabilities": [] } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_version {}
 generate_command_impl!(query_version, Version);
 
-/// Query commands:
+/// query-commands
 ///
 /// Query all qmp commands of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-commands" }
-/// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},{"name":"cont"},
-/// {"name":"system_powerdown"},{"name":"system_reset"},{"name":"device_add"},{"name":"device_del"},
-/// {"name":"chardev_add"},{"name":"chardev_remove"},{"name":"netdev_add"},{"name":"netdev_del"},
-/// {"name":"cameradev_add"},{"name":"cameradev_del"},{"name":"query-hotpluggable-cpus"},
-/// {"name":"query-cpus"},{"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
-/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query-vnc"},
-/// {"name":"migrate"},{"name":"query_migrate"},{"name":"cancel_migrate"},{"name":"query_version"},
-/// {"name":"query_commands"},{"name":"query_target"},{"name":"query_kvm"},{"name":"query_machines"},
-/// {"name":"query-events"},{"name":"list_type"},{"name":"device_list_properties"},{"name":"block-commit"},
-/// {"name":"query_tpm_models"},{"name":"query_tpm_types"},{"name":"query_command_line_options"},
-/// {"name":"query_migrate_capabilities"},{"name":"query_qmp_schema"},{"name":"query_sev_capabilities"},
-/// {"name":"query-chardev"},{"name":"qom-list"},{"name":"qom_get"},{"name":"query-block"},{"name":"query-named-block-nodes"},
-/// {"name":"query-blockstats"},{"name":"query-block-jobs"},{"name":"query-gic-capabilities"},{"name":"query-iothreads"},
-/// {"name":"update_region"},{"name":"input_event"},{"name":"human_monitor_command"}]}
+/// <- { "return": [ { "name": "qmp_capabilities" }, { "name": "quit" }, { "name": "stop" },
+///        { "name": "cont" }, { "name": "system_powerdown" }, { "name": "system_reset" },
+///        { "name": "device_add" }, { "name": "device_del" }, { "name": "chardev_add" },
+///        { "name": "chardev_remove" }, { "name": "netdev_add" }, { "name": "netdev_del" },
+///        { "name" : "cameradev_add" }, { "name": "cameradev_del" },
+///        { "name": "query-hotpluggable-cpus" }, { "name": "query-cpus" } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_commands {}
@@ -1101,20 +1130,20 @@ pub struct Cmd {
     pub name: String,
 }
 
-/// Query target:
+/// query-target
 ///
 /// Query the target platform where the StratoVirt is running.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// # for X86 platform.
 /// -> { "execute": "query-target" }
-/// <- {"return":{"arch":"x86_64"}}
+/// <- { "return": { "arch": "x86_64" } }
 ///
 /// # for Aarch64 platform.
 /// -> { "execute": "query-target" }
-/// <- {"return":{"arch":"aarch64"}}
+/// <- { "return": { "arch": "aarch64" } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_target {}
@@ -1125,17 +1154,20 @@ pub struct Target {
     pub arch: String,
 }
 
-/// Query machines:
+/// query-machines
 ///
 /// Query machine information.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-machines" }
-/// <- {"return":[{"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"none","numa-mem-supported":false},
-/// {"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"microvm","numa-mem-supported":false},
-/// {"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"standardvm","numa-mem-supported":false}]}
+/// <- { "return": [ { "cpu-max": 255, "deprecated": false, "hotpluggable-cpus": true,
+///            "name": "none", "numa-mem-supported": false },
+///        { "cpu-max": 255, "deprecated": false, "hotpluggable-cpus": true,
+///            "name": "microvm", "numa-mem-supported": false },
+///        { "cpu-max": 255, "deprecated": false, "hotpluggable-cpus": true,
+///            "name": "standardvm", "numa-mem-supported": false } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_machines {}
@@ -1153,17 +1185,17 @@ pub struct MachineInfo {
     pub deprecated: bool,
 }
 
-/// Query events:
+/// query-events
 ///
 /// Query all events of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-events" }
-/// <- {"return":[{"name":"Shutdown"},{"name":"Reset"},
-/// {"name":"Stop"},{"name":"Resume"},{"name":"DeviceDeleted"},
-/// {"name":"BalloonChanged"}]}
+/// <- { "return": [ { "name": "Shutdown" }, { "name": "Reset" },
+///        { "name": "Stop" }, { "name": "Resume" }, { "name": "DeviceDeleted" },
+///        { "name": "BalloonChanged" } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Events {
@@ -1174,15 +1206,15 @@ pub struct Events {
 pub struct query_events {}
 generate_command_impl!(query_events, Vec<Events>);
 
-/// Query KVM:
+/// query-kvm
 ///
 /// Query if KVM is enabled.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-kvm" }
-/// <- {"return":{"enabled":true,"present":true}}
+/// <- { "return": { "enabled": true, "present": true } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_kvm {}
@@ -1194,16 +1226,18 @@ pub struct KvmInfo {
     pub present: bool,
 }
 
-/// List all Qom type.
+/// qom-list-types
 ///
-/// # Example
+/// This command will return a list of types given search parameters.
+///
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "qom-list-types" }
-/// <- {"return":[{"name":"ioh3420","parent":"pcie-root-port-base"},
-/// {"name":"pcie-root-port","parent":"pcie-root-port-base"},
-/// {"name":"pcie-pci-bridge","parent":"base-pci-bridge"},
-/// {"name":"pci-bridge","parent":"base-pci-bridge"}]}
+/// <- { "return": [ { "name": "ioh3420", "parent": "pcie-root-port-base" },
+///        { "name": "pcie-root-port", "parent": "pcie-root-port-base" },
+///        { "name": "pcie-pci-bridge", "parent": "base-pci-bridge" },
+///        { "name": "pci-bridge", "parent": "base-pci-bridge" } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct list_type {}
@@ -1221,13 +1255,15 @@ impl TypeLists {
     }
 }
 
-/// Get device list properties.
+/// device-list-properties
 ///
-/// # Example
+/// List properties associated with a device.
+///
+/// # Examples
 ///
 /// ```text
-/// -> { "execute": "device-list-properties", "arguments": {"typename": "virtio-blk-pci"} }
-/// <- {"return":[]}
+/// -> { "execute": "device-list-properties", "arguments": { "typename": "virtio-blk-pci" } }
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct device_list_properties {
@@ -1246,37 +1282,43 @@ pub struct DeviceProps {
 pub struct block_commit {}
 generate_command_impl!(block_commit, Vec<DeviceProps>);
 
+/// query-tpm-models
+///
 /// Query tpm models of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-tpm-models" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_tpm_models {}
 generate_command_impl!(query_tpm_models, Vec<String>);
 
+/// query-tpm-types
+///
 /// Query target of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-tpm-types" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_tpm_types {}
 generate_command_impl!(query_tpm_types, Vec<String>);
 
+/// query-command-line-options
+///
 /// Query command line options.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-command-line-options" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_command_line_options {}
@@ -1296,13 +1338,15 @@ pub struct CmdLine {
     pub option: String,
 }
 
+/// query-migrate-capabilities
+///
 /// Query capabilities of migration.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-migrate-capabilities" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_migrate_capabilities {}
@@ -1314,37 +1358,43 @@ pub struct MigrateCapabilities {
     pub capability: String,
 }
 
+/// query-qmp-schema
+///
 /// Query target of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-qmp-schema" }
-/// <- {"return":{}}
+/// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_qmp_schema {}
 generate_command_impl!(query_qmp_schema, Empty);
 
+/// query-sev-capabilities
+///
 /// Query capabilities of sev.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-sev-capabilities" }
-/// <- {"return":{}}
+/// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_sev_capabilities {}
 generate_command_impl!(query_sev_capabilities, Empty);
 
+/// qom-list
+///
 /// List all Qom.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "qom-list" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct qom_list {}
@@ -1357,13 +1407,15 @@ pub struct PropList {
     pub prop_type: String,
 }
 
+/// query-chardev
+///
 /// Query char devices.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-chardev" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_chardev {}
@@ -1377,73 +1429,85 @@ pub struct ChardevInfo {
     pub label: String,
 }
 
+/// qom-get
+///
 /// Get qom properties.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
-/// -> { "execute": "qom_get" }
-/// <- {"return":[]}
+/// -> { "execute": "qom-get" }
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct qom_get {}
 generate_command_impl!(qom_get, bool);
 
+/// query-block
+///
 /// Query blocks of StratoVirt.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-block" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_block {}
 generate_command_impl!(query_block, Vec<Cmd>);
 
+/// query-named-block-nodes
+///
 /// Query named block node.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-named-block-nodes" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_named_block_nodes {}
 generate_command_impl!(query_named_block_nodes, Vec<Cmd>);
 
+/// query-blockstats
+///
 /// Query status of blocks.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-blockstats" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_blockstats {}
 generate_command_impl!(query_blockstats, Vec<Cmd>);
 
+/// query-block-jobs
+///
 /// Query jobs of blocks.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
-/// -> { "execute": "query-block_jobs" }
-/// <- {"return":[]}
+/// -> { "execute": "query-block-jobs" }
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_block_jobs {}
 generate_command_impl!(query_block_jobs, Vec<Cmd>);
 
+/// query-gic-capabilities
+///
 /// Query capabilities of gic.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-gic-capabilities" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_gic_capabilities {}
@@ -1456,13 +1520,15 @@ pub struct GicCap {
     kernel: bool,
 }
 
+/// query-iothreads
+///
 /// Query information of iothreads.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-iothreads" }
-/// <- {"return":[]}
+/// <- { "return": [] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_iothreads {}
@@ -1487,12 +1553,12 @@ pub struct IothreadInfo {
 ///
 /// * `key` - the input type such as 'keyboard' or 'pointer'.
 /// * `value` - the input value.
-
+///
 /// # Examples
 ///
 /// ```text
 /// -> { "execute": "input_event",
-///      "arguments": { "key": "pointer", "value": "100,200,1" }}
+///      "arguments": { "key": "pointer", "value": "100,200,1" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -1513,7 +1579,7 @@ generate_command_impl!(input_event, Vec<input_event>);
 /// ```text
 /// -> { "execute": "human-monitor-command",
 ///      "arguments": { "command-line": "drive_add dummy
-///      file=/path/to/file,format=raw,if=none,id=drive-id" }}
+///          file=/path/to/file,format=raw,if=none,id=drive-id" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -1537,8 +1603,7 @@ pub type HumanMonitorCmdArgument = human_monitor_command;
 ///
 /// ```text
 /// -> { "execute": "blockdev-snapshot-internal-sync",
-///      "arguments": { "device": "disk0",
-///                     "name": "snapshot1" }}
+///      "arguments": { "device": "disk0", "name": "snapshot1" } }
 /// <- { "return": {} }
 /// ```
 ///
@@ -1555,8 +1620,7 @@ pub type HumanMonitorCmdArgument = human_monitor_command;
 ///
 /// ```text
 /// -> { "execute": "blockdev-snapshot-delete-internal-sync",
-///      "arguments": { "device": "disk0",
-///                     "name": "snapshot1" }}
+///      "arguments": { "device": "disk0", "name": "snapshot1" } }
 /// <- { "return": {
 ///                    "id": "1",
 ///                    "name": "snapshot0",
@@ -1566,7 +1630,7 @@ pub type HumanMonitorCmdArgument = human_monitor_command;
 ///                    "vm-clock-sec": 100,
 ///                    "vm-clock-nsec": 20,
 ///                    "icount": 220414
-///  } }
+///    } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1596,13 +1660,13 @@ pub struct SnapshotInfo {
 
 /// query-mem
 ///
-/// This command
+/// Query memory address space flat.
 ///
 /// # Examples
 ///
 /// ```text
 /// -> { "execute": "query-mem" }
-/// <- { "return": {}}
+/// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1610,6 +1674,8 @@ pub struct query_mem {}
 generate_command_impl!(query_mem, Empty);
 
 /// query-vcpu-reg
+///
+/// Query vcpu register value.
 ///
 /// # Arguments
 ///
@@ -1634,7 +1700,7 @@ pub type QueryVcpuRegArgument = query_vcpu_reg;
 
 /// query-mem-gpa
 ///
-/// This command
+/// Query the value of the guest physical address.
 ///
 /// # Examples
 ///
@@ -1688,7 +1754,15 @@ define_qmp_event_enum!(
 /// # Notes
 ///
 /// If the command-line option "-no-shutdown" has been specified, StratoVirt
-/// will not exit, and a STOP event will eventually follow the SHUTDOWN event
+/// will not exit, and a STOP event will eventually follow the SHUTDOWN event.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "SHUTDOWN",
+///      "data": { "guest": true, "reason": "guest-shutdown" },
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Shutdown {
@@ -1702,7 +1776,15 @@ pub struct Shutdown {
 
 /// Reset
 ///
-/// Emitted when the virtual machine is reset
+/// Emitted when the virtual machine is reset.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "RESET",
+///      "data": { "guest": false },
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Reset {
@@ -1715,21 +1797,45 @@ pub struct Reset {
 
 /// Stop
 ///
-/// Emitted when the virtual machine is stopped
+/// Emitted when the virtual machine is stopped.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "STOP",
+///      "data": {},
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Stop {}
 
 /// Resume
 ///
-/// Emitted when the virtual machine resumes execution
+/// Emitted when the virtual machine resumes execution.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "RESUME",
+///      "data": {},
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Resume {}
 
 /// Powerdown
 ///
-/// Emitted when the virtual machine powerdown execution
+/// Emitted when the virtual machine powerdown execution.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "POWERDOWN",
+///      "data": {},
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Powerdown {}
