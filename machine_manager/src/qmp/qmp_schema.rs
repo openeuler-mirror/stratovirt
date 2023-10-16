@@ -134,7 +134,9 @@ define_qmp_command_enum!(
     human_monitor_command("human-monitor-command", human_monitor_command),
     blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal),
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal),
-    query_vcpu_reg("query-vcpu-reg", query_vcpu_reg)
+    query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
+    trace_event_get_state("trace-event-get-state", trace_event_get_state),
+    trace_event_set_state("trace-event-set-state", trace_event_set_state)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -1907,6 +1909,58 @@ pub struct DeviceDeleted {
     #[serde(rename = "path")]
     pub path: String,
 }
+
+/// trace-event-get-state
+///
+/// # Arguments
+///
+/// * `name` - event name pattern
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "trace-event-get-state",
+///      "arguments": { "name": "event_name" } }
+/// <- { "return": [ { "name": "event_name", "state": "disabled" } ] }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct trace_event_get_state {
+    #[serde(rename = "name")]
+    pub pattern: String,
+}
+pub type TraceEventGetArgument = trace_event_get_state;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct TraceEventInfo {
+    pub name: String,
+    pub state: bool,
+}
+
+/// trace-event-set-state
+///
+/// # Arguments
+///
+/// * `name` - event name pattern
+/// * `enable` - whether to enable tracing
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "trace-event-set-state",
+///      "arguments": { "name": "event_name",
+///                     "enable": true } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct trace_event_set_state {
+    #[serde(rename = "name")]
+    pub pattern: String,
+    #[serde(rename = "enable")]
+    pub enable: bool,
+}
+pub type TraceEventSetArgument = trace_event_set_state;
 
 #[cfg(test)]
 mod tests {

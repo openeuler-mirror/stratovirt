@@ -533,6 +533,37 @@ Query the display image of virtiogpu. Currently only stdvm and gtk supports.
 <- { "return": { "fileDir": "/tmp/stratovirt-images", "isSuccess": true } }
 ```
 
+### trace-event-get-state
+
+Query whether the trace event is enabled.
+
+#### Arguments
+
+* `name` : Pattern used to match event name.
+
+#### Example
+
+```json
+-> { "execute": "trace-event-get-state", "arguments": { "name": "event_name" } }
+<- { "return": [ { "name": "event_name", "state": "disabled" } ] }
+```
+
+### trace-event-set-state
+
+Set the state of trace event.
+
+#### Arguments
+
+* `name` : Pattern used to match event name.
+* `enable` : Whether to enable trace events.
+
+#### Example
+
+```json
+-> { "execute": "trace-event-set-state", "arguments": { "name": "event_name","enable": true } }
+<- { "return": {} }
+```
+
 ## Others
 
 ### getfd

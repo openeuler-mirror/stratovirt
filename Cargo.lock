@@ -937,6 +937,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
