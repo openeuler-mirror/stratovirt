@@ -1,0 +1,17 @@
+[package]
+name = "trace_generator"
+version = "2.3.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+
+[lib]
+name = "trace_generator"
+proc-macro = true
+
+[dependencies]
+syn = "2.0.18"
+quote = "1.0"
+proc-macro2 = "1.0"
+toml = "0.7"
+serde = { version = "1.0", features = ["derive"] }
