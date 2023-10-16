@@ -770,26 +770,6 @@ fn read_config_default(config: &[u8], offset: u64, mut data: &mut [u8]) -> Resul
     Ok(())
 }
 
-/// The trait for trace descriptions of virtio device interactions
-/// on the front and back ends.
-pub trait VirtioTrace {
-    fn trace_request(&self, device: String, behaviour: String) {
-        util::ftrace!(
-            trace_request,
-            "{} : Request received from Guest {}, ready to start processing.",
-            device,
-            behaviour
-        );
-    }
-    fn trace_send_interrupt(&self, device: String) {
-        util::ftrace!(
-            trace_send_interrupt,
-            "{} : stratovirt processing complete, ready to send interrupt to guest.",
-            device
-        );
-    }
-}
-
 /// The function used to inject interrupt to guest when encounter an virtio error.
 pub fn report_virtio_error(
     interrupt_cb: Arc<VirtioInterrupt>,

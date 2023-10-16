@@ -36,7 +36,6 @@ pub mod syscall;
 pub mod tap;
 pub mod test_helper;
 pub mod time;
-pub mod trace;
 pub mod unix;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;

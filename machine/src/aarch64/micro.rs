@@ -14,13 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::{
-    micro_common::{
-        syscall::syscall_whitelist, trace_cpu_topo, trace_replaceable_info, trace_sysbus,
-        trace_vm_state,
-    },
-    MachineBase, MachineError,
-};
+use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError};
 use crate::{LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
@@ -143,15 +137,15 @@ impl MachineOps for LightMachine {
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
 
-        trace_sysbus(&locked_vm.base.sysbus);
-        trace_vm_state(&locked_vm.base.vm_state);
+        trace::sysbus(&locked_vm.base.sysbus);
+        trace::vm_state(&locked_vm.base.vm_state);
 
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
-        trace_cpu_topo(&topology);
+        trace::cpu_topo(&topology);
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -191,7 +185,7 @@ impl MachineOps for LightMachine {
             .create_replaceable_devices()
             .with_context(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
-        trace_replaceable_info(&locked_vm.replaceable_info);
+        trace::replaceable_info(&locked_vm.replaceable_info);
 
         if let Some(boot_cfg) = boot_config {
             let mut fdt_helper = FdtBuilder::new();

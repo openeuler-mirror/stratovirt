@@ -26,8 +26,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::{
     gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default, report_virtio_error,
     Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_CONSOLE,
+    VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
@@ -417,7 +416,7 @@ struct SerialControlHandler {
 
 impl SerialPortHandler {
     fn output_handle(&mut self) {
-        self.trace_request("Serial".to_string(), "to IO".to_string());
+        trace::virtio_receive_request("Serial".to_string(), "to IO".to_string());
 
         self.output_handle_internal().unwrap_or_else(|e| {
             error!("Port handle output error: {:?}", e);
@@ -614,8 +613,6 @@ impl SerialPortHandler {
         Ok(())
     }
 }
-
-impl VirtioTrace for SerialPortHandler {}
 
 impl EventNotifierHelper for SerialPortHandler {
     fn internal_notifiers(serial_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {

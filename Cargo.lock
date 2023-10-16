@@ -318,6 +318,7 @@ dependencies = [
  "migration_derive",
  "nix 0.26.2",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -915,6 +916,7 @@ dependencies = [
  "migration_derive",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "vfio",
@@ -1846,6 +1848,7 @@ dependencies = [
  "once_cell",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "vmm-sys-util",

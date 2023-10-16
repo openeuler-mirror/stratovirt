@@ -34,7 +34,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -45,8 +45,8 @@ use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::{MachineBase, MachineError, MachineOps};
-use cpu::{CPUTopology, CpuLifecycleState};
-use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+use cpu::CpuLifecycleState;
+use devices::sysbus::{IRQ_BASE, IRQ_MAX};
 use machine_manager::config::{
     parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, ConfigCheck, DiskFormat, MigrateMode,
     NetworkInterfaceConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
@@ -257,7 +257,7 @@ impl LightMachine {
             dev_config,
         };
 
-        trace_mmio_replaceable_config(&config);
+        trace::mmio_replaceable_config(&config);
         configs_lock.push(config);
         Ok(())
     }
@@ -949,25 +949,4 @@ impl EventLoopManager for LightMachine {
         set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
-}
-
-/// Trace descriptions for some devices at stratovirt startup.
-pub(crate) fn trace_cpu_topo(cpu_topo: &CPUTopology) {
-    util::ftrace!(trace_cpu_topo, "{:#?}", cpu_topo);
-}
-
-pub(crate) fn trace_sysbus(sysbus: &SysBus) {
-    util::ftrace!(trace_sysbus, "{:?}", sysbus);
-}
-
-pub(crate) fn trace_replaceable_info(replaceable_info: &MmioReplaceableInfo) {
-    util::ftrace!(trace_replaceable_info, "{:?}", replaceable_info);
-}
-
-pub(crate) fn trace_vm_state(vm_state: &Arc<(Mutex<KvmVmState>, Condvar)>) {
-    util::ftrace!(trace_vm_state, "{:#?}", vm_state);
-}
-
-fn trace_mmio_replaceable_config(config: &MmioReplaceableConfig) {
-    util::ftrace!(trace_mmio_replaceable_config, "{:#?}", config);
 }
