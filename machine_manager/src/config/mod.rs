@@ -81,19 +81,20 @@ pub use vnc::*;
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Read;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
+use trace::set_state_by_pattern;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
     num_ops::str_to_usize,
     test_helper::is_test_enabled,
-    trace::enable_trace_events,
     AsAny,
 };
 
@@ -608,16 +609,35 @@ impl From<ExBool> for bool {
     }
 }
 
-pub fn add_trace_events(config: &str) -> Result<()> {
+fn enable_trace_events(path: &str) -> Result<()> {
+    let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)
+        .with_context(|| format!("Failed to read {}", path))?;
+
+    let events: Vec<&str> = buf.split('\n').filter(|&s| !s.is_empty()).collect();
+    for e in events {
+        set_state_by_pattern(e.trim().to_string(), true).with_context(|| {
+            format!(
+                "Unable to set the state of {} according to {}",
+                e.trim(),
+                path
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub fn parse_trace_options(opt: &str) -> Result<()> {
     let mut cmd_parser = CmdParser::new("trace");
     cmd_parser.push("events");
-    cmd_parser.get_parameters(config)?;
+    cmd_parser.get_parameters(opt)?;
 
-    if let Some(file) = cmd_parser.get_value::<String>("events")? {
-        enable_trace_events(&file)?;
-        return Ok(());
-    }
-    bail!("trace: events file must be set.");
+    let path = cmd_parser
+        .get_value::<String>("events")?
+        .with_context(|| "trace: events file must be set.")?;
+    enable_trace_events(&path)?;
+    Ok(())
 }
 
 /// This struct is a wrapper for `usize`.
@@ -793,27 +813,10 @@ mod tests {
     }
 
     #[test]
-    fn test_add_trace_events_01() {
-        assert!(add_trace_events("event=test_trace_events").is_err());
-        assert!(add_trace_events("events").is_err());
-        assert!(add_trace_events("events=test_trace_events").is_err());
-    }
-
-    #[test]
-    fn test_add_trace_events_02() {
-        use std::fs::File;
-        use std::io::Write;
-
-        use util::trace::is_trace_event_enabled;
-
-        let file = "/tmp/test_trace_events";
-        let mut fd = File::create(file).unwrap();
-        let event = "add_trace_events";
-        fd.write(event.as_bytes()).unwrap();
-        add_trace_events(format!("events={}", file).as_str()).unwrap();
-
-        assert!(is_trace_event_enabled(event));
-        std::fs::remove_file(file).unwrap();
+    fn test_parse_trace_options() {
+        assert!(parse_trace_options("event=test_trace_events").is_err());
+        assert!(parse_trace_options("events").is_err());
+        assert!(parse_trace_options("events=test_trace_events").is_err());
     }
 
     #[test]
