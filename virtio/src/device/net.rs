@@ -29,8 +29,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use crate::{
     check_config_space_rw, iov_discard_front, iov_to_buf, mem_to_buf, read_config_default,
     report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue, VirtioBase, VirtioDevice,
-    VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
     VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
@@ -775,7 +775,7 @@ impl NetIoHandler {
     }
 
     fn handle_rx(&mut self) -> Result<()> {
-        self.trace_request("Net".to_string(), "to rx".to_string());
+        trace::virtio_receive_request("Net".to_string(), "to rx".to_string());
         if self.tap.is_none() {
             return Ok(());
         }
@@ -853,7 +853,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                self.trace_send_interrupt("Net".to_string());
+                trace::virtio_send_interrupt("Net".to_string());
             }
 
             rx_packets += 1;
@@ -894,7 +894,7 @@ impl NetIoHandler {
     }
 
     fn handle_tx(&mut self) -> Result<()> {
-        self.trace_request("Net".to_string(), "to tx".to_string());
+        trace::virtio_receive_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
 
         let mut tx_packets = 0;
@@ -940,7 +940,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                self.trace_send_interrupt("Net".to_string());
+                trace::virtio_send_interrupt("Net".to_string());
             }
             tx_packets += 1;
             if tx_packets >= self.queue_size {
@@ -1672,8 +1672,6 @@ impl StateTransfer for Net {
 }
 
 impl MigrationHook for Net {}
-
-impl VirtioTrace for NetIoHandler {}
 
 #[cfg(test)]
 mod tests {

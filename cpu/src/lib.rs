@@ -267,7 +267,7 @@ impl CPUInterface for CPU {
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
     ) -> Result<()> {
-        trace_cpu_boot_config(boot);
+        trace::cpu_boot_config(boot);
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(anyhow!(CpuError::RealizeVcpu(format!(
@@ -836,10 +836,6 @@ impl CpuTopology {
             thread_id: Some(threadid as isize),
         }
     }
-}
-
-fn trace_cpu_boot_config(cpu_boot_config: &CPUBootConfig) {
-    util::ftrace!(trace_CPU_boot_config, "{:#?}", cpu_boot_config);
 }
 
 /// Capture the boot signal that trap from guest kernel, and then record

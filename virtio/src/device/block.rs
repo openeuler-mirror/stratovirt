@@ -28,11 +28,11 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use crate::{
     check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_to_buf,
     read_config_default, report_virtio_error, virtio_has_feature, Element, Queue, VirtioBase,
-    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
-    VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_DISCARD,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
+    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID,
+    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
     VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
@@ -180,7 +180,7 @@ impl AioCompleteCb {
                 .with_context(|| {
                     VirtioError::InterruptTrigger("blk io completion", VirtioInterruptType::Vring)
                 })?;
-            self.trace_send_interrupt("Block".to_string());
+            trace::virtio_send_interrupt("Block".to_string());
         }
         Ok(())
     }
@@ -692,7 +692,7 @@ impl BlockIoHandler {
     }
 
     fn process_queue(&mut self) -> Result<bool> {
-        self.trace_request("Block".to_string(), "to IO".to_string());
+        trace::virtio_receive_request("Block".to_string(), "to IO".to_string());
         let result = self.process_queue_suppress_notify();
         if result.is_err() {
             report_virtio_error(
@@ -1325,9 +1325,6 @@ impl StateTransfer for Block {
 }
 
 impl MigrationHook for Block {}
-
-impl VirtioTrace for BlockIoHandler {}
-impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {

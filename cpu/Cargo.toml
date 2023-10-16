@@ -19,6 +19,7 @@ machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
+trace = { path = "../trace" }
 
 [features]
 default = []
