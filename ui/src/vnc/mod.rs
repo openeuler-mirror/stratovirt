@@ -18,7 +18,6 @@ pub mod server_io;
 
 use std::{
     cmp,
-    collections::HashMap,
     net::TcpListener,
     ptr,
     sync::{Arc, Mutex},
@@ -35,8 +34,8 @@ use crate::{
         DisplayChangeListenerOperations, DisplayMouse, DisplaySurface,
         DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
     },
-    data::keycode::KEYSYM2KEYCODE,
     error::VncError,
+    keycode::KeyCode,
     pixman::{
         bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
         get_image_width, ref_pixman_image, unref_pixman_image,
@@ -280,11 +279,8 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         .set_nonblocking(true)
         .expect("Set noblocking for vnc socket failed");
 
-    let mut keysym2keycode: HashMap<u16, u16> = HashMap::new();
     // Mapping ASCII to keycode.
-    for &(k, v) in KEYSYM2KEYCODE.iter() {
-        keysym2keycode.insert(k, v);
-    }
+    let keysym2keycode = KeyCode::keysym_to_qkeycode();
 
     let vnc_opts = Arc::new(VncInterface::default());
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));

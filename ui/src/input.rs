@@ -19,7 +19,7 @@ use anyhow::Result;
 use log::debug;
 use once_cell::sync::Lazy;
 
-use crate::data::keycode::KEYSYM2KEYCODE;
+use crate::keycode::KeyCode;
 use util::bitmap::Bitmap;
 
 // Logical window size for mouse.
@@ -94,8 +94,9 @@ pub struct KeyBoardState {
 impl Default for KeyBoardState {
     fn default() -> Self {
         let mut max_keycode: u16 = 0;
-        for &(_, v) in KEYSYM2KEYCODE.iter() {
-            max_keycode = std::cmp::max(max_keycode, v);
+        let keysym2keycode: HashMap<u16, u16> = KeyCode::keysym_to_qkeycode();
+        for (_, v) in keysym2keycode.iter() {
+            max_keycode = std::cmp::max(max_keycode, *v);
         }
         KeyBoardState::new(max_keycode as usize)
     }
@@ -363,17 +364,18 @@ pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
 /// Release all pressed key.
 pub fn release_all_key() -> Result<()> {
     let mut locked_input = INPUTS.lock().unwrap();
-    for &(_, keycode) in KEYSYM2KEYCODE.iter() {
+    let keysym2keycode = KeyCode::keysym_to_qkeycode();
+    for (_, keycode) in keysym2keycode.iter() {
         if locked_input
             .keyboard_state
             .keystate
-            .contain(keycode as usize)?
+            .contain(*keycode as usize)?
         {
             locked_input
                 .keyboard_state
-                .keyboard_state_update(keycode, false)?;
+                .keyboard_state_update(*keycode, false)?;
             if let Some(k) = locked_input.get_active_kbd().as_ref() {
-                k.lock().unwrap().do_key_event(keycode, false)?;
+                k.lock().unwrap().do_key_event(*keycode, false)?;
             }
         }
     }

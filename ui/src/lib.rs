@@ -16,10 +16,9 @@ pub mod error;
 #[cfg(feature = "gtk")]
 pub mod gtk;
 pub mod input;
+mod keycode;
 #[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod utils;
 #[cfg(feature = "vnc")]
 pub mod vnc;
-
-mod data;
