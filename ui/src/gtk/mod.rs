@@ -47,8 +47,8 @@ use crate::{
         DisplayMouse, DisplaySurface, VmRunningStage, DEFAULT_SURFACE_HEIGHT,
         DEFAULT_SURFACE_WIDTH, DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
-    data::keycode::KEYSYM2KEYCODE,
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
+    keycode::KeyCode,
     pixman::{
         create_pixman_image, get_image_data, get_image_height, get_image_width, ref_pixman_image,
         unref_pixman_image,
@@ -230,12 +230,7 @@ impl GtkDisplay {
             free_scale: true,
         }));
         // Mapping ASCII to keycode.
-        let keysym2keycode: Rc<RefCell<HashMap<u16, u16>>> = Rc::new(RefCell::new(HashMap::new()));
-        let mut borrow_keysym2keycode = keysym2keycode.borrow_mut();
-        for &(k, v) in KEYSYM2KEYCODE.iter() {
-            borrow_keysym2keycode.insert(k, v);
-        }
-        drop(borrow_keysym2keycode);
+        let keysym2keycode = Rc::new(RefCell::new(KeyCode::keysym_to_qkeycode()));
         Self {
             gtk_menu,
             scale_mode,
