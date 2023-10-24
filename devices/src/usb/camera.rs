@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -795,7 +795,7 @@ impl UsbDevice for UsbCamera {
                 }
             }
             Err(e) => {
-                error!("Camera descriptor error {:?}", e);
+                warn!("Camera descriptor error {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }

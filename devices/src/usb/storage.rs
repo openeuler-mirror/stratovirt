@@ -563,7 +563,7 @@ impl UsbDevice for UsbStorage {
                 self.handle_control_packet(&mut locked_packet, device_req)
             }
             Err(e) => {
-                error!("Storage descriptor error {:?}", e);
+                warn!("Storage descriptor error {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
             }
         }
