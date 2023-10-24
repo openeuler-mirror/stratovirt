@@ -14,7 +14,7 @@ use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
-use log::{debug, error, info};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 
 use super::descriptor::{
@@ -217,7 +217,7 @@ impl UsbDevice for UsbTablet {
                 }
             }
             Err(e) => {
-                error!("Tablet descriptor error {:?}", e);
+                warn!("Tablet descriptor error {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
