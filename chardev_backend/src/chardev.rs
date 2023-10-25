@@ -323,15 +323,17 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             "Chardev \'{}\' event, connection opened: {}",
             &locked_chardev.id, connection_info
         );
-
         let stream_fd = stream.as_raw_fd();
         let stream_arc = Arc::new(Mutex::new(stream));
+        let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+        let notify_dev = locked_chardev.dev.clone();
 
         locked_chardev.stream_fd = Some(stream_fd);
         locked_chardev.input = Some(stream_arc.clone());
         locked_chardev.output = Some(stream_arc.clone());
+        drop(locked_chardev);
 
-        if let Some(dev) = &locked_chardev.dev {
+        if let Some(dev) = notify_dev {
             dev.lock().unwrap().chardev_notify(ChardevStatus::Open);
         }
 
@@ -372,19 +374,19 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                 None
             } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
                 let mut locked_chardev = cloned_chardev.lock().unwrap();
-
-                if let Some(dev) = &locked_chardev.dev {
-                    dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
-                }
-
+                let notify_dev = locked_chardev.dev.clone();
                 locked_chardev.input = None;
                 locked_chardev.output = None;
                 locked_chardev.stream_fd = None;
-
                 info!(
                     "Chardev \'{}\' event, connection closed: {}",
                     &locked_chardev.id, connection_info
                 );
+                drop(locked_chardev);
+
+                if let Some(dev) = notify_dev {
+                    dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
+                }
 
                 // Note: we use stream_arc variable here because we want to capture it and prolongate
                 // its lifetime with this notifier callback lifetime. It allows us to ensure
@@ -396,7 +398,6 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             }
         });
 
-        let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
         Some(vec![EventNotifier::new(
             NotifierOperation::AddShared,
             stream_fd,
