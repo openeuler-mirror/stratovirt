@@ -359,16 +359,29 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             // NOTE: we can drain request when request in io thread.
             let drain = prop.iothread.is_some();
             let cloned_drive_id = prop.id.clone();
+
+            // `qcow2` address has changed after Arc::new(), so we should use the new one.
+            let exit_qcow2 = new_qcow2.lock().unwrap();
+            let exit_qcow2_ptr = &(*exit_qcow2) as *const Qcow2Driver<T> as u64;
+            drop(exit_qcow2);
             let exit_notifier = Arc::new(move || {
-                if let Some(qcow2) = cloned_qcow2.upgrade() {
-                    let mut locked_qcow2 = qcow2.lock().unwrap();
-                    info!("clean up qcow2 {:?} resources.", cloned_drive_id);
-                    if let Err(e) = locked_qcow2.flush() {
-                        error!("Failed to flush qcow2 {:?}", e);
-                    }
-                    if drain {
-                        locked_qcow2.drain_request();
-                    }
+                // Note: Increase the reference count of `qcow2`` to avoid abnormal kill during the
+                // hot-unplug process, where a reference count of 0 leads to null pointer access.
+                let qcow2_h = cloned_qcow2.upgrade();
+                if qcow2_h.is_none() {
+                    return;
+                }
+
+                // SAFETY: This callback is called only when the vm exits abnormally.
+                let qcow2 = unsafe {
+                    &mut std::slice::from_raw_parts_mut(exit_qcow2_ptr as *mut Qcow2Driver<T>, 1)[0]
+                };
+                info!("clean up qcow2 {:?} resources.", cloned_drive_id);
+                if let Err(e) = qcow2.flush() {
+                    error!("Failed to flush qcow2 {:?}", e);
+                }
+                if drain {
+                    qcow2.drain_request();
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id, exit_notifier);
@@ -383,4 +396,5 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
 
 pub fn remove_block_backend(id: &str) {
     QCOW2_LIST.lock().unwrap().remove(id);
+    TempCleaner::remove_exit_notifier(id);
 }
