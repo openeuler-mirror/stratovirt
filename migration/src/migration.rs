@@ -190,6 +190,11 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
+        // Sanity check for len to avoid OOM. Given 1MB is enough.
+        if len > (1 << 20) {
+            bail!("Source vm_config size is too large");
+        }
+
         let mut data: Vec<u8> = Vec::new();
         data.resize_with(len as usize, Default::default);
         fd.read_exact(&mut data)?;
@@ -319,6 +324,11 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
+        // Sanity check for len to avoid OOM. Given 1MB is enough.
+        if len > (1 << 20) {
+            bail!("Source MemBlock config size is too large");
+        }
+
         let mut blocks = Vec::<MemBlock>::new();
         blocks.resize_with(len as usize / (size_of::<MemBlock>()), Default::default);
         fd.read_exact(unsafe {
