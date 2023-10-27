@@ -13,7 +13,6 @@
 use std::fs::{read_link, File, OpenOptions};
 use std::io::{Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -33,6 +32,7 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::set_termi_raw_mode;
+use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
 
 /// Provide the trait that helps handle the input data.
@@ -59,8 +59,8 @@ pub struct Chardev {
     id: String,
     /// Type of backend device.
     backend: ChardevType,
-    /// UnixListener for socket-type chardev.
-    listener: Option<UnixListener>,
+    /// Socket listener for chardev of socket type.
+    listener: Option<SocketListener>,
     /// Chardev input.
     input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
@@ -108,7 +108,7 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::Socket {
+            ChardevType::UnixSocket {
                 path,
                 server,
                 nowait,
@@ -116,21 +116,48 @@ impl Chardev {
                 if !*server || !*nowait {
                     bail!(
                         "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        path
+                        &self.id
                     );
                 }
+
                 clear_file(path.clone())?;
-                let sock = UnixListener::bind(path.clone())
-                    .with_context(|| format!("Failed to bind socket for chardev, path:{}", path))?;
-                self.listener = Some(sock);
+                let listener = SocketListener::bind_by_uds(path).with_context(|| {
+                    format!(
+                        "Failed to bind socket for chardev \'{}\', path: {}",
+                        &self.id, path
+                    )
+                })?;
+                self.listener = Some(listener);
+
                 // add file to temporary pool, so it could be cleaned when vm exit.
                 TempCleaner::add_path(path.clone());
                 limit_permission(path).with_context(|| {
                     format!(
-                        "Failed to change file permission for chardev, path:{}",
-                        path
+                        "Failed to change file permission for chardev \'{}\', path: {}",
+                        &self.id, path
                     )
                 })?;
+            }
+            ChardevType::TcpSocket {
+                host,
+                port,
+                server,
+                nowait,
+            } => {
+                if !*server || !*nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                        &self.id
+                    );
+                }
+
+                let listener = SocketListener::bind_by_tcp(host, *port).with_context(|| {
+                    format!(
+                        "Failed to bind socket for chardev \'{}\', address: {}:{}",
+                        &self.id, host, port
+                    )
+                })?;
+                self.listener = Some(listener);
             }
             ChardevType::File(path) => {
                 let file = Arc::new(Mutex::new(
@@ -214,144 +241,194 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
     Ok((master, path))
 }
 
-fn get_notifier_handler(
-    chardev: Arc<Mutex<Chardev>>,
-    backend: ChardevType,
-) -> Rc<NotifierCallback> {
-    match backend {
-        ChardevType::Stdio | ChardevType::Pty => Rc::new(move |_, _| {
-            let locked_chardev = chardev.lock().unwrap();
-            if locked_chardev.receiver.is_none() {
-                error!("Failed to get chardev receiver");
-                return None;
-            }
-            if locked_chardev.input.is_none() {
-                error!("Failed to get chardev input fd");
-                return None;
-            }
-            let receiver = locked_chardev.receiver.clone().unwrap();
-            let input = locked_chardev.input.clone().unwrap();
-            drop(locked_chardev);
-
-            let mut locked_receiver = receiver.lock().unwrap();
-            let buff_size = locked_receiver.remain_size();
-            if buff_size == 0 {
-                return None;
-            }
-            let mut buffer = vec![0_u8; buff_size];
-            if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                locked_receiver.receive(&buffer[..index]);
-            } else {
-                error!("Failed to read input data");
-            }
-            None
-        }),
-        ChardevType::Socket { .. } => Rc::new(move |_, _| {
-            let mut locked_chardev = chardev.lock().unwrap();
-            let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
-            let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-            let stream_fd = stream.as_raw_fd();
-            locked_chardev.stream_fd = Some(stream_fd);
-            let stream_arc = Arc::new(Mutex::new(stream));
-            locked_chardev.input = Some(stream_arc.clone());
-            locked_chardev.output = Some(stream_arc);
-
-            if let Some(dev) = &locked_chardev.dev {
-                dev.lock().unwrap().chardev_notify(ChardevStatus::Open);
-            }
-
-            let cloned_chardev = chardev.clone();
-            let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
-                let mut locked_chardev = cloned_chardev.lock().unwrap();
-                if event == EventSet::IN {
-                    if locked_chardev.receiver.is_none() {
-                        error!("Failed to get chardev receiver");
-                        return None;
-                    }
-                    if locked_chardev.input.is_none() {
-                        error!("Failed to get chardev input fd");
-                        return None;
-                    }
-                    let receiver = locked_chardev.receiver.clone().unwrap();
-                    let input = locked_chardev.input.clone().unwrap();
-                    drop(locked_chardev);
-
-                    let mut locked_receiver = receiver.lock().unwrap();
-                    let buff_size = locked_receiver.remain_size();
-                    if buff_size == 0 {
-                        return None;
-                    }
-                    let mut buffer = vec![0_u8; buff_size];
-                    if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                        locked_receiver.receive(&buffer[..index]);
-                    } else {
-                        error!("Failed to read input data");
-                    }
-                    None
-                } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    // Always allow disconnect even if has deactivated.
-                    if let Some(dev) = &locked_chardev.dev {
-                        dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
-                    }
-                    locked_chardev.input = None;
-                    locked_chardev.output = None;
-                    locked_chardev.stream_fd = None;
-                    Some(gen_delete_notifiers(&[stream_fd]))
-                } else {
-                    None
-                }
-            });
-            Some(vec![EventNotifier::new(
-                NotifierOperation::AddShared,
-                stream_fd,
-                Some(listener_fd),
-                EventSet::IN | EventSet::HANG_UP,
-                vec![inner_handler],
-            )])
-        }),
-        ChardevType::File(_) => Rc::new(move |_, _| None),
+// Notification handling in case of stdio or pty usage.
+fn get_terminal_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
+    let locked_chardev = chardev.lock().unwrap();
+    let input = locked_chardev.input.clone();
+    if input.is_none() {
+        // Method `realize` expected to be called before we get here because to build event
+        // notifier we need already valid file descriptors here.
+        error!(
+            "Failed to initialize input events for chardev \'{}\', chardev not initialized",
+            &locked_chardev.id
+        );
+        return None;
     }
+
+    let cloned_chardev = chardev.clone();
+    let event_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+        let locked_chardev = cloned_chardev.lock().unwrap();
+        if locked_chardev.receiver.is_none() {
+            error!(
+                "Failed to read input data from chardev \'{}\', receiver is none",
+                &locked_chardev.id
+            );
+            return None;
+        }
+        let receiver = locked_chardev.receiver.clone().unwrap();
+        let input = locked_chardev.input.clone().unwrap();
+        drop(locked_chardev);
+
+        let mut locked_receiver = receiver.lock().unwrap();
+        let buff_size = locked_receiver.remain_size();
+        if buff_size == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0_u8; buff_size];
+        if let Ok(bytes_count) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+            locked_receiver.receive(&buffer[..bytes_count]);
+        } else {
+            let os_error = std::io::Error::last_os_error();
+            let locked_chardev = cloned_chardev.lock().unwrap();
+            error!(
+                "Failed to read input data from chardev \'{}\', {}",
+                &locked_chardev.id, &os_error
+            );
+        }
+        None
+    });
+
+    let input_fd = input.unwrap().lock().unwrap().as_raw_fd();
+    Some(EventNotifier::new(
+        NotifierOperation::AddShared,
+        input_fd,
+        None,
+        EventSet::IN,
+        vec![event_handler],
+    ))
+}
+
+// Notification handling in case of listening (server) socket.
+fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
+    let locked_chardev = chardev.lock().unwrap();
+    let listener = &locked_chardev.listener;
+    if listener.is_none() {
+        // Method `realize` expected to be called before we get here because to build event
+        // notifier we need already valid file descriptors here.
+        error!(
+            "Failed to setup io-event notifications for chardev \'{}\', device not initialized",
+            &locked_chardev.id
+        );
+        return None;
+    }
+
+    let cloned_chardev = chardev.clone();
+    let event_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+        let mut locked_chardev = cloned_chardev.lock().unwrap();
+
+        let stream = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
+        let connection_info = stream.link_description();
+        info!(
+            "Chardev \'{}\' event, connection opened: {}",
+            &locked_chardev.id, connection_info
+        );
+
+        let stream_fd = stream.as_raw_fd();
+        let stream_arc = Arc::new(Mutex::new(stream));
+
+        locked_chardev.stream_fd = Some(stream_fd);
+        locked_chardev.input = Some(stream_arc.clone());
+        locked_chardev.output = Some(stream_arc.clone());
+
+        if let Some(dev) = &locked_chardev.dev {
+            dev.lock().unwrap().chardev_notify(ChardevStatus::Open);
+        }
+
+        let cloned_chardev = cloned_chardev.clone();
+        let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+            if event == EventSet::IN {
+                let locked_chardev = cloned_chardev.lock().unwrap();
+                if locked_chardev.receiver.is_none() {
+                    error!(
+                        "Failed to read input data from chardev \'{}\', receiver is none",
+                        &locked_chardev.id
+                    );
+                    return None;
+                }
+                let receiver = locked_chardev.receiver.clone().unwrap();
+                let input = locked_chardev.input.clone().unwrap();
+                drop(locked_chardev);
+
+                let mut locked_receiver = receiver.lock().unwrap();
+                let buff_size = locked_receiver.remain_size();
+                if buff_size == 0 {
+                    return None;
+                }
+
+                let mut buffer = vec![0_u8; buff_size];
+                if let Ok(bytes_count) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+                    locked_receiver.receive(&buffer[..bytes_count]);
+                } else {
+                    let os_error = std::io::Error::last_os_error();
+                    if os_error.kind() != std::io::ErrorKind::WouldBlock {
+                        let locked_chardev = cloned_chardev.lock().unwrap();
+                        error!(
+                            "Failed to read input data from chardev \'{}\', {}",
+                            &locked_chardev.id, &os_error
+                        );
+                    }
+                }
+                None
+            } else if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let mut locked_chardev = cloned_chardev.lock().unwrap();
+
+                if let Some(dev) = &locked_chardev.dev {
+                    dev.lock().unwrap().chardev_notify(ChardevStatus::Close);
+                }
+
+                locked_chardev.input = None;
+                locked_chardev.output = None;
+                locked_chardev.stream_fd = None;
+
+                info!(
+                    "Chardev \'{}\' event, connection closed: {}",
+                    &locked_chardev.id, connection_info
+                );
+
+                // Note: we use stream_arc variable here because we want to capture it and prolongate
+                // its lifetime with this notifier callback lifetime. It allows us to ensure
+                // that socket fd be valid until we unregister it from epoll_fd subscription.
+                let stream_fd = stream_arc.lock().unwrap().as_raw_fd();
+                Some(gen_delete_notifiers(&[stream_fd]))
+            } else {
+                None
+            }
+        });
+
+        let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+        Some(vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            stream_fd,
+            Some(listener_fd),
+            EventSet::IN | EventSet::HANG_UP,
+            vec![inner_handler],
+        )])
+    });
+
+    let listener_fd = listener.as_ref().unwrap().as_raw_fd();
+    Some(EventNotifier::new(
+        NotifierOperation::AddShared,
+        listener_fd,
+        None,
+        EventSet::IN,
+        vec![event_handler],
+    ))
 }
 
 impl EventNotifierHelper for Chardev {
     fn internal_notifiers(chardev: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        let backend = chardev.lock().unwrap().backend.clone();
-        let cloned_chardev = chardev.clone();
-        match backend {
-            ChardevType::Stdio | ChardevType::Pty => {
-                if let Some(input) = chardev.lock().unwrap().input.clone() {
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::AddShared,
-                        input.lock().unwrap().as_raw_fd(),
-                        None,
-                        EventSet::IN,
-                        vec![get_notifier_handler(cloned_chardev, backend)],
-                    ));
-                }
+        let notifier = {
+            let backend = chardev.lock().unwrap().backend.clone();
+            match backend {
+                ChardevType::Stdio => get_terminal_notifier(chardev),
+                ChardevType::Pty => get_terminal_notifier(chardev),
+                ChardevType::UnixSocket { .. } => get_socket_notifier(chardev),
+                ChardevType::TcpSocket { .. } => get_socket_notifier(chardev),
+                ChardevType::File(_) => None,
             }
-            ChardevType::Socket { .. } => {
-                if chardev.lock().unwrap().stream_fd.is_some() {
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::Resume,
-                        chardev.lock().unwrap().stream_fd.unwrap(),
-                        None,
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    ));
-                } else if let Some(listener) = chardev.lock().unwrap().listener.as_ref() {
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::AddShared,
-                        listener.as_raw_fd(),
-                        None,
-                        EventSet::IN,
-                        vec![get_notifier_handler(cloned_chardev, backend)],
-                    ));
-                }
-            }
-            ChardevType::File(_) => (),
-        }
-        notifiers
+        };
+        notifier.map_or(Vec::new(), |value| vec![value])
     }
 }
 
@@ -371,10 +448,10 @@ pub trait CommunicatInInterface: std::marker::Send + std::os::unix::io::AsRawFd 
 /// Provide backend trait object processing the output from the guest.
 pub trait CommunicatOutInterface: std::io::Write + std::marker::Send {}
 
-impl CommunicatInInterface for UnixStream {}
+impl CommunicatInInterface for SocketStream {}
 impl CommunicatInInterface for File {}
 impl CommunicatInInterface for Stdin {}
 
-impl CommunicatOutInterface for UnixStream {}
+impl CommunicatOutInterface for SocketStream {}
 impl CommunicatOutInterface for File {}
 impl CommunicatOutInterface for Stdout {}

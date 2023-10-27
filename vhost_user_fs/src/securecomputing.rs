@@ -98,6 +98,7 @@ fn syscall_whitelist() -> Vec<i64> {
     v.push(libc::SYS_rt_sigreturn);
     v.push(libc::SYS_sched_getaffinity);
     v.push(libc::SYS_sendmsg);
+    v.push(libc::SYS_sendto);
     v.push(libc::SYS_setresgid);
     v.push(libc::SYS_setresuid);
     v.push(libc::SYS_set_robust_list);
