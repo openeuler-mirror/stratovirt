@@ -413,6 +413,10 @@ impl MachineOps for StdMachine {
         &self.base
     }
 
+    fn machine_base_mut(&mut self) -> &mut MachineBase {
+        &mut self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 

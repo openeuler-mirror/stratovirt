@@ -255,6 +255,8 @@ impl MachineBase {
 pub trait MachineOps {
     fn machine_base(&self) -> &MachineBase;
 
+    fn machine_base_mut(&mut self) -> &mut MachineBase;
+
     fn build_smbios(
         &self,
         fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,

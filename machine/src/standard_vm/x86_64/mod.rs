@@ -278,6 +278,10 @@ impl MachineOps for StdMachine {
         &self.base
     }
 
+    fn machine_base_mut(&mut self) -> &mut MachineBase {
+        &mut self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let ram = self.get_vm_ram();
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
