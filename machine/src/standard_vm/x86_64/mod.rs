@@ -24,7 +24,6 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
-use self::ich9_lpc::SLEEP_CTRL_OFFSET;
 use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::error::MachineError;
@@ -827,56 +826,20 @@ impl MachineLifecycle for StdMachine {
 }
 
 impl MachineAddressInterface for StdMachine {
-    fn pio_in(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        if (0x60..=0x64).contains(&addr) {
-            // The function pit_calibrate_tsc() in kernel gets stuck if data read from
-            // io-port 0x61 is not 0x20.
-            // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
-            if addr == 0x61 {
-                data[0] = 0x20;
-                return true;
-            }
-            if addr == 0x64 {
-                // UEFI will read PS2 Keyboard's Status register 0x64 to detect if
-                // this device is present.
-                data[0] = 0xFF;
-            }
-        }
-
-        let length = data.len() as u64;
-        self.base
-            .sys_io
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().pio_in(addr, data)
     }
 
-    fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
-        if addr == SLEEP_CTRL_OFFSET as u64 {
-            if let Err(e) = self.base.cpus[0].pause() {
-                error!("Fail to pause bsp, {:?}", e);
-            }
-        }
-        self.base
-            .sys_io
-            .write(&mut data, GuestAddress(addr), count)
-            .is_ok()
+    fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().pio_out(addr, data)
     }
 
-    fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        let length = data.len() as u64;
-        self.base
-            .sys_mem
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().mmio_read(addr, data)
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
-        self.base
-            .sys_mem
-            .write(&mut data, GuestAddress(addr), count)
-            .is_ok()
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().mmio_write(addr, data)
     }
 }
 

@@ -41,7 +41,7 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{
-    create_backend_mem, create_default_mem, AddressSpace, KvmMemoryListener, Region,
+    create_backend_mem, create_default_mem, AddressSpace, GuestAddress, KvmMemoryListener, Region,
 };
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -199,6 +199,56 @@ impl MachineBase {
                 "MachineRam",
             )),
         })
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn pio_in(&self, addr: u64, mut data: &mut [u8]) -> bool {
+        // The function pit_calibrate_tsc() in kernel gets stuck if data read from
+        // io-port 0x61 is not 0x20.
+        // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
+        if addr == 0x61 {
+            data[0] = 0x20;
+            return true;
+        }
+        if addr == 0x64 {
+            // UEFI will read PS2 Keyboard's Status register 0x64 to detect if
+            // this device is present.
+            data[0] = 0xFF;
+        }
+
+        let length = data.len() as u64;
+        self.sys_io
+            .read(&mut data, GuestAddress(addr), length)
+            .is_ok()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
+        use standard_vm::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
+
+        let count = data.len() as u64;
+        if addr == SLEEP_CTRL_OFFSET as u64 {
+            if let Err(e) = self.cpus[0].pause() {
+                log::error!("Fail to pause bsp, {:?}", e);
+            }
+        }
+        self.sys_io
+            .write(&mut data, GuestAddress(addr), count)
+            .is_ok()
+    }
+
+    fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
+        let length = data.len() as u64;
+        self.sys_mem
+            .read(&mut data, GuestAddress(addr), length)
+            .is_ok()
+    }
+
+    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
+        let count = data.len() as u64;
+        self.sys_mem
+            .write(&mut data, GuestAddress(addr), count)
+            .is_ok()
     }
 }
 
