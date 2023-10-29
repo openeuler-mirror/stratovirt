@@ -2,6 +2,21 @@
 
 StratoVirt提供了轻量虚拟机和标准虚拟机两种机型。两种机型的启动过程如下。
 
+## 前置参数设置
+
+```shell
+arch=`uname -m`
+if [ ${arch} = "x86_64" ]; then
+    con=ttyS0
+    machine="q35"
+elif [ ${arch} = "aarch64" ]; then
+    con=ttyAMA0
+    machine="virt"
+else
+    echo "${arch} architecture not supported."
+    exit 1
+fi
+
 ## 轻量虚拟机启动过程
 
 ### 1. 构建内核镜像
@@ -54,7 +69,7 @@ Rootfs镜像是一种文件系统镜像。在StratoVirt启动时可以挂载带�
     -kernel /path/to/kernel \
     -smp 1 \
     -m 1024m \
-    -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
+    -append "console=${con} pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
     -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
@@ -228,18 +243,6 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 首先给出 kernel + rootfs 的启动命令，具体如下：
 
 ```shell
-arch=`uname -m`
-if [ ${arch} = "x86_64" ]; then
-    con=ttyS0
-    machine="q35"
-elif [ ${arch} = "aarch64" ]; then
-    con=ttyAMA0
-    machine="virt"
-else
-    echo "${arch} architecture not supported."
-    exit 1
-fi
-
 /usr/bin/stratovirt \
     -machine ${machine} \
     -kernel /path/to/kernel \

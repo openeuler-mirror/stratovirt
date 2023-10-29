@@ -58,11 +58,8 @@ use cpu::PMU_INTR;
 use cpu::{CPUTopology, CpuLifecycleState};
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::FwCfgOps;
-use devices::legacy::Serial;
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
-#[cfg(target_arch = "x86_64")]
-use devices::legacy::SERIAL_ADDR;
 use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 #[cfg(target_arch = "aarch64")]
 use devices::sysbus::{SysBusDevType, SysRes};
@@ -394,6 +391,10 @@ impl MachineOps for LightMachine {
         &self.base
     }
 
+    fn machine_base_mut(&mut self) -> &mut MachineBase {
+        &mut self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 
@@ -567,27 +568,39 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
-        #[cfg(target_arch = "x86_64")]
-        let region_base: u64 = SERIAL_ADDR;
-        #[cfg(target_arch = "aarch64")]
+    #[cfg(target_arch = "aarch64")]
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
+        use devices::legacy::PL011;
+
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
-        #[cfg(target_arch = "x86_64")]
-        let region_size: u64 = 8;
-        #[cfg(target_arch = "aarch64")]
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
 
+        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
+        let base = self.machine_base_mut();
+        pl011
+            .realize(
+                &mut base.sysbus,
+                region_base,
+                region_size,
+                &base.boot_source,
+            )
+            .with_context(|| "Failed to realize PL011")
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
+        use devices::legacy::{Serial, SERIAL_ADDR};
+
+        let region_base: u64 = SERIAL_ADDR;
+        let region_size: u64 = 8;
         let serial = Serial::new(config.clone());
         serial
             .realize(
-                &mut self.base.sysbus,
+                &mut self.machine_base_mut().sysbus,
                 region_base,
                 region_size,
-                #[cfg(target_arch = "aarch64")]
-                &self.base.boot_source,
             )
-            .with_context(|| "Failed to realize serial device.")?;
-        Ok(())
+            .with_context(|| "Failed to realize serial device.")
     }
 
     fn add_virtio_mmio_net(
@@ -1281,11 +1294,14 @@ impl EventLoopManager for LightMachine {
 // * `fdt` - Flatted device-tree blob where serial node will be filled into.
 #[cfg(target_arch = "aarch64")]
 fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("uart@{:x}", res.region_base);
+    let node = format!("pl011@{:x}", res.region_base);
     let serial_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "ns16550a")?;
-    fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
+    fdt.set_property_string("compatible", "arm,pl011\0arm,primecell")?;
+    fdt.set_property_string("clock-names", "uartclk\0apb_pclk")?;
+    fdt.set_property_array_u32(
+        "clocks",
+        &[device_tree::CLK_PHANDLE, device_tree::CLK_PHANDLE],
+    )?;
     fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
     fdt.set_property_array_u32(
         "interrupts",
@@ -1513,7 +1529,7 @@ impl CompileFDTHelper for LightMachine {
             let dev_type = locked_dev.sysbusdev_base().dev_type;
             let sys_res = locked_dev.sysbusdev_base().res;
             match dev_type {
-                SysBusDevType::Serial => generate_serial_device_node(fdt, &sys_res)?,
+                SysBusDevType::PL011 => generate_serial_device_node(fdt, &sys_res)?,
                 SysBusDevType::Rtc => generate_rtc_device_node(fdt, &sys_res)?,
                 SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, &sys_res)?,
                 _ => (),
@@ -1530,6 +1546,10 @@ impl CompileFDTHelper for LightMachine {
         let chosen_node_dep = fdt.begin_node(node)?;
         let cmdline = &boot_source.kernel_cmdline.to_string();
         fdt.set_property_string("bootargs", cmdline.as_str())?;
+
+        let pl011_property_string =
+            format!("/pl011@{:x}", MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
+        fdt.set_property_string("stdout-path", &pl011_property_string)?;
 
         match &boot_source.initrd {
             Some(initrd) => {
