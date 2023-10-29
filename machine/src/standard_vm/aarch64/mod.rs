@@ -49,7 +49,7 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
-use devices::sysbus::{SysBusDevType, SysRes};
+use devices::sysbus::SysBusDevType;
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(feature = "ramfb")]
@@ -1231,312 +1231,88 @@ impl EventLoopManager for StdMachine {
     }
 }
 
-// Function that helps to generate pci node in device-tree.
-//
-// # Arguments
-//
-// * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::Result<()> {
-    let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
-    let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1;
-    let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20;
-    let node = format!("pcie@{:x}", pcie_ecam_base);
-    let pci_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "pci-host-ecam-generic")?;
-    fdt.set_property_string("device_type", "pci")?;
-    fdt.set_property_array_u64("reg", &[pcie_ecam_base, pcie_ecam_size])?;
-    fdt.set_property_array_u32("bus-range", &[0, (pcie_buses_num - 1) as u32])?;
-    fdt.set_property_u32("linux,pci-domain", 0)?;
-    fdt.set_property_u32("#address-cells", 3)?;
-    fdt.set_property_u32("#size-cells", 2)?;
-
-    let high_pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].0;
-    let high_pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].1;
-    let fdt_pci_mmio_type_64bit: u32 = device_tree::FDT_PCI_RANGE_MMIO_64BIT;
-    let high_mmio_base_hi: u32 = (high_pcie_mmio_base >> 32) as u32;
-    let high_mmio_base_lo: u32 = (high_pcie_mmio_base & 0xffff_ffff) as u32;
-    let high_mmio_size_hi: u32 = (high_pcie_mmio_size >> 32) as u32;
-    let high_mmio_size_lo: u32 = (high_pcie_mmio_size & 0xffff_ffff) as u32;
-
-    let pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
-    let pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;
-    let fdt_pci_mmio_type: u32 = device_tree::FDT_PCI_RANGE_MMIO;
-    let mmio_base_hi: u32 = (pcie_mmio_base >> 32) as u32;
-    let mmio_base_lo: u32 = (pcie_mmio_base & 0xffff_ffff) as u32;
-    let mmio_size_hi: u32 = (pcie_mmio_size >> 32) as u32;
-    let mmio_size_lo: u32 = (pcie_mmio_size & 0xffff_ffff) as u32;
-
-    let pcie_pio_base = MEM_LAYOUT[LayoutEntryType::PciePio as usize].0;
-    let pcie_pio_size = MEM_LAYOUT[LayoutEntryType::PciePio as usize].1;
-    let fdt_pci_pio_type: u32 = device_tree::FDT_PCI_RANGE_IOPORT;
-    let pio_base_hi: u32 = (pcie_pio_base >> 32) as u32;
-    let pio_base_lo: u32 = (pcie_pio_base & 0xffff_ffff) as u32;
-    let pio_size_hi: u32 = (pcie_pio_size >> 32) as u32;
-    let pio_size_lo: u32 = (pcie_pio_size & 0xffff_ffff) as u32;
-
-    fdt.set_property_array_u32(
-        "ranges",
-        &[
-            fdt_pci_pio_type,
-            0,
-            0,
-            pio_base_hi,
-            pio_base_lo,
-            pio_size_hi,
-            pio_size_lo,
-            fdt_pci_mmio_type,
-            mmio_base_hi,
-            mmio_base_lo,
-            mmio_base_hi,
-            mmio_base_lo,
-            mmio_size_hi,
-            mmio_size_lo,
-            fdt_pci_mmio_type_64bit,
-            high_mmio_base_hi,
-            high_mmio_base_lo,
-            high_mmio_base_hi,
-            high_mmio_base_lo,
-            high_mmio_size_hi,
-            high_mmio_size_lo,
-        ],
-    )?;
-
-    fdt.set_property_u32("msi-parent", device_tree::GIC_ITS_PHANDLE)?;
-    fdt.end_node(pci_node_dep)?;
-    Ok(())
-}
-
-// Function that helps to generate Virtio-Mmio device's node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of Virtio-Mmio device.
-// * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("virtio_mmio@{:x}", res.region_base);
-    let virtio_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "virtio,mmio")?;
-    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_EDGE_RISING,
-        ],
-    )?;
-    fdt.end_node(virtio_node_dep)?;
-    Ok(())
-}
-
 /// Function that helps to generate flash node in device-tree.
 ///
-/// # Arguments
-///
-/// * `dev_info` - Device resource info of fw-cfg device.
-/// * `flash` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_flash_device_node(fdt: &mut FdtBuilder) -> util::Result<()> {
-    let flash_base = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
-    let flash_size = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
-    let node = format!("flash@{:x}", flash_base);
-    let flash_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "cfi-flash")?;
-    fdt.set_property_array_u64(
-        "reg",
-        &[flash_base, flash_size, flash_base + flash_size, flash_size],
-    )?;
-    fdt.set_property_u32("bank-width", 4)?;
-    fdt.end_node(flash_node_dep)?;
-    Ok(())
-}
-
-/// Function that helps to generate fw-cfg node in device-tree.
-///
-/// # Arguments
-///
-/// * `dev_info` - Device resource info of fw-cfg device.
-/// * `fdt` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("fw-cfg@{:x}", res.region_base);
-    let fwcfg_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "qemu,fw-cfg-mmio")?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.end_node(fwcfg_node_dep)?;
-
-    Ok(())
-}
-
-// Function that helps to generate serial node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of serial device.
-// * `fdt` - Flatted device-tree blob where serial node will be filled into.
-fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("pl011@{:x}", res.region_base);
-    let serial_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "arm,pl011\0arm,primecell")?;
-    fdt.set_property_string("clock-names", "uartclk\0apb_pclk")?;
-    fdt.set_property_array_u32(
-        "clocks",
-        &[device_tree::CLK_PHANDLE, device_tree::CLK_PHANDLE],
-    )?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_EDGE_RISING,
-        ],
-    )?;
-    fdt.end_node(serial_node_dep)?;
-
-    Ok(())
-}
-
-// Function that helps to generate RTC node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of RTC device.
-// * `fdt` - Flatted device-tree blob where RTC node will be filled into.
-fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("pl031@{:x}", res.region_base);
-    let rtc_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
-    fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_LEVEL_HIGH,
-        ],
-    )?;
-    fdt.end_node(rtc_node_dep)?;
-
-    Ok(())
-}
-
-fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
-    let node = "pmu";
-    let pmu_node_dep = fdt.begin_node(node)?;
-    fdt.set_property_string("compatible", "arm,armv8-pmuv3")?;
-    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_PPI,
-            PMU_INTR,
-            device_tree::IRQ_TYPE_LEVEL_HIGH,
-        ],
-    )?;
-    fdt.end_node(pmu_node_dep)?;
-
-    Ok(())
-}
 
 /// Trait that helps to generate all nodes in device-tree.
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
-    /// Function that helps to generate cpu nodes.
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate memory nodes.
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
-    /// Function that helps to generate Virtio-mmio devices' nodes.
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    /// Function that helps to generate pci node in device-tree.
+    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate the chosen node.
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
-    /// Function that helps to generate numa node distances.
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
 }
 
 impl CompileFDTHelper for StdMachine {
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        let node = "cpus";
+    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+        let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+        let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1;
+        let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20;
+        let node = format!("pcie@{:x}", pcie_ecam_base);
+        let pci_node_dep = fdt.begin_node(&node)?;
+        fdt.set_property_string("compatible", "pci-host-ecam-generic")?;
+        fdt.set_property_string("device_type", "pci")?;
+        fdt.set_property_array_u64("reg", &[pcie_ecam_base, pcie_ecam_size])?;
+        fdt.set_property_array_u32("bus-range", &[0, (pcie_buses_num - 1) as u32])?;
+        fdt.set_property_u32("linux,pci-domain", 0)?;
+        fdt.set_property_u32("#address-cells", 3)?;
+        fdt.set_property_u32("#size-cells", 2)?;
 
-        let cpus_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_u32("#address-cells", 0x02)?;
-        fdt.set_property_u32("#size-cells", 0x0)?;
+        let high_pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].0;
+        let high_pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].1;
+        let fdt_pci_mmio_type_64bit: u32 = device_tree::FDT_PCI_RANGE_MMIO_64BIT;
+        let high_mmio_base_hi: u32 = (high_pcie_mmio_base >> 32) as u32;
+        let high_mmio_base_lo: u32 = (high_pcie_mmio_base & 0xffff_ffff) as u32;
+        let high_mmio_size_hi: u32 = (high_pcie_mmio_size >> 32) as u32;
+        let high_mmio_size_lo: u32 = (high_pcie_mmio_size & 0xffff_ffff) as u32;
 
-        // Generate CPU topology
-        let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
-        for socket in 0..self.base.cpu_topo.sockets {
-            let sock_name = format!("cluster{}", socket);
-            let sock_node_dep = fdt.begin_node(&sock_name)?;
-            for cluster in 0..self.base.cpu_topo.clusters {
-                let clster = format!("cluster{}", cluster);
-                let cluster_node_dep = fdt.begin_node(&clster)?;
+        let pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
+        let pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;
+        let fdt_pci_mmio_type: u32 = device_tree::FDT_PCI_RANGE_MMIO;
+        let mmio_base_hi: u32 = (pcie_mmio_base >> 32) as u32;
+        let mmio_base_lo: u32 = (pcie_mmio_base & 0xffff_ffff) as u32;
+        let mmio_size_hi: u32 = (pcie_mmio_size >> 32) as u32;
+        let mmio_size_lo: u32 = (pcie_mmio_size & 0xffff_ffff) as u32;
 
-                for core in 0..self.base.cpu_topo.cores {
-                    let core_name = format!("core{}", core);
-                    let core_node_dep = fdt.begin_node(&core_name)?;
+        let pcie_pio_base = MEM_LAYOUT[LayoutEntryType::PciePio as usize].0;
+        let pcie_pio_size = MEM_LAYOUT[LayoutEntryType::PciePio as usize].1;
+        let fdt_pci_pio_type: u32 = device_tree::FDT_PCI_RANGE_IOPORT;
+        let pio_base_hi: u32 = (pcie_pio_base >> 32) as u32;
+        let pio_base_lo: u32 = (pcie_pio_base & 0xffff_ffff) as u32;
+        let pio_size_hi: u32 = (pcie_pio_size >> 32) as u32;
+        let pio_size_lo: u32 = (pcie_pio_size & 0xffff_ffff) as u32;
 
-                    for thread in 0..self.base.cpu_topo.threads {
-                        let thread_name = format!("thread{}", thread);
-                        let thread_node_dep = fdt.begin_node(&thread_name)?;
-                        let vcpuid =
-                            self.base.cpu_topo.threads * self.base.cpu_topo.cores * cluster
-                                + self.base.cpu_topo.threads * core
-                                + thread;
-                        fdt.set_property_u32(
-                            "cpu",
-                            u32::from(vcpuid) + device_tree::CPU_PHANDLE_START,
-                        )?;
-                        fdt.end_node(thread_node_dep)?;
-                    }
-                    fdt.end_node(core_node_dep)?;
-                }
-                fdt.end_node(cluster_node_dep)?;
-            }
-            fdt.end_node(sock_node_dep)?;
-        }
-        fdt.end_node(cpu_map_node_dep)?;
+        fdt.set_property_array_u32(
+            "ranges",
+            &[
+                fdt_pci_pio_type,
+                0,
+                0,
+                pio_base_hi,
+                pio_base_lo,
+                pio_size_hi,
+                pio_size_lo,
+                fdt_pci_mmio_type,
+                mmio_base_hi,
+                mmio_base_lo,
+                mmio_base_hi,
+                mmio_base_lo,
+                mmio_size_hi,
+                mmio_size_lo,
+                fdt_pci_mmio_type_64bit,
+                high_mmio_base_hi,
+                high_mmio_base_lo,
+                high_mmio_base_hi,
+                high_mmio_base_lo,
+                high_mmio_size_hi,
+                high_mmio_size_lo,
+            ],
+        )?;
 
-        for cpu_index in 0..self.base.cpu_topo.nrcpus {
-            let mpidr = self.base.cpus[cpu_index as usize]
-                .arch()
-                .lock()
-                .unwrap()
-                .mpidr();
-
-            let node = format!("cpu@{:x}", mpidr);
-            let mpidr_node_dep = fdt.begin_node(&node)?;
-            fdt.set_property_u32(
-                "phandle",
-                u32::from(cpu_index) + device_tree::CPU_PHANDLE_START,
-            )?;
-            fdt.set_property_string("device_type", "cpu")?;
-            fdt.set_property_string("compatible", "arm,arm-v8")?;
-            if self.base.cpu_topo.max_cpus > 1 {
-                fdt.set_property_string("enable-method", "psci")?;
-            }
-            fdt.set_property_u64("reg", mpidr & 0x007F_FFFF)?;
-            fdt.set_property_u32("phandle", device_tree::FIRST_VCPU_PHANDLE)?;
-
-            if let Some(numa_nodes) = &self.base.numa_nodes {
-                for numa_index in 0..numa_nodes.len() {
-                    let numa_node = numa_nodes.get(&(numa_index as u32));
-                    if numa_node.unwrap().cpus.contains(&(cpu_index)) {
-                        fdt.set_property_u32("numa-node-id", numa_index as u32)?;
-                    }
-                }
-            }
-
-            fdt.end_node(mpidr_node_dep)?;
-        }
-
-        fdt.end_node(cpus_node_dep)?;
-
-        if self.base.cpu_features.pmu {
-            generate_pmu_node(fdt)?;
-        }
-
-        Ok(())
+        fdt.set_property_u32("msi-parent", device_tree::GIC_ITS_PHANDLE)?;
+        fdt.end_node(pci_node_dep)
     }
 
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
@@ -1569,67 +1345,6 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        // timer
-        let mut cells: Vec<u32> = Vec::new();
-        for &irq in [13, 14, 11, 10].iter() {
-            cells.push(device_tree::GIC_FDT_IRQ_TYPE_PPI);
-            cells.push(irq);
-            cells.push(device_tree::IRQ_TYPE_LEVEL_HIGH);
-        }
-        let node = "timer";
-        let timer_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "arm,armv8-timer")?;
-        fdt.set_property("always-on", &Vec::new())?;
-        fdt.set_property_array_u32("interrupts", &cells)?;
-        fdt.end_node(timer_node_dep)?;
-
-        // clock
-        let node = "apb-pclk";
-        let clock_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "fixed-clock")?;
-        fdt.set_property_string("clock-output-names", "clk24mhz")?;
-        fdt.set_property_u32("#clock-cells", 0x0)?;
-        fdt.set_property_u32("clock-frequency", 24_000_000)?;
-        fdt.set_property_u32("phandle", device_tree::CLK_PHANDLE)?;
-        fdt.end_node(clock_node_dep)?;
-
-        // psci
-        let node = "psci";
-        let psci_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "arm,psci-0.2")?;
-        fdt.set_property_string("method", "hvc")?;
-        fdt.end_node(psci_node_dep)?;
-
-        for dev in self.base.sysbus.devices.iter() {
-            let locked_dev = dev.lock().unwrap();
-            match locked_dev.sysbusdev_base().dev_type {
-                SysBusDevType::PL011 => {
-                    // SAFETY: Legacy devices guarantee is not empty.
-                    generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
-                }
-                SysBusDevType::Rtc => {
-                    // SAFETY: Legacy devices guarantee is not empty.
-                    generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
-                }
-                SysBusDevType::VirtioMmio => {
-                    // SAFETY: Legacy devices guarantee is not empty.
-                    generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
-                }
-                SysBusDevType::FwCfg => {
-                    // SAFETY: Legacy devices guarantee is not empty.
-                    generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
-                }
-                _ => (),
-            }
-        }
-        generate_flash_device_node(fdt)?;
-
-        generate_pci_host_node(fdt)?;
-
-        Ok(())
-    }
-
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "chosen";
 
@@ -1650,66 +1365,17 @@ impl CompileFDTHelper for StdMachine {
             }
             None => {}
         }
-        fdt.end_node(chosen_node_dep)?;
-
-        Ok(())
-    }
-
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        if self.base.numa_nodes.is_none() {
-            return Ok(());
-        }
-
-        let distance_node_dep = fdt.begin_node("distance-map")?;
-        fdt.set_property_string("compatible", "numa-distance-map-v1")?;
-
-        let mut matrix = Vec::new();
-        let numa_nodes = self.base.numa_nodes.as_ref().unwrap();
-        let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
-        for (id, node) in numa_nodes.iter().enumerate() {
-            let distances = &node.1.distances;
-            for i in existing_nodes.iter() {
-                matrix.push(id as u32);
-                matrix.push(*i);
-                let dist: u32 = if id as u32 == *i {
-                    10
-                } else if let Some(distance) = distances.get(i) {
-                    *distance as u32
-                } else {
-                    20
-                };
-                matrix.push(dist);
-            }
-        }
-
-        fdt.set_property_array_u32("distance-matrix", matrix.as_ref())?;
-        fdt.end_node(distance_node_dep)?;
-
-        Ok(())
+        fdt.end_node(chosen_node_dep)
     }
 }
 
 impl device_tree::CompileFDT for StdMachine {
     fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node_dep = fdt.begin_node("")?;
-
-        fdt.set_property_string("compatible", "linux,dummy-virt")?;
-        fdt.set_property_u32("#address-cells", 0x2)?;
-        fdt.set_property_u32("#size-cells", 0x2)?;
-        fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-
-        self.generate_cpu_nodes(fdt)?;
+        self.base.generate_fdt_node(fdt)?;
         self.generate_memory_node(fdt)?;
-        self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
-        self.base
-            .irq_chip
-            .as_ref()
-            .unwrap()
-            .generate_fdt_node(fdt)?;
-        self.generate_distance_node(fdt)?;
-        fdt.end_node(node_dep)?;
-
-        Ok(())
+        self.generate_pci_host_node(fdt)?;
+        fdt.end_node(node_dep)
     }
 }

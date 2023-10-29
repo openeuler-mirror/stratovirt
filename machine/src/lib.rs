@@ -13,6 +13,8 @@
 pub mod error;
 pub mod standard_vm;
 
+#[cfg(target_arch = "aarch64")]
+mod fdt;
 mod micro_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
