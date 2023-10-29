@@ -1180,20 +1180,12 @@ impl MachineLifecycle for StdMachine {
 }
 
 impl MachineAddressInterface for StdMachine {
-    fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        let length = data.len() as u64;
-        self.base
-            .sys_mem
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().mmio_read(addr, data)
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
-        self.base
-            .sys_mem
-            .write(&mut data, GuestAddress(addr), count)
-            .is_ok()
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().mmio_write(addr, data)
     }
 }
 

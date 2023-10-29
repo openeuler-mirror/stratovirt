@@ -827,19 +827,8 @@ impl MachineLifecycle for LightMachine {
 
 impl MachineAddressInterface for LightMachine {
     #[cfg(target_arch = "x86_64")]
-    fn pio_in(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        // The function pit_calibrate_tsc() in kernel gets stuck if data read from
-        // io-port 0x61 is not 0x20.
-        // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
-        if addr == 0x61 {
-            data[0] = 0x20;
-            return true;
-        }
-        let length = data.len() as u64;
-        self.base
-            .sys_io
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().pio_in(addr, data)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -851,20 +840,12 @@ impl MachineAddressInterface for LightMachine {
             .is_ok()
     }
 
-    fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        let length = data.len() as u64;
-        self.base
-            .sys_mem
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().mmio_read(addr, data)
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
-        self.base
-            .sys_mem
-            .write(&mut data, GuestAddress(addr), count)
-            .is_ok()
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().mmio_write(addr, data)
     }
 }
 
