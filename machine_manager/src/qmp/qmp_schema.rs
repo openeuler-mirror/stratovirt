@@ -191,6 +191,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-mem-gpa")]
+    query_mem_gpa {
+        #[serde(default)]
+        arguments: query_mem_gpa,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-balloon")]
     query_balloon {
         #[serde(default)]
@@ -434,6 +441,12 @@ pub enum QmpCommand {
     #[serde(rename = "blockdev-snapshot-delete-internal-sync")]
     blockdev_snapshot_delete_internal_sync {
         arguments: blockdev_snapshot_internal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-vcpu-reg")]
+    query_vcpu_reg {
+        arguments: query_vcpu_reg,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
@@ -2382,6 +2395,48 @@ impl Command for query_mem {
         Default::default()
     }
 }
+
+/// query-vcpu-reg
+///
+/// # Arguments
+///
+/// * `addr` - the register addr will be query.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-vcpu-reg",
+///      "arguments": { "addr": "603000000013df1a", "vcpu": 0 } }
+/// <- { "return": "348531C5" }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_vcpu_reg {
+    #[serde(rename = "addr")]
+    pub addr: String,
+    #[serde(rename = "vcpu")]
+    pub vcpu: usize,
+}
+pub type QueryVcpuRegArgument = query_vcpu_reg;
+
+/// query-mem-gpa
+///
+/// This command
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-mem-gpa", "arguments": { "gpa": "13c4d1d00" } }
+/// <- { "return": "B9000001" }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_gpa {
+    #[serde(rename = "gpa")]
+    pub gpa: String,
+}
+
+pub type QueryMemGpaArgument = query_mem_gpa;
 
 #[cfg(test)]
 mod tests {

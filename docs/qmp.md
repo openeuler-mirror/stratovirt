@@ -445,6 +445,44 @@ Now there are 5 states during snapshot:
 <- {"return":{"status":"completed"}}
 ```
 
+## Debug
+
+### query-vcpu-reg
+
+Query vcpu register value.
+
+#### Arguments
+
+* `addr` : the register address.
+* `vcpu` : vcpu id.
+
+#### Notes
+
+- The VM will pause during the query and then resume.
+- Only aarch64 is supported now.
+
+#### Example
+
+```json
+-> {"execute": "query-vcpu-reg", "arguments": {"addr": "603000000013df1a", "vcpu": 0}}
+<- {"return": "348531C5"}
+```
+
+### query-mem-gpa
+
+Query the value of the guest physical address.
+
+#### Arguments
+
+* `gpa` : the guest physical address.
+
+#### Example
+
+```json
+-> {"execute": "query-mem-gpa", "arguments": {"gpa": "13c4d1d00" }}
+<- {"return": "B9000001"}
+```
+
 ## Event Notification
 
 When some events happen, connected client will receive QMP events.
