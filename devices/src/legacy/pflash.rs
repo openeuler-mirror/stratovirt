@@ -93,15 +93,12 @@ impl PFlash {
         }
         if let Some(fd) = backend.as_ref() {
             let len = fd.metadata().unwrap().len();
-            if len < size {
+            if len > size || len == 0 || (!read_only && len != size) {
                 bail!(
-                    "Mmap requires 0x{:X} bytes, given file provides 0x{:X} bytes",
-                    size,
-                    len
+                    "Invalid flash file: Region size 0x{size:X}, file size 0x{len:X}; read_only {read_only}"
                 );
             }
         }
-
         let num_devices: u32 = if device_width == 0 {
             1
         } else {
