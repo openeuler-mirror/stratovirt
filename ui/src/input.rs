@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -19,7 +19,6 @@ use anyhow::Result;
 use log::debug;
 use once_cell::sync::Lazy;
 
-use crate::data::keycode::KEYSYM2KEYCODE;
 use util::bitmap::Bitmap;
 
 // Logical window size for mouse.
@@ -86,31 +85,23 @@ pub enum KeyboardModifier {
 /// and some status information.
 pub struct KeyBoardState {
     /// Keyboard state.
-    pub keystate: Bitmap<u8>,
+    pub keystate: HashSet<u16>,
     /// Key Modifier states.
     pub keymods: Bitmap<u8>,
 }
 
 impl Default for KeyBoardState {
     fn default() -> Self {
-        let mut max_keycode: u16 = 0;
-        for &(_, v) in KEYSYM2KEYCODE.iter() {
-            max_keycode = std::cmp::max(max_keycode, v);
-        }
-        KeyBoardState::new(max_keycode as usize)
-    }
-}
-
-impl KeyBoardState {
-    pub fn new(key_num: usize) -> Self {
         Self {
-            keystate: Bitmap::new(key_num / (BIT_PER_BYTE as usize) + 1),
+            keystate: HashSet::new(),
             keymods: Bitmap::new(
                 KeyboardModifier::KeyModMax as usize / (BIT_PER_BYTE as usize) + 1,
             ),
         }
     }
+}
 
+impl KeyBoardState {
     /// Get the corresponding keyboard modifier.
     fn keyboard_modifier_get(&self, key_mod: KeyboardModifier) -> bool {
         match self.keymods.contain(key_mod as usize) {
@@ -127,15 +118,15 @@ impl KeyBoardState {
     /// Record the press and up state in the keyboard.
     fn keyboard_state_update(&mut self, keycode: u16, down: bool) -> Result<()> {
         // Key is not pressed and the incoming key action is up.
-        if !down && !self.keystate.contain(keycode as usize)? {
+        if !down && !self.keystate.contains(&keycode) {
             return Ok(());
         }
 
         // Update Keyboard key modifier state.
         if down {
-            self.keystate.set(keycode as usize)?;
+            self.keystate.insert(keycode);
         } else {
-            self.keystate.clear(keycode as usize)?;
+            self.keystate.remove(&keycode);
         }
 
         // Update Keyboard modifier state.
@@ -195,10 +186,7 @@ impl KeyBoardState {
         keycode_2: u16,
         mod_state: KeyboardModifier,
     ) -> Result<()> {
-        let mut res = self.keystate.contain(keycode_1 as usize)?;
-        res |= self.keystate.contain(keycode_2 as usize)?;
-
-        if res {
+        if self.keystate.contains(&keycode_1) | self.keystate.contains(&keycode_2) {
             self.keymods.set(mod_state as usize)?;
         } else {
             self.keymods.clear(mod_state as usize)?;
@@ -363,18 +351,16 @@ pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
 /// Release all pressed key.
 pub fn release_all_key() -> Result<()> {
     let mut locked_input = INPUTS.lock().unwrap();
-    for &(_, keycode) in KEYSYM2KEYCODE.iter() {
-        if locked_input
+    let mut keycode_lists: Vec<u16> = Vec::new();
+    for keycode in locked_input.keyboard_state.keystate.iter() {
+        keycode_lists.push(*keycode);
+    }
+    for keycode in keycode_lists.iter() {
+        locked_input
             .keyboard_state
-            .keystate
-            .contain(keycode as usize)?
-        {
-            locked_input
-                .keyboard_state
-                .keyboard_state_update(keycode, false)?;
-            if let Some(k) = locked_input.get_active_kbd().as_ref() {
-                k.lock().unwrap().do_key_event(keycode, false)?;
-            }
+            .keyboard_state_update(*keycode, false)?;
+        if let Some(k) = locked_input.get_active_kbd().as_ref() {
+            k.lock().unwrap().do_key_event(*keycode, false)?;
         }
     }
     Ok(())
@@ -417,7 +403,50 @@ pub trait PointerOpts: Send {
 
 #[cfg(test)]
 mod tests {
+    use crate::keycode::KeyCode;
+    static TEST_INPUT: Lazy<Arc<Mutex<TestInput>>> =
+        Lazy::new(|| Arc::new(Mutex::new(TestInput::default())));
+
     use super::*;
+
+    pub struct TestInput {
+        kbd: Arc<Mutex<TestKbd>>,
+        tablet: Arc<Mutex<TestTablet>>,
+    }
+
+    impl Default for TestInput {
+        fn default() -> Self {
+            Self {
+                kbd: Arc::new(Mutex::new(TestKbd {
+                    keycode: 0,
+                    down: false,
+                })),
+                tablet: Arc::new(Mutex::new(TestTablet {
+                    button: 0,
+                    x: 0,
+                    y: 0,
+                })),
+            }
+        }
+    }
+
+    impl TestInput {
+        fn register_input(&self) {
+            register_keyboard("TestKeyboard", self.kbd.clone());
+            register_pointer("TestPointer", self.tablet.clone());
+        }
+
+        fn unregister_input(&self) {
+            unregister_keyboard("TestKeyboard");
+            unregister_pointer("TestPointer");
+            self.kbd.lock().unwrap().keycode = 0;
+            self.kbd.lock().unwrap().down = false;
+            self.tablet.lock().unwrap().x = 0;
+            self.tablet.lock().unwrap().y = 0;
+            self.tablet.lock().unwrap().button = 0;
+        }
+    }
+
     #[derive(Default)]
     pub struct TestKbd {
         keycode: u16,
@@ -449,18 +478,16 @@ mod tests {
 
     #[test]
     fn test_input_basic() {
-        // Test keyboard event.
-        let test_kdb = Arc::new(Mutex::new(TestKbd {
-            keycode: 0,
-            down: false,
-        }));
-        register_keyboard("TestKeyboard", test_kdb.clone());
+        let test_input = TEST_INPUT.lock().unwrap();
+        test_input.register_input();
+        let test_kdb = test_input.kbd.clone();
+        let test_mouse = test_input.tablet.clone();
+
         assert!(key_event(12, true).is_ok());
         assert_eq!(test_kdb.lock().unwrap().keycode, 12);
         assert_eq!(test_kdb.lock().unwrap().down, true);
 
         // Test point event.
-        let test_mouse = Arc::new(Mutex::new(TestTablet::default()));
         assert_eq!(test_mouse.lock().unwrap().button, 0);
         assert_eq!(test_mouse.lock().unwrap().x, 0);
         assert_eq!(test_mouse.lock().unwrap().y, 0);
@@ -469,5 +496,54 @@ mod tests {
         assert_eq!(test_mouse.lock().unwrap().button, 1);
         assert_eq!(test_mouse.lock().unwrap().x, 54);
         assert_eq!(test_mouse.lock().unwrap().y, 12);
+
+        test_input.unregister_input();
+    }
+
+    #[test]
+    fn test_release_all_key() {
+        fn do_key_event(press: bool, keysym: i32, keycode: u16) -> Result<()> {
+            update_key_state(press, keysym, keycode)?;
+            key_event(keycode, press)
+        }
+
+        // Test keyboard event.
+        let test_input = TEST_INPUT.lock().unwrap();
+        test_input.register_input();
+        let test_kdb = test_input.kbd.clone();
+
+        let keysym2qkeycode = KeyCode::keysym_to_qkeycode();
+        // ["0", "a", "space"]
+        let keysym_lists: Vec<u16> = vec![0x0030, 0x0061, 0x0020];
+        let keycode_lists: Vec<u16> = keysym_lists
+            .iter()
+            .map(|x| *keysym2qkeycode.get(&x).unwrap())
+            .collect();
+        for idx in 0..keysym_lists.len() {
+            let keysym = keycode_lists[idx];
+            let keycode = keycode_lists[idx];
+            assert!(do_key_event(true, keysym as i32, keycode).is_ok());
+            assert_eq!(test_kdb.lock().unwrap().keycode, keycode);
+            assert_eq!(test_kdb.lock().unwrap().down, true);
+        }
+
+        let locked_input = INPUTS.lock().unwrap();
+        for keycode in &keycode_lists {
+            assert!(locked_input.keyboard_state.keystate.contains(keycode));
+            assert!(locked_input.keyboard_state.keystate.contains(keycode));
+        }
+        drop(locked_input);
+
+        // Release all keys
+        assert!(release_all_key().is_ok());
+
+        let locked_input = INPUTS.lock().unwrap();
+        for keycode in &keycode_lists {
+            assert!(!locked_input.keyboard_state.keystate.contains(keycode));
+            assert!(!locked_input.keyboard_state.keystate.contains(keycode));
+        }
+        drop(locked_input);
+
+        test_input.unregister_input();
     }
 }
