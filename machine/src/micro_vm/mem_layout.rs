@@ -47,6 +47,7 @@ pub enum LayoutEntryType {
     Mmio,
     IoApic,
     LocalApic,
+    IdentTss,
     MemAbove4g,
 }
 
@@ -57,5 +58,6 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
+    (0xFEF0_C000, 0x4000),           // Identity map address and TSS
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
 ];

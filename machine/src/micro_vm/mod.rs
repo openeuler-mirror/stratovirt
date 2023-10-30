@@ -35,7 +35,6 @@ mod syscall;
 
 pub use error::MicroVmError;
 
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -44,37 +43,29 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
-#[cfg(target_arch = "x86_64")]
-use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use log::{error, info};
 
 use super::Result as MachineResult;
 use super::{error::MachineError, MachineOps};
 #[cfg(target_arch = "x86_64")]
 use crate::vm_state;
+use crate::MachineBase;
 use address_space::{AddressSpace, GuestAddress, Region};
-use boot_loader::{load_linux, BootLoaderConfig};
-#[cfg(target_arch = "aarch64")]
-use cpu::CPUFeatures;
-#[cfg(target_arch = "aarch64")]
-use cpu::PMU_INTR;
-use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState, CpuTopology, CPU};
+#[cfg(target_arch = "x86_64")]
+use cpu::CPUBootConfig;
+use cpu::{CPUTopology, CpuLifecycleState};
+#[cfg(target_arch = "x86_64")]
+use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
-#[cfg(target_arch = "x86_64")]
-use devices::legacy::SERIAL_ADDR;
-use devices::legacy::{FwCfgOps, Serial};
 use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
-#[cfg(target_arch = "aarch64")]
-use devices::sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 #[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DiskFormat,
-    DriveFile, Incoming, MigrateMode, NetworkInterfaceConfig, NumaNodes, SerialConfig, VmConfig,
-    DEFAULT_VIRTQUEUE_SIZE,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, ConfigCheck, DiskFormat, MigrateMode,
+    NetworkInterfaceConfig, SerialConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -159,37 +150,10 @@ impl MmioReplaceableInfo {
 
 /// A wrapper around creating and using a kvm-based micro VM.
 pub struct LightMachine {
-    // `vCPU` topology, support sockets, cores, threads.
-    cpu_topo: CpuTopology,
-    // `vCPU` family and feature configuration. Only supports aarch64 currently.
-    #[cfg(target_arch = "aarch64")]
-    cpu_feature: CPUFeatures,
-    // `vCPU` devices.
-    cpus: Vec<Arc<CPU>>,
-    // Interrupt controller device.
-    #[cfg(target_arch = "aarch64")]
-    irq_chip: Option<Arc<InterruptController>>,
-    // Memory address space.
-    sys_mem: Arc<AddressSpace>,
-    // IO address space.
-    #[cfg(target_arch = "x86_64")]
-    sys_io: Arc<AddressSpace>,
-    // System bus.
-    sysbus: SysBus,
+    // Machine base members.
+    base: MachineBase,
     // All replaceable device information.
     replaceable_info: MmioReplaceableInfo,
-    // VM running state.
-    vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
-    // Vm boot_source config.
-    boot_source: Arc<Mutex<BootSource>>,
-    // All configuration information of virtual machine.
-    vm_config: Arc<Mutex<VmConfig>>,
-    // List of guest NUMA nodes information.
-    numa_nodes: Option<NumaNodes>,
-    // Drive backend files.
-    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-    // All backend memory region tree.
-    machine_ram: Arc<Region>,
 }
 
 impl LightMachine {
@@ -199,85 +163,17 @@ impl LightMachine {
     ///
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "SysMem"),
-            "sys_mem",
-        )
-        .with_context(|| MachineError::CrtMemSpaceErr)?;
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16, "SysIo"), "SysIo")
-            .with_context(|| MachineError::CrtIoSpaceErr)?;
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (
             MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
             MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
         );
-        let sysbus = SysBus::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            free_irqs,
-            mmio_region,
-        );
-
-        // Machine state init
-        let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
+        let base = MachineBase::new(vm_config, free_irqs, mmio_region)?;
 
         Ok(LightMachine {
-            cpu_topo: CpuTopology::new(
-                vm_config.machine_config.nr_cpus,
-                vm_config.machine_config.nr_sockets,
-                vm_config.machine_config.nr_dies,
-                vm_config.machine_config.nr_clusters,
-                vm_config.machine_config.nr_cores,
-                vm_config.machine_config.nr_threads,
-                vm_config.machine_config.max_cpus,
-            ),
-            cpus: Vec::new(),
-            #[cfg(target_arch = "aarch64")]
-            cpu_feature: (&vm_config.machine_config.cpu_config).into(),
-            #[cfg(target_arch = "aarch64")]
-            irq_chip: None,
-            sys_mem,
-            #[cfg(target_arch = "x86_64")]
-            sys_io,
-            sysbus,
+            base,
             replaceable_info: MmioReplaceableInfo::new(),
-            boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
-            vm_state,
-            vm_config: Arc::new(Mutex::new(vm_config.clone())),
-            numa_nodes: None,
-            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
-            machine_ram: Arc::new(Region::init_container_region(u64::max_value(), "pc.ram")),
         })
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn arch_init() -> MachineResult<()> {
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        vm_fd
-            .set_tss_address(0xfffb_d000_usize)
-            .with_context(|| MachineError::SetTssErr)?;
-
-        let pit_config = kvm_pit_config {
-            flags: KVM_PIT_SPEAKER_DUMMY,
-            pad: Default::default(),
-        };
-        vm_fd
-            .create_pit2(pit_config)
-            .with_context(|| MachineError::CrtPitErr)?;
-
-        Ok(())
-    }
-
-    pub fn mem_show(&self) {
-        self.sys_mem.memspace_show();
-        #[cfg(target_arch = "x86_64")]
-        self.sys_io.memspace_show();
-
-        let machine_ram = self.get_vm_ram();
-        machine_ram.mtree(0_u32);
     }
 
     fn create_replaceable_devices(&mut self) -> Result<()> {
@@ -287,7 +183,7 @@ impl LightMachine {
                 BlkDevConfig::default(),
                 self.get_drive_files(),
             )));
-            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block.clone());
+            let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, block.clone());
             rpl_devs.push(virtio_mmio);
 
             MigrationManager::register_device_instance(
@@ -298,7 +194,7 @@ impl LightMachine {
         }
         for id in 0..MMIO_REPLACEABLE_NET_NR {
             let net = Arc::new(Mutex::new(Net::new(NetworkInterfaceConfig::default())));
-            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net.clone());
+            let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
 
             MigrationManager::register_device_instance(
@@ -308,7 +204,7 @@ impl LightMachine {
             );
         }
 
-        let mut region_base = self.sysbus.min_free_base;
+        let mut region_base = self.base.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         for (id, dev) in rpl_devs.into_iter().enumerate() {
             self.replaceable_info
@@ -325,18 +221,18 @@ impl LightMachine {
                 VirtioMmioState::descriptor(),
                 VirtioMmioDevice::realize(
                     dev,
-                    &mut self.sysbus,
+                    &mut self.base.sysbus,
                     region_base,
                     MEM_LAYOUT[LayoutEntryType::Mmio as usize].1,
                     #[cfg(target_arch = "x86_64")]
-                    &self.boot_source,
+                    &self.base.boot_source,
                 )
                 .with_context(|| MicroVmError::RlzVirtioMmioErr)?,
                 &id.to_string(),
             );
             region_base += region_size;
         }
-        self.sysbus.min_free_base = region_base;
+        self.base.sysbus.min_free_base = region_base;
         Ok(())
     }
 
@@ -484,21 +380,17 @@ impl LightMachine {
         }
         Ok(id.to_string())
     }
-
-    /// Must be called after the CPUs have been realized and GIC has been created.
-    #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
-        let features = vcpu_cfg.unwrap_or_default();
-        if features.pmu {
-            for cpu in self.cpus.iter() {
-                cpu.init_pmu()?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl MachineOps for LightMachine {
+    fn machine_base(&self) -> &MachineBase {
+        &self.base
+    }
+
+    fn machine_base_mut(&mut self) -> &mut MachineBase {
+        &mut self.base
+    }
+
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 
@@ -583,8 +475,8 @@ impl MachineOps for LightMachine {
             v2: Some(v2),
         };
         let irq_chip = InterruptController::new(&intc_conf)?;
-        self.irq_chip = Some(Arc::new(irq_chip));
-        self.irq_chip.as_ref().unwrap().realize()?;
+        self.base.irq_chip = Some(Arc::new(irq_chip));
+        self.base.irq_chip.as_ref().unwrap().realize()?;
         Ok(())
     }
 
@@ -593,7 +485,9 @@ impl MachineOps for LightMachine {
         &self,
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     ) -> MachineResult<CPUBootConfig> {
-        let boot_source = self.boot_source.lock().unwrap();
+        use boot_loader::{load_linux, BootLoaderConfig};
+
+        let boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
@@ -603,14 +497,14 @@ impl MachineOps for LightMachine {
             kernel: boot_source.kernel_file.clone(),
             initrd,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-            cpu_count: self.cpu_topo.nrcpus,
+            cpu_count: self.base.cpu_topo.nrcpus,
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
             ident_tss_range: None,
             prot64_mode: true,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
+        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
             .with_context(|| MachineError::LoadKernErr)?;
 
         Ok(CPUBootConfig {
@@ -629,88 +523,30 @@ impl MachineOps for LightMachine {
         })
     }
 
-    #[cfg(target_arch = "aarch64")]
-    fn load_boot_source(
-        &self,
-        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
-    ) -> MachineResult<CPUBootConfig> {
-        let mut boot_source = self.boot_source.lock().unwrap();
-        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
-
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-        };
-        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
-        if let Some(rd) = &mut boot_source.initrd {
-            rd.initrd_addr = layout.initrd_start;
-            rd.initrd_size = layout.initrd_size;
-        }
-
-        Ok(CPUBootConfig {
-            fdt_addr: layout.dtb_start,
-            boot_pc: layout.boot_pc,
-        })
-    }
-
     fn realize_virtio_mmio_device(
         &mut self,
         dev: VirtioMmioDevice,
     ) -> MachineResult<Arc<Mutex<VirtioMmioDevice>>> {
-        let region_base = self.sysbus.min_free_base;
+        let region_base = self.base.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         let realized_virtio_mmio_device = VirtioMmioDevice::realize(
             dev,
-            &mut self.sysbus,
+            &mut self.base.sysbus,
             region_base,
             region_size,
             #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
+            &self.base.boot_source,
         )
         .with_context(|| MicroVmError::RlzVirtioMmioErr)?;
-        self.sysbus.min_free_base += region_size;
+        self.base.sysbus.min_free_base += region_size;
         Ok(realized_virtio_mmio_device)
-    }
-
-    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
-        &self.sys_mem
-    }
-
-    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
-        self.vm_config.clone()
-    }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.vm_state
-    }
-
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.sysbus
-    }
-
-    fn get_vm_ram(&self) -> &Arc<Region> {
-        &self.machine_ram
-    }
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.numa_nodes
     }
 
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         PL031::realize(
             PL031::default(),
-            &mut self.sysbus,
+            &mut self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
@@ -728,27 +564,39 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
-        #[cfg(target_arch = "x86_64")]
-        let region_base: u64 = SERIAL_ADDR;
-        #[cfg(target_arch = "aarch64")]
+    #[cfg(target_arch = "aarch64")]
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
+        use devices::legacy::PL011;
+
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
-        #[cfg(target_arch = "x86_64")]
-        let region_size: u64 = 8;
-        #[cfg(target_arch = "aarch64")]
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
 
+        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
+        let base = self.machine_base_mut();
+        pl011
+            .realize(
+                &mut base.sysbus,
+                region_base,
+                region_size,
+                &base.boot_source,
+            )
+            .with_context(|| "Failed to realize PL011")
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
+        use devices::legacy::{Serial, SERIAL_ADDR};
+
+        let region_base: u64 = SERIAL_ADDR;
+        let region_size: u64 = 8;
         let serial = Serial::new(config.clone());
         serial
             .realize(
-                &mut self.sysbus,
+                &mut self.machine_base_mut().sysbus,
                 region_base,
                 region_size,
-                #[cfg(target_arch = "aarch64")]
-                &self.boot_source,
             )
-            .with_context(|| "Failed to realize serial device.")?;
-        Ok(())
+            .with_context(|| "Failed to realize serial device.")
     }
 
     fn add_virtio_mmio_net(
@@ -759,11 +607,17 @@ impl MachineOps for LightMachine {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         if device_cfg.vhost_type.is_some() {
             let device = if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
-                let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
-                VirtioMmioDevice::new(&self.sys_mem, net)
+                let net = Arc::new(Mutex::new(VhostKern::Net::new(
+                    &device_cfg,
+                    &self.base.sys_mem,
+                )));
+                VirtioMmioDevice::new(&self.base.sys_mem, net)
             } else {
-                let net = Arc::new(Mutex::new(VhostUser::Net::new(&device_cfg, &self.sys_mem)));
-                VirtioMmioDevice::new(&self.sys_mem, net)
+                let net = Arc::new(Mutex::new(VhostUser::Net::new(
+                    &device_cfg,
+                    &self.base.sys_mem,
+                )));
+                VirtioMmioDevice::new(&self.base.sys_mem, net)
             };
             self.realize_virtio_mmio_device(device)?;
         } else {
@@ -802,16 +656,12 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
-        self.drive_files.clone()
-    }
-
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         let mut locked_vm = vm.lock().unwrap();
 
         // trace for lightmachine
-        trace_sysbus(&locked_vm.sysbus);
-        trace_vm_state(&locked_vm.vm_state);
+        trace_sysbus(&locked_vm.base.sysbus);
+        trace_vm_state(&locked_vm.base.vm_state);
 
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
@@ -819,12 +669,12 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_dies,
         ));
         trace_cpu_topo(&topology);
-        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
-            &locked_vm.sys_io,
-            &locked_vm.sys_mem,
+            &locked_vm.base.sys_io,
+            &locked_vm.base.sys_mem,
             vm_config.machine_config.nr_cpus,
         )?;
 
@@ -833,7 +683,7 @@ impl MachineOps for LightMachine {
         #[cfg(target_arch = "x86_64")]
         {
             locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
-            LightMachine::arch_init()?;
+            locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
             // Add mmio devices
             locked_vm
@@ -849,7 +699,7 @@ impl MachineOps for LightMachine {
             };
 
             // vCPUs init
-            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+            locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
                 vm.clone(),
                 vm_config.machine_config.nr_cpus,
                 &topology,
@@ -861,7 +711,10 @@ impl MachineOps for LightMachine {
         {
             let (boot_config, cpu_config) = if migrate_info.0 == MigrateMode::Unknown {
                 (
-                    Some(locked_vm.load_boot_source(None)?),
+                    Some(
+                        locked_vm
+                            .load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?,
+                    ),
                     Some(locked_vm.load_cpu_features(vm_config)?),
                 )
             } else {
@@ -869,7 +722,7 @@ impl MachineOps for LightMachine {
             };
 
             // vCPUs init,and apply CPU features (for aarch64)
-            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+            locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
                 vm.clone(),
                 vm_config.machine_config.nr_cpus,
                 &topology,
@@ -895,6 +748,7 @@ impl MachineOps for LightMachine {
                     .with_context(|| MachineError::GenFdtErr)?;
                 let fdt_vec = fdt_helper.finish()?;
                 locked_vm
+                    .base
                     .sys_mem
                     .write(
                         &mut fdt_vec.as_slice(),
@@ -916,10 +770,6 @@ impl MachineOps for LightMachine {
         }
 
         Ok(())
-    }
-
-    fn run(&self, paused: bool) -> MachineResult<()> {
-        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -944,7 +794,7 @@ impl MachineLifecycle for LightMachine {
 
     fn destroy(&self) -> bool {
         let vmstate = {
-            let state = self.vm_state.deref().0.lock().unwrap();
+            let state = self.base.vm_state.deref().0.lock().unwrap();
             *state
         };
 
@@ -960,7 +810,7 @@ impl MachineLifecycle for LightMachine {
 
     fn reset(&mut self) -> bool {
         // For micro vm, the reboot command is equivalent to the shutdown command.
-        for cpu in self.cpus.iter() {
+        for cpu in self.base.cpus.iter() {
             let (cpu_state, _) = cpu.state();
             *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
         }
@@ -970,10 +820,10 @@ impl MachineLifecycle for LightMachine {
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
-            &self.cpus,
+            &self.base.cpus,
             #[cfg(target_arch = "aarch64")]
-            &self.irq_chip,
-            &mut self.vm_state.0.lock().unwrap(),
+            &self.base.irq_chip,
+            &mut self.base.vm_state.0.lock().unwrap(),
             old,
             new,
         ) {
@@ -986,40 +836,25 @@ impl MachineLifecycle for LightMachine {
 
 impl MachineAddressInterface for LightMachine {
     #[cfg(target_arch = "x86_64")]
-    fn pio_in(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        // The function pit_calibrate_tsc() in kernel gets stuck if data read from
-        // io-port 0x61 is not 0x20.
-        // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
-        if addr == 0x61 {
-            data[0] = 0x20;
-            return true;
-        }
-        let length = data.len() as u64;
-        self.sys_io
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().pio_in(addr, data)
     }
 
     #[cfg(target_arch = "x86_64")]
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
-        self.sys_io
+        self.base
+            .sys_io
             .write(&mut data, GuestAddress(addr), count)
             .is_ok()
     }
 
-    fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        let length = data.len() as u64;
-        self.sys_mem
-            .read(&mut data, GuestAddress(addr), length)
-            .is_ok()
+    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().mmio_read(addr, data)
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
-        self.sys_mem
-            .write(&mut data, GuestAddress(addr), count)
-            .is_ok()
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().mmio_write(addr, data)
     }
 }
 
@@ -1045,10 +880,12 @@ impl DeviceInterface for LightMachine {
 
     fn query_cpus(&self) -> Response {
         let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
-                let thread_id = self.cpus[cpu_index as usize].tid();
-                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+        let cpu_topo = self.get_cpu_topo();
+        let cpus = self.get_cpus();
+        for cpu_index in 0..cpu_topo.max_cpus {
+            if cpu_topo.get_mask(cpu_index as usize) == 1 {
+                let thread_id = cpus[cpu_index as usize].tid();
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
@@ -1087,9 +924,12 @@ impl DeviceInterface for LightMachine {
         #[cfg(target_arch = "aarch64")]
         let cpu_type = String::from("host-aarch64-cpu");
 
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            if self.cpu_topo.get_mask(cpu_index as usize) == 0 {
-                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+        for cpu_index in 0..self.base.cpu_topo.max_cpus {
+            if self.base.cpu_topo.get_mask(cpu_index as usize) == 0 {
+                let cpu_instance = self
+                    .base
+                    .cpu_topo
+                    .get_topo_instance_for_qmp(cpu_index as usize);
                 let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,
@@ -1098,7 +938,10 @@ impl DeviceInterface for LightMachine {
                 };
                 hotplug_vec.push(serde_json::to_value(hotpluggable_cpu).unwrap());
             } else {
-                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+                let cpu_instance = self
+                    .base
+                    .cpu_topo
+                    .get_topo_instance_for_qmp(cpu_index as usize);
                 let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,
@@ -1429,7 +1272,7 @@ impl MachineExternalInterface for LightMachine {}
 
 impl EventLoopManager for LightMachine {
     fn loop_should_exit(&self) -> bool {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
         *vmstate == KvmVmState::Shutdown
     }
 
@@ -1439,259 +1282,40 @@ impl EventLoopManager for LightMachine {
     }
 }
 
-// Function that helps to generate serial node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of serial device.
-// * `fdt` - Flatted device-tree blob where serial node will be filled into.
-#[cfg(target_arch = "aarch64")]
-fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("uart@{:x}", res.region_base);
-    let serial_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "ns16550a")?;
-    fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_EDGE_RISING,
-        ],
-    )?;
-    fdt.end_node(serial_node_dep)?;
-
-    Ok(())
-}
-
-// Function that helps to generate RTC node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of RTC device.
-// * `fdt` - Flatted device-tree blob where RTC node will be filled into.
-#[cfg(target_arch = "aarch64")]
-fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("pl031@{:x}", res.region_base);
-    let rtc_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
-    fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_LEVEL_HIGH,
-        ],
-    )?;
-    fdt.end_node(rtc_node_dep)?;
-
-    Ok(())
-}
-
-// Function that helps to generate Virtio-Mmio device's node in device-tree.
-//
-// # Arguments
-//
-// * `dev_info` - Device resource info of Virtio-Mmio device.
-// * `fdt` - Flatted device-tree blob where node will be filled into.
-#[cfg(target_arch = "aarch64")]
-fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
-    let node = format!("virtio_mmio@{:x}", res.region_base);
-    let virtio_node_dep = fdt.begin_node(&node)?;
-    fdt.set_property_string("compatible", "virtio,mmio")?;
-    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-    fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_SPI,
-            res.irq as u32,
-            device_tree::IRQ_TYPE_EDGE_RISING,
-        ],
-    )?;
-    fdt.end_node(virtio_node_dep)?;
-    Ok(())
-}
-
-#[cfg(target_arch = "aarch64")]
-fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
-    let node = "pmu";
-    let pmu_node_dep = fdt.begin_node(node)?;
-    fdt.set_property_string("compatible", "arm,armv8-pmuv3")?;
-    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-    fdt.set_property_array_u32(
-        "interrupts",
-        &[
-            device_tree::GIC_FDT_IRQ_TYPE_PPI,
-            PMU_INTR,
-            device_tree::IRQ_TYPE_LEVEL_HIGH,
-        ],
-    )?;
-
-    fdt.end_node(pmu_node_dep)?;
-    Ok(())
-}
-
 /// Trait that helps to generate all nodes in device-tree.
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 trait CompileFDTHelper {
-    /// Function that helps to generate cpu nodes.
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate memory nodes.
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
-    /// Function that helps to generate Virtio-mmio devices' nodes.
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate the chosen node.
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
 }
 
 #[cfg(target_arch = "aarch64")]
 impl CompileFDTHelper for LightMachine {
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        let node = "cpus";
-
-        let cpus_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_u32("#address-cells", 0x02)?;
-        fdt.set_property_u32("#size-cells", 0x0)?;
-
-        // Generate CPU topology
-        let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
-        for socket in 0..self.cpu_topo.sockets {
-            let sock_name = format!("cluster{}", socket);
-            let sock_node_dep = fdt.begin_node(&sock_name)?;
-            for cluster in 0..self.cpu_topo.clusters {
-                let clster = format!("cluster{}", cluster);
-                let cluster_node_dep = fdt.begin_node(&clster)?;
-
-                for core in 0..self.cpu_topo.cores {
-                    let core_name = format!("core{}", core);
-                    let core_node_dep = fdt.begin_node(&core_name)?;
-
-                    for thread in 0..self.cpu_topo.threads {
-                        let thread_name = format!("thread{}", thread);
-                        let thread_node_dep = fdt.begin_node(&thread_name)?;
-                        let vcpuid = self.cpu_topo.threads
-                            * self.cpu_topo.cores
-                            * self.cpu_topo.clusters
-                            * socket
-                            + self.cpu_topo.threads * self.cpu_topo.cores * cluster
-                            + self.cpu_topo.threads * core
-                            + thread;
-                        fdt.set_property_u32(
-                            "cpu",
-                            u32::from(vcpuid) + device_tree::CPU_PHANDLE_START,
-                        )?;
-                        fdt.end_node(thread_node_dep)?;
-                    }
-                    fdt.end_node(core_node_dep)?;
-                }
-                fdt.end_node(cluster_node_dep)?;
-            }
-            fdt.end_node(sock_node_dep)?;
-        }
-        fdt.end_node(cpu_map_node_dep)?;
-
-        for cpu_index in 0..self.cpu_topo.nrcpus {
-            let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
-
-            let node = format!("cpu@{:x}", mpidr);
-            let mpidr_node_dep = fdt.begin_node(&node)?;
-            fdt.set_property_u32(
-                "phandle",
-                u32::from(cpu_index) + device_tree::CPU_PHANDLE_START,
-            )?;
-            fdt.set_property_string("device_type", "cpu")?;
-            fdt.set_property_string("compatible", "arm,arm-v8")?;
-            if self.cpu_topo.max_cpus > 1 {
-                fdt.set_property_string("enable-method", "psci")?;
-            }
-            fdt.set_property_u64("reg", mpidr & 0x007F_FFFF)?;
-            fdt.end_node(mpidr_node_dep)?;
-        }
-
-        fdt.end_node(cpus_node_dep)?;
-
-        // CPU Features : PMU
-        if self.cpu_feature.pmu {
-            generate_pmu_node(fdt)?;
-        }
-
-        Ok(())
-    }
-
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let mem_size = self.sys_mem.memory_end_address().raw_value()
+        let mem_size = self.base.sys_mem.memory_end_address().raw_value()
             - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
         let node = "memory";
         let memory_node_dep = fdt.begin_node(node)?;
         fdt.set_property_string("device_type", "memory")?;
         fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
-        fdt.end_node(memory_node_dep)?;
-
-        Ok(())
-    }
-
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
-        // timer
-        let mut cells: Vec<u32> = Vec::new();
-        for &irq in [13, 14, 11, 10].iter() {
-            cells.push(device_tree::GIC_FDT_IRQ_TYPE_PPI);
-            cells.push(irq);
-            cells.push(device_tree::IRQ_TYPE_LEVEL_HIGH);
-        }
-        let node = "timer";
-        let timer_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "arm,armv8-timer")?;
-        fdt.set_property("always-on", &Vec::new())?;
-        fdt.set_property_array_u32("interrupts", &cells)?;
-        fdt.end_node(timer_node_dep)?;
-
-        // clock
-        let node = "apb-pclk";
-        let clock_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "fixed-clock")?;
-        fdt.set_property_string("clock-output-names", "clk24mhz")?;
-        fdt.set_property_u32("#clock-cells", 0x0)?;
-        fdt.set_property_u32("clock-frequency", 24_000_000)?;
-        fdt.set_property_u32("phandle", device_tree::CLK_PHANDLE)?;
-        fdt.end_node(clock_node_dep)?;
-
-        // psci
-        let node = "psci";
-        let psci_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("compatible", "arm,psci-0.2")?;
-        fdt.set_property_string("method", "hvc")?;
-        fdt.end_node(psci_node_dep)?;
-
-        for dev in self.sysbus.devices.iter() {
-            let locked_dev = dev.lock().unwrap();
-            let dev_type = locked_dev.sysbusdev_base().dev_type;
-            let sys_res = locked_dev.sysbusdev_base().res;
-            match dev_type {
-                SysBusDevType::Serial => generate_serial_device_node(fdt, &sys_res)?,
-                SysBusDevType::Rtc => generate_rtc_device_node(fdt, &sys_res)?,
-                SysBusDevType::VirtioMmio => generate_virtio_devices_node(fdt, &sys_res)?,
-                _ => (),
-            }
-        }
-
-        Ok(())
+        fdt.end_node(memory_node_dep)
     }
 
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "chosen";
-        let boot_source = self.boot_source.lock().unwrap();
+        let boot_source = self.base.boot_source.lock().unwrap();
 
         let chosen_node_dep = fdt.begin_node(node)?;
         let cmdline = &boot_source.kernel_cmdline.to_string();
         fdt.set_property_string("bootargs", cmdline.as_str())?;
+
+        let pl011_property_string =
+            format!("/pl011@{:x}", MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
+        fdt.set_property_string("stdout-path", &pl011_property_string)?;
 
         match &boot_source.initrd {
             Some(initrd) => {
@@ -1700,9 +1324,7 @@ impl CompileFDTHelper for LightMachine {
             }
             None => {}
         }
-        fdt.end_node(chosen_node_dep)?;
-
-        Ok(())
+        fdt.end_node(chosen_node_dep)
     }
 }
 
@@ -1710,22 +1332,10 @@ impl CompileFDTHelper for LightMachine {
 impl device_tree::CompileFDT for LightMachine {
     fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node_dep = fdt.begin_node("")?;
-
-        fdt.set_property_string("compatible", "linux,dummy-virt")?;
-        fdt.set_property_u32("#address-cells", 0x2)?;
-        fdt.set_property_u32("#size-cells", 0x2)?;
-        fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
-
-        self.generate_cpu_nodes(fdt)?;
+        self.base.generate_fdt_node(fdt)?;
         self.generate_memory_node(fdt)?;
-        self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
-        // SAFETY: ARM architecture must have interrupt controllers in user mode.
-        self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
-
-        fdt.end_node(node_dep)?;
-
-        Ok(())
+        fdt.end_node(node_dep)
     }
 }
 
