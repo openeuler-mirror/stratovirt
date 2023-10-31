@@ -54,6 +54,8 @@ use devices::misc::scream::Scream;
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::DemoDev;
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
+use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
+use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::UsbCamera;
@@ -91,8 +93,6 @@ use machine_manager::config::{
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
-use smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
-use smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use standard_vm::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
