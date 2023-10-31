@@ -15,7 +15,6 @@ vmm-sys-util = "0.11.1"
 thiserror = "1.0"
 anyhow = "1.0"
 acpi = { path = "../acpi" }
-smbios = { path = "../smbios" }
 address_space = { path = "../address_space" }
 boot_loader = { path = "../boot_loader" }
 cpu = { path = "../cpu" }

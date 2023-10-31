@@ -920,7 +920,6 @@ dependencies = [
  "migration",
  "migration_derive",
  "serde_json",
- "smbios",
  "thiserror",
  "ui",
  "util",
@@ -1030,7 +1029,6 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
- "smbios",
  "util",
  "virtio",
  "vmm-sys-util",
@@ -1492,16 +1490,6 @@ name = "smallvec"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
-
-[[package]]
-name = "smbios"
-version = "2.3.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "machine_manager",
- "util",
-]
 
 [[package]]
 name = "spin"
