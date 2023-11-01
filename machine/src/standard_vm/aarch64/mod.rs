@@ -831,7 +831,7 @@ impl AcpiBuilder for StdMachine {
         // BaseAddressRegister: access width
         dbg2.set_field(offset + 25, 1_u8);
         // BaseAddressRegister: address
-        dbg2.set_field(offset + 26, uart_memory_address as u64);
+        dbg2.set_field(offset + 26, uart_memory_address);
         // AddressSize
         dbg2.set_field(offset + 34, uart_memory_size as u32);
 
