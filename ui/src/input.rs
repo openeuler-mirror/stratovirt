@@ -403,6 +403,7 @@ pub trait PointerOpts: Send {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "keycode")]
     use crate::keycode::KeyCode;
     static TEST_INPUT: Lazy<Arc<Mutex<TestInput>>> =
         Lazy::new(|| Arc::new(Mutex::new(TestInput::default())));
@@ -500,6 +501,7 @@ mod tests {
         test_input.unregister_input();
     }
 
+    #[cfg(feature = "keycode")]
     #[test]
     fn test_release_all_key() {
         fn do_key_event(press: bool, keysym: i32, keycode: u16) -> Result<()> {
