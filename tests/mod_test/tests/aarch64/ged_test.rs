@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 
 pub const GED_ADDR_BASE: u64 = MEM_LAYOUT[LayoutEntryType::Ged as usize].0;
 const ADD_ADDRESS: u64 = 1;
@@ -29,7 +29,7 @@ fn ged_write_evt(ts: &TestState, val: u32) {
 }
 
 fn ged_args(base_args: &mut Vec<&str>) {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     base_args.append(&mut args);
     args = "-no-shutdown".split(' ').collect();
     base_args.append(&mut args);

@@ -16,7 +16,7 @@ use serde_json::{json, Value::String as JsonString};
 
 use mod_test::{
     libdriver::{machine::TestStdMachine, malloc::GuestAllocator},
-    libtest::{test_init, TestState},
+    libtest::{test_init, TestState, MACHINE_TYPE_ARG},
 };
 
 pub struct MemoryTest {
@@ -610,7 +610,7 @@ fn ram_readwrite_exception() {
 #[test]
 fn ram_readwrite_numa() {
     let mut args: Vec<&str> = Vec::new();
-    let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
 
     let cpu = 8;
@@ -666,7 +666,7 @@ fn ram_readwrite_numa() {
 #[test]
 fn ram_readwrite_numa1() {
     let mut args: Vec<&str> = Vec::new();
-    let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
 
     let cpu = 8;

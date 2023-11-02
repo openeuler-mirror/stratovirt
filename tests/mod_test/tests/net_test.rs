@@ -28,7 +28,7 @@ use mod_test::libdriver::virtio::{
     VIRTIO_RING_F_EVENT_IDX, VRING_DESC_F_WRITE, VRING_DESC_SIZE,
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::byte_code::ByteCode;
 use util::offset_of;
 
@@ -413,7 +413,7 @@ pub fn create_net(
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let mut iothread_arg = "";

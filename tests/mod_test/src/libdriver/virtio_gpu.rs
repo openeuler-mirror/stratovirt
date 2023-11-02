@@ -20,7 +20,7 @@ use super::{
 };
 use crate::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
 use crate::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use crate::libtest::{test_init, TestState};
+use crate::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::byte_code::ByteCode;
 use virtio::{
     VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
@@ -610,8 +610,7 @@ pub fn set_up(
 
     let mut args: Vec<String> = Vec::new();
     // vm args
-    let vm_args = String::from("-machine virt");
-    let vm_args: Vec<&str> = vm_args[..].split(' ').collect();
+    let vm_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     let mut vm_args = vm_args.into_iter().map(|s| s.to_string()).collect();
     args.append(&mut vm_args);
     // log args
