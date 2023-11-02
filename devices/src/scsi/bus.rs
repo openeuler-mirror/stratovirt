@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, error, info};
+use log::{debug, info};
 
 use crate::ScsiDisk::{
     ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
@@ -686,11 +686,11 @@ impl ScsiRequest {
             }
             Err(ref e) => {
                 if not_supported_flag {
-                    debug!("emulation scsi command {:#x} is no supported", self.cmd.op);
+                    debug!("emulation scsi command {:#x} is not supported", self.cmd.op);
                     status = CHECK_CONDITION;
                     sense = Some(SCSI_SENSE_INVALID_OPCODE);
                 } else {
-                    error!(
+                    debug!(
                         "Error in processing scsi command {:#x}, err is {:?}",
                         self.cmd.op, e
                     );
