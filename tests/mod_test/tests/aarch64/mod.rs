@@ -10,22 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(target_arch = "aarch64")]
-mod aarch64;
-mod balloon_test;
-mod block_test;
-mod fwcfg_test;
-mod memory_test;
-mod net_test;
-mod pci_test;
-mod rng_test;
-mod scream_test;
-mod scsi_test;
-mod serial_test;
-mod usb_camera_test;
-mod usb_storage_test;
-mod usb_test;
-mod virtio_gpu_test;
-mod virtio_test;
-mod virtiofs_test;
-mod vnc_test;
+mod acpi_test;
+mod ged_test;
+mod pl031_test;
+mod ramfb_test;
