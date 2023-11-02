@@ -23,7 +23,7 @@ use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{TestVirtQueue, TestVringDescEntry, VirtioDeviceOps};
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::{byte_code::ByteCode, offset_of};
 
 const BALLOON_F_DEFLATE_ON_OOM_TEST: u32 = 2;
@@ -92,12 +92,11 @@ impl VirtioBalloonTest {
         let mut auto_switch = String::from("false");
         let mem_path = format!("-mem-path /tmp/stratovirt/hugepages");
 
-        let mut args: Vec<&str> = "-machine".split(' ').collect();
+        let mut machine_args = MACHINE_TYPE_ARG.to_string();
         if shared {
-            args.push("virt,mem-share=on");
-        } else {
-            args.push("virt");
+            machine_args.push_str(",mem-share=on");
         }
+        let mut args: Vec<&str> = machine_args.split(' ').collect();
         extra_args.append(&mut args);
 
         let mem_args = format!("-m {}", memsize);
@@ -168,7 +167,7 @@ impl VirtioBalloonTest {
 
     pub fn numa_node_new() -> Self {
         let mut args: Vec<&str> = Vec::new();
-        let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+        let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
         args.append(&mut extra_args);
 
         let cpu = 8;
@@ -552,7 +551,7 @@ fn balloon_feature_001() {
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let mem_args = format!("-m {}", 128);
@@ -599,7 +598,7 @@ fn balloon_feature_002() {
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let mem_args = format!("-m {}", 128);

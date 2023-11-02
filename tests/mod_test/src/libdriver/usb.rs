@@ -28,7 +28,7 @@ use super::{
     pci_bus::TestPciBus,
 };
 use crate::libdriver::pci::{PciMsixOps, PCI_DEVICE_ID};
-use crate::libtest::{test_init, TestState};
+use crate::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use devices::usb::{
     config::*,
     hid::{
@@ -2321,7 +2321,7 @@ pub struct TestUsbBuilder {
 impl TestUsbBuilder {
     pub fn new() -> Self {
         let mut args = Vec::new();
-        let machine: Vec<&str> = "-machine virt".split(' ').collect();
+        let machine: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
         let mut arg = machine.into_iter().map(|s| s.to_string()).collect();
         args.append(&mut arg);
 

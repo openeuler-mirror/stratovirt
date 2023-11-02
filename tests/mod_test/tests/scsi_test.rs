@@ -25,7 +25,7 @@ use mod_test::libdriver::virtio::{
     VIRTIO_F_BAD_FEATURE, VIRTIO_RING_F_EVENT_IDX, VIRTIO_RING_F_INDIRECT_DESC,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
@@ -592,7 +592,7 @@ fn scsi_test_init(
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
 ) {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
 
     let pci_fn = 0;
     let pci_slot = 0x4;
