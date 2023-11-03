@@ -884,22 +884,31 @@ impl EventNotifierHelper for SerialControlHandler {
 
 impl ChardevNotifyDevice for SerialPort {
     fn chardev_notify(&mut self, status: ChardevStatus) {
+        if self.ctrl_handler.is_none() {
+            warn!("No control handler for port {}.", self.nr);
+            return;
+        }
+
         match (&status, self.host_connected) {
             (ChardevStatus::Close, _) => self.host_connected = false,
             (ChardevStatus::Open, false) => self.host_connected = true,
             (ChardevStatus::Open, true) => return,
         }
 
-        if let Some(handler) = &self.ctrl_handler {
-            let handler = handler.upgrade().unwrap();
-            handler.lock().unwrap().send_control_event(
-                self.nr,
-                VIRTIO_CONSOLE_PORT_OPEN,
-                status as u16,
-            );
-        } else {
-            error!("Control handler for port {} is None", self.nr);
+        let handler = self.ctrl_handler.as_ref().unwrap().upgrade();
+        if handler.is_none() {
+            warn!("Control handler for port {} is invalid", self.nr);
+            return;
         }
+
+        // Note: when virtio serial devices are deactivated, all handlers will be unregistered.
+        // For this action is in the same thread with `chardev_notify`, these two operations will
+        // not be executed concurrently. So, `handler` must be effective here.
+        handler.unwrap().lock().unwrap().send_control_event(
+            self.nr,
+            VIRTIO_CONSOLE_PORT_OPEN,
+            status as u16,
+        );
     }
 }
 
