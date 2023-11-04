@@ -16,7 +16,6 @@ util = { path = "util" }
 
 [workspace]
 members = [
-    "vhost_user_fs",
     "ozone",
     "image",
     "tests/mod_test",

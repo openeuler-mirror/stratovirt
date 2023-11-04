@@ -220,16 +220,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "capng"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a26766f93f07f7e8b8309ed2824fa2a68f5d12d219de855e24688e9fbe89e85"
-dependencies = [
- "bitflags",
- "libc",
-]
-
-[[package]]
 name = "cc"
 version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1805,28 +1795,6 @@ name = "vfio-bindings"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43449b404c488f70507dca193debd4bea361fe8089869b947adc19720e464bce"
-
-[[package]]
-name = "vhost_user_fs"
-version = "2.3.0"
-dependencies = [
- "acpi",
- "address_space",
- "anyhow",
- "capng",
- "devices",
- "hypervisor",
- "libc",
- "log",
- "machine_manager",
- "migration",
- "migration_derive",
- "nix 0.26.2",
- "thiserror",
- "util",
- "virtio",
- "vmm-sys-util",
-]
 
 [[package]]
 name = "virtio"

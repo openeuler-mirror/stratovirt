@@ -1059,27 +1059,13 @@ Three properties can be set for virtio fs device.
 ```
 
 #### 2.17.2 vhost_user_fs
-The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
-Seven properties are supported for vhost_user_fs.
-* source: Shared directory path.
-* socket-path: vhost user socket path.
-* rlimit-nofile: Set maximum number of file descriptors, The limit of file resources which can be opened for the process.
-* D: log file path.
-* seccomp: Action to take when seccomp finds a not allowed syscall (allow, kill, log, trap).
-  - **allow**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule.
-  - **kill**: The process will be killed by the kernel when it calls a syscall that matches the filter rule.
-  - **log**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule but the syscall will be logged.
-  - **trap**: The thread will throw a SIGSYS signal when it calls a syscall that matches the filter rule.
-* sandbox: Sandbox mechanism to isolate the daemon process (chroot, namespace).
-  - **chroot**: The program invokes `chroot(2)` to make the shared directory tree its root when it does not have permission to create namespaces itself.
-  - **namespace**: The program invodes `pivot_root(2)` to make the shared directory tree its root.
-* modcaps: Add/delete capabilities, For example, `--modcaps=-LEASE,+KILL` stands for delete CAP_LEASE, add CAP_KILL. Capabilityes list do not need prefix `CAP_`.
+Note: The vhost_user_fs binary of StratoVirt has been removed. As there is a new Rust implementation of virtiofsd at "https://gitlab.com/virtio-fs/virtiofsd", it's marked as stable and existing project should consider to use it instead.
 
-*How to start vhost_user_fs process?*
+*How to setup file sharing based on StratoVirt and virtiofsd?*
 
 ```shell
-host# ./path/to/vhost_user_fs -source /tmp/shared -socket-path /tmp/shared/virtio_fs.sock -D
+host# Setup virtiofsd server, refer to "https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/README.md"
 
 host# stratovirt \
         -machine type=q35,dump-guest-core=off,mem-share=on \
@@ -1091,7 +1077,7 @@ host# stratovirt \
         -qmp unix:/tmp/qmp2.socket,server,nowait \
         -drive id=drive_id,file=<your image>,direct=on \
         -device virtio-blk-pci,drive=drive_id,bug=pcie.0,addr=1,id=blk -serial stdio -disable-seccomp \
-        -chardev socket,id=virtio_fs,path=/tmp/shared/virtio_fs.sock,server,nowait \
+        -chardev socket,id=virtio_fs,path=/path/to/virtiofsd.sock,server,nowait \
         -device vhost-user-fs-pci,id=device_id,chardev=virtio_fs,tag=myfs,bus=pcie.0,addr=0x7
 
 guest# mount -t virtiofs myfs /mnt
