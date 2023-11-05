@@ -107,7 +107,7 @@ The path has to be absolute path.
 -mem-path <filebackend_path>
 ```
 
-### 1.4.1 hugepages
+#### 1.4.1 hugepages
 
 Memory backend file can be used to let guest use hugetlbfs on host. It supports 2M or 1G hugepages memory.
 The following steps show how to use hugepages:
@@ -425,14 +425,19 @@ Virtio-net is a virtual Ethernet card in VM. It can enable the network capabilit
 
 Six properties are supported for netdev.
 * tap/vhost-user: the type of net device. NB: currently only tap and vhost-user is supported.
+
 * id: unique netdev id.
+
 * ifname: name of tap device in host.
+
 * fd: the file descriptor of opened tap device.
+
 * fds: file descriptors of opened tap device.
+
 * queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or
-  vhost-net device. The max queues number supported is no more than 16.
-NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
-the tap device would be created according to `ifname`.
+  vhost-net device. The max queues number supported is no more than 16. 
+
+NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, the tap device would be created according to `ifname`.
 
 Eight properties are supported for virtio-net-device or virtio-net-pci.
 * id: unique net device id.
