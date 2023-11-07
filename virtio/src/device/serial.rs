@@ -884,15 +884,15 @@ impl EventNotifierHelper for SerialControlHandler {
 
 impl ChardevNotifyDevice for SerialPort {
     fn chardev_notify(&mut self, status: ChardevStatus) {
-        if self.ctrl_handler.is_none() {
-            warn!("No control handler for port {}.", self.nr);
-            return;
-        }
-
         match (&status, self.host_connected) {
             (ChardevStatus::Close, _) => self.host_connected = false,
             (ChardevStatus::Open, false) => self.host_connected = true,
             (ChardevStatus::Open, true) => return,
+        }
+
+        if self.ctrl_handler.is_none() {
+            warn!("No control handler for port {}.", self.nr);
+            return;
         }
 
         let handler = self.ctrl_handler.as_ref().unwrap().upgrade();
