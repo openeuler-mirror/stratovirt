@@ -233,7 +233,7 @@ mod test {
     #[test]
     fn test_boot_param() {
         let root = Region::init_container_region(0x2000_0000, "root");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),

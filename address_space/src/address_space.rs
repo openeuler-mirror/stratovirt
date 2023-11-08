@@ -132,6 +132,8 @@ pub struct AddressSpace {
     listeners: Arc<Mutex<Vec<ListenerObj>>>,
     /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
+    /// The backend memory region tree, used for migrate.
+    machine_ram: Option<Arc<Region>>,
 }
 
 impl fmt::Debug for AddressSpace {
@@ -151,13 +153,18 @@ impl AddressSpace {
     ///
     /// * `root` - Root region of address space.
     /// * `name` - the name of AddressSpace.
-    pub fn new(root: Region, name: &str) -> Result<Arc<AddressSpace>> {
+    pub fn new(
+        root: Region,
+        name: &str,
+        machine_ram: Option<Arc<Region>>,
+    ) -> Result<Arc<AddressSpace>> {
         let space = Arc::new(AddressSpace {
             name: String::from(name),
             root: root.clone(),
             flat_view: Arc::new(ArcSwap::new(Arc::new(FlatView::default()))),
             listeners: Arc::new(Mutex::new(Vec::new())),
             ioeventfds: Arc::new(Mutex::new(Vec::new())),
+            machine_ram,
         });
 
         root.set_belonged_address_space(&space);
@@ -168,6 +175,13 @@ impl AddressSpace {
         }
 
         Ok(space)
+    }
+
+    pub fn get_machine_ram(&self) -> Option<&Arc<Region>> {
+        if let Some(region) = &self.machine_ram {
+            return Some(region);
+        }
+        None
     }
 
     /// Get the reference of root region of AddressSpace.
@@ -875,7 +889,7 @@ mod test {
         }
 
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root, "space").unwrap();
+        let space = AddressSpace::new(root, "space", None).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
@@ -926,7 +940,7 @@ mod test {
         }
 
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root, "space").unwrap();
+        let space = AddressSpace::new(root, "space", None).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         space.register_listener(listener1.clone()).unwrap();
@@ -942,7 +956,7 @@ mod test {
     #[test]
     fn test_update_topology() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1040,7 +1054,7 @@ mod test {
         // the flat_view is as follows,
         //               [BBBBBBBBBBBBB][CCCCC]
         let root = Region::init_container_region(8000, "region");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1102,7 +1116,7 @@ mod test {
         // the flat_view is as follows,
         //                      [CCCCCC]
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1124,7 +1138,7 @@ mod test {
     #[test]
     fn test_get_ram_info() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
@@ -1197,7 +1211,7 @@ mod test {
     #[test]
     fn test_write_and_read_object() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space").unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );

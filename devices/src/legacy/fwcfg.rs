@@ -1309,11 +1309,16 @@ mod test {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sys_mem"),
             "sys_mem",
+            None,
         )
         .unwrap();
         #[cfg(target_arch = "x86_64")]
-        let sys_io =
-            AddressSpace::new(Region::init_container_region(1 << 16, "sys_io"), "sys_io").unwrap();
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sys_io"),
+            "sys_io",
+            None,
+        )
+        .unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
         SysBus::new(
@@ -1327,7 +1332,7 @@ mod test {
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space").unwrap();
+        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),

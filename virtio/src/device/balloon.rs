@@ -1190,7 +1190,7 @@ mod tests {
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "space");
-        let sys_space = AddressSpace::new(root, "space").unwrap();
+        let sys_space = AddressSpace::new(root, "space", None).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
