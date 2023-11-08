@@ -162,15 +162,24 @@ impl MachineBase {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
+        let machine_ram = Arc::new(Region::init_container_region(
+            u64::max_value(),
+            "MachineRam",
+        ));
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "SysMem"),
             "sys_mem",
+            Some(machine_ram.clone()),
         )
         .with_context(|| MachineError::CrtIoSpaceErr)?;
 
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16, "SysIo"), "SysIo")
-            .with_context(|| MachineError::CrtIoSpaceErr)?;
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "SysIo"),
+            "SysIo",
+            None,
+        )
+        .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             #[cfg(target_arch = "x86_64")]
             &sys_io,
@@ -196,10 +205,7 @@ impl MachineBase {
             numa_nodes: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
             fwcfg_dev: None,
-            machine_ram: Arc::new(Region::init_container_region(
-                u64::max_value(),
-                "MachineRam",
-            )),
+            machine_ram,
         })
     }
 

@@ -422,6 +422,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(

@@ -1350,7 +1350,7 @@ mod tests {
     // build dummy address space of vm
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
+        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
