@@ -9,11 +9,17 @@ StratoVirt controls VM's lifecycle and external api interface with [QMP](https:/
 
 When running StratoVirt, you must create QMP in cmdline arguments as a management interface.
 
-StratoVirt supports UnixSocket-type QMP, you can set it by:
+StratoVirt supports UnixSocket-type QMP and TcpSocket-type QMP, you can set it by:
 
 ```shell
 # cmdline
+# Start with UnixSocket
 -qmp unix:/path/to/api/socket,server,nowait
+```
+```shell
+# cmdline
+# Start with TcpSocket
+-qmp tcp:ip:port,server,nowait
 ```
 Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev)
 
@@ -29,7 +35,14 @@ Three properties can be set for monitor.
 
 ```shell
 # cmdline
+# Start with UnixSocket
 -chardev socket,path=/path/to/monitor/sock,id=chardev_id,server,nowait
+-mon chardev=chardev_id,id=monitor_id,mode=control
+```
+```shell
+# cmdline
+# Start with TcpSocket
+-chardev socket,host=ip,port=port,id=chardev_id,server,nowait
 -mon chardev=chardev_id,id=monitor_id,mode=control
 ```
 
@@ -43,7 +56,10 @@ Several steps to connect QMP are showed as following:
 # Start with UnixSocket
 $ ncat -U /path/to/api/socket
 ```
-
+```shell
+# Start with TcpSocket
+$ ncat ip port
+```
 Once connection is built, you will receive a `greeting` message from StratoVirt.
 
 ```json

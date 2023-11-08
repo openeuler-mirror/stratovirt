@@ -151,9 +151,13 @@ impl SocketRWHandler {
             // MSG_DONTWAIT: Enables nonblocking operation, if the operation would block the call
             // fails with the error EAGAIN or EWOULDBLOCK. When this error occurs, break loop
             let ret = unsafe { recvmsg(self.socket_fd, &mut mhdr, MSG_DONTWAIT) };
-            if ret == -1 {
+            // when use tcpsocket client and exit with ctrl+c, ret value will return 0 and get
+            // error WouldBlock or BrokenPipe, so we should handle this 0 to break this loop.
+            if ret == -1 || ret == 0 {
                 let sock_err = Error::last_os_error();
-                if sock_err.kind() == ErrorKind::WouldBlock {
+                if sock_err.kind() == ErrorKind::WouldBlock
+                    || sock_err.kind() == ErrorKind::BrokenPipe
+                {
                     break;
                 } else {
                     return Err(sock_err);
