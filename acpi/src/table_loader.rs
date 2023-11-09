@@ -381,20 +381,16 @@ mod test {
             .is_ok());
 
         let file_bytes = file_name.as_bytes();
+        // SATETY: The "alloc" field of union consists of u8 members, so the access is safe.
+        let alloc = unsafe { &table_loader.cmds.get(0).unwrap().entry.alloc };
         assert_eq!(
-            unsafe {
-                table_loader.cmds.get(0).unwrap().entry.alloc.file[0..file_bytes.len()].to_vec()
-            },
+            alloc.file[0..file_bytes.len()].to_vec(),
             file_bytes.to_vec()
         );
-        assert_eq!(
-            unsafe { table_loader.cmds.get(0).unwrap().entry.alloc.align },
-            4_u32
-        );
-        assert_eq!(
-            unsafe { table_loader.cmds.get(0).unwrap().entry.alloc.zone },
-            0x1
-        );
+        // Copy to local var to avoid unaligned_references error.
+        let align = alloc.align;
+        assert_eq!(align, 4_u32);
+        assert_eq!(alloc.zone, 0x1);
 
         assert!(table_loader
             .add_alloc_entry("etc/table-loader", file_blob, 4_u32, false)
