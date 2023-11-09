@@ -28,6 +28,7 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
+ "nix 0.26.2",
  "thiserror",
  "util",
  "vmm-sys-util",
