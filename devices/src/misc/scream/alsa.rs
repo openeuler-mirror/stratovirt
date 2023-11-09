@@ -251,6 +251,18 @@ impl AudioInterface for AlsaStreamData {
                 }
                 Ok(n) => {
                     frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
+
+                    // During the host headset switchover, io.read is blocked for a long time.
+                    // As a result, the VM recording delay exceeds 1s. Thereforce, check whether
+                    // the delay exceeds 500ms. If the delay exceeds 500ms, start recording again.
+                    let delay = self.pcm.as_ref().unwrap().delay().unwrap_or_else(|e| {
+                        warn!("Scream alsa can't get frames delay: {e:?}");
+                        0
+                    });
+                    if delay > self.rate as i64 >> 1 {
+                        warn!("Scream alsa read audio blocked too long, delay {delay} frames, init again!");
+                        self.init = false;
+                    }
                 }
             }
         }
