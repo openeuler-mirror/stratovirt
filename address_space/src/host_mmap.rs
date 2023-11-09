@@ -11,13 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::min;
-use std::fs::File;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::fs::{remove_file, File};
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use nix::sys::statfs::fstatfs;
+use nix::unistd::sysconf;
+use nix::unistd::SysconfVar;
 
 use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
@@ -44,18 +47,8 @@ pub struct FileBackend {
 }
 
 fn file_unlink(file_path: &str) {
-    let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
-
-    if unsafe { libc::unlink(fs_cstr) } != 0 {
-        error!(
-            "Failed to unlink file \"{}\", error: {:?}",
-            file_path,
-            std::io::Error::last_os_error()
-        );
-    }
-    // SAFETY: fs_cstr obtained by calling CString::into_raw.
-    unsafe {
-        drop(std::ffi::CString::from_raw(fs_cstr));
+    if let Err(e) = remove_file(file_path) {
+        error!("Failed to unlink file \"{}\", error: {:?}", file_path, e);
     }
 }
 
@@ -130,13 +123,10 @@ impl FileBackend {
                 .with_context(|| format!("Failed to open file: {}", file_path))?
         };
 
-        // Safe because struct `statfs` only contains plain-data-type field,
-        // and set to all-zero will not cause any undefined behavior.
-        let mut fstat: libc::statfs = unsafe { std::mem::zeroed() };
-        unsafe { libc::fstatfs(file.as_raw_fd(), &mut fstat) };
+        let fstat = fstatfs(&file).with_context(|| "Failed to fstatfs file")?;
         info!(
             "Using memory backing file, the page size is {}",
-            fstat.f_bsize
+            fstat.optimal_transfer_size()
         );
 
         let old_file_len = file.metadata().unwrap().len();
@@ -158,7 +148,7 @@ impl FileBackend {
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
-            page_size: fstat.f_bsize as u64,
+            page_size: fstat.optimal_transfer_size() as u64,
         })
     }
 }
@@ -169,12 +159,23 @@ impl FileBackend {
 ///
 /// * `nr_vcpus` - Number of vcpus.
 fn max_nr_threads(nr_vcpus: u8) -> u8 {
-    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    if nr_host_cpu > 0 {
-        return min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus);
-    }
+    let conf = sysconf(SysconfVar::_NPROCESSORS_ONLN);
+
     // If fails to call `sysconf` function, just use a single thread to touch pages.
-    1
+    if conf.is_err() || conf.unwrap().is_none() {
+        log::warn!("Failed to get sysconf of _NPROCESSORS_ONLN");
+        return 1;
+    }
+    let nr_host_cpu = conf.unwrap().unwrap();
+    if nr_host_cpu <= 0 {
+        log::warn!(
+            "The sysconf of _NPROCESSORS_ONLN: {} is ignored",
+            nr_host_cpu
+        );
+        return 1;
+    }
+
+    min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus)
 }
 
 /// Touch pages to pre-alloc memory for VM.
