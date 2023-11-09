@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::Ordering;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -249,7 +250,23 @@ impl VhostUserMemInfo {
             mmap_offset: file_back.offset + fr.offset_in_region,
         };
         let region_info = RegionInfo { region, file_back };
-        self.regions.lock().unwrap().push(region_info);
+        let mut locked_regions = self.regions.lock().unwrap();
+        match locked_regions.binary_search_by(|r| {
+            if (r.region.guest_phys_addr + r.region.memory_size - 1) < guest_phys_addr {
+                Ordering::Less
+            } else if r.region.guest_phys_addr > (guest_phys_addr + memory_size - 1) {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        }) {
+            Ok(p) => bail!(
+                "New region {:?} is overlapped with region {:?}",
+                region_info.region,
+                locked_regions[p].region
+            ),
+            Err(p) => locked_regions.insert(p, region_info),
+        }
 
         Ok(())
     }
@@ -259,10 +276,13 @@ impl VhostUserMemInfo {
             return Ok(());
         }
 
-        let file_back = fr
-            .owner
-            .get_file_backend()
-            .with_context(|| "Failed to get file backend")?;
+        let file_back = match fr.owner.get_file_backend() {
+            None => {
+                info!("fr {:?} backend is not file, ignored", fr);
+                return Ok(());
+            }
+            Some(fb) => fb,
+        };
         let mut mem_regions = self.regions.lock().unwrap();
         let host_address = match fr.owner.get_host_address() {
             Some(addr) => addr,
