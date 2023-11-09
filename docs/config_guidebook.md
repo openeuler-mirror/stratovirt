@@ -351,13 +351,16 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```
 
-StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it.
+StratoVirt also supports vhost-user-blk to get a higher performance in storage.
 
-You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
+You can use it by adding a new device, one more property is supported by vhost-user-blk device than virtio-blk.
 
 * chardev: id for char device, that means you need to add a chardev first, and use its id to find the character device.
 
 ```shell
+# vhost user blk mmio device
+-chardev socket,id=<chardevid>,path=<socket_path>
+-device vhost-user-blk-device,id=<blk_id>,chardev=<chardev_id>[,num-queues=<N>][,queue-size=<queuesize>]
 # vhost user blk pci device
 -chardev socket,id=<chardevid>,path=<socket_path>
 -device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
@@ -365,9 +368,9 @@ You can use it by adding a new device, one more property is supported by vhost-u
 
 Note: More features to be supported.
 
-It should open sharing memory('-mem-share=on') and hugepages('-mem-path ...' ) when using vhost-user-blk-pci.
+It should open sharing memory('-mem-share=on') and hugepages('-mem-path ...' ) when using vhost-user-blk.
 
-Vhost-user-blk-pci use spdk as vhost-backend, so you need to start spdk before starting stratovirt.
+Vhost-user-blk use spdk as vhost-backend, so you need to start spdk before starting stratovirt.
 
 *How to start and configure spdk?*
 
@@ -474,11 +477,14 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 -device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}]
 ```
 
-StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
-virtio pci net device support vhost-user net. It should open sharing memory('-mem-share=on') and
-hugepages('-mem-path ...' ) when using vhost-user net.
+StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk.
+It should open sharing memory('-mem-share=on') and hugepages('-mem-path ...' ) when using vhost-user net.
 
 ```shell
+# virtio mmio net device
+-chardev socket,id=chardevid,path=socket_path
+-netdev vhost-user,id=<netdevid>,chardev=<chardevid>
+-device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
 # virtio pci net device
 -chardev socket,id=chardevid,path=socket_path
 -netdev vhost-user,id=<netdevid>,chardev=<chardevid>[,queues=<N>]
@@ -940,7 +946,30 @@ It determines the order of bootable devices which firmware will use for booting 
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-### 2.16 VNC
+### 2.16 Display
+
+Multiple display methods are supported by stratovirt, including `GTK` and `VNC`, which allows users to interact with virtual machine.
+
+#### 2.16.1 GTK
+
+Graphical interface drawn by gtk toolkits. Visit [GTK](https://www.gtk.org) for more details.
+
+Two properties can be set for GTK.
+
+* appname: string of the program name, which will be drawn on the titlebar of the window.
+* full-screen: if configured on, the initial window will cover the entire screen.
+
+Sample Configuration：
+
+```shell
+-display gtk[,appname=<application_name>,full-screen={on|off}]
+```
+
+Note: It should be ensured that gtk toolkits have been installed before using gtk.
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable GTK.
+
+#### 2.16.2 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
 In order to use VNC, the ip and port value must be configured. The IP address can be set to a specified value or `0.0.0.0`, which means that all IP addresses on the host network card are monitored
@@ -1002,6 +1031,10 @@ Three properties can be set for virtio fs device.
 * mount_tag: the mount tag of the shared directory which can be mounted in the guest
 
 ```shell
+# vhost user fs mmio device
+-chardev socket,id=<chardevid>,path=<socket_path>
+-device vhost-user-fs-device,id=<device id>,chardev=<chardevid>,tag=<mount tag>
+# vhost user fs pci device
 -chardev socket,id=<chardevid>,path=<socket_path>
 -device vhost-user-fs-pci,id=<device id>,chardev=<chardevid>,tag=<mount tag>
 ```

@@ -188,7 +188,7 @@ impl Socket {
                 serde_json::to_string(&Response::create_empty_response()).unwrap()
             };
             handler.send_str(&resp)?;
-            info!("QMP: --> {:?}", resp);
+            info!("QMP: <-- {:?}", resp);
         }
         Ok(())
     }
@@ -373,10 +373,10 @@ fn handle_qmp(
     match qmp_service.decode_line() {
         (Ok(None), _) => Ok(()),
         (Ok(buffer), if_fd) => {
-            info!("QMP: <-- {:?}", buffer);
+            info!("QMP: --> {:?}", buffer);
             let qmp_command: QmpCommand = buffer.unwrap();
             let (return_msg, shutdown_flag) = qmp_command_exec(qmp_command, controller, if_fd);
-            info!("QMP: --> {:?}", return_msg);
+            info!("QMP: <-- {:?}", return_msg);
             qmp_service.send_str(&return_msg)?;
 
             // handle shutdown command

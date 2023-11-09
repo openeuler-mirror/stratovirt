@@ -121,16 +121,6 @@ impl CacheTable {
         Ok(())
     }
 
-    pub fn find_empty_entry(&self, start: usize) -> Result<usize> {
-        let len = self.table_data.len() / self.entry_size;
-        for i in start..len {
-            if self.be_read(i)? == 0 {
-                return Ok(i);
-            }
-        }
-        Ok(len)
-    }
-
     pub fn get_value(&self) -> &[u8] {
         &self.table_data
     }
@@ -186,6 +176,11 @@ impl Qcow2Cache {
         entry.borrow_mut().lru_count = self.lru_count;
         self.lru_count += 1;
         Some(entry)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache_map.clear();
+        self.dirty_tables.clear();
     }
 
     pub fn lru_replace(

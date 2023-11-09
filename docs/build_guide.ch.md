@@ -4,11 +4,11 @@
 ## 1. 检查Rust构建环境
 
 为了构建StratoVirt，需保证已经安装了Rust语言环境和Cargo软件。
-rustc的推荐版本为1.51.0及其之后的版本, 否则编译可能失败。
+rustc的推荐版本为1.64.0及其之后的版本, 否则编译可能失败。
 
 ```shell
 $ rustc --version
-rustc 1.51.0
+rustc 1.64.0
 ```
 
 如果你想部署rust环境，下面的链接可以帮助你：
@@ -25,7 +25,7 @@ $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-gnu
 
 # 构建StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-gnu
+$ cargo build --workspace --bins --release --target ${arch}-unknown-linux-gnu
 ```
 
 现在你可找到StratoVirt二进制的路径在 `target/${arch}-unknown-linux-gnu/release/stratovirt`.
@@ -40,7 +40,7 @@ $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-musl
 
 # 构建StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-musl
+$ cargo build --workspace --bins --release --target ${arch}-unknown-linux-musl
 ```
 
 现在你可找到StratoVirt静态链接二进制的路径在 `target/${arch}-unknown-linux-musl/release/stratovirt`.

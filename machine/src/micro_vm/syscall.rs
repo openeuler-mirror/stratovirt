@@ -42,10 +42,10 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 49 syscalls
-/// * x86_64-unknown-musl: 48 syscalls
-/// * aarch64-unknown-gnu: 47 syscalls
-/// * aarch64-unknown-musl: 47 syscalls
+/// * x86_64-unknown-gnu: 53 syscalls
+/// * x86_64-unknown-musl: 52 syscalls
+/// * aarch64-unknown-gnu: 51 syscalls
+/// * aarch64-unknown-musl: 51 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -125,6 +125,10 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_fallocate),
+        BpfRule::new(libc::SYS_socket),
+        BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_ppoll),
+        BpfRule::new(libc::SYS_connect),
         madvise_rule(),
     ]
 }
@@ -192,11 +196,13 @@ fn madvise_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
     #[cfg(not(target_env = "musl"))]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
 }
 

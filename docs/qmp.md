@@ -81,8 +81,8 @@ Add a block backend.
 #### Example
 
 ```json
-<- {"execute": "blockdev-add", "arguments": {"node-name": "drive-0", "file": {"driver": "file", "filename": "/path/to/block", "aio": native}, "cache": {"direct": true}, "read-only": false}}
--> {"return": {}}
+-> {"execute": "blockdev-add", "arguments": {"node-name": "drive-0", "file": {"driver": "file", "filename": "/path/to/block", "aio": native}, "cache": {"direct": true}, "read-only": false}}
+<- {"return": {}}
 ```
 
 ### blockdev-del
@@ -96,8 +96,8 @@ Remove a block backend.
 #### Example
 
 ```json
-<- {"execute": "blockdev-del", "arguments": {"node-name": "drive-0"}}
--> {"return": {}}
+-> {"execute": "blockdev-del", "arguments": {"node-name": "drive-0"}}
+<- {"return": {}}
 ```
 
 ## Net device backend management
@@ -131,8 +131,8 @@ Add a network backend.
 #### Example
 
 ```json
-<- {"execute":"netdev_add", "arguments":{"id":"net-0", "ifname":"tap0"}}
--> {"return": {}}
+-> {"execute":"netdev_add", "arguments":{"id":"net-0", "ifname":"tap0"}}
+<- {"return": {}}
 ```
 
 ### netdev_del
@@ -146,8 +146,8 @@ Remove a network backend.
 #### Example
 
 ```json
-<- {"execute": "netdev_del", "arguments": {"id": "net-0"}}
--> {"return": {}}
+-> {"execute": "netdev_del", "arguments": {"id": "net-0"}}
+<- {"return": {}}
 ```
 
 ## Camera device backend management
@@ -169,8 +169,8 @@ Add a camera backend.
 #### Example
 
 ```json
-<- {"execute":"cameradev_add", "arguments":{"id":"cam-0", "driver": "v4l2", "path":"/dev/video0"}}
--> {"return": {}}
+-> {"execute":"cameradev_add", "arguments":{"id":"cam-0", "driver": "v4l2", "path":"/dev/video0"}}
+<- {"return": {}}
 ```
 
 ### cameradev_del
@@ -188,8 +188,8 @@ Remove a camera backend.
 #### Example
 
 ```json
-<- {"execute": "cameradev_del", "arguments": {"id": "cam-0"}}
--> {"return": {}}
+-> {"execute": "cameradev_del", "arguments": {"id": "cam-0"}}
+<- {"return": {}}
 ```
 
 ## Character device backend management
@@ -214,8 +214,8 @@ Add a character device backend.
 #### Example
 
 ```json
-<- {"execute":"chardev-add", "arguments": {"id": "chardev_id", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": "/path/to/socket"}}, "server": false}}}}
--> {"return": {}}
+-> {"execute":"chardev-add", "arguments": {"id": "chardev_id", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": "/path/to/socket"}}, "server": false}}}}
+<- {"return": {}}
 ```
 
 ### chardev-remove
@@ -229,8 +229,8 @@ Remove a character device backend.
 #### Example
 
 ```json
-<- {"execute": "chardev-remove", "arguments": {"id": "chardev_id"}}
--> {"return": {}}
+-> {"execute": "chardev-remove", "arguments": {"id": "chardev_id"}}
+<- {"return": {}}
 ```
 
 ## Hot plug management
@@ -266,8 +266,8 @@ Add a device.
 #### Example
 
 ```json
-<- {"execute":"device_add", "arguments":{"id":"net-0", "driver":"virtio-net-mmio", "addr":"0x0"}}
--> {"return": {}}
+-> {"execute":"device_add", "arguments":{"id":"net-0", "driver":"virtio-net-mmio", "addr":"0x0"}}
+<- {"return": {}}
 ```
 
 ### device_del
@@ -285,9 +285,9 @@ Remove a device from a guest.
 #### Example
 
 ```json
-<- {"execute": "device_del", "arguments": {"id": "net-0"}}
--> {"event":"DEVICE_DELETED","data":{"device":"net-0","path":"net-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
--> {"return": {}}
+-> {"execute": "device_del", "arguments": {"id": "net-0"}}
+<- {"event":"DEVICE_DELETED","data":{"device":"net-0","path":"net-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
+<- {"return": {}}
 ```
 
 ## Lifecycle Management
@@ -302,9 +302,9 @@ Stop all guest VCPUs execution.
 #### Example
 
 ```json
-<- {"execute":"stop"}
--> {"event":"STOP","data":{},"timestamp":{"seconds":1583908726,"microseconds":162739}}
--> {"return":{}}
+-> {"execute":"stop"}
+<- {"event":"STOP","data":{},"timestamp":{"seconds":1583908726,"microseconds":162739}}
+<- {"return":{}}
 ```
 
 ### cont
@@ -314,9 +314,9 @@ Resume all guest VCPUs execution.
 #### Example
 
 ```json
-<- {"execute":"cont"}
--> {"event":"RESUME","data":{},"timestamp":{"seconds":1583908853,"microseconds":411394}}
--> {"return":{}}
+-> {"execute":"cont"}
+<- {"event":"RESUME","data":{},"timestamp":{"seconds":1583908853,"microseconds":411394}}
+<- {"return":{}}
 ```
 
 ### system_reset
@@ -326,9 +326,9 @@ Reset all guest VCPUs execution.
 #### Example
 
 ```json
-<- {"execute":"system_reset"}
--> {"return":{}}
--> {"event":"RESET","data":{"guest":true},"timestamp":{"seconds":1677381086,"microseconds":432033}}
+-> {"execute":"system_reset"}
+<- {"return":{}}
+<- {"event":"RESET","data":{"guest":true},"timestamp":{"seconds":1677381086,"microseconds":432033}}
 ```
 
 ### system_powerdown
@@ -338,9 +338,9 @@ Requests that a guest perform a powerdown operation.
 ### Example
 
 ```json
-<- {"execute":"system_powerdown"}
--> {"return":{}}
--> {"event":"POWERDOWN","data":{},"timestamp":{"seconds":1677850193,"microseconds":617907}}
+-> {"execute":"system_powerdown"}
+<- {"return":{}}
+<- {"event":"POWERDOWN","data":{},"timestamp":{"seconds":1677850193,"microseconds":617907}}
 ```
 
 ### quit
@@ -350,9 +350,9 @@ This command will cause StratoVirt process to exit gracefully.
 #### Example
 
 ```json
-<- {"execute":"quit"}
--> {"return":{}}
--> {"event":"SHUTDOWN","data":{"guest":false,"reason":"host-qmp-quit"},"timestamp":{"ds":1590563776,"microseconds":519808}}
+-> {"execute":"quit"}
+<- {"return":{}}
+<- {"event":"SHUTDOWN","data":{"guest":false,"reason":"host-qmp-quit"},"timestamp":{"ds":1590563776,"microseconds":519808}}
 ```
 
 ### query-status
@@ -362,8 +362,8 @@ Query the running status of all VCPUs.
 #### Example
 
 ```json
-<- { "execute": "query-status" }
--> { "return": { "running": true,"singlestep": false,"status": "running" } }
+-> { "execute": "query-status" }
+<- { "return": { "running": true,"singlestep": false,"status": "running" } }
 ```
 
 ### getfd
@@ -373,8 +373,8 @@ Receive a file descriptor via SCM rights and assign it a name.
 #### Example
 
 ```json
-<- { "execute": "getfd", "arguments": { "fdname": "fd1" } }
--> { "return": {} }
+-> { "execute": "getfd", "arguments": { "fdname": "fd1" } }
+<- { "return": {} }
 ```
 
 ## balloon
@@ -392,8 +392,8 @@ Set target memory size of guest.
 #### Example
 
 ```json
-<- { "execute": "balloon", "arguments": { "value": 2147483648 } }
--> {"return":{}}
+-> { "execute": "balloon", "arguments": { "value": 2147483648 } }
+<- {"return":{}}
 ```
 
 ### query-balloon
@@ -403,8 +403,8 @@ Get memory size of guest.
 #### Example
 
 ```json
-<- { "execute": "query-balloon" }
--> {"return":{"actual":2147483648}}
+-> { "execute": "query-balloon" }
+<- {"return":{"actual":2147483648}}
 ```
 
 ## Migration
@@ -420,8 +420,8 @@ Take a snapshot of the VM into the specified directory.
 #### Example
 
 ```json
-<- {"execute":"migrate", "arguments":{"uri":"file:path/to/template"}}
--> {"return":{}}
+-> {"execute":"migrate", "arguments":{"uri":"file:path/to/template"}}
+<- {"return":{}}
 ```
 
 ### query-migrate
@@ -441,8 +441,8 @@ Now there are 5 states during snapshot:
 #### Example
 
 ```json
-<- {"execute":"query-migrate"}
--> {"return":{"status":"completed"}}
+-> {"execute":"query-migrate"}
+<- {"return":{"status":"completed"}}
 ```
 
 ## Event Notification

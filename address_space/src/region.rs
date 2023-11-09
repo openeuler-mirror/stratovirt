@@ -1184,7 +1184,7 @@ mod test {
         assert_eq!(&slice, &mut res_slice);
 
         // write the file content to 0~24 (24 not included)
-        // then ckeck the ram's content
+        // then check the ram's content
         file_read.seek(SeekFrom::Start(0)).unwrap();
         assert!(ram_region.write(&mut file_read, rgn_start, 0, 24).is_ok());
         ram_region

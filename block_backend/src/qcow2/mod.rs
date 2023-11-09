@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod cache;
-mod header;
-mod refcount;
-mod snapshot;
-mod table;
+pub mod cache;
+pub mod check;
+pub mod header;
+pub mod refcount;
+pub mod snapshot;
+pub mod table;
 
 use std::{
     cell::RefCell,
     collections::HashMap,
     fs::File,
+    io::{Seek, SeekFrom, Write},
     mem::size_of,
     os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
@@ -32,7 +34,9 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use self::{cache::ENTRY_SIZE_U64, refcount::Qcow2DiscardType};
+use self::{
+    cache::ENTRY_SIZE_U64, check::Qcow2Check, header::QCOW_MAGIC, refcount::Qcow2DiscardType,
+};
 use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::{
@@ -42,7 +46,7 @@ use crate::{
         snapshot::{InternalSnapshot, QcowSnapshot, QcowSnapshotExtraData, QCOW2_MAX_SNAPSHOTS},
         table::{Qcow2ClusterType, Qcow2Table},
     },
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
@@ -56,28 +60,32 @@ use util::{
 };
 
 // The L1/L2/Refcount table entry size.
-const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
-const ENTRY_BITS: u64 = 3;
-const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
-const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
-const REFCOUNT_TABLE_OFFSET_MASK: u64 = 0xffff_ffff_ffff_fe00;
-const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
+pub const ENTRY_SIZE: u64 = 1 << ENTRY_BITS;
+pub const ENTRY_BITS: u64 = 3;
+pub const L1_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+pub const L1_RESERVED_MASK: u64 = 0x7f00_0000_0000_01ff;
+pub const L2_TABLE_OFFSET_MASK: u64 = 0x00ff_ffff_ffff_fe00;
+pub const L2_STD_RESERVED_MASK: u64 = 0x3f00_0000_0000_01fe;
+pub const REFCOUNT_TABLE_OFFSET_MASK: u64 = 0xffff_ffff_ffff_fe00;
+pub const REFCOUNT_TABLE_RESERVED_MASK: u64 = 0x0000_0000_0000_01ff;
+pub const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
 const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
-const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
+pub const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
+const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 const DEFAULT_SECTOR_SIZE: u64 = 512;
+pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
 // The default flush interval is 30s.
 const DEFAULT_METADATA_FLUSH_INTERVAL: u64 = 30;
 
 const METADATA_OVERLAP_CHECK_MAINHEADER: u64 = 1 << 0;
 const METADATA_OVERLAP_CHECK_ACTIVEL1: u64 = 1 << 1;
-const METADATA_OVERLAP_CHECK_ACTIVEL2: u64 = 1 << 2;
+pub(crate) const METADATA_OVERLAP_CHECK_ACTIVEL2: u64 = 1 << 2;
 const METADATA_OVERLAP_CHECK_REFCOUNTTABLE: u64 = 1 << 3;
 const METADATA_OVERLAP_CHECK_REFCOUNTBLOCK: u64 = 1 << 4;
 const METADATA_OVERLAP_CHECK_SNAPSHOTTABLE: u64 = 1 << 5;
 const METADATA_OVERLAP_CHECK_INACTIVEL1: u64 = 1 << 6;
-#[allow(unused)]
-const METADATA_OVERLAP_CHECK_INACTIVEL2: u64 = 1 << 7;
+pub(crate) const METADATA_OVERLAP_CHECK_INACTIVEL2: u64 = 1 << 7;
 #[allow(unused)]
 const METADATA_OVERLAP_CHECK_BITMAPDIRECTORY: u64 = 1 << 8;
 
@@ -104,7 +112,7 @@ pub enum HostRange {
 pub struct SyncAioInfo {
     /// Aio for sync read/write metadata.
     aio: Aio<()>,
-    fd: RawFd,
+    pub(crate) fd: RawFd,
     pub prop: BlockProperty,
 }
 
@@ -121,7 +129,7 @@ impl SyncAioInfo {
         Ok(())
     }
 
-    fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
+    pub fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
         Ok(Self {
             aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off)?,
             fd,
@@ -165,7 +173,7 @@ impl SyncAioInfo {
         self.aio.submit_request(aiocb)
     }
 
-    fn write_buffer(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+    pub(crate) fn write_buffer(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         let ptr = buf.as_ptr() as u64;
         let cnt = buf.len() as u64;
         let aiocb = self.package_sync_aiocb(
@@ -177,12 +185,12 @@ impl SyncAioInfo {
         self.aio.submit_request(aiocb)
     }
 
-    fn write_ctrl_cluster(&mut self, addr: u64, buf: &[u64]) -> Result<()> {
+    pub(crate) fn write_ctrl_cluster(&mut self, addr: u64, buf: &[u64]) -> Result<()> {
         let output: Vec<u8> = buf.iter().flat_map(|val| val.to_be_bytes()).collect();
         self.write_buffer(addr, &output)
     }
 
-    fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
+    pub(crate) fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
         let mut buf = vec![0; sz as usize];
         let vec_len = size_of::<u64>() * sz as usize;
         let mut vec = vec![0_u8; vec_len];
@@ -193,7 +201,13 @@ impl SyncAioInfo {
         Ok(buf)
     }
 
-    fn write_dirty_info(&mut self, addr: u64, buf: &[u8], start: u64, end: u64) -> Result<()> {
+    pub(crate) fn write_dirty_info(
+        &mut self,
+        addr: u64,
+        buf: &[u8],
+        start: u64,
+        end: u64,
+    ) -> Result<()> {
         let start = round_down(start, DEFAULT_SECTOR_SIZE)
             .with_context(|| format!("Round down failed, value is {}", start))?;
         let end = round_up(end, DEFAULT_SECTOR_SIZE)
@@ -203,13 +217,13 @@ impl SyncAioInfo {
 }
 
 pub struct Qcow2Driver<T: Clone + 'static> {
-    driver: FileDriver<T>,
-    sync_aio: Rc<RefCell<SyncAioInfo>>,
-    header: QcowHeader,
-    table: Qcow2Table,
-    refcount: RefCount,
-    snapshot: InternalSnapshot,
-    status: Arc<Mutex<BlockStatus>>,
+    pub driver: FileDriver<T>,
+    pub sync_aio: Rc<RefCell<SyncAioInfo>>,
+    pub header: QcowHeader,
+    pub table: Qcow2Table,
+    pub refcount: RefCount,
+    pub snapshot: InternalSnapshot,
+    pub status: Arc<Mutex<BlockStatus>>,
 }
 
 impl<T: Clone + 'static> Drop for Qcow2Driver<T> {
@@ -246,34 +260,39 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     pub fn new(file: File, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
         let fd = file.as_raw_fd();
         let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(fd, conf.clone())?));
-        let mut qcow2 = Self {
-            driver: FileDriver::new(file, aio, conf.clone()),
+        Ok(Self {
+            driver: FileDriver::new(file, aio, conf),
             sync_aio: sync_aio.clone(),
             header: QcowHeader::default(),
             table: Qcow2Table::new(sync_aio.clone()),
             refcount: RefCount::new(sync_aio.clone()),
             snapshot: InternalSnapshot::new(sync_aio),
             status: Arc::new(Mutex::new(BlockStatus::Init)),
-        };
-        qcow2
-            .load_header()
-            .with_context(|| "Failed to load header")?;
-        qcow2.header.check().with_context(|| "Invalid header")?;
-        qcow2
-            .table
-            .init_table(&qcow2.header, &conf)
-            .with_context(|| "Failed to create qcow2 table")?;
-        qcow2.refcount.init_refcount_info(&qcow2.header, &conf);
-        qcow2
-            .load_refcount_table()
-            .with_context(|| "Failed to load refcount table")?;
-        qcow2.snapshot.set_cluster_size(qcow2.header.cluster_size());
-        qcow2
-            .snapshot
-            .load_snapshot_table(qcow2.header.snapshots_offset, qcow2.header.nb_snapshots)
-            .with_context(|| "Failed to load snapshot table")?;
+        })
+    }
 
-        Ok(qcow2)
+    pub fn load_metadata(&mut self, conf: BlockProperty) -> Result<()> {
+        self.load_header()
+            .with_context(|| "Failed to load header")?;
+        self.header.check().with_context(|| "Invalid header")?;
+        self.table
+            .init_table_info(&self.header, &conf)
+            .with_context(|| "Failed to create qcow2 table")?;
+        self.table
+            .load_l1_table()
+            .with_context(|| "Failed to load l1 table")?;
+        self.refcount.init_refcount_info(&self.header, &conf);
+        self.load_refcount_table()
+            .with_context(|| "Failed to load refcount table")?;
+        self.snapshot.set_cluster_size(self.header.cluster_size());
+        self.snapshot
+            .load_snapshot_table(
+                self.header.snapshots_offset,
+                self.header.nb_snapshots,
+                false,
+            )
+            .with_context(|| "Failed to load snapshot table")?;
+        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -292,14 +311,17 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         });
     }
 
-    fn load_header(&mut self) -> Result<()> {
+    pub fn load_header(&mut self) -> Result<()> {
         let mut buf = vec![0; QcowHeader::len()];
         self.sync_aio.borrow_mut().read_buffer(0, &mut buf)?;
         self.header = QcowHeader::from_vec(&buf)?;
+        if self.header.backing_file_size != 0 {
+            bail!("Backing file is not supported now");
+        }
         Ok(())
     }
 
-    fn load_refcount_table(&mut self) -> Result<()> {
+    pub fn load_refcount_table(&mut self) -> Result<()> {
         let sz =
             self.header.refcount_table_clusters as u64 * (self.header.cluster_size() / ENTRY_SIZE);
         self.refcount.refcount_table = self
@@ -373,7 +395,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         ))
     }
 
-    fn host_offset_for_read(&mut self, guest_offset: u64, req_len: u64) -> Result<HostRange> {
+    pub fn host_offset_for_read(&mut self, guest_offset: u64, req_len: u64) -> Result<HostRange> {
         // Request not support cross l2 table.
         let l2_max_len = self
             .table
@@ -435,11 +457,64 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(cluster_addr + self.offset_into_cluster(guest_offset))
     }
 
+    /// Extend the l1 table.
+    pub fn grow_l1_table(&mut self, new_l1_size: u64) -> Result<()> {
+        let old_l1_size = self.header.l1_size as u64;
+        if new_l1_size <= old_l1_size {
+            return Ok(());
+        }
+        if new_l1_size > MAX_L1_SIZE / ENTRY_SIZE {
+            bail!("L1 size {} is too large", new_l1_size);
+        }
+
+        info!(
+            "Resize the l1 table size from {} to {}",
+            old_l1_size, new_l1_size
+        );
+
+        // Copy data from old l1 table.
+        let cluster_size = self.header.cluster_size();
+        let old_l1_table_size = old_l1_size * ENTRY_SIZE;
+        let old_l1_table_clusters = div_round_up(old_l1_table_size, cluster_size).unwrap();
+        let old_l1_table_offset = self.header.l1_table_offset;
+        let new_l1_table_size = new_l1_size * ENTRY_SIZE;
+        let new_l1_table_clusters = div_round_up(new_l1_table_size, cluster_size).unwrap();
+        let new_l1_table_offset = self.alloc_cluster(new_l1_table_clusters, true)?;
+        let mut new_l1_table = vec![0_u64; new_l1_size as usize];
+        new_l1_table[..(old_l1_size as usize)]
+            .copy_from_slice(&self.table.l1_table[..(old_l1_size as usize)]);
+
+        let ret = self.check_overlap(0, new_l1_table_offset, new_l1_table_size);
+        if ret != 0 {
+            bail!("Write on metadata(overlap with {:?})", ret);
+        }
+        self.refcount.flush()?;
+        self.sync_aio
+            .borrow_mut()
+            .write_ctrl_cluster(new_l1_table_offset, &new_l1_table)?;
+
+        // Flush new data to disk.
+        let mut new_header = self.header.clone();
+        new_header.l1_size = new_l1_size as u32;
+        new_header.l1_table_offset = new_l1_table_offset;
+        self.sync_aio
+            .borrow_mut()
+            .write_buffer(0, &new_header.to_vec())?;
+        self.header = new_header;
+        self.table.l1_table = new_l1_table;
+        self.free_cluster(
+            old_l1_table_offset,
+            old_l1_table_clusters,
+            true,
+            &Qcow2DiscardType::Other,
+        )
+    }
+
     /// Obtaining the target entry for guest offset.
     /// If the corresponding entry didn't cache, it will be read from the disk synchronously.
     /// Input: guest offset.
     /// Output: target entry.
-    fn get_table_cluster(&mut self, guest_offset: u64) -> Result<Rc<RefCell<CacheTable>>> {
+    pub fn get_table_cluster(&mut self, guest_offset: u64) -> Result<Rc<RefCell<CacheTable>>> {
         let l1_index = self.table.get_l1_table_index(guest_offset);
         if l1_index >= self.header.l1_size as u64 {
             bail!("Need to grow l1 table size.");
@@ -640,7 +715,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         guest_offset & (self.header.cluster_size() - 1)
     }
 
-    fn load_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
+    pub(crate) fn load_cluster(&mut self, addr: u64) -> Result<Vec<u8>> {
         if !is_aligned(self.header.cluster_size(), addr) {
             bail!("Cluster address not aligned {}", addr);
         }
@@ -658,13 +733,15 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         std::cmp::min(cnt, self.header.cluster_size() - offset)
     }
 
-    fn alloc_cluster(&mut self, clusters: u64, write_zero: bool) -> Result<u64> {
+    pub fn alloc_cluster(&mut self, clusters: u64, write_zero: bool) -> Result<u64> {
         if !self.refcount.discard_list.is_empty() {
             self.refcount.sync_process_discards(OpCode::Discard);
         }
 
         let size = clusters * self.header.cluster_size();
-        let addr = self.refcount.alloc_cluster(&mut self.header, size)?;
+        let addr = self
+            .refcount
+            .alloc_clusters_with_ref(&mut self.header, size)?;
         let ret = self.check_overlap(0, addr, size);
         if ret != 0 {
             bail!(
@@ -714,6 +791,68 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
     fn get_snapshot_by_name(&mut self, name: &String) -> i32 {
         self.snapshot.find_snapshot(name)
+    }
+
+    fn qcow2_apply_snapshot(&mut self, name: String) -> Result<()> {
+        // Get target snapshot by name.
+        let snap_id = self.get_snapshot_by_name(&name);
+        if snap_id < 0 {
+            bail!("Failed to load snapshots {}", name);
+        }
+        let snap = self.snapshot.snapshots[snap_id as usize].clone();
+
+        // Validate snapshot table
+        if snap.l1_size as u64 > MAX_L1_SIZE / ENTRY_SIZE {
+            bail!("Snapshot L1 table too large");
+        }
+
+        if i64::MAX as u64 - snap.l1_size as u64 * ENTRY_SIZE < snap.l1_table_offset
+            || !is_aligned(self.header.cluster_size(), snap.l1_table_offset)
+        {
+            bail!("Snapshot L1 table offset invalid");
+        }
+
+        if snap.disk_size != self.virtual_disk_size() {
+            bail!("The virtual disk size has been changed");
+        }
+
+        // Apply the l1 table of snapshot to active l1 table.
+        let mut snap_l1_table = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(snap.l1_table_offset, snap.l1_size as u64)?;
+        snap_l1_table.resize(self.header.l1_size as usize, 0);
+
+        // Increase the refcount of all clusters searched by L1 table.
+        self.qcow2_update_snapshot_refcount(snap.l1_table_offset, 1)?;
+
+        let active_l1_bytes = self.header.l1_size as u64 * ENTRY_SIZE;
+        if self.check_overlap(
+            METADATA_OVERLAP_CHECK_ACTIVEL1,
+            self.header.l1_table_offset,
+            active_l1_bytes,
+        ) != 0
+        {
+            bail!("check overlap failed");
+        }
+
+        // Synchronous write back to disk.
+        self.sync_aio
+            .borrow_mut()
+            .write_ctrl_cluster(self.header.l1_table_offset, &snap_l1_table)?;
+
+        self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, -1)?;
+
+        // Update flag of QCOW2_OFFSET_COPIED in current active l1 table, as it has been changed.
+        self.table.l1_table = snap_l1_table;
+        self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 0)?;
+
+        self.table.save_l1_table()?;
+
+        // Discard unused clusters.
+        self.refcount.sync_process_discards(OpCode::Discard);
+
+        Ok(())
     }
 
     fn qcow2_delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo> {
@@ -883,6 +1022,63 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
+    /// Write the modified snapshots back to disk
+    /// 1. Alloc a new space for new snapshot table.
+    /// 2. Write the snapshots to the new space.
+    /// 3. Free the old snapshot table.
+    /// 4. Modify qcow2 header.
+    pub(crate) fn write_snapshots_to_disk(&mut self) -> Result<()> {
+        let cluster_size = self.header.cluster_size();
+        let snapshot_size = self.snapshot.snapshot_size;
+        let snapshot_clusters = bytes_to_clusters(snapshot_size, cluster_size).unwrap();
+        let new_nb_snapshots = self.snapshot.snapshots.len() as u32;
+        let mut new_snapshot_offset = 0_u64;
+        if snapshot_clusters != 0 {
+            new_snapshot_offset = self.alloc_cluster(snapshot_clusters, true)?;
+            info!(
+                "Snapshot table offset: old(0x{:x}) -> new(0x{:x})",
+                self.header.snapshots_offset, new_snapshot_offset,
+            );
+
+            // Write new snapshots to disk.
+            let mut snap_buf = Vec::new();
+            for snap in &self.snapshot.snapshots {
+                snap_buf.append(&mut snap.gen_snapshot_table_entry());
+            }
+            self.sync_aio
+                .borrow_mut()
+                .write_buffer(new_snapshot_offset, &snap_buf)?;
+        }
+
+        let old_snapshot_offset = self.header.snapshots_offset;
+        // Free the old snapshot table cluster if snapshot exists.
+        if self.header.snapshots_offset != 0 {
+            self.refcount.update_refcount(
+                old_snapshot_offset,
+                snapshot_clusters,
+                -1,
+                false,
+                &Qcow2DiscardType::Snapshot,
+            )?;
+        }
+
+        // Flush the cache of the refcount block and l1/l2 table.
+        self.flush()?;
+
+        // Update snapshot offset and num in qcow2 header.
+        let mut new_header = self.header.clone();
+        new_header.snapshots_offset = new_snapshot_offset;
+        new_header.nb_snapshots = new_nb_snapshots;
+        self.sync_aio
+            .borrow_mut()
+            .write_buffer(0, &new_header.to_vec())?;
+
+        self.snapshot.snapshot_table_offset = new_snapshot_offset;
+        self.header.snapshots_offset = new_header.snapshots_offset;
+        self.header.nb_snapshots = new_header.nb_snapshots;
+        Ok(())
+    }
+
     /// Update the refcounts of all clusters searched by l1_table_offset.
     fn qcow2_update_snapshot_refcount(&mut self, l1_table_offset: u64, added: i32) -> Result<()> {
         let l1_table_size = self.header.l1_size as usize;
@@ -1037,7 +1233,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     // Check if there exist intersection between given address range and qcow2 metadata.
-    fn check_overlap(&self, ignore: u64, offset: u64, size: u64) -> i64 {
+    pub(crate) fn check_overlap(&self, ignore: u64, offset: u64, size: u64) -> i64 {
         let check = DEFAULT_QCOW2_METADATA_OVERLAP_CHECK & !ignore;
         if check == 0 {
             return 0;
@@ -1153,6 +1349,7 @@ pub fn bytes_to_clusters(size: u64, cluster_sz: u64) -> Result<u64> {
 pub trait InternalSnapshotOps: Send + Sync {
     fn create_snapshot(&mut self, name: String, vm_clock_nsec: u64) -> Result<()>;
     fn delete_snapshot(&mut self, name: String) -> Result<SnapshotInfo>;
+    fn apply_snapshot(&mut self, name: String) -> Result<()>;
     fn list_snapshots(&self) -> String;
     fn get_status(&self) -> Arc<Mutex<BlockStatus>>;
 }
@@ -1174,6 +1371,14 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
         // when deleting snapshot failed.
         self.flush()?;
         self.qcow2_delete_snapshot(name).map_err(|e| {
+            self.drop_dirty_caches();
+            e
+        })
+    }
+
+    fn apply_snapshot(&mut self, name: String) -> Result<()> {
+        self.flush()?;
+        self.qcow2_apply_snapshot(name).map_err(|e| {
             self.drop_dirty_caches();
             e
         })
@@ -1291,6 +1496,119 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
+    fn create_image(&mut self, options: &CreateOptions) -> Result<String> {
+        let qcow2_options = options.qcow2()?;
+        let cluster_size = qcow2_options.cluster_size;
+        let refcount_bytes = qcow2_options.refcount_bits / 8;
+
+        let rc_table_offset: u64 = cluster_size;
+        let rc_block_offset: u64 = cluster_size * 2;
+        let mut rc_table: Vec<u8> = Vec::new();
+        let mut rc_block: Vec<u8> = Vec::new();
+        let zero_buf: Vec<u8> = vec![0_u8; cluster_size as usize];
+        rc_table.append(&mut rc_block_offset.to_be_bytes().to_vec());
+
+        // Init image with 3 clusters(Header + refcount table + refcount block)
+        let count = match refcount_bytes {
+            1 => 1_u8.to_be_bytes().to_vec(),
+            2 => 1_u16.to_be_bytes().to_vec(),
+            4 => 1_u32.to_be_bytes().to_vec(),
+            8 => 1_u64.to_be_bytes().to_vec(),
+            _ => {
+                bail!("Refcount bytes {:?} is invalid", refcount_bytes);
+            }
+        };
+        for _ in 0..3 {
+            rc_block.append(&mut count.clone());
+        }
+
+        let header = QcowHeader {
+            magic: QCOW_MAGIC,
+            version: qcow2_options.version,
+            backing_file_offset: 0,
+            backing_file_size: 0,
+            cluster_bits: qcow2_options.cluster_size.trailing_zeros(),
+            size: qcow2_options.img_size,
+            crypt_method: 0,
+            l1_size: 0,
+            l1_table_offset: 0,
+            refcount_table_offset: rc_table_offset,
+            refcount_table_clusters: 1,
+            nb_snapshots: 0,
+            snapshots_offset: 0,
+            incompatible_features: 0,
+            compatible_features: 0,
+            autoclear_features: 0,
+            refcount_order: qcow2_options.refcount_bits.trailing_zeros(),
+            header_length: std::mem::size_of::<QcowHeader>() as u32,
+        };
+
+        let conf = options.conf.clone();
+        self.table
+            .init_table_info(&header, &conf)
+            .with_context(|| "Failed to create qcow2 table")?;
+        self.refcount.init_refcount_info(&header, &conf);
+        self.snapshot.set_cluster_size(header.cluster_size());
+        self.header = header;
+
+        // Header.
+        self.driver.file.set_len(3 * cluster_size)?;
+
+        // Write zero.
+        for i in 0..3 {
+            let offset = i * cluster_size;
+            self.driver.file.seek(SeekFrom::Start(offset))?;
+            self.driver.file.write_all(&zero_buf.to_vec())?
+        }
+        self.driver.file.rewind()?;
+        self.driver.file.write_all(&self.header.to_vec())?;
+
+        // Refcount table.
+        self.driver.file.seek(SeekFrom::Start(cluster_size))?;
+        self.driver.file.write_all(&rc_table)?;
+
+        // Refcount block table.
+        self.driver.file.seek(SeekFrom::Start(cluster_size * 2))?;
+        self.driver.file.write_all(&rc_block)?;
+
+        // Create qcow2 driver.
+        self.load_refcount_table()?;
+
+        let l1_entry_size = cluster_size * (cluster_size / ENTRY_SIZE);
+        let l1_size = div_round_up(qcow2_options.img_size, l1_entry_size).unwrap();
+        self.grow_l1_table(l1_size)?;
+        self.flush()?;
+
+        let image_info = format!(
+            "fmt=qcow2 cluster_size={} extended_l2=off compression_type=zlib size={} lazy_refcounts=off refcount_bits={}",
+            qcow2_options.cluster_size,
+            qcow2_options.img_size,
+            qcow2_options.refcount_bits
+        );
+        Ok(image_info)
+    }
+
+    fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()> {
+        let cluster_size = self.header.cluster_size();
+        let refcount_order = self.header.refcount_order;
+        let entry_bytes = ((1 << refcount_order) / 8) as usize;
+        let file_len = self.driver.disk_size().unwrap();
+        let nb_clusters = div_round_up(file_len, cluster_size).unwrap();
+        let mut qcow2_check = Qcow2Check::new(fix, quite, entry_bytes, nb_clusters as usize);
+
+        self.check_read_snapshot_table(res, quite, fix)?;
+
+        let mut ret = self.check_refcounts(&mut qcow2_check);
+        if ret.is_err() {
+            res.merge_result(&qcow2_check.res);
+            return ret;
+        }
+
+        ret = self.check_fix_snapshot_table(res, quite, fix);
+        res.merge_result(&qcow2_check.res);
+        ret
+    }
+
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
         let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)
@@ -1580,7 +1898,9 @@ mod test {
                 util::aio::AioEngine::Off,
             )
             .unwrap();
-            Qcow2Driver::new(file, aio, conf).unwrap()
+            let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+            qcow2_driver.load_metadata(conf).unwrap();
+            qcow2_driver
         }
 
         /// Write full the disk with value disorderly.
@@ -1666,7 +1986,9 @@ mod test {
             refcount_cache_size: None,
         };
         image.file = file.try_clone().unwrap();
-        (image, Qcow2Driver::new(file, aio, conf).unwrap())
+        let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+        qcow2_driver.load_metadata(conf).unwrap();
+        (image, qcow2_driver)
     }
 
     fn qcow2_read(qcow2: &mut Qcow2Driver<()>, buf: &mut [u8], offset: usize) -> Result<()> {

@@ -1555,6 +1555,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "stratovirt-img"
+version = "2.3.0"
+dependencies = [
+ "anyhow",
+ "block_backend",
+ "libc",
+ "log",
+ "machine_manager",
+ "util",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

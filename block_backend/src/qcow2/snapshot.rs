@@ -37,7 +37,7 @@ pub struct InternalSnapshot {
     pub snapshot_size: u64,
     pub snapshot_table_offset: u64,
     // Number of snapshot table entry.
-    nb_snapshots: u32,
+    pub(crate) nb_snapshots: u32,
 }
 
 impl InternalSnapshot {
@@ -114,12 +114,29 @@ impl InternalSnapshot {
         self.sync_aio.borrow_mut().write_buffer(addr, &buf)
     }
 
-    pub fn load_snapshot_table(&mut self, addr: u64, nb_snapshots: u32) -> Result<()> {
-        if !is_aligned(self.cluster_size, addr) {
-            bail!("snapshot table address not aligned {}", addr);
+    pub(crate) fn load_snapshot_table(
+        &mut self,
+        addr: u64,
+        nb_snapshots: u32,
+        repair: bool,
+    ) -> Result<(i32, i32)> {
+        let mut extra_data_dropped: i32 = 0;
+        let mut clusters_reduced: i32 = 0;
+
+        if nb_snapshots == 0 {
+            self.nb_snapshots = 0;
+            self.snapshots.clear();
+            return Ok((clusters_reduced, extra_data_dropped));
         }
 
-        for _ in 0..nb_snapshots {
+        if addr == 0 || !is_aligned(self.cluster_size, addr) {
+            bail!(
+                "The offset of snapshot table {} can't be 0 and mut aligned to cluster size",
+                addr
+            );
+        }
+
+        for i in 0..nb_snapshots {
             let offset = addr + self.snapshot_size;
 
             let mut pos = 0;
@@ -134,7 +151,15 @@ impl InternalSnapshot {
 
             let extra_size = header.extra_date_size as usize;
             if ![SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24].contains(&extra_size) {
-                bail!("Invalid extra data size {}", extra_size);
+                if !repair {
+                    bail!("Too much extra metadata in snapshot table entry {}", i);
+                }
+                let err_msg = format!(
+                    "Discarding too much extra metadata in snapshot table entry {}, {} > {}",
+                    i, extra_size, SNAPSHOT_EXTRA_DATA_LEN_24
+                );
+                println!("{:?}", err_msg);
+                extra_data_dropped += 1;
             }
             let mut extra_buf = vec![0_u8; extra_size];
             self.sync_aio
@@ -159,7 +184,7 @@ impl InternalSnapshot {
                 .with_context(|| {
                     format!("read snapshot ID error(addr {:x}).", offset + pos as u64)
                 })?;
-            let id = from_utf8(&id_buf).unwrap().parse::<u64>().unwrap();
+            let id = from_utf8(&id_buf)?.parse::<u64>()?;
             pos += header.id_str_size as usize;
 
             let mut name_buf = vec![0_u8; header.name_size as usize];
@@ -169,7 +194,7 @@ impl InternalSnapshot {
                 .with_context(|| {
                     format!("read snapshot name error(addr {:x}).", offset + pos as u64)
                 })?;
-            let name = from_utf8(&name_buf).unwrap();
+            let name = from_utf8(&name_buf)?;
 
             let snap = QcowSnapshot {
                 l1_table_offset: header.l1_table_offset,
@@ -186,9 +211,25 @@ impl InternalSnapshot {
             };
 
             self.add_snapshot(snap);
+            if self.snapshot_size > QCOW2_MAX_SNAPSHOTS as u64 * 1024
+                || offset - addr > i32::MAX as u64
+            {
+                if !repair {
+                    bail!("Snapshot table is too big");
+                }
+                let err_msg = format!(
+                    "Discarding {} overhanging snapshots(snapshot) table is too big",
+                    nb_snapshots - i
+                );
+                println!("{:?}", err_msg);
+                clusters_reduced += (nb_snapshots - i) as i32;
+                self.del_snapshot(i as usize);
+                self.nb_snapshots = i;
+                break;
+            }
         }
 
-        Ok(())
+        Ok((clusters_reduced, extra_data_dropped))
     }
 }
 
@@ -221,7 +262,7 @@ impl QcowSnapshot {
         round_up(tmp_size as u64, 8).unwrap()
     }
 
-    fn gen_snapshot_table_entry(&self) -> Vec<u8> {
+    pub(crate) fn gen_snapshot_table_entry(&self) -> Vec<u8> {
         let id_str = self.id.to_string();
         let entry_size = size_of::<QcowSnapshotHeader>() + self.extra_data_size as usize;
         let mut buf = vec![0_u8; entry_size];

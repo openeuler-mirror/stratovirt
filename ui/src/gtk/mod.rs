@@ -226,7 +226,7 @@ impl GtkDisplay {
     fn create(gtk_menu: GtkMenu, gtk_cfg: &GtkConfig) -> Self {
         // Window scale mode.
         let scale_mode = Rc::new(RefCell::new(ScaleMode {
-            full_screen: gtk_cfg.full_screen,
+            full_screen: false,
             free_scale: true,
         }));
         // Mapping ASCII to keycode.
@@ -308,7 +308,7 @@ impl GtkDisplay {
             let first_radio = &self.gtk_menu.radio_group[0];
             gs_show_menu.join_group(Some(first_radio));
         } else {
-            gs_show_menu.activate();
+            note_book.set_current_page(Some(page_num));
         }
 
         self.gtk_menu.radio_group.push(gs_show_menu.clone());
@@ -424,17 +424,17 @@ impl GtkDisplayScreen {
         }
     }
 
-    fn get_window_size(&self) -> Result<(f64, f64)> {
-        let (mut w_width, mut w_height) = (0.0, 0.0);
+    fn get_window_size(&self) -> Option<(f64, f64)> {
         if let Some(win) = self.draw_area.window() {
-            w_width = win.width() as f64;
-            w_height = win.height() as f64;
+            let w_width = win.width() as f64;
+            let w_height = win.height() as f64;
+
+            if w_width.ne(&0.0) && w_height.ne(&0.0) {
+                return Some((w_width, w_height));
+            }
         };
 
-        if w_width.eq(&0.0) || w_height.eq(&0.0) {
-            bail!("The window size can not be zero!");
-        }
-        Ok((w_width, w_height))
+        None
     }
 
     /// Convert coordinates of the window to relative coordinates of the image.
@@ -453,7 +453,10 @@ impl GtkDisplayScreen {
             (surface_height as f64) * self.scale_y,
         );
 
-        let (window_width, window_height) = self.get_window_size()?;
+        let (mut window_width, mut window_height) = (0.0, 0.0);
+        if let Some((w, h)) = self.get_window_size() {
+            (window_width, window_height) = (w, h);
+        };
         let scale_factor = match self.draw_area.window() {
             Some(window) => window.scale_factor() as f64,
             None => bail!("No display window."),
@@ -556,7 +559,7 @@ fn build_ui(app: &Application, gtk_cfg: &GtkConfig) {
         .with_context(|| "Gtk display init failed!")
         .unwrap();
 
-    gtk_menu.show_window(scale_mode);
+    gtk_menu.show_window(scale_mode, gtk_cfg.full_screen);
 }
 
 fn set_program_attribute(gtk_cfg: &GtkConfig, window: &ApplicationWindow) -> Result<()> {
@@ -813,7 +816,11 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
 
     let scale_width = (surface_width as f64) * borrowed_gs.scale_x;
     let scale_height = (surface_height as f64) * borrowed_gs.scale_y;
-    let (window_width, window_height) = borrowed_gs.get_window_size()?;
+    let (window_width, window_height);
+    match borrowed_gs.get_window_size() {
+        Some((w, h)) => (window_width, window_height) = (w, h),
+        None => return Ok(()),
+    };
 
     let mut mx: f64 = 0.0;
     let mut my: f64 = 0.0;
@@ -940,7 +947,11 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         });
     };
 
-    let (window_width, window_height) = borrowed_gs.get_window_size()?;
+    let (window_width, window_height);
+    match borrowed_gs.get_window_size() {
+        Some((w, h)) => (window_width, window_height) = (w, h),
+        None => return Ok(()),
+    };
     if scale_mode.borrow().is_full_screen() || scale_mode.borrow().is_free_scale() {
         borrowed_gs.scale_x = window_width / surface_width as f64;
         borrowed_gs.scale_y = window_height / surface_height as f64;
@@ -1013,7 +1024,12 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
 /// Ask the gtk display to update the display.
 pub(crate) fn renew_image(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let borrowed_gs = gs.borrow();
-    let (width, height) = borrowed_gs.get_window_size()?;
+    let (width, height);
+    match borrowed_gs.get_window_size() {
+        Some((w, h)) => (width, height) = (w, h),
+        None => return Ok(()),
+    };
+
     borrowed_gs
         .draw_area
         .queue_draw_area(0, 0, width as i32, height as i32);

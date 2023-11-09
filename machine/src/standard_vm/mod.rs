@@ -63,7 +63,7 @@ use machine_manager::config::get_cameradev_config;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
     ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, M, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::MachineLifecycle;
@@ -128,6 +128,11 @@ trait StdMachineOps: AcpiBuilder {
                 .build_gtdt_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI GTDT table")?;
             xsdt_entries.push(gtdt_addr);
+
+            let dbg2_addr = self
+                .build_dbg2_table(&acpi_tables, &mut loader)
+                .with_context(|| "Failed to build ACPI DBG2 table")?;
+            xsdt_entries.push(dbg2_addr);
 
             let iort_addr = self
                 .build_iort_table(&acpi_tables, &mut loader)
@@ -384,6 +389,24 @@ trait AcpiBuilder {
         Self: Sized,
     {
         Ok(0)
+    }
+
+    /// Build ACPI DBG2 table, returns the offset of ACPI DBG2 table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_dbg2_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        bail!("Not implemented");
     }
 
     /// Build ACPI IORT table, returns the offset of ACPI IORT table in `acpi_data`.
@@ -1995,12 +2018,12 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
         config.format = format.as_str().parse::<DiskFormat>()?;
     }
     if let Some(l2_cache) = args.l2_cache_size.as_ref() {
-        let sz = memory_unit_conversion(l2_cache)
+        let sz = memory_unit_conversion(l2_cache, M)
             .with_context(|| format!("Invalid l2 cache size: {}", l2_cache))?;
         config.l2_cache_size = Some(sz);
     }
     if let Some(rc_cache) = args.refcount_cache_size.as_ref() {
-        let sz = memory_unit_conversion(rc_cache)
+        let sz = memory_unit_conversion(rc_cache, M)
             .with_context(|| format!("Invalid refcount cache size: {}", rc_cache))?;
         config.refcount_cache_size = Some(sz);
     }
