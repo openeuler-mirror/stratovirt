@@ -240,7 +240,8 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
 }
 
 extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
-    if unsafe { (*host_transfer).user_data.is_null() } {
+    // SAFETY: the pointer has been verified.
+    if host_transfer.is_null() || unsafe { (*host_transfer).user_data.is_null() } {
         free_host_transfer(host_transfer);
         return;
     }

@@ -298,6 +298,7 @@ impl CPU {
             addr: 0,
             flags: 0,
         };
+        // SAFETY: the fd can be guaranteed to be legal during creation.
         let vcpu_device = unsafe { DeviceFd::from_raw_fd(self.fd.as_raw_fd()) };
         vcpu_device
             .has_device_attr(&pmu_attr)

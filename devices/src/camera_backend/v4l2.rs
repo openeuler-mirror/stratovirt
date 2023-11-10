@@ -175,6 +175,8 @@ impl V4l2CameraBackend {
             if frmsize.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
+            // SAFETY: there are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
+            // Parsing will not result in undefined value.
             let width = unsafe { frmsize.__bindgen_anon_1.discrete.width };
             let height = unsafe { frmsize.__bindgen_anon_1.discrete.height };
             let interval_list = self.list_frame_interval(pixfmt, width, height)?;
@@ -209,6 +211,8 @@ impl V4l2CameraBackend {
             if frame_val.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
+            // SAFETY: there are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
+            // Parsing will not result in undefined value.
             let numerator = unsafe { frame_val.__bindgen_anon_1.discrete.numerator };
             let denominator = unsafe { frame_val.__bindgen_anon_1.discrete.denominator };
             if denominator == 0 {
@@ -259,6 +263,9 @@ impl CameraBackend for V4l2CameraBackend {
         let mut parm = new_init::<v4l2_streamparm>();
         parm.type_ = v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE;
         let interval = cam_fmt.get_frame_intervals()?;
+        // SAFETY: there are two enumeration types for v4l2_streamparm__bindgen_ty_1:
+        // v4l2_captureparm and v4l2_outputparm. They have same length in memory and
+        // parsing will not result in undefined value.
         unsafe {
             parm.parm.capture.timeperframe.numerator = 30;
             parm.parm.capture.timeperframe.denominator =
