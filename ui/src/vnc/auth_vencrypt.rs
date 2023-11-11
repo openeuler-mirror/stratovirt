@@ -420,6 +420,7 @@ impl IoOperations for TlsIoChannel {
         let io_state = self.tls_conn.process_new_packets()?;
         if io_state.plaintext_bytes_to_read() > 0 {
             len = io_state.plaintext_bytes_to_read();
+            // FIXME: Split len to avoid possible OOM.
             buf.resize(len, 0u8);
             self.tls_conn.reader().read_exact(buf)?;
         }

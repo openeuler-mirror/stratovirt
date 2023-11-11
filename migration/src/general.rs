@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::mem::size_of;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
@@ -81,6 +81,7 @@ impl MigrationManager {
 
         // 2. read header according to its length
         let mut header_bytes = Vec::new();
+        // SAFETY: upper limit of header_len is HEADER_LENGTH - 8.
         header_bytes.resize(header_len as usize, 0);
         fd.read_exact(&mut header_bytes)?;
 
@@ -110,6 +111,7 @@ impl MigrationManager {
     pub fn save_desc_db(fd: &mut dyn Write) -> Result<()> {
         let length = Self::desc_db_len()?;
         let mut buffer = Vec::new();
+        // SAFETY: desc db length is under control.
         buffer.resize(length, 0);
         let mut start = 0;
 
@@ -132,6 +134,7 @@ impl MigrationManager {
         desc_length: usize,
     ) -> Result<HashMap<u64, DeviceStateDesc>> {
         let mut desc_buffer = Vec::new();
+        // SAFETY: desc_length has been checked in check_header().
         desc_buffer.resize(desc_length, 0);
         fd.read_exact(&mut desc_buffer)?;
         let mut snapshot_desc_db = HashMap::<u64, DeviceStateDesc>::new();
@@ -142,6 +145,9 @@ impl MigrationManager {
                 Ok(desc) => desc,
                 Err(_) => break,
             };
+            if device_desc.size > (1 << 20) {
+                bail!("The size field of DeviceStateDesc is too large");
+            }
             snapshot_desc_db.insert(device_desc.alias, device_desc);
         }
 
@@ -176,6 +182,7 @@ impl MigrationManager {
             .with_context(|| "Failed to get snap_desc name")?;
 
         let mut state_data = Vec::new();
+        // SAFETY: size has been checked in restore_desc_db().
         state_data.resize(snap_desc.size as usize, 0);
         fd.read_exact(&mut state_data)?;
 

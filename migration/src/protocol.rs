@@ -446,6 +446,12 @@ impl MigrationHeader {
             )));
         }
 
+        if self.desc_len > (1 << 20) {
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Desc length".to_string()
+            )));
+        }
+
         Ok(())
     }
 }
@@ -563,6 +569,7 @@ impl DeviceStateDesc {
     pub fn add_padding(&self, desc: &DeviceStateDesc, current_slice: &mut Vec<u8>) -> Result<()> {
         let tmp_slice = current_slice.clone();
         current_slice.clear();
+        // SAFETY: size has been checked in restore_desc_db().
         current_slice.resize(self.size as usize, 0);
         for field in self.clone().fields {
             if desc.contains(&field.alias) {
