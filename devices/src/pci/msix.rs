@@ -129,8 +129,8 @@ impl Msix {
     }
 
     pub fn reset(&mut self) {
-        self.table.resize_with(self.table.len(), || 0);
-        self.pba.resize_with(self.pba.len(), || 0);
+        self.table.fill(0);
+        self.pba.fill(0);
         self.func_masked = true;
         self.enabled = true;
         self.mask_all_vectors();
