@@ -30,7 +30,6 @@ pub mod num_ops;
 pub mod offsetof;
 #[cfg(feature = "pixman")]
 pub mod pixman;
-pub mod reader;
 pub mod seccomp;
 pub mod socket;
 pub mod syscall;
