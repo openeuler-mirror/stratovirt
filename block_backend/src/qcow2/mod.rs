@@ -831,6 +831,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             .sync_aio
             .borrow_mut()
             .read_ctrl_cluster(snap.l1_table_offset, snap.l1_size as u64)?;
+        // SAFETY: Upper limit of l1_size is decided by disk virtual size.
         snap_l1_table.resize(self.header.l1_size as usize, 0);
 
         // Increase the refcount of all clusters searched by L1 table.

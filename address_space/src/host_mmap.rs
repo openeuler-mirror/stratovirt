@@ -355,6 +355,7 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
     let mut max_node = nodes[nodes.len() - 1] as usize;
 
     let mut nmask: Vec<u64> = Vec::new();
+    // Upper limit of max_node is MAX_NODES.
     nmask.resize(max_node / 64 + 1, 0);
     for node in nodes.iter() {
         nmask[(*node / 64) as usize] |= 1_u64 << (*node % 64);
