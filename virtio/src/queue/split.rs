@@ -920,6 +920,48 @@ impl VringOps for SplitVring {
     fn get_cache(&self) -> &Option<RegionCache> {
         &self.cache
     }
+
+    fn get_avail_bytes(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        max_size: usize,
+        is_in: bool,
+    ) -> Result<usize> {
+        if !self.is_enabled() {
+            return Ok(0);
+        }
+        fence(Ordering::Acquire);
+
+        let mut avail_bytes = 0_usize;
+        let mut avail_idx = self.next_avail;
+        let end_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+        while (end_idx - avail_idx).0 > 0 {
+            let desc_info = self.get_desc_info(sys_mem, avail_idx, 0)?;
+
+            let mut elem = Element::new(0);
+            SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, &mut elem).with_context(
+                || {
+                    format!(
+                        "Failed to get element from descriptor chain {}, table addr: 0x{:X}, size: {}",
+                        desc_info.index, desc_info.table_host, desc_info.size,
+                    )
+                },
+            )?;
+
+            for e in match is_in {
+                true => elem.in_iovec,
+                false => elem.out_iovec,
+            } {
+                avail_bytes += e.len as usize;
+            }
+
+            if avail_bytes >= max_size {
+                return Ok(max_size);
+            }
+            avail_idx += Wrapping(1);
+        }
+        Ok(avail_bytes)
+    }
 }
 
 #[cfg(test)]
