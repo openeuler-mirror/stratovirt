@@ -39,6 +39,7 @@
 //!     let space = AddressSpace::new(
 //!         Region::init_container_region(u64::max_value(), "space"),
 //!         "space",
+//!          None,
 //!     )
 //!     .unwrap();
 //!

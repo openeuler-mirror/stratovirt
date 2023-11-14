@@ -216,6 +216,7 @@ impl VirtioFs {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "VirtioFsMem"),
             "VirtioFsMem",
+            None,
         )
         .with_context(|| "Failed to create address space")?;
 

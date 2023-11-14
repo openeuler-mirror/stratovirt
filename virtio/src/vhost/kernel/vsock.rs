@@ -394,7 +394,7 @@ mod tests {
 
     fn vsock_address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(u64::max_value(), "sysmem");
-        let sys_mem = AddressSpace::new(root, "sysmem").unwrap();
+        let sys_mem = AddressSpace::new(root, "sysmem", None).unwrap();
         sys_mem
     }
 
