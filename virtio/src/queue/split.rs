@@ -733,14 +733,14 @@ impl SplitVring {
         }
     }
 
-    fn get_vring_element(
+    fn get_desc_info(
         &mut self,
         sys_mem: &Arc<AddressSpace>,
+        next_avail: Wrapping<u16>,
         features: u64,
-        elem: &mut Element,
-    ) -> Result<()> {
-        let index_offset = VRING_FLAGS_AND_IDX_LEN
-            + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
+    ) -> Result<DescInfo> {
+        let index_offset =
+            VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(next_avail.0 % self.actual_size());
         // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
@@ -760,16 +760,26 @@ impl SplitVring {
 
         // Suppress queue notification related to current processing desc chain.
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem, (self.next_avail + Wrapping(1)).0)
+            self.set_avail_event(sys_mem, (next_avail + Wrapping(1)).0)
                 .with_context(|| "Failed to set avail event for popping avail ring")?;
         }
 
-        let desc_info = DescInfo {
+        Ok(DescInfo {
             table_host: self.addr_cache.desc_table_host,
             size: self.actual_size(),
             index: desc_index,
             desc,
-        };
+        })
+    }
+
+    fn get_vring_element(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        elem: &mut Element,
+    ) -> Result<()> {
+        let desc_info = self.get_desc_info(sys_mem, self.next_avail, features)?;
+
         SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, elem).with_context(
             || {
                 format!(
