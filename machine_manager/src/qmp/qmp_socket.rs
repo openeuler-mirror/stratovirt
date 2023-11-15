@@ -10,12 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::net::IpAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 
@@ -34,59 +35,68 @@ use util::loop_context::{
     NotifierOperation,
 };
 use util::set_termi_canon_mode;
+use util::socket::{SocketListener, SocketStream};
+use util::unix::parse_unix_uri;
 
 const LEAK_BUCKET_LIMIT: u64 = 100;
 
-/// Type for api socket.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum SocketType {
-    Unix = 1,
+pub enum QmpSocketPath {
+    Unix { path: String },
+    Tcp { host: String, port: u16 },
 }
 
-/// Wrapper over UnixSteam.
-#[derive(Debug)]
-struct SocketStream(UnixStream);
-
-impl SocketStream {
-    fn from_unix_stream(stream: UnixStream) -> Self {
-        SocketStream(stream)
+impl QmpSocketPath {
+    pub fn new(path: String) -> Result<Self> {
+        if path.starts_with('u') {
+            Ok(QmpSocketPath::Unix {
+                path: parse_unix_uri(&path)?,
+            })
+        } else if path.starts_with('t') {
+            let (host, port) = parse_tcp_uri(&path)?;
+            Ok(QmpSocketPath::Tcp { host, port })
+        } else {
+            bail!("invalid socket type: {}", path)
+        }
     }
 }
 
-impl AsRawFd for SocketStream {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_raw_fd()
+impl ToString for QmpSocketPath {
+    fn to_string(&self) -> String {
+        match self {
+            QmpSocketPath::Tcp { host, port } => {
+                format!("{}:{}", &host, &port)
+            }
+            QmpSocketPath::Unix { path } => path.clone(),
+        }
     }
 }
 
-/// The wrapper over Unix socket and socket handler.
+/// The wrapper over socket and socket handler.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use std::io::prelude::*;
 /// use std::os::unix::io::AsRawFd;
-/// use std::os::unix::net::{UnixListener, UnixStream};
+/// use std::os::unix::net::UnixStream;
 ///
 /// use machine_manager::qmp::qmp_socket::Socket;
+/// use util::socket::SocketListener;
 ///
 /// fn main() -> std::io::Result<()> {
-///     let listener = UnixListener::bind("/path/to/my/socket")?;
-///     let socket = Socket::from_unix_listener(listener, None);
+///     let listener = SocketListener::bind_by_uds("/path/to/my/socket").unwrap();
+///     let socket = Socket::from_listener(listener, None);
 ///     assert!(!socket.is_connected());
 ///
 ///     let client_stream = UnixStream::connect("/path/to/my/socket")?;
-///     let server_stream = socket.accept_unix_stream();
-///     socket.bind_unix_stream(server_stream);
+///     socket.accept();
 ///     assert!(socket.is_connected());
 ///     Ok(())
 /// }
 /// ```
 pub struct Socket {
-    /// Type for Socket
-    sock_type: SocketType,
     /// Socket listener tuple
-    listener: UnixListener,
+    listener: SocketListener,
     /// Socket stream with RwLock
     stream: RwLock<Option<SocketStream>>,
     /// Perform socket command
@@ -94,18 +104,17 @@ pub struct Socket {
 }
 
 impl Socket {
-    /// Allocates a new `Socket` with `UnixListener`.
+    /// Allocates a new `Socket` with `SocketListener`.
     ///
     /// # Arguments
     ///
-    /// * `listener` - The `UnixListener` bind to `Socket`.
+    /// * `listener` - The `SocketListener` bind to `Socket`.
     /// * `performer` - The `VM` to perform socket command.
-    pub fn from_unix_listener(
-        listener: UnixListener,
+    pub fn from_listener(
+        listener: SocketListener,
         performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
     ) -> Self {
         Socket {
-            sock_type: SocketType::Unix,
             listener,
             stream: RwLock::new(None),
             performer,
@@ -118,34 +127,16 @@ impl Socket {
     }
 
     /// Accept stream and bind to Socket.
-    fn accept(&self) {
-        match self.sock_type {
-            SocketType::Unix => {
-                let stream = self.accept_unix_stream();
-                self.bind_unix_stream(stream);
-            }
-        }
+    pub fn accept(&self) {
+        self.bind_stream(self.listener.accept().unwrap());
     }
 
-    /// Accept a new incoming connection unix stream from unix listener.
-    pub fn accept_unix_stream(&self) -> UnixStream {
-        let (stream, _) = self.listener.accept().unwrap();
-        stream
-    }
-
-    /// Get socket type from `Socket`.
-    #[allow(unused)]
-    fn get_socket_type(&self) -> SocketType {
-        self.sock_type
-    }
-
-    /// Bind `Socket` with a `UnixStream`.
+    /// Bind `Socket` with a `SocketStream`.
     ///
     /// # Arguments
     ///
-    /// * `unix_stream` - The `UnixStream` bind to `Socket`.
-    pub fn bind_unix_stream(&self, unix_stream: UnixStream) {
-        let stream = SocketStream::from_unix_stream(unix_stream);
+    /// * `sock_stream` - The `SocketStream` bind to `Socket`.
+    pub fn bind_stream(&self, stream: SocketStream) {
         *self.stream.write().unwrap() = Some(stream);
     }
 
@@ -339,6 +330,28 @@ macro_rules! create_command_matches {
     };
 }
 
+/// Parse tcp uri to ip:port.
+///
+/// # Notions
+///
+/// tcp uri is the string as `tcp:ip:port`.
+fn parse_tcp_uri(uri: &str) -> Result<(String, u16)> {
+    let parse_vec: Vec<&str> = uri.splitn(3, ':').collect();
+    if parse_vec.len() == 3 && parse_vec[0] == "tcp" {
+        if let Ok(host) = IpAddr::from_str(parse_vec[1]) {
+            if let Ok(port) = parse_vec[2].parse::<u16>() {
+                Ok((host.to_string(), port))
+            } else {
+                bail!("Invalid port used by tcp socket: {}", parse_vec[2])
+            }
+        } else {
+            bail!("Invalid host used by tcp socket: {}", parse_vec[1])
+        }
+    } else {
+        bail!("Invalid tcp uri: {}", uri)
+    }
+}
+
 /// Accept qmp command, analyze and exec it.
 ///
 /// # Arguments
@@ -497,21 +510,24 @@ fn qmp_command_exec(
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
     use super::*;
     use serde_json;
 
     // Environment Preparation for UnixSocket
-    fn prepare_unix_socket_environment(socket_id: &str) -> (UnixListener, UnixStream, UnixStream) {
+    fn prepare_unix_socket_environment(
+        socket_id: &str,
+    ) -> (SocketListener, UnixStream, SocketStream) {
         let socket_name: String = format!("test_{}.sock", socket_id);
         let _ = std::fs::remove_file(&socket_name);
 
-        let listener = UnixListener::bind(&socket_name).unwrap();
+        let listener = SocketListener::bind_by_uds(&socket_name).unwrap();
+
         std::thread::sleep(Duration::from_millis(100));
         let client = UnixStream::connect(&socket_name).unwrap();
-        let (server, _) = listener.accept().unwrap();
+        let server = listener.accept().unwrap();
         (listener, client, server)
     }
 
@@ -525,16 +541,15 @@ mod tests {
     fn test_socket_lifecycle() {
         // Pre test. Environment Preparation
         let (listener, _, server) = prepare_unix_socket_environment("04");
-        let socket = Socket::from_unix_listener(listener, None);
+        let socket = Socket::from_listener(listener, None);
 
         // life cycle test
         // 1.Unconnected
         assert_eq!(socket.is_connected(), false);
 
         // 2.Connected
-        socket.bind_unix_stream(server);
+        socket.bind_stream(server);
         assert_eq!(socket.is_connected(), true);
-        assert_eq!(socket.get_socket_type(), SocketType::Unix);
 
         // 3.Unbind SocketStream, reset state
         socket.drop_stream();
@@ -542,8 +557,7 @@ mod tests {
 
         // 4.Accept and reconnect a new UnixStream
         let _new_client = UnixStream::connect("test_04.sock");
-        let new_server = socket.accept_unix_stream();
-        socket.bind_unix_stream(new_server);
+        socket.accept();
         assert_eq!(socket.is_connected(), true);
 
         // After test. Environment Recover
@@ -562,8 +576,8 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("06");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
-        socket.bind_unix_stream(server);
+        let socket = Socket::from_listener(listener, None);
+        socket.bind_stream(server);
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
         // 1.send no-content event
@@ -611,8 +625,8 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("07");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
-        socket.bind_unix_stream(server);
+        let socket = Socket::from_listener(listener, None);
+        socket.bind_stream(server);
 
         // 1.send greeting response
         let res = socket.send_response(true);

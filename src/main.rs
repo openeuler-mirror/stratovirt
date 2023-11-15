@@ -173,7 +173,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
-                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
             }
             vm
         }
@@ -198,7 +198,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             }
 
             for listener in listeners {
-                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
             }
             vm
         }
@@ -212,7 +212,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
-                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
             }
             vm
         }
