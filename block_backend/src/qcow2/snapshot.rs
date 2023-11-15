@@ -298,6 +298,7 @@ impl QcowSnapshot {
         // 8 bytes Alignment.
         let tmp_size = buf.len();
         let size = round_up(tmp_size as u64, 8).unwrap();
+        // SAFETY: The size is a round up of old size.
         buf.resize(size as usize, 0);
 
         buf

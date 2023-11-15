@@ -1250,6 +1250,7 @@ impl GpuIoHandler {
 
         // Start reading and parsing.
         let mut ents = Vec::<VirtioGpuMemEntry>::new();
+        // SAFETY: Upper limit of ents is 16384.
         ents.resize(entries as usize, VirtioGpuMemEntry::default());
         let ents_buf =
             unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
