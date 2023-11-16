@@ -513,6 +513,31 @@ impl SerialPortHandler {
         };
     }
 
+    fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
+        let port = self.port.as_ref();
+        if port.is_none() || !port.unwrap().lock().unwrap().guest_connected {
+            warn!("virtio-serial port is none or disconnected");
+            return 0;
+        }
+
+        if self.device_broken.load(Ordering::SeqCst) {
+            warn!("virtio-serial device is broken");
+            return 0;
+        }
+
+        let mut locked_queue = self.input_queue.lock().unwrap();
+        match locked_queue
+            .vring
+            .get_avail_bytes(&self.mem_space, max_size, true)
+        {
+            Ok(n) => n,
+            Err(_) => {
+                warn!("error occurred while getting available bytes of vring");
+                0
+            }
+        }
+    }
+
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
@@ -631,7 +656,7 @@ impl InputReceiver for SerialPortHandler {
     }
 
     fn remain_size(&mut self) -> usize {
-        BUF_SIZE
+        self.get_input_avail_bytes(BUF_SIZE)
     }
 }
 
