@@ -17,6 +17,8 @@ use std::{
     cell::RefCell,
     cmp,
     collections::HashMap,
+    env, fs,
+    path::Path,
     ptr,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
@@ -55,7 +57,9 @@ use crate::{
     },
 };
 use machine_manager::config::{DisplayConfig, UiContext};
+use machine_manager::qmp::qmp_schema::GpuInfo;
 use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
+use util::time::gettime;
 
 const CHANNEL_BOUND: usize = 1024;
 /// Width of default window.
@@ -1018,4 +1022,54 @@ pub(crate) fn renew_image(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         .draw_area
         .queue_draw_area(0, 0, width as i32, height as i32);
     Ok(())
+}
+
+pub fn qmp_query_display_image() -> Result<GpuInfo> {
+    let mut gpu_info = GpuInfo::default();
+    let console_list = get_active_console();
+    for con in console_list {
+        let c = match con.upgrade() {
+            Some(c) => c,
+            None => continue,
+        };
+        let mut locked_con = c.lock().unwrap();
+        if !locked_con.active {
+            continue;
+        }
+        let dev_name = &locked_con.dev_name.clone();
+
+        if let Some(surface) = &mut locked_con.surface {
+            // SAFETY: The image is created within the function, it can be ensure
+            // that the data ptr is not nullptr and the image size matches the image data.
+            let cairo_image = unsafe {
+                ImageSurface::create_for_data_unsafe(
+                    surface.data() as *mut u8,
+                    Format::Rgb24,
+                    surface.width(),
+                    surface.height(),
+                    surface.stride(),
+                )
+            }?;
+            let mut file = create_file(&mut gpu_info, dev_name)?;
+            cairo_image.write_to_png(&mut file)?;
+        };
+    }
+    gpu_info.isSuccess = true;
+    Ok(gpu_info)
+}
+
+fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
+    let temp_dir = env::temp_dir().display().to_string();
+    let binding = temp_dir + "/stratovirt-images";
+    let path = Path::new(&binding);
+
+    if !path.exists() {
+        fs::create_dir(path)?;
+    }
+    let file_dir = path.display().to_string();
+    gpu_info.fileDir = file_dir.clone();
+    let nsec = gettime().1;
+    let file_name = file_dir + "/stratovirt-display-" + dev_name + "-" + &nsec.to_string() + ".png";
+    let file = fs::File::create(file_name)?;
+    Ok(file)
 }
