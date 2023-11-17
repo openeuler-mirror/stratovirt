@@ -513,12 +513,37 @@ impl SerialPortHandler {
         };
     }
 
+    fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
+        let port = self.port.as_ref();
+        if port.is_none() || !port.unwrap().lock().unwrap().guest_connected {
+            warn!("virtio-serial port is none or disconnected");
+            return 0;
+        }
+
+        if self.device_broken.load(Ordering::SeqCst) {
+            warn!("virtio-serial device is broken");
+            return 0;
+        }
+
+        let mut locked_queue = self.input_queue.lock().unwrap();
+        match locked_queue
+            .vring
+            .get_avail_bytes(&self.mem_space, max_size, true)
+        {
+            Ok(n) => n,
+            Err(_) => {
+                warn!("error occurred while getting available bytes of vring");
+                0
+            }
+        }
+    }
+
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
-        let count = buffer.len();
+        let mut left = buffer.len();
         let port = self.port.as_ref();
-        if count == 0 || port.is_none() {
+        if left == 0 || port.is_none() {
             return Ok(());
         }
         let port_locked = port.unwrap().lock().unwrap();
@@ -526,6 +551,7 @@ impl SerialPortHandler {
             return Ok(());
         }
 
+        let mut written_count = 0_usize;
         loop {
             let elem = queue_lock
                 .vring
@@ -534,11 +560,11 @@ impl SerialPortHandler {
                 break;
             }
 
-            let mut written_count = 0_usize;
+            let mut once_count = 0_usize;
             for elem_iov in elem.in_iovec.iter() {
-                let allow_write_count = cmp::min(written_count + elem_iov.len as usize, count);
-                let mut source_slice = &buffer[written_count..allow_write_count];
-                let len = source_slice.len();
+                let len = cmp::min(elem_iov.len as usize, left);
+                let write_end = written_count + len;
+                let mut source_slice = &buffer[written_count..write_end];
 
                 self.mem_space
                     .write(&mut source_slice, elem_iov.addr, len as u64)
@@ -549,19 +575,21 @@ impl SerialPortHandler {
                         )
                     })?;
 
-                written_count = allow_write_count;
-                if written_count >= count {
+                written_count = write_end;
+                once_count += len;
+                left -= len;
+                if left == 0 {
                     break;
                 }
             }
 
             queue_lock
                 .vring
-                .add_used(&self.mem_space, elem.index, written_count as u32)
+                .add_used(&self.mem_space, elem.index, once_count as u32)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for virtio serial port input: index {} len {}",
-                        elem.index, written_count
+                        elem.index, once_count
                     )
                 })?;
 
@@ -578,7 +606,7 @@ impl SerialPortHandler {
                     })?;
             }
 
-            if written_count >= count {
+            if left == 0 {
                 break;
             }
         }
@@ -628,7 +656,7 @@ impl InputReceiver for SerialPortHandler {
     }
 
     fn remain_size(&mut self) -> usize {
-        BUF_SIZE
+        self.get_input_avail_bytes(BUF_SIZE)
     }
 }
 

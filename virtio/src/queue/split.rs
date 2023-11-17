@@ -733,14 +733,14 @@ impl SplitVring {
         }
     }
 
-    fn get_vring_element(
+    fn get_desc_info(
         &mut self,
         sys_mem: &Arc<AddressSpace>,
+        next_avail: Wrapping<u16>,
         features: u64,
-        elem: &mut Element,
-    ) -> Result<()> {
-        let index_offset = VRING_FLAGS_AND_IDX_LEN
-            + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
+    ) -> Result<DescInfo> {
+        let index_offset =
+            VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(next_avail.0 % self.actual_size());
         // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
@@ -760,16 +760,26 @@ impl SplitVring {
 
         // Suppress queue notification related to current processing desc chain.
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem, (self.next_avail + Wrapping(1)).0)
+            self.set_avail_event(sys_mem, (next_avail + Wrapping(1)).0)
                 .with_context(|| "Failed to set avail event for popping avail ring")?;
         }
 
-        let desc_info = DescInfo {
+        Ok(DescInfo {
             table_host: self.addr_cache.desc_table_host,
             size: self.actual_size(),
             index: desc_index,
             desc,
-        };
+        })
+    }
+
+    fn get_vring_element(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        elem: &mut Element,
+    ) -> Result<()> {
+        let desc_info = self.get_desc_info(sys_mem, self.next_avail, features)?;
+
         SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, elem).with_context(
             || {
                 format!(
@@ -909,6 +919,48 @@ impl VringOps for SplitVring {
 
     fn get_cache(&self) -> &Option<RegionCache> {
         &self.cache
+    }
+
+    fn get_avail_bytes(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        max_size: usize,
+        is_in: bool,
+    ) -> Result<usize> {
+        if !self.is_enabled() {
+            return Ok(0);
+        }
+        fence(Ordering::Acquire);
+
+        let mut avail_bytes = 0_usize;
+        let mut avail_idx = self.next_avail;
+        let end_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+        while (end_idx - avail_idx).0 > 0 {
+            let desc_info = self.get_desc_info(sys_mem, avail_idx, 0)?;
+
+            let mut elem = Element::new(0);
+            SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, &mut elem).with_context(
+                || {
+                    format!(
+                        "Failed to get element from descriptor chain {}, table addr: 0x{:X}, size: {}",
+                        desc_info.index, desc_info.table_host, desc_info.size,
+                    )
+                },
+            )?;
+
+            for e in match is_in {
+                true => elem.in_iovec,
+                false => elem.out_iovec,
+            } {
+                avail_bytes += e.len as usize;
+            }
+
+            if avail_bytes >= max_size {
+                return Ok(max_size);
+            }
+            avail_idx += Wrapping(1);
+        }
+        Ok(avail_bytes)
     }
 }
 
