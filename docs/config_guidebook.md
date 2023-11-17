@@ -565,7 +565,7 @@ redirection will be required. See [section 2.12 Chardev](#212-chardev) for detai
 Three properties can be set for virtconsole(console port) and virtserialport(generic port).
 * id: unique device-id.
 * chardev: char device of this console/generic port.
-* nr: unique port number for this port. (optional) If set, all virtserialports and virtconsoles should set. nr = 0 is only allowed for virtconsole.
+* nr: unique port number for this port. (optional) If set, all virtserialports and virtconsoles should set. nr = 0 is only allowed for virtconsole. The default nr for generic port starts from 1 and starts from 0 for console port. If not set, nr = 0 will be assigned to the first console port in the command line. And nr = 0 will be reserved if there is no console port in the command line.
 
 For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
