@@ -767,9 +767,11 @@ pub trait MachineOps {
         let mut virtio_dev_h = virtio_dev.lock().unwrap();
         let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
 
-        // Note: port 0 is reserved for a virtconsole. "nr=0" should be specified to configure.
+        let free_port0 = find_port_by_nr(&serial.ports, 0).is_none();
+        // Note: port 0 is reserved for a virtconsole.
         let free_nr = get_max_nr(&serial.ports) + 1;
-        let serialport_cfg = parse_virtserialport(vm_config, cfg_args, is_console, free_nr)?;
+        let serialport_cfg =
+            parse_virtserialport(vm_config, cfg_args, is_console, free_nr, free_port0)?;
         if serialport_cfg.nr >= serial.max_nr_ports {
             bail!(
                 "virtio serial port nr {} should be less than virtio serial's max_nr_ports {}",
