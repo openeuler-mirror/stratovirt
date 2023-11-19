@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::{thread_rng, Rng};
 
 use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 
 const RTC_ADDR_BASE: u64 = 0x0901_0000;
 
@@ -44,7 +44,7 @@ fn pl031_write_reg(ts: &TestState, reg: u64, val: u32) {
 }
 
 fn set_up() -> TestState {
-    let extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    let extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     test_init(extra_args)
 }
 

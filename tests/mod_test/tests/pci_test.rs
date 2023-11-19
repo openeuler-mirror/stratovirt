@@ -26,7 +26,7 @@ use mod_test::libdriver::virtio_block::{
     VIRTIO_BLK_T_OUT,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::{cleanup_img, create_img, read_le_u16, ImageType, TEST_IMAGE_SIZE};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1af4;
@@ -68,7 +68,10 @@ fn fmt_demo_deves(cfg: DemoDev, num: u8) -> String {
 fn init_demo_dev(cfg: DemoDev, dev_num: u8) -> (Rc<RefCell<TestPciDev>>, Rc<RefCell<TestState>>) {
     let mut demo_dev_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt -D /tmp/oscar.log".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
+    demo_dev_args.append(&mut args);
+
+    let mut args: Vec<&str> = "-D /tmp/oscar.log".split(' ').collect();
     demo_dev_args.append(&mut args);
 
     let demo_str = fmt_demo_deves(cfg.clone(), dev_num);
@@ -336,7 +339,7 @@ fn create_machine(
 ) {
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     for device_arg in device_args.iter() {

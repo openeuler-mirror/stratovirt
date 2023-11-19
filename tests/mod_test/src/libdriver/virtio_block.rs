@@ -22,7 +22,7 @@ use super::virtio_pci_modern::TestVirtioPciDev;
 use crate::libdriver::virtio::{
     TestVringDescEntry, VIRTIO_F_BAD_FEATURE, VIRTIO_RING_F_EVENT_IDX, VIRTIO_RING_F_INDIRECT_DESC,
 };
-use crate::libtest::{test_init, TestState};
+use crate::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use crate::utils::ImageType;
 use crate::utils::{cleanup_img, create_img, TEST_IMAGE_SIZE};
 use util::byte_code::ByteCode;
@@ -129,7 +129,7 @@ pub fn create_blk(
         &ImageType::Qcow2 => "qcow2",
     };
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let blk_pci_args = format!(

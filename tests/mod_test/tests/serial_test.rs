@@ -27,7 +27,7 @@ use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps, VIRTIO_CONFIG_S_NEEDS_RESET};
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::byte_code::ByteCode;
 
 const TIMEOUT_US: u64 = 15 * 1000 * 1000;
@@ -402,7 +402,7 @@ impl SerialTest {
 }
 
 fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> SerialTest {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     let serial_pci_args = format!(
         "-device {},id=serial0,bus=pcie.0,addr={}.0",
         "virtio-serial-pci", pci_slot

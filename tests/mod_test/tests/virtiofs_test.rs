@@ -24,7 +24,7 @@ use mod_test::libdriver::{
     virtio_pci_modern::TestVirtioPciDev,
     virtiofs::*,
 };
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::get_rand_str;
 use util::byte_code::ByteCode;
 use util::offset_of;
@@ -112,7 +112,8 @@ impl VirtioFsTest {
         let pci_slot: u8 = 0x4;
         let pci_fn: u8 = 0x0;
 
-        let mut args = "-D -machine virt,mem-share=on".to_string();
+        let mut args = format!("-D {},mem-share=on", MACHINE_TYPE_ARG);
+
         let mem_args = format!(" -m {}", memsize);
         args.push_str(&mem_args);
         let chardev_args = format!(
