@@ -516,7 +516,7 @@ impl SerialPortHandler {
     fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
         let port = self.port.as_ref();
         if port.is_none() || !port.unwrap().lock().unwrap().guest_connected {
-            warn!("virtio-serial port is none or disconnected");
+            debug!("virtio-serial port is none or disconnected");
             return 0;
         }
 
