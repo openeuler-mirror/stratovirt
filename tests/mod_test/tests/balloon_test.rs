@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cell::RefCell;
-use std::fs::File;
+use std::fs::{remove_file, File};
 use std::io::{self, BufRead, BufReader};
 use std::process::Command;
 use std::rc::Rc;
@@ -1134,4 +1134,5 @@ fn balloon_numa1() {
     );
 
     balloon.state.borrow_mut().stop();
+    remove_file("test.fd").unwrap();
 }
