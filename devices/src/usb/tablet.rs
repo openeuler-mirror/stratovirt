@@ -85,7 +85,7 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             iInterface: 0,
         },
         other_desc: vec![Arc::new(UsbDescOther {
-            /// HID descriptor
+            // HID descriptor
             data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 89, 0x0],
         })],
         endpoints: vec![Arc::new(UsbDescEndpoint {
