@@ -10,7 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
+use std::cell::RefCell;
+use std::fs::{remove_file, File};
+use std::process::Command;
+use std::rc::Rc;
+use std::string::String;
 
 use serde_json::{json, Value::String as JsonString};
 
@@ -29,10 +33,6 @@ const PAGE_SIZE: u64 = 4096;
 const ADDRESS_BASE: u64 = 0x4000_0000;
 const ROM_DEV_PATH: &str = "rom_dev_file.fd";
 const RAM_DEV_PATH: &str = "ram_dev_file.fd";
-
-fn remove_file(path: String) {
-    let _output = Command::new("rm").arg("-f").arg(path).output();
-}
 
 impl MemoryTest {
     pub fn new(
@@ -290,7 +290,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x02u8; 8]);
-    remove_file(ROM_DEV_PATH.to_string());
+    remove_file(ROM_DEV_PATH).unwrap();
 
     // Write overflow
     memory_test
@@ -329,7 +329,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x00u8; 8]);
-    remove_file(ROM_DEV_PATH.to_string());
+    remove_file(ROM_DEV_PATH).unwrap();
 
     memory_test.state.borrow_mut().stop();
 }
@@ -391,7 +391,7 @@ fn ram_device_region_readwrite() {
         .borrow_mut()
         .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
 
-    remove_file(RAM_DEV_PATH.to_string());
+    remove_file(RAM_DEV_PATH).unwrap();
 
     memory_test.state.borrow_mut().stop();
 }
@@ -724,6 +724,7 @@ fn ram_readwrite_numa1() {
     test_state.borrow_mut().qmp(&qmp_str);
 
     test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
-    remove_file(RAM_DEV_PATH.to_string());
+    remove_file(RAM_DEV_PATH).unwrap();
     test_state.borrow_mut().stop();
+    remove_file("test.fd").unwrap();
 }
