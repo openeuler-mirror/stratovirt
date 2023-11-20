@@ -349,6 +349,10 @@ pub trait UsbDevice: Send + Sync {
     fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Cancel specified USB packet.
+    fn cancel_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>);
+
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.usb_device_base_mut();

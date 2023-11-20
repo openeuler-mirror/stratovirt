@@ -783,6 +783,8 @@ impl UsbDevice for UsbCamera {
         Ok(())
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Camera {} device reset", self.device_id());
         self.base.addr = 0;
