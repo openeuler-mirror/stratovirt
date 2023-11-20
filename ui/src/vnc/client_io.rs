@@ -32,8 +32,8 @@ use crate::{
     input::{
         input_button, input_move_abs, input_point_sync, key_event, keyboard_modifier_get,
         keyboard_state_reset, update_key_state, Axis, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z,
-        INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9,
-        UPPERCASE_TO_LOWERCASE,
+        INPUT_BUTTON_MAX_NUM, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1,
+        KEYCODE_9, UPPERCASE_TO_LOWERCASE,
     },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
@@ -975,18 +975,24 @@ impl ClientIoHandler {
         y = ((y as u64 * ABS_MAX) / height as u64) as u16;
 
         // ASCII -> HidCode.
+        let new_button = buf[1];
         let last_button = self.client.client_dpm.lock().unwrap().last_button;
-        let button_mask: u8 = match buf[1] {
-            INPUT_POINT_LEFT => 0x01,
-            INPUT_POINT_MIDDLE => 0x04,
-            INPUT_POINT_RIGHT => 0x02,
-            _ => buf[1],
-        };
+        if last_button != new_button {
+            for bit in 0..INPUT_BUTTON_MAX_NUM {
+                let button_mask = 1 << bit;
+                if last_button & button_mask == new_button & button_mask {
+                    continue;
+                }
 
-        if last_button != button_mask {
-            self.client.client_dpm.lock().unwrap().last_button = button_mask;
-            input_button(last_button as u32, false)?;
-            input_button(button_mask as u32, true)?;
+                let button = match button_mask {
+                    INPUT_POINT_LEFT => 0x01,
+                    INPUT_POINT_MIDDLE => 0x04,
+                    INPUT_POINT_RIGHT => 0x02,
+                    _ => button_mask,
+                };
+                input_button(button as u32, new_button & button_mask != 0)?;
+            }
+            self.client.client_dpm.lock().unwrap().last_button = new_button;
         }
 
         input_move_abs(Axis::X, x as u32)?;
