@@ -580,7 +580,7 @@ impl UsbPacket {
         self.actual_length = copied as u32;
     }
 
-    pub fn get_iovecs_size(&mut self) -> u64 {
+    pub fn get_iovecs_size(&self) -> u64 {
         let mut size = 0;
         for iov in &self.iovecs {
             size += iov.iov_len;
