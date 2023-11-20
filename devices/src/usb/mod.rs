@@ -60,6 +60,12 @@ pub enum UsbPacketStatus {
     IoError,
 }
 
+impl Default for UsbPacketStatus {
+    fn default() -> Self {
+        Self::NoDev
+    }
+}
+
 /// USB request used to transfer to USB device.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -483,6 +489,7 @@ pub trait TransferOps: Send + Sync {
 }
 
 /// Usb packet used for device transfer data.
+#[derive(Default)]
 pub struct UsbPacket {
     /// USB packet id.
     pub pid: u32,
@@ -580,21 +587,6 @@ impl UsbPacket {
         }
 
         size
-    }
-}
-
-impl Default for UsbPacket {
-    fn default() -> UsbPacket {
-        UsbPacket {
-            pid: 0,
-            is_async: false,
-            iovecs: Vec::new(),
-            parameter: 0,
-            status: UsbPacketStatus::NoDev,
-            actual_length: 0,
-            ep_number: 0,
-            xfer_ops: None,
-        }
     }
 }
 
