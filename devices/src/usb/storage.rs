@@ -542,6 +542,8 @@ impl UsbDevice for UsbStorage {
         Ok(storage)
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Storage device reset");
         self.base.remote_wakeup = 0;

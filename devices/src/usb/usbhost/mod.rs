@@ -1045,6 +1045,8 @@ impl UsbDevice for UsbHost {
         Ok(())
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Usb Host device {} reset", self.device_id());
         if self.handle.is_none() {

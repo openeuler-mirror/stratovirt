@@ -260,6 +260,8 @@ impl UsbDevice for UsbTablet {
         Ok(())
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Tablet device reset");
         self.base.remote_wakeup = 0;
