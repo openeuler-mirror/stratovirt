@@ -15,7 +15,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -165,6 +165,8 @@ struct Timer {
     func: Box<dyn Fn()>,
     /// Given the real time when the `func` will be called.
     expire_time: Instant,
+    /// Timer id.
+    id: u64,
 }
 
 impl Timer {
@@ -174,9 +176,13 @@ impl Timer {
     ///
     /// * `func` - the function will be called later.
     /// * `delay` - delay time to call the function.
-    pub fn new(func: Box<dyn Fn()>, delay: Duration) -> Self {
+    pub fn new(func: Box<dyn Fn()>, delay: Duration, id: u64) -> Self {
         let expire_time = get_current_time() + delay;
-        Timer { func, expire_time }
+        Timer {
+            func,
+            expire_time,
+            id,
+        }
     }
 }
 
@@ -202,6 +208,8 @@ pub struct EventLoopContext {
     ready_events: Vec<EpollEvent>,
     /// Timer list
     timers: Arc<Mutex<Vec<Box<Timer>>>>,
+    /// The next timer id to be used.
+    timer_next_id: AtomicU64,
     /// Record VM clock state.
     pub clock_state: Arc<Mutex<ClockState>>,
 }
@@ -223,6 +231,7 @@ impl EventLoopContext {
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
             timers: Arc::new(Mutex::new(Vec::new())),
+            timer_next_id: AtomicU64::new(0),
             clock_state: Arc::new(Mutex::new(ClockState::default())),
         };
         ctx.init_kick();
@@ -520,11 +529,12 @@ impl EventLoopContext {
     /// * `func` - the function will be called later.
     /// * `delay` - delay time.
     pub fn timer_add(&mut self, func: Box<dyn Fn()>, delay: Duration) -> u64 {
-        let timer = Box::new(Timer::new(func, delay));
-        let timer_id = timer.as_ref() as *const _ as u64;
-
         // insert in order of expire_time
         let mut timers = self.timers.lock().unwrap();
+
+        let timer_id = self.timer_next_id.fetch_add(1, Ordering::SeqCst);
+        let timer = Box::new(Timer::new(func, delay, timer_id));
+
         let mut index = timers.len();
         for (i, t) in timers.iter().enumerate() {
             if timer.expire_time < t.expire_time {
@@ -542,7 +552,7 @@ impl EventLoopContext {
     pub fn timer_del(&mut self, timer_id: u64) {
         let mut timers = self.timers.lock().unwrap();
         for (i, t) in timers.iter().enumerate() {
-            if timer_id == t.as_ref() as *const _ as u64 {
+            if timer_id == t.id {
                 timers.remove(i);
                 break;
             }
