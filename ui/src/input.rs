@@ -27,6 +27,12 @@ pub const ABS_MAX: u64 = 0x7fff;
 pub const INPUT_POINT_LEFT: u8 = 0x01;
 pub const INPUT_POINT_MIDDLE: u8 = 0x02;
 pub const INPUT_POINT_RIGHT: u8 = 0x04;
+pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
+pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
+pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x20;
+pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x40;
+pub const INPUT_BUTTON_MAX_NUM: u32 = 7;
+
 // ASCII value.
 pub const ASCII_A: i32 = 65;
 pub const ASCII_Z: i32 = 90;
@@ -57,11 +63,6 @@ const KEYCODE_KP_DECIMAL: u16 = 0x53;
 const NUM_LOCK_LED: u8 = 0x1;
 const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
-/// Input button state.
-pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
-pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
-pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x20;
-pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x40;
 
 static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
 
