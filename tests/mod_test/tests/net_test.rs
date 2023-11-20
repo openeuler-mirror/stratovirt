@@ -361,7 +361,7 @@ fn execute_cmd_checked(cmd: String) {
 fn create_tap(id: u8, mq: bool) {
     let br_name = "mst_net_qbr".to_string() + &id.to_string();
     let tap_name = "mst_net_qtap".to_string() + &id.to_string();
-    execute_cmd_checked("brctl addbr ".to_string() + &br_name);
+    execute_cmd_checked("ip link add name ".to_string() + &br_name + &" type bridge".to_string());
     if mq {
         execute_cmd_checked(
             "ip tuntap add ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
@@ -369,7 +369,9 @@ fn create_tap(id: u8, mq: bool) {
     } else {
         execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd_checked("brctl addif ".to_string() + &br_name + &" ".to_string() + &tap_name);
+    execute_cmd_checked(
+        "ip link set ".to_string() + &tap_name + &" master ".to_string() + &br_name,
+    );
     execute_cmd_checked("ip link set ".to_string() + &br_name + &" up".to_string());
     execute_cmd_checked("ip link set ".to_string() + &tap_name + &" up".to_string());
     execute_cmd_checked(
@@ -394,7 +396,7 @@ fn clear_tap(id: u8, mq: bool) {
     } else {
         execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd_unchecked("brctl delbr ".to_string() + &br_name);
+    execute_cmd_unchecked("ip link delete ".to_string() + &br_name + &" type bridge".to_string());
 }
 
 #[allow(unused)]
