@@ -19,8 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use libc::{cfmakeraw, tcgetattr, tcsetattr, termios};
 use log::{error, info, warn};
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
+use nix::pty::openpty;
+use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use vmm_sys_util::epoll::EventSet;
 
 use machine_manager::event_loop::EventLoop;
@@ -232,58 +234,30 @@ impl Chardev {
 }
 
 fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
-    let mut master: libc::c_int = 0;
-    let master_ptr: *mut libc::c_int = &mut master;
-    let mut slave: libc::c_int = 0;
-    let slave_ptr: *mut libc::c_int = &mut slave;
-    // Safe because this only create a new pseudoterminal and set the master and slave fd.
-    let ret = {
-        unsafe {
-            libc::openpty(
-                master_ptr,
-                slave_ptr,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        }
+    let (master, slave) = match openpty(None, None) {
+        Ok(res) => (res.master, res.slave),
+        Err(e) => bail!("Failed to open pty, error is {:?}", e),
     };
-    if ret < 0 {
-        bail!(
-            "Failed to open pty, error is {}",
-            std::io::Error::last_os_error()
-        )
-    }
+
     let proc_path = PathBuf::from(format!("/proc/self/fd/{}", slave));
     let path = read_link(proc_path).with_context(|| "Failed to read slave pty link")?;
-    // Safe because this only set the `old_termios` struct to zero.
-    let mut old_termios: termios = unsafe { std::mem::zeroed() };
-    // Safe because this only get the current mode of slave pty and save it.
-    let ret = unsafe { tcgetattr(slave, &mut old_termios as *mut _) };
-    if ret < 0 {
-        bail!(
-            "Failed to get mode of pty, error is {}",
-            std::io::Error::last_os_error()
-        );
-    }
-    let mut new_termios: termios = old_termios;
-    // Safe because this function only change the `new_termios` argument.
-    unsafe { cfmakeraw(&mut new_termios as *mut _) };
-    // Safe because this function only set the slave pty to raw mode.
-    let ret = unsafe { tcsetattr(slave, libc::TCSAFLUSH, &new_termios as *const _) };
-    if ret < 0 {
-        bail!(
-            "Failed to set pty to raw mode, error is {}",
-            std::io::Error::last_os_error()
-        );
+
+    let mut new_termios: Termios = match tcgetattr(slave) {
+        Ok(tm) => tm,
+        Err(e) => bail!("Failed to get mode of pty, error is {:?}", e),
+    };
+
+    cfmakeraw(&mut new_termios);
+
+    if let Err(e) = tcsetattr(slave, SetArg::TCSAFLUSH, &new_termios) {
+        bail!("Failed to set pty to raw mode, error is {:?}", e);
     }
 
-    // SAFETY: master is got from openpty.
-    let ret = unsafe { libc::fcntl(master, libc::F_SETFL, libc::O_NONBLOCK) };
-    if ret < 0 {
+    let fcnt_arg = FcntlArg::F_SETFL(OFlag::from_bits(libc::O_NONBLOCK).unwrap());
+    if let Err(e) = fcntl(master, fcnt_arg) {
         bail!(
-            "Failed to set pty master to nonblocking mode, error is {}",
-            std::io::Error::last_os_error()
+            "Failed to set pty master to nonblocking mode, error is {:?}",
+            e
         );
     }
 
@@ -512,13 +486,10 @@ impl EventNotifierHelper for Chardev {
 /// Provide backend trait object receiving the input from the guest.
 pub trait CommunicatInInterface: std::marker::Send + std::os::unix::io::AsRawFd {
     fn chr_read_raw(&mut self, buf: &mut [u8]) -> Result<usize> {
-        use libc::read;
-        // Safe because this only read the bytes from terminal within the buffer.
-        let ret = unsafe { read(self.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) };
-        if ret < 0 {
-            bail!("Failed to read buffer");
+        match nix::unistd::read(self.as_raw_fd(), buf) {
+            Err(e) => bail!("Failed to read buffer: {:?}", e),
+            Ok(bytes) => Ok(bytes),
         }
-        Ok(ret as usize)
     }
 }
 

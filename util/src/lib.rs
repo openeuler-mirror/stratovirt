@@ -47,8 +47,8 @@ pub use error::UtilError;
 
 use std::{any::Any, sync::Mutex};
 
-use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use log::debug;
+use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, OutputFlags, SetArg, Termios};
 use once_cell::sync::Lazy;
 use vmm_sys_util::terminal::Terminal;
 
@@ -59,27 +59,23 @@ pub const VERSION: &str = concat!(
     include_str!(concat!(env!("OUT_DIR"), "/GIT_COMMIT"))
 );
 
-pub static TERMINAL_MODE: Lazy<Mutex<Option<termios>>> = Lazy::new(|| Mutex::new(None));
+pub static TERMINAL_MODE: Lazy<Mutex<Option<Termios>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn set_termi_raw_mode() -> std::io::Result<()> {
     let tty_fd = std::io::stdin().lock().tty_fd();
 
-    // Safe because this only set the `old_term_mode` struct to zero.
-    let mut old_term_mode: termios = unsafe { std::mem::zeroed() };
-    // Safe because this only get stdin's current mode and save it.
-    let ret = unsafe { tcgetattr(tty_fd, &mut old_term_mode as *mut _) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    *TERMINAL_MODE.lock().unwrap() = Some(old_term_mode);
+    let old_term_mode = match tcgetattr(tty_fd) {
+        Ok(tm) => tm,
+        Err(_) => return Err(std::io::Error::last_os_error()),
+    };
 
-    let mut new_term_mode: termios = old_term_mode;
-    // Safe because this function only change the `new_term_mode` argument.
-    unsafe { libc::cfmakeraw(&mut new_term_mode as *mut _) };
-    new_term_mode.c_oflag |= OPOST;
-    // Safe because this function only set the stdin to raw mode.
-    let ret = unsafe { tcsetattr(tty_fd, TCSANOW, &new_term_mode as *const _) };
-    if ret < 0 {
+    *TERMINAL_MODE.lock().unwrap() = Some(old_term_mode.clone());
+
+    let mut new_term_mode = old_term_mode;
+    cfmakeraw(&mut new_term_mode);
+    new_term_mode.output_flags = new_term_mode.output_flags.union(OutputFlags::OPOST);
+
+    if tcsetattr(tty_fd, SetArg::TCSANOW, &new_term_mode).is_err() {
         return Err(std::io::Error::last_os_error());
     }
 
@@ -89,9 +85,7 @@ pub fn set_termi_raw_mode() -> std::io::Result<()> {
 pub fn set_termi_canon_mode() -> std::io::Result<()> {
     let tty_fd = std::io::stdin().lock().tty_fd();
     if let Some(old_term_mode) = TERMINAL_MODE.lock().unwrap().as_ref() {
-        // Safe because this only recover the stdin's mode.
-        let ret = unsafe { tcsetattr(tty_fd, TCSANOW, old_term_mode as *const _) };
-        if ret < 0 {
+        if tcsetattr(tty_fd, SetArg::TCSANOW, old_term_mode).is_err() {
             return Err(std::io::Error::last_os_error());
         }
     } else {

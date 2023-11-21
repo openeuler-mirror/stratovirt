@@ -959,7 +959,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 1)?;
 
         // Alloc new snapshot table.
-        let (date_sec, date_nsec) = gettime();
+        let (date_sec, date_nsec) = gettime()?;
         let snap = QcowSnapshot {
             l1_table_offset: new_l1_table_offset,
             l1_size: self.header.l1_size,

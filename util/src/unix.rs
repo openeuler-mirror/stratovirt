@@ -23,13 +23,9 @@ use libc::{
     MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
 use log::error;
+use nix::unistd::{sysconf, SysconfVar};
 
 use crate::UtilError;
-
-/// This function returns the caller's thread ID(TID).
-pub fn gettid() -> u64 {
-    unsafe { libc::syscall(libc::SYS_gettid) as u64 }
-}
 
 /// This function used to remove group and others permission using libc::chmod.
 pub fn limit_permission(path: &str) -> Result<()> {
@@ -46,7 +42,15 @@ pub fn limit_permission(path: &str) -> Result<()> {
 
 /// Gets the page size of host.
 pub fn host_page_size() -> u64 {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
+    let page_size = match sysconf(SysconfVar::PAGE_SIZE) {
+        Ok(Some(size)) => size,
+        Ok(None) => 0,
+        Err(e) => {
+            error!("Get host page size failed: {:?}", e);
+            0
+        }
+    };
+    page_size as u64
 }
 
 /// Parse unix uri to unix path.
