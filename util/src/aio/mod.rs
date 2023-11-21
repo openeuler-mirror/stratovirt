@@ -600,10 +600,10 @@ impl<T: Clone + 'static> Aio<T> {
 
     fn discard_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
-        if ret < 0 && ret != -libc::ENOTSUP as i64 {
+        if ret < 0 && ret != -libc::ENOTSUP {
             error!("Failed to do sync discard.");
         }
-        (self.complete_func)(&cb, ret)
+        (self.complete_func)(&cb, ret as i64)
     }
 
     fn write_zeroes_sync(&mut self, mut cb: AioCb<T>) -> Result<()> {
@@ -611,11 +611,11 @@ impl<T: Clone + 'static> Aio<T> {
         if cb.opcode == OpCode::WriteZeroesUnmap {
             ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
             if ret == 0 {
-                return (self.complete_func)(&cb, ret);
+                return (self.complete_func)(&cb, ret as i64);
             }
         }
         ret = raw_write_zeroes(cb.file_fd, cb.offset, cb.nbytes);
-        if ret == -libc::ENOTSUP as i64 && !cb.iovec.is_empty() {
+        if ret == -libc::ENOTSUP && !cb.iovec.is_empty() {
             cb.opcode = OpCode::Pwritev;
             cb.write_zeroes = WriteZeroesState::Off;
             return self.submit_request(cb);
@@ -624,7 +624,7 @@ impl<T: Clone + 'static> Aio<T> {
         if ret < 0 {
             error!("Failed to do sync write zeroes.");
         }
-        (self.complete_func)(&cb, ret)
+        (self.complete_func)(&cb, ret as i64)
     }
 }
 
