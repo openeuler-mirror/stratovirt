@@ -250,31 +250,36 @@ fn da_pointer_callback(button_event: &gdk::EventButton) -> Result<()> {
 }
 
 fn da_scroll_callback(scroll_event: &gdk::EventScroll) -> Result<()> {
-    let button_mask = match scroll_event.direction() {
-        ScrollDirection::Up => INPUT_BUTTON_WHEEL_UP,
-        ScrollDirection::Down => INPUT_BUTTON_WHEEL_DOWN,
-        ScrollDirection::Left => INPUT_BUTTON_WHEEL_LEFT,
-        ScrollDirection::Right => INPUT_BUTTON_WHEEL_RIGHT,
+    match scroll_event.direction() {
+        ScrollDirection::Up => press_mouse(INPUT_BUTTON_WHEEL_UP),
+        ScrollDirection::Down => press_mouse(INPUT_BUTTON_WHEEL_DOWN),
+        ScrollDirection::Left => press_mouse(INPUT_BUTTON_WHEEL_LEFT),
+        ScrollDirection::Right => press_mouse(INPUT_BUTTON_WHEEL_RIGHT),
         ScrollDirection::Smooth => match scroll_event.scroll_deltas() {
-            Some((_, delta_y)) => {
-                if delta_y == 0.0 {
+            Some((delta_x, delta_y)) => {
+                if delta_x.eq(&0.0) && delta_y.eq(&0.0) {
                     return Ok(());
                 }
-                if delta_y > 0.0 {
-                    INPUT_BUTTON_WHEEL_DOWN
-                } else {
-                    INPUT_BUTTON_WHEEL_UP
-                }
-            }
-            None => return Ok(()),
-        },
-        _ => 0x0,
-    };
 
-    input_button(button_mask, true)?;
-    input_point_sync()?;
-    input_button(button_mask, false)?;
-    input_point_sync()
+                // Horizontal scrolling.
+                if delta_x.gt(&0.0) {
+                    press_mouse(INPUT_BUTTON_WHEEL_RIGHT)?;
+                } else if delta_x.lt(&0.0) {
+                    press_mouse(INPUT_BUTTON_WHEEL_LEFT)?;
+                }
+
+                // Vertical scrolling.
+                if delta_y.gt(&0.0) {
+                    press_mouse(INPUT_BUTTON_WHEEL_DOWN)?;
+                } else if delta_y.lt(&0.0) {
+                    press_mouse(INPUT_BUTTON_WHEEL_UP)?;
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
 }
 
 /// Draw_area callback func for draw signal.
