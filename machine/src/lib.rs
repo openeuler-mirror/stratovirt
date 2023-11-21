@@ -526,7 +526,6 @@ pub trait MachineOps {
     fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
 
     /// Add Generic event device.
-    #[cfg(target_arch = "aarch64")]
     fn add_ged_device(&mut self) -> Result<()>;
 
     /// Add serial device.
@@ -1707,7 +1706,6 @@ pub trait MachineOps {
         )
         .with_context(|| MachineError::AddDevErr("RTC".to_string()))?;
 
-        #[cfg(target_arch = "aarch64")]
         self.add_ged_device()
             .with_context(|| MachineError::AddDevErr("Ged".to_string()))?;
 

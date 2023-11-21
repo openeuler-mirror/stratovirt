@@ -559,7 +559,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    #[cfg(target_arch = "aarch64")]
     fn add_ged_device(&mut self) -> MachineResult<()> {
         Ok(())
     }
