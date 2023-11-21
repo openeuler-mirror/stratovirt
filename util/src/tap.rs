@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
 
@@ -95,10 +96,10 @@ impl Tap {
 
             file = file_;
         } else if let Some(fd) = fd {
-            file = unsafe {
-                libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
-                File::from_raw_fd(fd)
-            };
+            let fcnt_arg = FcntlArg::F_SETFL(OFlag::from_bits(libc::O_NONBLOCK).unwrap());
+            fcntl(fd, fcnt_arg)?;
+            // SAFETY: the fd has been verified.
+            file = unsafe { File::from_raw_fd(fd) };
         } else {
             return Err(anyhow!(
                 "Open tap failed, unsupported operation, error is {}",

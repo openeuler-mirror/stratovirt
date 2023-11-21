@@ -10,6 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{bail, Result};
+use nix::time::{clock_gettime, ClockId};
+
 pub const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 /// Converts date to seconds since 1970-01-01 00:00:00.
@@ -30,17 +33,11 @@ pub fn mktime64(year: u64, mon: u64, day: u64, hour: u64, min: u64, sec: u64) ->
 }
 
 /// Get wall time.
-pub fn gettime() -> (u32, u32) {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-
-    unsafe {
-        libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts);
+pub fn gettime() -> Result<(u32, u32)> {
+    match clock_gettime(ClockId::CLOCK_REALTIME) {
+        Ok(ts) => Ok((ts.tv_sec() as u32, ts.tv_nsec() as u32)),
+        Err(e) => bail!("clock_gettime failed: {:?}", e),
     }
-
-    (ts.tv_sec as u32, ts.tv_nsec as u32)
 }
 
 /// Convert wall time to year/month/day/hour/minute/second format.

@@ -67,6 +67,7 @@ use anyhow::{anyhow, Context, Result};
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
+use nix::unistd::gettid;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
@@ -256,7 +257,7 @@ impl CPU {
 
     /// Set thread id for `CPU`.
     fn set_tid(&self) {
-        *self.tid.lock().unwrap() = Some(util::unix::gettid());
+        *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
     }
 }
 

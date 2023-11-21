@@ -1081,7 +1081,7 @@ fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
     }
     let file_dir = path.display().to_string();
     gpu_info.fileDir = file_dir.clone();
-    let nsec = gettime().1;
+    let nsec = gettime()?.1;
     let file_name = file_dir + "/stratovirt-display-" + dev_name + "-" + &nsec.to_string() + ".png";
     let file = fs::File::create(file_name)?;
     Ok(file)
