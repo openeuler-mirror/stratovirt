@@ -27,8 +27,11 @@ use acpi::{
     AmlEqual, AmlExtendedInterrupt, AmlField, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUnit,
     AmlFieldUpdateRule, AmlIf, AmlIntShare, AmlInteger, AmlLocal, AmlMethod, AmlName, AmlNameDecl,
     AmlNotify, AmlOpRegion, AmlResTemplate, AmlResourceUsage, AmlScopeBuilder, AmlStore, AmlString,
-    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
+#[cfg(target_arch = "x86_64")]
+use acpi::{AmlCallWithArgs1, AmlOne};
+#[cfg(target_arch = "aarch64")]
+use acpi::{INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT};
 use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -43,10 +46,30 @@ pub enum AcpiEvent {
     AcadSt = 2,
     BatteryInf = 4,
     BatterySt = 8,
+    CpuResize = 16,
 }
 
 const AML_GED_EVT_REG: &str = "EREG";
 const AML_GED_EVT_SEL: &str = "ESEL";
+
+pub struct GedEvent {
+    power_button: Arc<EventFd>,
+    #[cfg(target_arch = "x86_64")]
+    cpu_resize: Arc<EventFd>,
+}
+
+impl GedEvent {
+    pub fn new(
+        power_button: Arc<EventFd>,
+        #[cfg(target_arch = "x86_64")] cpu_resize: Arc<EventFd>,
+    ) -> GedEvent {
+        GedEvent {
+            power_button,
+            #[cfg(target_arch = "x86_64")]
+            cpu_resize,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Ged {
@@ -69,7 +92,7 @@ impl Ged {
     pub fn realize(
         mut self,
         sysbus: &mut SysBus,
-        power_button: Arc<EventFd>,
+        ged_event: GedEvent,
         battery_present: bool,
         region_base: u64,
         region_size: u64,
@@ -83,8 +106,11 @@ impl Ged {
         sysbus.attach_device(&dev, region_base, region_size, "Ged")?;
 
         let ged = dev.lock().unwrap();
-        ged.register_acpi_powerdown_event(power_button)
+        ged.register_acpi_powerdown_event(ged_event.power_button)
             .with_context(|| "Failed to register ACPI powerdown event.")?;
+        #[cfg(target_arch = "x86_64")]
+        ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
+            .with_context(|| "Failed to register ACPI cpu resize event.")?;
         Ok(dev.clone())
     }
 
@@ -113,6 +139,35 @@ impl Ged {
 
         EventLoop::update_event(vec![notifier], None)
             .with_context(|| "Failed to register powerdown notifier.")?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn register_acpi_cpu_resize_event(&self, cpu_resize: Arc<EventFd>) -> Result<()> {
+        let cpu_resize_fd = cpu_resize.as_raw_fd();
+        let clone_ged = self.clone();
+        let cpu_resize_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            read_fd(cpu_resize_fd);
+            clone_ged
+                .notification_type
+                .store(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
+            clone_ged.inject_interrupt();
+            if QmpChannel::is_connected() {
+                event!(CpuResize);
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            cpu_resize_fd,
+            None,
+            EventSet::IN,
+            vec![cpu_resize_handler],
+        );
+
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register cpu resize notifier.")?;
         Ok(())
     }
 
@@ -178,7 +233,10 @@ impl AmlBuilder for Ged {
         let mut res = AmlResTemplate::new();
 
         // SPI start at interrupt number 32 on aarch64 platform.
+        #[cfg(target_arch = "aarch64")]
         let irq_base = INTERRUPT_PPIS_COUNT + INTERRUPT_SGIS_COUNT;
+        #[cfg(target_arch = "x86_64")]
+        let irq_base = 0;
         res.append_child(AmlExtendedInterrupt::new(
             AmlResourceUsage::Consumer,
             AmlEdgeLevel::Edge,
@@ -235,6 +293,21 @@ impl AmlBuilder for Ged {
             ));
             if_scope.append_child(AmlNotify::new(AmlName(dev.to_string()), AmlInteger(notify)));
             method.append_child(if_scope);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Call cpu hot(un)plug method.
+            let mut cpu_if_scope = AmlIf::new(AmlEqual::new(
+                AmlAnd::new(
+                    AmlLocal(0),
+                    AmlInteger(AcpiEvent::CpuResize as u64),
+                    AmlLocal(1),
+                ),
+                AmlInteger(AcpiEvent::CpuResize as u64),
+            ));
+            cpu_if_scope.append_child(AmlCallWithArgs1::new("\\_SB.PRES.CSCN", AmlOne));
+            method.append_child(cpu_if_scope);
         }
 
         acpi_dev.append_child(method);

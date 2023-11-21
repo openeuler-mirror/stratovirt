@@ -36,6 +36,7 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology};
+use devices::acpi::ged::{Ged, GedEvent};
 use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
@@ -75,6 +76,7 @@ pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
     PcieEcam,
     PcieMmio,
+    GedMmio,
     Mmio,
     IoApic,
     LocalApic,
@@ -87,6 +89,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0, 0x8000_0000),                // MemBelow4g
     (0xB000_0000, 0x1000_0000),      // PcieEcam
     (0xC000_0000, 0x3000_0000),      // PcieMmio
+    (0xF000_0000, 0x04),             // GedMmio
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
@@ -119,6 +122,10 @@ pub struct StdMachine {
     reset_req: Arc<EventFd>,
     /// Shutdown_req, handle VM 'ShutDown' event.
     shutdown_req: Arc<EventFd>,
+    /// VM power button, handle VM `Powerdown` event.
+    power_button: Arc<EventFd>,
+    /// CPU Resize request, handle vm cpu hot(un)plug event.
+    cpu_resize_req: Arc<EventFd>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
 }
@@ -154,6 +161,14 @@ impl StdMachine {
                 EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                     MachineError::InitEventFdErr("shutdown request".to_string())
                 })?,
+            ),
+            power_button: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("power button".to_string()))?,
+            ),
+            cpu_resize_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("cpu resize".to_string()))?,
             ),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
         })
@@ -368,6 +383,23 @@ impl MachineOps for StdMachine {
         );
         RTC::realize(rtc, &mut self.base.sysbus).with_context(|| "Failed to realize RTC device")?;
 
+        Ok(())
+    }
+
+    fn add_ged_device(&mut self) -> Result<()> {
+        let ged = Ged::default();
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].0;
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].1;
+
+        let ged_event = GedEvent::new(self.power_button.clone(), self.cpu_resize_req.clone());
+        ged.realize(
+            &mut self.base.sysbus,
+            ged_event,
+            false,
+            region_base,
+            region_size,
+        )
+        .with_context(|| "Failed to realize Ged")?;
         Ok(())
     }
 

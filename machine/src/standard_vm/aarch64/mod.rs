@@ -41,7 +41,7 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 
-use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged};
+use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
 #[cfg(feature = "ramfb")]
 use devices::legacy::Ramfb;
@@ -499,7 +499,7 @@ impl MachineOps for StdMachine {
         let ged_dev = ged
             .realize(
                 &mut self.base.sysbus,
-                self.power_button.clone(),
+                GedEvent::new(self.power_button.clone()),
                 battery_present,
                 MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
