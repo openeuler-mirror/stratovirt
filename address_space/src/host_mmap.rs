@@ -139,10 +139,10 @@ impl FileBackend {
             }
         } else if old_file_len < file_len {
             bail!(
-            "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
-            file_path,
-            file_len
-        );
+                "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
+                file_path,
+                file_len
+            );
         }
 
         Ok(FileBackend {
