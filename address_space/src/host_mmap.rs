@@ -253,12 +253,14 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
     } else if mem_config.mem_share {
         let anon_mem_name = String::from("stratovirt_anon_mem");
 
+        // SAFETY: the parameters is constant.
         let anon_fd =
             unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
+        // SAFETY: the parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.mem_size)
@@ -300,12 +302,14 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
     if mem_config.memfd {
         let anon_mem_name = String::from("stratovirt_anon_mem");
 
+        // SAFETY: the parameters is constant.
         let anon_fd =
             unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
+        // SAFETY: the parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.size)

@@ -112,8 +112,9 @@ impl Chardev {
                     label: self.id.clone(),
                 };
                 PTY_PATH.lock().unwrap().push(path_info);
-                // Safe because `master_arc` is the only one owner for the file descriptor.
-                let master_arc = unsafe { Arc::new(Mutex::new(File::from_raw_fd(master))) };
+                // SAFETY: master was created in the function of set_pty_raw_mode,
+                // the value can be guaranteed to be legal.
+                let master_arc = Arc::new(Mutex::new(unsafe { File::from_raw_fd(master) }));
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }

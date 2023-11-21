@@ -44,7 +44,10 @@ use ui::console::{
     display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
     DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
 };
-use ui::pixman::unref_pixman_image;
+use ui::pixman::{
+    create_pixman_image, get_image_data, get_image_format, get_image_height, get_image_stride,
+    get_image_width, ref_pixman_image, unref_pixman_image,
+};
 use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::edid::EdidInfo;
@@ -52,11 +55,9 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::pixman::{
-    pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
-    pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
-    pixman_image_get_width, pixman_image_ref, pixman_image_set_destroy_function, pixman_image_t,
-    pixman_image_unref, pixman_region16_t, pixman_region_extents, pixman_region_fini,
-    pixman_region_init, pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
+    pixman_format_bpp, pixman_format_code_t, pixman_image_set_destroy_function, pixman_image_t,
+    pixman_region16_t, pixman_region_extents, pixman_region_fini, pixman_region_init,
+    pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
     virtio_gpu_unref_resource_callback,
 };
 
@@ -482,30 +483,33 @@ fn create_surface(
     res_data_offset: *mut u32,
 ) -> DisplaySurface {
     let mut surface = DisplaySurface::default();
+    let rect = create_pixman_image(
+        pixman_format,
+        info_set_scanout.rect.width as i32,
+        info_set_scanout.rect.height as i32,
+        res_data_offset,
+        pixman_stride,
+    );
+    ref_pixman_image(res.pixman_image);
+    // SAFETY: the param of create operation for image has been checked.
     unsafe {
-        let rect = pixman_image_create_bits(
-            pixman_format,
-            info_set_scanout.rect.width as i32,
-            info_set_scanout.rect.height as i32,
-            res_data_offset,
-            pixman_stride,
-        );
-        pixman_image_ref(res.pixman_image);
         pixman_image_set_destroy_function(
             rect,
             Some(virtio_gpu_unref_resource_callback),
             res.pixman_image.cast(),
         );
-        surface.format = pixman_image_get_format(rect);
-        surface.image = pixman_image_ref(rect);
-        if !surface.image.is_null() {
-            // update surface in scanout.
-            scanout.surface = Some(surface);
-            pixman_image_unref(rect);
-            display_replace_surface(&scanout.con, scanout.surface)
-                .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
-        }
-    };
+    }
+    surface.format = pixman_format;
+    surface.image = ref_pixman_image(rect);
+
+    if !surface.image.is_null() {
+        // Update surface in scanout.
+        scanout.surface = Some(surface);
+        unref_pixman_image(rect);
+        display_replace_surface(&scanout.con, scanout.surface)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    }
+
     surface
 }
 
@@ -699,14 +703,15 @@ impl GpuIoHandler {
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         let mse = scanout.mouse.as_mut().unwrap();
         let mse_data_size = mse.data.len();
+        let res_width = get_image_width(res.pixman_image);
+        let res_height = get_image_height(res.pixman_image);
+        if res_width as u32 != mse.width || res_height as u32 != mse.height {
+            return;
+        }
+        let res_data_ptr = get_image_data(res.pixman_image) as *mut u8;
+        // SAFETY: the length of the source and dest pointers can be ensured to be same,
+        // and equal to mse_data_size.
         unsafe {
-            let res_width = pixman_image_get_width(res.pixman_image);
-            let res_height = pixman_image_get_height(res.pixman_image);
-            if res_width as u32 != mse.width || res_height as u32 != mse.height {
-                return;
-            }
-
-            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
             ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
         }
 
@@ -883,15 +888,13 @@ impl GpuIoHandler {
             .filter(|&sum| sum <= self.max_hostmem)
             .is_some()
         {
-            res.pixman_image = unsafe {
-                pixman_image_create_bits(
-                    pixman_format,
-                    info_create_2d.width as i32,
-                    info_create_2d.height as i32,
-                    ptr::null_mut(),
-                    0,
-                )
-            }
+            res.pixman_image = create_pixman_image(
+                pixman_format,
+                info_create_2d.width as i32,
+                info_create_2d.height as i32,
+                ptr::null_mut(),
+                0,
+            );
         }
         if res.pixman_image.is_null() {
             error!(
@@ -983,22 +986,23 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
         }
 
-        let pixman_format = unsafe { pixman_image_get_format(res.pixman_image) };
+        let pixman_format = get_image_format(res.pixman_image);
         let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-        let pixman_stride = unsafe { pixman_image_get_stride(res.pixman_image) };
+        let pixman_stride = get_image_stride(res.pixman_image);
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
         let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 {
             res.iov[0].iov_base as *mut u32
         } else {
-            unsafe { pixman_image_get_data(res.pixman_image) }
+            get_image_data(res.pixman_image)
         };
+        // SAFETY: the offset is within the legal address.
         let res_data_offset = unsafe { res_data.offset(offset as isize) };
 
         // Create surface for the scanout.
         let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
         if scanout.surface.is_none()
-            || unsafe { pixman_image_get_data(scanout.surface.unwrap().image) } != res_data_offset
+            || get_image_data(scanout.surface.unwrap().image) != res_data_offset
             || scanout.width != info_set_scanout.rect.width
             || scanout.height != info_set_scanout.rect.height
         {
@@ -1059,9 +1063,10 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
         }
 
+        let mut flush_reg = pixman_region16_t::default();
+        let flush_reg_ptr = &mut flush_reg as *mut pixman_region16_t;
+        // SAFETY: rect information has been checked.
         unsafe {
-            let mut flush_reg = pixman_region16_t::default();
-            let flush_reg_ptr = &mut flush_reg as *mut pixman_region16_t;
             pixman_region_init_rect(
                 flush_reg_ptr,
                 info_res_flush.rect.x_coord as i32,
@@ -1069,17 +1074,21 @@ impl GpuIoHandler {
                 info_res_flush.rect.width,
                 info_res_flush.rect.height,
             );
-            for i in 0..self.num_scanouts {
-                // Flushes any scanouts the resource is being used on.
-                if res.scanouts_bitmask & (1 << i) == 0 {
-                    continue;
-                }
-                let scanout = &self.scanouts[i as usize];
+        }
 
-                let mut rect_reg = pixman_region16_t::default();
-                let mut final_reg = pixman_region16_t::default();
-                let rect_reg_ptr = &mut rect_reg as *mut pixman_region16_t;
-                let final_reg_ptr = &mut final_reg as *mut pixman_region16_t;
+        for i in 0..self.num_scanouts {
+            // Flushes any scanouts the resource is being used on.
+            if res.scanouts_bitmask & (1 << i) == 0 {
+                continue;
+            }
+            let scanout = &self.scanouts[i as usize];
+
+            let mut rect_reg = pixman_region16_t::default();
+            let mut final_reg = pixman_region16_t::default();
+            let rect_reg_ptr = &mut rect_reg as *mut pixman_region16_t;
+            let final_reg_ptr = &mut final_reg as *mut pixman_region16_t;
+            // SAFETY: the pointer is not empty.
+            unsafe {
                 pixman_region_init(final_reg_ptr);
                 pixman_region_init_rect(
                     rect_reg_ptr,
@@ -1102,8 +1111,13 @@ impl GpuIoHandler {
                 pixman_region_fini(rect_reg_ptr);
                 pixman_region_fini(final_reg_ptr);
             }
+        }
+
+        // SAFETY: it can ensured that the pointer is not empty.
+        unsafe {
             pixman_region_fini(flush_reg_ptr);
         }
+
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
@@ -1145,19 +1159,11 @@ impl GpuIoHandler {
         res_idx: usize,
     ) -> Result<()> {
         let res = &self.resources_list[res_idx];
-        let pixman_format;
-        let width;
-        let bpp;
-        let stride;
-        let data;
-        // SAFETY: res.pixman_image has been checked valid.
-        unsafe {
-            pixman_format = pixman_image_get_format(res.pixman_image);
-            width = pixman_image_get_width(res.pixman_image) as u32;
-            bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-            stride = pixman_image_get_stride(res.pixman_image) as u32;
-            data = pixman_image_get_data(res.pixman_image).cast() as *mut u8;
-        }
+        let pixman_format = get_image_format(res.pixman_image);
+        let width = get_image_width(res.pixman_image) as u32;
+        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let stride = get_image_stride(res.pixman_image) as u32;
+        let data = get_image_data(res.pixman_image).cast() as *mut u8;
 
         // When the dedicated area is continuous.
         if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {

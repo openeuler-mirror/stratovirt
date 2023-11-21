@@ -84,6 +84,8 @@ use virtio::{
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
+const MAX_REGION_SIZE: u64 = 65536;
+
 trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
 
@@ -1594,6 +1596,13 @@ impl DeviceInterface for StdMachine {
     }
 
     fn update_region(&mut self, args: UpdateRegionArgument) -> Response {
+        if args.size >= MAX_REGION_SIZE {
+            let err_resp = qmp_schema::QmpErrorClass::GenericError(format!(
+                "Region size {} is out of range",
+                args.size
+            ));
+            return Response::create_error_response(err_resp, None);
+        }
         #[derive(Default)]
         struct DummyDevice {
             head: u64,

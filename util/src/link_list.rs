@@ -57,63 +57,64 @@ impl<T> List<T> {
     pub fn add_tail(&mut self, mut node: Box<Node<T>>) {
         node.prev = self.tail;
         node.next = None;
-        unsafe {
-            let node = NonNull::new(Box::into_raw(node));
-            if let Some(mut t) = self.tail {
-                t.as_mut().next = node;
-            } else {
-                self.head = node;
-                self.tail = node;
-            }
 
+        let node = NonNull::new(Box::into_raw(node));
+        if let Some(mut t) = self.tail {
+            // SAFETY: t is guaranteed not to be null.
+            unsafe { t.as_mut() }.next = node;
+        } else {
+            self.head = node;
             self.tail = node;
-            self.len += 1;
         }
+
+        self.tail = node;
+        self.len += 1;
     }
 
     #[inline]
     pub fn add_head(&mut self, mut node: Box<Node<T>>) {
         node.prev = None;
         node.next = self.head;
-        unsafe {
-            let node = NonNull::new(Box::into_raw(node));
-            if let Some(mut h) = self.head {
-                h.as_mut().prev = node;
-            } else {
-                self.head = node;
-                self.tail = node;
-            }
-
+        let node = NonNull::new(Box::into_raw(node));
+        if let Some(mut h) = self.head {
+            // SAFETY: h is guaranteed not to be null.
+            unsafe { h.as_mut() }.prev = node;
+        } else {
             self.head = node;
-            self.len += 1;
+            self.tail = node;
         }
+
+        self.head = node;
+        self.len += 1;
     }
 
     #[inline]
     pub fn unlink(&mut self, node: &Node<T>) {
-        unsafe {
-            match node.prev {
-                Some(mut p) => p.as_mut().next = node.next,
-                None => self.head = node.next,
-            }
+        match node.prev {
+            // SAFETY: p is guaranteed not to be null.
+            Some(mut p) => unsafe { p.as_mut() }.next = node.next,
+            None => self.head = node.next,
+        }
 
-            match node.next {
-                Some(mut n) => n.as_mut().prev = node.prev,
-                None => self.tail = node.prev,
-            }
+        match node.next {
+            // SAFETY: n is guaranteed not to be null.
+            Some(mut n) => unsafe { n.as_mut() }.prev = node.prev,
+            None => self.tail = node.prev,
         }
         self.len -= 1;
     }
 
     #[inline]
     pub fn pop_tail(&mut self) -> Option<Box<Node<T>>> {
-        self.tail.map(|node| unsafe {
-            let node = Box::from_raw(node.as_ptr());
+        self.tail.map(|node| {
+            // SAFETY: node is guaranteed not to be null.
+            let node = unsafe { Box::from_raw(node.as_ptr()) };
             self.tail = node.prev;
 
             match self.tail {
                 None => self.head = None,
-                Some(mut t) => t.as_mut().next = None,
+                // SAFETY: t is guaranteed not to be null.
+                Some(mut t) => unsafe { t.as_mut() }.next = None,
             }
 
             self.len -= 1;
@@ -123,13 +124,15 @@ impl<T> List<T> {
 
     #[inline]
     pub fn pop_head(&mut self) -> Option<Box<Node<T>>> {
-        self.head.map(|node| unsafe {
-            let node = Box::from_raw(node.as_ptr());
+        self.head.map(|node| {
+            // SAFETY: node is guaranteed not to be null.
+            let node = unsafe { Box::from_raw(node.as_ptr()) };
             self.head = node.next;
 
             match self.head {
                 None => self.tail = None,
-                Some(mut h) => h.as_mut().prev = None,
+                // SAFETY: h is guaranteed not to be null.
+                Some(mut h) => unsafe { h.as_mut() }.prev = None,
             }
 
             self.len -= 1;
