@@ -19,8 +19,7 @@ use std::thread;
 use anyhow::{bail, Context, Result};
 use log::{error, info};
 use nix::sys::statfs::fstatfs;
-use nix::unistd::sysconf;
-use nix::unistd::SysconfVar;
+use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
@@ -87,30 +86,25 @@ impl FileBackend {
             // The last six characters of template file must be "XXXXXX" for `mkstemp`
             // function to create unique temporary file.
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
-            let fs_cstr = std::ffi::CString::new(fs_path.clone()).unwrap().into_raw();
 
-            let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
-            if raw_fd < 0 {
-                // SAFETY: fs_cstr obtained by calling CString::into_raw.
-                unsafe {
-                    drop(std::ffi::CString::from_raw(fs_cstr));
+            let (raw_fd, fs_tmp_path) = match mkstemp(fs_path.as_str()) {
+                Ok((fd, p)) => (fd, p),
+                Err(_) => {
+                    return Err(std::io::Error::last_os_error()).with_context(|| {
+                        format!("Failed to create file in directory: {} ", file_path)
+                    });
                 }
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("Failed to create file in directory: {} ", file_path)
-                });
+            };
+
+            if unlink(fs_tmp_path.as_path()).is_err() {
+                error!(
+                    "Failed to unlink file \"{:?}\", error: {:?}",
+                    fs_tmp_path.as_path(),
+                    std::io::Error::last_os_error()
+                )
             }
 
-            if unsafe { libc::unlink(fs_cstr) } != 0 {
-                error!(
-                    "Failed to unlink file \"{}\", error: {:?}",
-                    fs_path,
-                    std::io::Error::last_os_error()
-                );
-            }
-            // SAFETY: fs_cstr obtained by calling CString::into_raw.
-            unsafe {
-                drop(std::ffi::CString::from_raw(fs_cstr));
-            }
+            // SAFETY: only one FileBackend instance has the ownership of the file descriptor
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
             need_unlink = !path.exists();
