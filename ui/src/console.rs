@@ -788,7 +788,10 @@ pub fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<Displa
     let y = (height / FONT_HEIGHT - 1) / 2;
 
     for (index, ch) in msg.chars().enumerate() {
-        let glyph = pixman_glyph_from_vgafont(FONT_HEIGHT, ch as u32);
+        let glyph = pixman_glyph_from_vgafont(FONT_HEIGHT as u32, ch as u32);
+        if glyph.is_null() {
+            continue;
+        }
         pixman_glyph_render(
             glyph,
             surface.image,
