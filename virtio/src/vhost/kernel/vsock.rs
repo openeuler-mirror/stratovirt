@@ -49,6 +49,7 @@ trait VhostVsockBackend {
 
 impl VhostVsockBackend for VhostBackend {
     fn set_guest_cid(&self, cid: u64) -> Result<()> {
+        // SAFETY: self.fd was created in function new() and the return value will be checked later.
         let ret = unsafe { ioctl_with_ref(&self.fd, VHOST_VSOCK_SET_GUEST_CID(), &cid) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -60,6 +61,7 @@ impl VhostVsockBackend for VhostBackend {
 
     fn set_running(&self, start: bool) -> Result<()> {
         let on: u32 = u32::from(start);
+        // SAFETY: self.fd was created in function new() and the return value will be checked later.
         let ret = unsafe { ioctl_with_ref(&self.fd, VHOST_VSOCK_SET_RUNNING(), &on) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(

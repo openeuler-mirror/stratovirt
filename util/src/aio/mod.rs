@@ -248,9 +248,9 @@ impl<T: Clone + 'static> Aio<T> {
                 .with_context(|| "Failed to round down request length.")?;
             // Set upper limit of buffer length to avoid OOM.
             let buff_len = cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
-            // SAFETY: we allocate aligned memory and free it later. Alignment is set to
-            // host page size to decrease the count of allocated pages.
             let bounce_buffer =
+                // SAFETY: We allocate aligned memory and free it later. Alignment is set to
+                // host page size to decrease the count of allocated pages.
                 unsafe { libc::memalign(host_page_size() as usize, buff_len as usize) };
             if bounce_buffer.is_null() {
                 error!("Failed to alloc memory for misaligned read/write.");

@@ -167,7 +167,7 @@ fn iov_to_buf<T: ByteCode>(
 }
 
 fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
-    // Safe, because the memory to be freed is allocated by guest.
+    // SAFETY: The memory to be freed is allocated by guest.
     if unsafe { libc::madvise(addr, len, advice) } != 0 {
         let evt_type = match advice {
             libc::MADV_DONTNEED => "DONTNEED".to_string(),
@@ -694,6 +694,8 @@ impl BalloonIoHandler {
             }
             let req = Request::parse(&elem, OUT_IOVEC)
                 .with_context(|| "Fail to parse available descriptor chain")?;
+            // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
+            // words, this function will not be called simultaneously.
             if let Some(dev) = unsafe { &BALLOON_DEV } {
                 let mut balloon_dev = dev.lock().unwrap();
                 for iov in req.iovec.iter() {
@@ -923,7 +925,7 @@ impl Balloon {
 
     /// Init balloon object for global use.
     pub fn object_init(dev: Arc<Mutex<Balloon>>) {
-        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+        // SAFETY: there is no confliction when writing global variable BALLOON_DEV, in other
         // words, this function will not be called simultaneously.
         unsafe {
             if BALLOON_DEV.is_none() {
@@ -1040,8 +1042,8 @@ impl VirtioDevice for Balloon {
 
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
         // Guest update actual balloon size
-        // Safe, because the results will be checked.
         let old_actual = self.actual.load(Ordering::Acquire);
+        // SAFETY: The results will be checked.
         let new_actual = match unsafe { data.align_to::<u32>() } {
             (_, [new_config], _) => *new_config,
             _ => {
@@ -1140,7 +1142,7 @@ impl VirtioDevice for Balloon {
 }
 
 pub fn qmp_balloon(target: u64) -> bool {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // SAFETY: there is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         match dev.lock().unwrap().set_guest_memory_size(target) {
@@ -1158,7 +1160,7 @@ pub fn qmp_balloon(target: u64) -> bool {
 }
 
 pub fn qmp_query_balloon() -> Option<u64> {
-    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other
+    // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         let unlocked_dev = dev.lock().unwrap();

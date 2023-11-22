@@ -31,6 +31,8 @@ use crate::UtilError;
 pub fn limit_permission(path: &str) -> Result<()> {
     let file_path = path.as_bytes().to_vec();
     let cstr_file_path = std::ffi::CString::new(file_path).unwrap();
+    // SAFETY: The file_path can be guaranteed to be legal, and the
+    // return value have bee verified later.
     let ret = unsafe { libc::chmod(cstr_file_path.as_ptr(), 0o600) };
 
     if ret == 0 {
@@ -108,7 +110,7 @@ pub fn do_mmap(
         prot |= libc::PROT_WRITE;
     }
 
-    // Safe because the return value is checked.
+    // SAFETY: The return value is checked.
     let hva = unsafe {
         libc::mmap(
             std::ptr::null_mut() as *mut libc::c_void,
@@ -130,7 +132,7 @@ pub fn do_mmap(
 }
 
 fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
-    // Safe because host_addr and size are valid and return value is checked.
+    // SAFETY: host_addr and size are valid and return value is checked.
     let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
     if ret < 0 {
         error!(
@@ -232,8 +234,10 @@ impl UnixSock {
     }
 
     fn cmsg_data(&self, cmsg_buffer: *mut cmsghdr) -> *mut RawFd {
-        // Safe as parameter is zero.
-        (cmsg_buffer as *mut u8).wrapping_add(unsafe { CMSG_LEN(0) } as usize) as *mut RawFd
+        (cmsg_buffer as *mut u8).wrapping_add(
+            // SAFETY: Parameter is zero.
+            unsafe { CMSG_LEN(0) } as usize,
+        ) as *mut RawFd
     }
 
     fn get_next_cmsg(
@@ -242,14 +246,14 @@ impl UnixSock {
         cmsg: &cmsghdr,
         cmsg_ptr: *mut cmsghdr,
     ) -> *mut cmsghdr {
-        // Safe to get cmsg_len because the parameter is valid.
-        let next_cmsg = (cmsg_ptr as *mut u8)
-            .wrapping_add(unsafe { CMSG_LEN(cmsg.cmsg_len as u32) } as usize)
-            as *mut cmsghdr;
+        let next_cmsg = (cmsg_ptr as *mut u8).wrapping_add(
+            // SAFETY: Safe to get cmsg_len because the parameter is valid.
+            unsafe { CMSG_LEN(cmsg.cmsg_len as u32) } as usize,
+        ) as *mut cmsghdr;
         // Safe to get msg_control because the parameter is valid.
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;
 
-        // Safe as parameter is zero.
+        // SAFETY: Parameter is constant.
         if nex_cmsg_pos.wrapping_add(unsafe { CMSG_LEN(0) } as u64) > msghdr.msg_controllen as u64 {
             null_mut()
         } else {
@@ -268,16 +272,17 @@ impl UnixSock {
     ///
     /// The socket file descriptor is broken.
     pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> std::io::Result<usize> {
-        // SAFETY: we checked the iovecs lens before.
+        // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
-        // SATETY: we checked the out_fds lens before.
+        // SAFETY: We checked the out_fds lens before.
         let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
-        // SAFETY: we checked the out_fds lens before.
+        // SAFETY: We checked the out_fds lens before.
         let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
+        // SAFETY: The member variable of msg will be assigned value later.
         let mut msg: msghdr = unsafe { std::mem::zeroed() };
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
@@ -295,6 +300,7 @@ impl UnixSock {
                 cmsg_level: SOL_SOCKET,
                 cmsg_type: SCM_RIGHTS,
             };
+            // SAFETY: cmsg_buffer was created in this function and can be guaranteed not be null.
             unsafe {
                 write_unaligned(cmsg_buffer.as_mut_ptr() as *mut cmsghdr, cmsg);
 
@@ -309,8 +315,8 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
-        // Safe as msg parameters are valid.
         let write_count =
+            // SAFETY: msg parameters are valid.
             unsafe { sendmsg(self.sock.as_ref().unwrap().as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
         if write_count == -1 {
@@ -341,14 +347,15 @@ impl UnixSock {
         iovecs: &mut [iovec],
         in_fds: &mut [RawFd],
     ) -> std::io::Result<(usize, usize)> {
-        // SAFETY: we check the iovecs lens before.
+        // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
-        // SAFETY: we check the in_fds lens before.
+        // SAFETY: We check the in_fds lens before.
         let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
+        // SAFETY: The member variable of msg will be assigned value later.
         let mut msg: msghdr = unsafe { std::mem::zeroed() };
         msg.msg_name = null_mut();
         msg.msg_namelen = 0;
@@ -363,7 +370,7 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
-        // Safe as msg parameters are valid.
+        // SAFETY: msg parameters are valid.
         let total_read = unsafe {
             recvmsg(
                 self.sock.as_ref().unwrap().as_raw_fd(),
@@ -395,11 +402,17 @@ impl UnixSock {
         let mut cmsg_ptr = msg.msg_control as *mut cmsghdr;
         let mut in_fds_count = 0_usize;
         while !cmsg_ptr.is_null() {
+            // SAFETY: The pointer of cmsg_ptr was created in this function and
+            // can be guaranteed not be null.
             let cmsg = unsafe { (cmsg_ptr as *mut cmsghdr).read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
+                // SAFETY: Input parameter is constant.
                 let fd_count = (cmsg.cmsg_len as u64 - unsafe { CMSG_LEN(0) } as u64) as usize
                     / size_of::<RawFd>();
+                // SAFETY:
+                // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.
+                // 2. the parameter of in_fds has been checked before.
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),

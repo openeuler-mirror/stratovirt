@@ -256,12 +256,16 @@ impl KvmMemoryListener {
             userspace_addr: aligned_hva,
             flags,
         };
-        unsafe {
-            KVM_FDS
-                .load()
-                .add_mem_slot(kvm_region)
-                .with_context(|| "Failed to add memory slot to kvm")?;
 
+        KVM_FDS
+            .load()
+            .add_mem_slot(kvm_region)
+            .with_context(|| "Failed to add memory slot to kvm")?;
+
+        // SAFETY: All parameters in the struct of kvm_region are valid,
+        // it can be guaranteed that calling the ioctl_with_ref in the function
+        // of set_user_memory_region is safe.
+        unsafe {
             KVM_FDS
                 .load()
                 .vm_fd
@@ -316,12 +320,16 @@ impl KvmMemoryListener {
             userspace_addr: mem_slot.host_addr,
             flags: 0,
         };
-        unsafe {
-            KVM_FDS
-                .load()
-                .remove_mem_slot(kvm_region)
-                .with_context(|| "Failed to remove memory slot to kvm")?;
 
+        KVM_FDS
+            .load()
+            .remove_mem_slot(kvm_region)
+            .with_context(|| "Failed to remove memory slot to kvm")?;
+
+        // SAFETY: All parameters in the struct of kvm_region are valid,
+        // it can be guaranteed that calling the ioctl_with_ref in the function
+        // of set_user_memory_region is safe.
+        unsafe {
             KVM_FDS
                 .load()
                 .vm_fd

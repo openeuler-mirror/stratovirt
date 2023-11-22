@@ -574,6 +574,8 @@ impl Region {
                     AddressSpaceError::InvalidOffset(offset, count, self.size())
                 })?;
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
+                // SAFETY: host_addr is managed by mem_mapping, it can be guaranteed to be legal,
+                // the legality of offset and count has been verified.
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
                 };
@@ -586,6 +588,8 @@ impl Region {
                 })?;
                 if self.rom_dev_romd.as_ref().load(Ordering::SeqCst) {
                     let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
+                    // SAFETY: host_addr is managed by mem_mapping, it can be guaranteed to be legal,
+                    // the legality of offset and count has been verified.
                     let read_ret = unsafe {
                         std::slice::from_raw_parts(
                             (host_addr + offset) as *const u8,
@@ -673,6 +677,8 @@ impl Region {
                 // Mark vmm dirty page manually if live migration is active.
                 MigrationManager::mark_dirty_log(host_addr + offset, count);
 
+                // SAFETY: host_addr is managed by mem_mapping, it can be guaranteed to be legal,
+                // the legality of offset and count has been verified.
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
                 };

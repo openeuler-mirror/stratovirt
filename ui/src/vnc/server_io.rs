@@ -77,13 +77,11 @@ pub struct VncServer {
     pub conn_limits: usize,
 }
 
-// SAFETY:
-// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image
-//    by this pointer.
-// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in
-//    single thread.
-// So implement Send and Sync is safe.
+// SAFETY: The raw pointer in rust doesn't impl Send, the target thread can only read the
+// memory of image by this pointer.
 unsafe impl Send for VncServer {}
+// SAFETY: Tt can be guaranteed that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>>
+// are used only in single thread.
 unsafe impl Sync for VncServer {}
 
 impl VncServer {
@@ -431,7 +429,7 @@ impl VncSurface {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
             }
 
-            // SAFETY: it can be ensure the raw pointer will not exceed the range.
+            // SAFETY: Tt can be ensure the raw pointer will not exceed the range.
             unsafe {
                 if libc::memcmp(
                     s_info.ptr as *mut libc::c_void,

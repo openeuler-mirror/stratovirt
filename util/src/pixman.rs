@@ -192,6 +192,7 @@ pub extern "C" fn virtio_gpu_unref_resource_callback(
     _image: *mut pixman_image_t,
     data: *mut libc::c_void,
 ) {
+    // SAFETY: The safety of this function is guaranteed by caller.
     unsafe { pixman_image_unref(data.cast()) };
 }
 

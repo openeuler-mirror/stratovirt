@@ -175,9 +175,10 @@ impl V4l2CameraBackend {
             if frmsize.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
-            // SAFETY: there are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
+            // SAFETY: There are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
             // Parsing will not result in undefined value.
             let width = unsafe { frmsize.__bindgen_anon_1.discrete.width };
+            // SAFETY: The reason is same as above.
             let height = unsafe { frmsize.__bindgen_anon_1.discrete.height };
             let interval_list = self.list_frame_interval(pixfmt, width, height)?;
             for interval in interval_list {
@@ -211,9 +212,10 @@ impl V4l2CameraBackend {
             if frame_val.type_ != v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE {
                 continue;
             }
-            // SAFETY: there are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
+            // SAFETY: There are two enumeration types for v4l2_frmivalenum__bindgen_ty_1: discrete and stepwise.
             // Parsing will not result in undefined value.
             let numerator = unsafe { frame_val.__bindgen_anon_1.discrete.numerator };
+            // SAFETY: The reason is as same above.
             let denominator = unsafe { frame_val.__bindgen_anon_1.discrete.denominator };
             if denominator == 0 {
                 warn!(

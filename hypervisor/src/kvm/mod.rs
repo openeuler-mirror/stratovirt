@@ -140,7 +140,7 @@ impl KVMFds {
             std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
         )?;
 
-        // Safe because data in `routes` is reliable.
+        // SAFETY: data in `routes` is reliable.
         unsafe {
             let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
             if irq_routing.is_null() {
@@ -191,7 +191,7 @@ impl KVMFds {
     pub fn start_dirty_log(&self) -> Result<()> {
         for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
             region.flags = KVM_MEM_LOG_DIRTY_PAGES;
-            // Safe because region from `KVMFds` is reliable.
+            // SAFETY: region from `KVMFds` is reliable.
             unsafe {
                 self.vm_fd
                     .as_ref()
@@ -213,7 +213,7 @@ impl KVMFds {
     pub fn stop_dirty_log(&self) -> Result<()> {
         for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
             region.flags = 0;
-            // Safe because region from `KVMFds` is reliable.
+            // SAFETY: region from `KVMFds` is reliable.
             unsafe {
                 self.vm_fd
                     .as_ref()

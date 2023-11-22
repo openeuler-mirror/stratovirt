@@ -31,7 +31,7 @@ const SYSTEMCALL_OFFSET: isize = 6;
 static mut RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 pub fn exit_with_code(code: i32) {
-    // Safe, because the basic_clean function has been executed before exit.
+    // SAFETY: The basic_clean function has been executed before exit.
     unsafe {
         libc::_exit(code);
     }
@@ -86,6 +86,7 @@ extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void)
 
 extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {
     set_signal(num);
+    // SAFETY: The safety of this function is guaranteed by caller.
     let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
     write!(
         &mut std::io::stderr(),

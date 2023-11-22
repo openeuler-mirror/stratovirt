@@ -52,6 +52,7 @@ pub fn set_test_enabled() {
     if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
         panic!("Failed to initialize clock");
     }
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
@@ -64,6 +65,7 @@ pub fn is_test_enabled() -> bool {
 }
 
 pub fn set_test_clock(value: u64) {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");
@@ -78,6 +80,7 @@ pub fn set_test_clock(value: u64) {
 }
 
 pub fn get_test_clock() -> u64 {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");
@@ -88,6 +91,7 @@ pub fn get_test_clock() -> u64 {
 }
 
 pub fn get_test_time() -> Instant {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");

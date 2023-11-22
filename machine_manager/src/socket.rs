@@ -95,11 +95,13 @@ impl SocketRWHandler {
 
     fn parse_fd(&mut self, mhdr: &msghdr) {
         // At least it should has one RawFd.
+        // SAFETY: The input parameter is constant.
         let min_cmsg_len = unsafe { CMSG_LEN(size_of::<RawFd>() as u32) as u64 };
         if (mhdr.msg_controllen as u64) < min_cmsg_len {
             return;
         }
 
+        // SAFETY: The pointer of mhdr can be guaranteed not null.
         let mut cmsg_hdr = unsafe { CMSG_FIRSTHDR(mhdr as *const msghdr).as_ref() };
         while cmsg_hdr.is_some() {
             let scm = cmsg_hdr.unwrap();
@@ -107,6 +109,7 @@ impl SocketRWHandler {
                 && scm.cmsg_type == SCM_RIGHTS
                 && scm.cmsg_len as u64 >= min_cmsg_len
             {
+                // SAFETY: The pointer of scm can be guaranteed not null.
                 let fds = unsafe {
                     let fd_num =
                         (scm.cmsg_len as u64 - CMSG_LEN(0) as u64) as usize / size_of::<RawFd>();
@@ -114,6 +117,7 @@ impl SocketRWHandler {
                 };
                 self.scm_fd.append(&mut fds.to_vec());
             }
+            // SAFETY: The pointer of mhdr can be guaranteed not null.
             cmsg_hdr = unsafe { CMSG_NXTHDR(mhdr as *const msghdr, scm).as_ref() };
         }
     }
@@ -137,9 +141,10 @@ impl SocketRWHandler {
         };
         let mut cmsg_space = [0_u8; MAX_RECV_FDS_LEN];
         loop {
-            // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
-            // initialized in normal way.
-            let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
+            let mut mhdr: msghdr =
+                // SAFETY: In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be 
+                // initialized in normal way.
+                unsafe { std::mem::zeroed() };
             mhdr.msg_name = std::ptr::null_mut();
             mhdr.msg_namelen = 0;
             mhdr.msg_iov = &mut iov as *mut iovec;
@@ -150,6 +155,7 @@ impl SocketRWHandler {
 
             // MSG_DONTWAIT: Enables nonblocking operation, if the operation would block the call
             // fails with the error EAGAIN or EWOULDBLOCK. When this error occurs, break loop
+            // SAFETY: The pointer of mhdr can been guaranteed not null.
             let ret = unsafe { recvmsg(self.socket_fd, &mut mhdr, MSG_DONTWAIT) };
             // when use tcpsocket client and exit with ctrl+c, ret value will return 0 and get
             // error WouldBlock or BrokenPipe, so we should handle this 0 to break this loop.
@@ -198,6 +204,7 @@ impl SocketRWHandler {
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
         // initialized in normal way.
+        // SAFETY: The member variables of mhdr have been initialization later.
         let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
         mhdr.msg_name = std::ptr::null_mut();
         mhdr.msg_namelen = 0;
@@ -207,6 +214,7 @@ impl SocketRWHandler {
         mhdr.msg_controllen = 0;
         mhdr.msg_flags = 0;
 
+        // SAFETY: The buffer address and length recorded in mhdr are both legal.
         if unsafe { sendmsg(self.socket_fd, &mhdr, MSG_NOSIGNAL) } == -1 {
             Err(Error::new(
                 ErrorKind::BrokenPipe,

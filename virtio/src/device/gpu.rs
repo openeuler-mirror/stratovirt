@@ -493,7 +493,7 @@ fn create_surface(
         pixman_stride,
     );
     ref_pixman_image(res.pixman_image);
-    // SAFETY: the param of create operation for image has been checked.
+    // SAFETY: The param of create operation for image has been checked.
     unsafe {
         pixman_image_set_destroy_function(
             rect,
@@ -1100,7 +1100,7 @@ impl GpuIoHandler {
         } else {
             get_image_data(res.pixman_image)
         };
-        // SAFETY: the offset is within the legal address.
+        // SAFETY: The offset is within the legal address.
         let res_data_offset = unsafe { res_data.offset(offset as isize) };
 
         // Create surface for the scanout.
@@ -1191,7 +1191,7 @@ impl GpuIoHandler {
             let mut final_reg = pixman_region16_t::default();
             let rect_reg_ptr = &mut rect_reg as *mut pixman_region16_t;
             let final_reg_ptr = &mut final_reg as *mut pixman_region16_t;
-            // SAFETY: the pointer is not empty.
+            // SAFETY: The pointer is not empty.
             unsafe {
                 pixman_region_init(final_reg_ptr);
                 pixman_region_init_rect(
@@ -1217,7 +1217,7 @@ impl GpuIoHandler {
             }
         }
 
-        // SAFETY: it can ensured that the pointer is not empty.
+        // SAFETY: Tt can ensured that the pointer is not empty.
         unsafe {
             pixman_region_fini(flush_reg_ptr);
         }
@@ -1371,6 +1371,7 @@ impl GpuIoHandler {
         // SAFETY: Upper limit of ents is 16384.
         ents.resize(entries as usize, VirtioGpuMemEntry::default());
         let ents_buf =
+            // SAFETY: ents is guaranteed not be null and the range of ents_size has been limited.
             unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
         let v = iov_to_buf_direct(&req.out_iovec, head_size, ents_buf)?;
         if v as u64 != ents_size {

@@ -534,7 +534,7 @@ pub fn write_pixel(
 ) {
     if !client_dpm.convert {
         let mut con = vec![0; copy_bytes];
-        // SAFETY: it can be ensure the raw pointer will not exceed the range.
+        // SAFETY: Tt can be ensure the raw pointer will not exceed the range.
         unsafe {
             ptr::copy(data_ptr as *mut u8, con.as_mut_ptr(), copy_bytes);
         }
@@ -543,7 +543,7 @@ pub fn write_pixel(
         let num = copy_bytes >> 2;
         let ptr = data_ptr as *mut u32;
         for i in 0..num {
-            // SAFETY: it can be ensure the raw pointer will not exceed the range.
+            // SAFETY: Tt can be ensure the raw pointer will not exceed the range.
             let color = unsafe { *ptr.add(i) };
             convert_pixel(client_dpm, buf, color);
         }

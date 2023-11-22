@@ -1407,6 +1407,7 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type in Aio.
 // We use Arc<Mutex<Qcow2Driver<T>>> to allow used in multi-threading.
 unsafe impl<T: Clone + 'static> Send for Qcow2Driver<T> {}
+// SAFETY: The reason is same as above.
 unsafe impl<T: Clone + 'static> Sync for Qcow2Driver<T> {}
 
 impl<T: Clone + Send + Sync> Qcow2Driver<T> {

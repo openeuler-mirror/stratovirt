@@ -142,8 +142,8 @@ impl VfioPciDevice {
         };
 
         let locked_dev = self.vfio_device.lock().unwrap();
-        // Safe as device is the owner of file, and we will verify the result is valid.
         let ret =
+            // SAFETY: Device is the owner of file, and we will verify the result is valid.
             unsafe { ioctl_with_mut_ref(&locked_dev.fd, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(

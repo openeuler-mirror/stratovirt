@@ -165,12 +165,15 @@ impl MigrationManager {
         desc_db: &HashMap<u64, DeviceStateDesc>,
     ) -> Result<(Vec<u8>, u64)> {
         let mut instance = Instance::default();
-        fd.read_exact(unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut instance as *mut Instance as *mut u8,
-                size_of::<Instance>(),
-            )
-        })
+        fd.read_exact(
+            // SAFETY: The pointer of instance can guaranteed not null.
+            unsafe {
+                std::slice::from_raw_parts_mut(
+                    &mut instance as *mut Instance as *mut u8,
+                    size_of::<Instance>(),
+                )
+            },
+        )
         .with_context(|| "Failed to read instance of object")?;
 
         let locked_desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
