@@ -264,7 +264,7 @@ fn region_update_exception() {
 #[test]
 fn rom_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
-    let addr = 0x100_0000_0000; // 1TB
+    let addr = 0x1_0000_0000; // 4GB
 
     // Add a dummy rom device by qmp. The function of the device is to multiply the written value by
     // 2 through the write interface and save it, and read the saved value through the read
@@ -275,7 +275,7 @@ fn rom_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"rom_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"read_only_mode\": false,
@@ -314,7 +314,7 @@ fn rom_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"rom_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"read_only_mode\": true,
@@ -349,7 +349,7 @@ fn rom_device_region_readwrite() {
 #[test]
 fn ram_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
-    let addr = 0x100_0000_0000; // 1TB
+    let addr = 0x1_0000_0000; // 4GB
 
     let file = File::create(&RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
@@ -357,7 +357,7 @@ fn ram_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"ram_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"device_fd_path\": {:?} }} }}",
@@ -389,7 +389,7 @@ fn ram_device_region_readwrite() {
     memory_test
         .state
         .borrow_mut()
-        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
+        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 4294967296, \"size\": 4096, \"priority\": 99 }}");
 
     remove_file(RAM_DEV_PATH).unwrap();
 
