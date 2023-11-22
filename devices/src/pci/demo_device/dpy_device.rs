@@ -40,7 +40,9 @@ use ui::{
 };
 use util::pixman::{pixman_format_bpp, pixman_image_get_stride, pixman_image_t};
 
+// SAFETY: Demo device is only used for test.
 unsafe impl Send for Surface {}
+// SAFETY: Demo device is only used for test.
 unsafe impl Sync for Surface {}
 pub struct Surface {
     pub pixman_image: *mut pixman_image_t,
@@ -88,6 +90,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
         let res_data_ptr = get_image_data(surface.image) as *mut u8;
         let height = get_image_height(surface.image);
         let stride;
+        // SAFETY: Demo device is only used for test.
         unsafe {
             stride = pixman_image_get_stride(surface.image);
         }
@@ -95,6 +98,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
         let size = height * stride;
 
         let mut data: Vec<u8> = vec![0u8; size as usize];
+        // SAFETY: Demo device is only used for test.
         unsafe {
             ptr::copy(res_data_ptr, data.as_mut_ptr(), size as usize);
         }
@@ -118,6 +122,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
 
         let bpp = pixman_format_bpp(get_image_format(ds.pixman_image) as u32);
         let stride;
+        // SAFETY: Demo device is only used for test.
         unsafe {
             stride = pixman_image_get_stride(ds.pixman_image);
         }
@@ -132,7 +137,7 @@ impl DisplayChangeListenerOperations for DpyInterface {
                 offset + count,
                 ds.image[offset as usize]
             );
-
+            // SAFETY: Demo device is only used for test.
             unsafe {
                 ptr::copy(
                     res_data_ptr.add(offset as usize),

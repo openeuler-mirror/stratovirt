@@ -439,6 +439,7 @@ impl SyscallFilter {
         let sock_bpf_vec = self.sock_filters;
 
         // This operation can guarantee seccomp make use for all users and subprocess.
+        // SAFETY: All input parameters are constants.
         let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         if ret != 0 {
             bail!("Seccomp: prctl(2) set no new privs failed.");
@@ -451,6 +452,7 @@ impl SyscallFilter {
         let bpf_prog_ptr = &prog as *const SockFProg;
 
         // Use seccomp(2) to make bpf rules take effect.
+        // SAFETY: The pointer of bpf_prog_ptr can be guaranteed not null.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_seccomp,

@@ -42,7 +42,9 @@ pub fn gettime() -> Result<(u32, u32)> {
 
 /// Convert wall time to year/month/day/hour/minute/second format.
 pub fn get_format_time(sec: i64) -> [i32; 6] {
+    // SAFETY: No input parameter.
     let mut ti: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: The parameters of sec and ti can be guaranteed not be null.
     unsafe {
         libc::localtime_r(&sec, &mut ti);
     }

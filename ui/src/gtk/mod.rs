@@ -875,10 +875,11 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
 
     if borrowed_gs.source_surface.format == pixman_format_code_t::PIXMAN_x8r8g8b8 {
         let data = get_image_data(borrowed_gs.source_surface.image) as *mut u8;
+        borrowed_gs.cairo_image =
         // SAFETY:
         // 1. It can be sure that the ptr of data is not nullptr.
         // 2. The copy range will not exceed the image data.
-        borrowed_gs.cairo_image = unsafe {
+        unsafe {
             ImageSurface::create_for_data_unsafe(
                 data as *mut u8,
                 Format::Rgb24,
@@ -897,11 +898,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
             surface_stride,
         );
 
+        let data = get_image_data(transfer_image) as *mut u8;
+        borrowed_gs.cairo_image =
         // SAFETY:
         // 1. It can be sure that the ptr of data is not nullptr.
         // 2. The copy range will not exceed the image data.
-        let data = get_image_data(transfer_image) as *mut u8;
-        borrowed_gs.cairo_image = unsafe {
+        unsafe {
             ImageSurface::create_for_data_unsafe(
                 data as *mut u8,
                 Format::Rgb24,

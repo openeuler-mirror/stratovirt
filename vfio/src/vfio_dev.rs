@@ -121,7 +121,7 @@ impl VfioContainer {
             .open(CONTAINER_PATH)
             .with_context(|| format!("Failed to open {} for VFIO container.", CONTAINER_PATH))?;
 
-        // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
+        // SAFETY: Called file is `/dev/vfio/vfio` fd and we check the return.
         let v = unsafe { ioctl(&fd, VFIO_GET_API_VERSION()) };
         if v as u32 != vfio::VFIO_API_VERSION {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -130,8 +130,8 @@ impl VfioContainer {
             )));
         };
 
-        // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
         let ret =
+        // SAFETY: Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
             unsafe { ioctl_with_val(&fd, VFIO_CHECK_EXTENSION(), vfio::VFIO_TYPE1v2_IOMMU.into()) };
         if ret != 1 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -157,7 +157,7 @@ impl VfioContainer {
     /// * Fail to match IOMMU type.
     /// * Fail to set container IOMMU.
     fn set_iommu(&self, val: u32) -> Result<()> {
-        // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
+        // SAFETY: Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_val(&self.fd, VFIO_SET_IOMMU(), val.into()) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -187,7 +187,7 @@ impl VfioContainer {
             size,
         };
 
-        // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
+        // SAFETY: Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_IOMMU_MAP_DMA(), &map) };
         if ret != 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -215,7 +215,7 @@ impl VfioContainer {
             size,
         };
 
-        // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
+        // SAFETY: Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_IOMMU_UNMAP_DMA(), &unmap) };
         if ret != 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -335,7 +335,7 @@ impl VfioGroup {
             argsz: size_of::<vfio::vfio_group_status>() as u32,
             flags: 0,
         };
-        // Safe as file is `iommu_group` fd, and we check the return.
+        // SAFETY: file is `iommu_group` fd, and we check the return.
         let ret = unsafe { ioctl_with_mut_ref(&file, VFIO_GROUP_GET_STATUS(), &mut status) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -400,7 +400,7 @@ impl VfioGroup {
 
     fn set_container(&mut self, container: &Arc<Mutex<VfioContainer>>) -> Result<()> {
         let fd = &container.lock().unwrap().fd.as_raw_fd();
-        // Safe as group is the owner of file, and we check the return.
+        // SAFETY: group is the owner of file, and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -415,6 +415,7 @@ impl VfioGroup {
     fn unset_container(&mut self) {
         let container = self.container.upgrade().unwrap();
         let fd = container.lock().unwrap().fd.as_raw_fd();
+        // SAFETY: self.fd was created in function new().
         unsafe { ioctl_with_ref(&self.fd, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
         self.container = Weak::new();
     }
@@ -581,7 +582,7 @@ impl VfioDevice {
         let path: CString = CString::new(dev_name.as_bytes())
             .with_context(|| "Failed to convert device name to CString type of data")?;
         let ptr = path.as_ptr();
-        // Safe as group is the owner of file and make sure ptr is valid.
+        // SAFETY: group is the owner of file and make sure ptr is valid.
         let fd = unsafe { ioctl_with_ptr(&group.fd, VFIO_GROUP_GET_DEVICE_FD(), ptr) };
         if fd < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -590,7 +591,7 @@ impl VfioDevice {
             )));
         }
 
-        // Safe as we have verified that fd is a valid FD.
+        // SAFETY: We have verified that fd is a valid FD.
         let device = unsafe { File::from_raw_fd(fd) };
         Ok((String::from(dev_name), device))
     }
@@ -603,7 +604,7 @@ impl VfioDevice {
             num_irqs: 0,
         };
 
-        // Safe as device is the owner of file, and we will verify the result is valid.
+        // SAFETY: Device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_mut_ref(device, VFIO_DEVICE_GET_INFO(), &mut dev_info) };
         if ret < 0
             || (dev_info.flags & vfio::VFIO_DEVICE_FLAGS_PCI) == 0
@@ -635,7 +636,7 @@ impl VfioDevice {
                 let cap_size = (info.argsz - argsz) as usize;
                 let mut new_info = array_to_vec::<VfioRegionWithCap, u8>(cap_size);
                 new_info[0].region_info = info;
-                // Safe as device is the owner of file, and we will verify the result is valid.
+                // SAFETY: Device is the owner of file, and we will verify the result is valid.
                 let ret = unsafe {
                     ioctl_with_mut_ref(
                         &self.fd,
@@ -650,14 +651,17 @@ impl VfioDevice {
                     )));
                 }
 
-                // Safe as we make sure there is enough memory space to convert cap info into
+                // SAFETY: We make sure there is enough memory space to convert cap info into
                 // specific structure.
                 let sparse = unsafe {
                     new_info[0].cap_info.as_ptr() as *mut vfio::vfio_region_info_cap_sparse_mmap
                 };
+                // SAFETY: sparse was created in this function and can be guaranteed now be null.
                 if unsafe { (*sparse).header.id } == vfio::VFIO_REGION_INFO_CAP_SPARSE_MMAP as u16 {
+                    // SAFETY: The reason is same as above.
                     let nr_areas = unsafe { (*sparse).nr_areas as usize };
                     let areas: &mut [vfio::vfio_region_sparse_mmap_area] =
+                        // SAFETY: The reason is same as above.
                         unsafe { (*sparse).areas.as_mut_slice(nr_areas) };
                     mmaps = Vec::with_capacity(nr_areas);
                     for area in areas.iter() {
@@ -686,7 +690,7 @@ impl VfioDevice {
             offset: 0,
         };
 
-        // Safe as device is the owner of file, and we will verify the result is valid.
+        // SAFETY: Device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -735,8 +739,8 @@ impl VfioDevice {
                 count: 0,
             };
 
-            // Safe as device is the owner of file, and we will verify the result is valid.
             let ret =
+                // SAFETY: Device is the owner of file, and we will verify the result is valid.
                 unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
             if ret < 0 {
                 warn!(
@@ -802,14 +806,14 @@ impl VfioDevice {
         irq_set[0].start = start;
         irq_set[0].count = irq_fds.len() as u32;
 
-        // It is safe as enough memory space to save irq_set data.
+        // SAFETY: It is safe as enough memory space to save irq_set data.
         let data: &mut [u8] = unsafe {
             irq_set[0]
                 .data
                 .as_mut_slice(irq_fds.len() * size_of::<RawFd>())
         };
         LittleEndian::write_i32_into(irq_fds.as_slice(), data);
-        // Safe as device is the owner of file, and we will verify the result is valid.
+        // SAFETY: Device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -837,7 +841,7 @@ impl VfioDevice {
         irq_set[0].start = 0u32;
         irq_set[0].count = 0u32;
 
-        // Safe as device is the owner of file, and we will verify the result is valid.
+        // SAFETY: Device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
             return Err(anyhow!(VfioError::VfioIoctl(
@@ -850,8 +854,8 @@ impl VfioDevice {
     }
 
     pub fn reset(&self) -> Result<()> {
-        // Safe as device is the owner of file, and we verify the device supports being reset.
         if self.dev_info.flags & vfio::VFIO_DEVICE_FLAGS_RESET != 0 {
+            // SAFETY: Device is the owner of file, and we verify the device supports being reset.
             let ret = unsafe { ioctl(&self.fd, VFIO_DEVICE_RESET()) };
             if ret < 0 {
                 return Err(anyhow!(VfioError::VfioIoctl(

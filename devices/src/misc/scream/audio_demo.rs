@@ -47,6 +47,7 @@ impl AudioDemo {
 
 impl AudioInterface for AudioDemo {
     fn send(&mut self, recv_data: &StreamData) {
+        // SAFETY: Audio demo device is only used for test.
         let data = unsafe {
             std::slice::from_raw_parts(
                 recv_data.audio_base as *const u8,
@@ -65,6 +66,7 @@ impl AudioInterface for AudioDemo {
 
     fn receive(&mut self, recv_data: &StreamData) -> bool {
         thread::sleep(time::Duration::from_millis(20));
+        // SAFETY: Audio demo device is only used for test.
         let data = unsafe {
             std::slice::from_raw_parts_mut(
                 recv_data.audio_base as *mut u8,

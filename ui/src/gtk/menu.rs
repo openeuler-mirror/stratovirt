@@ -235,6 +235,7 @@ impl GtkMenu {
 
         // Disable the default F10 menu shortcut.
         if let Some(setting) = self.window.settings() {
+            // SAFETY: self.windows can be guaranteed to be legal.
             unsafe {
                 gtk::glib::gobject_ffi::g_object_set_property(
                     setting.as_ptr() as *mut GObject,
@@ -383,7 +384,7 @@ fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         ));
         if let Some(button_yes) = &dialog.widget_for_response(gtk::ResponseType::Yes) {
             let label: &str = &gettext("Yes");
-            // SAFETY: it can be ensure that the pointer is not empty.
+            // SAFETY: Tt can be ensure that the pointer is not empty.
             unsafe {
                 let button: *mut GtkWidget = button_yes.as_ptr();
                 gtk_button_set_label(button as *mut GtkButton, label.to_glib_none().0);
@@ -391,7 +392,7 @@ fn window_close_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
         }
         if let Some(button_no) = dialog.widget_for_response(gtk::ResponseType::No) {
             let label: &str = &gettext("No");
-            // SAFETY: it can be ensure that the pointer is not empty.
+            // SAFETY: Tt can be ensure that the pointer is not empty.
             unsafe {
                 let button: *mut GtkWidget = button_no.as_ptr();
                 gtk_button_set_label(button as *mut GtkButton, label.to_glib_none().0);

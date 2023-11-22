@@ -123,6 +123,7 @@ pub struct ScsiDevice {
 
 // SAFETY: the devices attached in one scsi controller will process IO in the same thread.
 unsafe impl Send for ScsiDevice {}
+// SAFETY: The reason is same as above.
 unsafe impl Sync for ScsiDevice {}
 
 impl ScsiDevice {

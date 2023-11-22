@@ -19,12 +19,14 @@ pub trait ByteCode: Default + Copy + Send + Sync {
     /// Return the contents of an object (impl trait `ByteCode`) as a slice of bytes.
     /// the inverse of this function is "from_bytes"
     fn as_bytes(&self) -> &[u8] {
+        // SAFETY: The object is guaranteed been initialized already.
         unsafe { from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 
     /// Return the contents of a mutable object (impl trait `ByteCode`) to a mutable slice of bytes.
     /// the inverse of this function is "from_bytes_mut"
     fn as_mut_bytes(&mut self) -> &mut [u8] {
+        // SAFETY: The object is guaranteed been initialized already.
         unsafe { from_raw_parts_mut(self as *mut Self as *mut u8, size_of::<Self>()) }
     }
 

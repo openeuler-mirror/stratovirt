@@ -329,8 +329,9 @@ impl PFlash {
         let addr: u64 = mr
             .get_host_address()
             .with_context(|| "Failed to get host address.")?;
-        let ret = unsafe {
-            // Safe as addr and size are valid.
+        let ret =
+        // SAFETY: addr and size are valid.
+        unsafe {
             libc::msync(
                 addr as *mut libc::c_void,
                 size as libc::size_t,
@@ -355,8 +356,8 @@ impl PFlash {
             )));
         }
         let host_addr = mr.get_host_address().unwrap();
-        // Safe because host_addr of the region is local allocated and sanity has been checked.
         let src =
+            // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         data.as_mut()
             .write_all(src)
@@ -376,8 +377,8 @@ impl PFlash {
             )));
         }
         let host_addr = mr.get_host_address().unwrap();
-        // Safe because host_addr of the region is local allocated and sanity has been checked.
         let mut dst =
+            // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         dst.write_all(data)
             .with_context(|| "Failed to write data to PFlash Rom")?;

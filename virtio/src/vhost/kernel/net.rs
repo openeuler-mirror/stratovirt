@@ -62,6 +62,7 @@ impl VhostNetBackend for VhostBackend {
             fd,
         };
 
+        // SAFETY: self.fd was created in function new() and the return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_NET_SET_BACKEND(), &vring_file) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(

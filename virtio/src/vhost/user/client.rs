@@ -485,7 +485,10 @@ impl VhostUserClient {
                 // Expect 1 fd.
                 let mut fds = [RawFd::default()];
                 let vhost_user_inflight = self.get_inflight_fd(queue_num, queue_size, &mut fds)?;
-                let file = Arc::new(unsafe { File::from_raw_fd(fds[0]) });
+                let file = Arc::new(
+                    // SAFETY: fds[0] create in function of get_inflight_fd.
+                    unsafe { File::from_raw_fd(fds[0]) },
+                );
                 let hva = do_mmap(
                     &Some(file.as_ref()),
                     vhost_user_inflight.mmap_size,
@@ -751,12 +754,17 @@ impl VhostUserClient {
             queue_size,
         };
         let body_opt: Option<&u32> = None;
-        let payload_opt: Option<&[u8]> = Some(unsafe {
-            from_raw_parts(
-                (&inflight as *const VhostUserInflight) as *const u8,
-                data_len,
-            )
-        });
+        let payload_opt: Option<&[u8]> = Some(
+            // SAFETY:
+            // 1. inflight can be guaranteed not null.
+            // 2. data_len is constant.
+            unsafe {
+                from_raw_parts(
+                    (&inflight as *const VhostUserInflight) as *const u8,
+                    data_len,
+                )
+            },
+        );
         let client = self.client.lock().unwrap();
         client
             .sock

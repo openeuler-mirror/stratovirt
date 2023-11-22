@@ -64,6 +64,7 @@ pub struct RamfbState {
 // modified by guest OS and accessed by vnc. So implement Sync and
 // Send is safe.
 unsafe impl Sync for RamfbState {}
+// SAFETY: The reason is same as above.
 unsafe impl Send for RamfbState {}
 
 impl RamfbState {
@@ -286,9 +287,9 @@ impl AmlBuilder for Ramfb {
 }
 
 fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
-    // SAFETY: data is the raw pointer of framebuffer. EDKII has malloc the memory of
-    // the framebuffer. So dereference the data is safe.
     let black_screen =
+        // SAFETY: data is the raw pointer of framebuffer. EDKII has malloc the memory of
+        // the framebuffer. So dereference the data is safe.
         unsafe { !data.is_null() && *data == 0 && *data.offset(1) == 0 && *data.offset(2) == 0 };
     if install.load(Ordering::Acquire) && black_screen {
         let set_press_func = Box::new(move || {

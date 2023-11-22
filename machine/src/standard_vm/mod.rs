@@ -1765,6 +1765,7 @@ impl DeviceInterface for StdMachine {
 
                 let ptr: *const u8 = data.as_ptr();
                 let ptr: *const u64 = ptr as *const u64;
+                // SAFETY: The ptr can be guaranteed not empty.
                 self.head = unsafe { *ptr } * 2;
                 true
             }
