@@ -25,7 +25,10 @@ use std::{
     mem::size_of,
     os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
-    sync::{atomic::AtomicBool, Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc, Mutex, Weak,
+    },
     time::Duration,
 };
 
@@ -1769,6 +1772,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
     fn drain_request(&self) {
         self.driver.drain_request();
+    }
+
+    fn get_inflight(&self) -> Arc<AtomicU64> {
+        self.driver.incomplete.clone()
     }
 
     fn register_io_event(

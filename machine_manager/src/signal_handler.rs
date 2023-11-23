@@ -10,28 +10,25 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::io::Write;
+use std::{
+    io::Write,
+    sync::atomic::{AtomicI32, Ordering},
+};
 
 use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::register_signal_handler;
 
 use crate::{
     event,
+    event_loop::EventLoop,
     qmp::{qmp_channel::QmpChannel, qmp_schema},
-    temp_cleaner::TempCleaner,
 };
 use util::set_termi_canon_mode;
 
-const VM_EXIT_SUCCESS: i32 = 0;
 pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
 
-fn basic_clean() {
-    // clean temporary file
-    TempCleaner::clean();
-
-    set_termi_canon_mode().expect("Failed to set terminal to canon mode.");
-}
+static mut RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 pub fn exit_with_code(code: i32) {
     // Safe, because the basic_clean function has been executed before exit.
@@ -40,27 +37,55 @@ pub fn exit_with_code(code: i32) {
     }
 }
 
-extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
-    if QmpChannel::is_connected() {
-        let shutdown_msg = qmp_schema::Shutdown {
-            guest: false,
-            reason: "Guest shutdown by signal ".to_string() + &num.to_string(),
-        };
-        event!(Shutdown; shutdown_msg);
+pub fn set_signal(num: c_int) {
+    /*
+     * Other three signals need to send shutdown message more than SIGSYS.
+     * So, if received other three signals, it should replace the SIGSYS
+     * which has been received before. The SIGTERM/SIGINT/SIGHUP has the
+     * same treatment, if received one of them, no need to replace it.
+     */
+    if [0, libc::SIGSYS].contains(&get_signal()) {
+        // SAFETY: just write a global variable.
+        unsafe {
+            RECEIVED_SIGNAL.store(num, Ordering::SeqCst);
+        }
+        EventLoop::get_ctx(None).unwrap().kick();
     }
+}
 
-    basic_clean();
+pub fn get_signal() -> i32 {
+    // SAFETY: just read a global variable.
+    unsafe { RECEIVED_SIGNAL.load(Ordering::SeqCst) }
+}
+
+pub fn handle_signal() {
+    let sig_num = get_signal();
+    if sig_num != 0 {
+        set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
+        if [libc::SIGTERM, libc::SIGINT, libc::SIGHUP].contains(&sig_num)
+            && QmpChannel::is_connected()
+        {
+            let shutdown_msg = qmp_schema::Shutdown {
+                guest: false,
+                reason: "Guest shutdown by signal ".to_string() + &sig_num.to_string(),
+            };
+            event!(Shutdown; shutdown_msg);
+        }
+    }
+}
+
+extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+    set_signal(num);
     write!(
         &mut std::io::stderr(),
         "Received kill signal, signal number: {} \r\n",
         num
     )
     .expect("Failed to write to stderr");
-    exit_with_code(VM_EXIT_SUCCESS);
 }
 
-extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) {
-    basic_clean();
+extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {
+    set_signal(num);
     let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
     write!(
         &mut std::io::stderr(),
@@ -68,17 +93,16 @@ extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) 
         badcall
     )
     .expect("Failed to write to stderr");
-    exit_with_code(VM_EXIT_GENE_ERR);
 }
 
 /// Register kill signal handler. Signals supported now are SIGTERM and SIGSYS.
 pub fn register_kill_signal() {
-    register_signal_handler(libc::SIGTERM, handle_signal_kill)
+    register_signal_handler(libc::SIGTERM, receive_signal_kill)
         .expect("Register signal handler for SIGTERM failed!");
-    register_signal_handler(libc::SIGSYS, handle_signal_sys)
+    register_signal_handler(libc::SIGSYS, receive_signal_sys)
         .expect("Register signal handler for SIGSYS failed!");
-    register_signal_handler(libc::SIGINT, handle_signal_kill)
+    register_signal_handler(libc::SIGINT, receive_signal_kill)
         .expect("Register signal handler for SIGINT failed!");
-    register_signal_handler(libc::SIGHUP, handle_signal_kill)
+    register_signal_handler(libc::SIGHUP, receive_signal_kill)
         .expect("Register signal handler for SIGHUP failed!");
 }
