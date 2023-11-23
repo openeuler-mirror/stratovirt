@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
+use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -113,7 +113,7 @@ trait CtrlHdr {
 }
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 struct VirtioGpuCtrlHdr {
     hdr_type: u32,
     flags: u32,
@@ -131,7 +131,7 @@ impl CtrlHdr for VirtioGpuCtrlHdr {
 }
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 struct VirtioGpuRect {
     x_coord: u32,
     y_coord: u32,
@@ -142,7 +142,7 @@ struct VirtioGpuRect {
 impl ByteCode for VirtioGpuRect {}
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 struct VirtioGpuDisplayOne {
     rect: VirtioGpuRect,
     enabled: u32,
@@ -152,7 +152,7 @@ struct VirtioGpuDisplayOne {
 impl ByteCode for VirtioGpuDisplayOne {}
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 struct VirtioGpuDisplayInfo {
     header: VirtioGpuCtrlHdr,
     pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_OUTPUTS],
@@ -808,6 +808,7 @@ impl GpuIoHandler {
             }
         }
         drop(output_states_lock);
+        info!("virtio-gpu get the display info {:?}", display_info);
         self.send_response(req, &mut display_info)
     }
 
@@ -1309,7 +1310,13 @@ impl GpuIoHandler {
                 VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => self.cmd_resource_attach_backing(req),
                 VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => self.cmd_resource_detach_backing(req),
                 VIRTIO_GPU_CMD_GET_EDID => self.cmd_get_edid(req),
-                _ => self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req),
+                _ => {
+                    error!(
+                        "Failed to process unsupported command: {}",
+                        req.header.hdr_type
+                    );
+                    self.response_nodata(VIRTIO_GPU_RESP_ERR_UNSPEC, req)
+                }
             } {
                 error!("Fail to handle GPU request, {:?}.", e);
             }
@@ -1630,6 +1637,7 @@ impl VirtioDevice for Gpu {
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
         register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
+        info!("virtio-gpu has been activated");
 
         Ok(())
     }
@@ -1639,6 +1647,9 @@ impl VirtioDevice for Gpu {
             display_set_major_screen("ramfb")?;
             set_run_stage(VmRunningStage::Bios);
         }
-        unregister_event_helper(None, &mut self.base.deactivate_evts)
+
+        let result = unregister_event_helper(None, &mut self.base.deactivate_evts);
+        info!("virtio-gpu deactivate {:?}", result);
+        result
     }
 }
