@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
-use log::{debug, error, info};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 
 use super::descriptor::{
@@ -223,7 +223,7 @@ impl UsbDevice for UsbKeyboard {
                 }
             }
             Err(e) => {
-                error!("Keyboard descriptor error {:?}", e);
+                warn!("Keyboard descriptor error {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
