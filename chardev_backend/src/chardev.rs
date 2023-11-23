@@ -422,6 +422,7 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
 
             let peer_disconnected = event & EventSet::HANG_UP == EventSet::HANG_UP;
             if peer_disconnected && locked_chardev.receiver.is_none() {
+                drop(locked_chardev);
                 return close_connection();
             }
 
