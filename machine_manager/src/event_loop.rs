@@ -21,6 +21,7 @@ use log::info;
 use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
+use crate::signal_handler::get_signal;
 use util::loop_context::{
     gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
 };
@@ -148,6 +149,11 @@ impl EventLoop {
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 loop {
+                    let sig_num = get_signal();
+                    if sig_num != 0 {
+                        info!("MainLoop exits due to receive signal {}", sig_num);
+                        return Ok(());
+                    }
                     if !event_loop.main_loop.run()? {
                         info!("MainLoop exits due to guest internal operation.");
                         return Ok(());

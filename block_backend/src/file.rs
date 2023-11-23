@@ -54,7 +54,7 @@ impl CombineRequest {
 pub struct FileDriver<T: Clone + 'static> {
     pub file: File,
     aio: Rc<RefCell<Aio<T>>>,
-    incomplete: Arc<AtomicU64>,
+    pub incomplete: Arc<AtomicU64>,
     delete_evts: Vec<RawFd>,
     block_prop: BlockProperty,
 }

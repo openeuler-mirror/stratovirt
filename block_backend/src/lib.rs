@@ -16,7 +16,11 @@ pub mod raw;
 
 use std::{
     fs::File,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    thread::yield_now,
 };
 
 use anyhow::{bail, Context, Result};
@@ -311,6 +315,8 @@ pub trait BlockDriverOps<T: Clone>: Send {
 
     fn drain_request(&self);
 
+    fn get_inflight(&self) -> Arc<AtomicU64>;
+
     fn register_io_event(
         &mut self,
         device_broken: Arc<AtomicBool>,
@@ -360,28 +366,19 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             let drain = prop.iothread.is_some();
             let cloned_drive_id = prop.id.clone();
 
-            // `qcow2` address has changed after Arc::new(), so we should use the new one.
-            let exit_qcow2 = new_qcow2.lock().unwrap();
-            let exit_qcow2_ptr = &(*exit_qcow2) as *const Qcow2Driver<T> as u64;
-            drop(exit_qcow2);
             let exit_notifier = Arc::new(move || {
-                // Note: Increase the reference count of `qcow2`` to avoid abnormal kill during the
-                // hot-unplug process, where a reference count of 0 leads to null pointer access.
-                let qcow2_h = cloned_qcow2.upgrade();
-                if qcow2_h.is_none() {
-                    return;
-                }
-
-                // SAFETY: This callback is called only when the vm exits abnormally.
-                let qcow2 = unsafe {
-                    &mut std::slice::from_raw_parts_mut(exit_qcow2_ptr as *mut Qcow2Driver<T>, 1)[0]
-                };
-                info!("clean up qcow2 {:?} resources.", cloned_drive_id);
-                if let Err(e) = qcow2.flush() {
-                    error!("Failed to flush qcow2 {:?}", e);
-                }
-                if drain {
-                    qcow2.drain_request();
+                if let Some(qcow2) = cloned_qcow2.upgrade() {
+                    info!("clean up qcow2 {:?} resources.", cloned_drive_id);
+                    if drain {
+                        info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
+                        let incomplete = qcow2.lock().unwrap().get_inflight();
+                        while incomplete.load(Ordering::SeqCst) != 0 {
+                            yield_now();
+                        }
+                    }
+                    if let Err(e) = qcow2.lock().unwrap().flush() {
+                        error!("Failed to flush qcow2 {:?}", e);
+                    }
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id, exit_notifier);
