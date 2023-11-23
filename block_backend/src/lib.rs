@@ -381,10 +381,10 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     }
                 }
             }) as Arc<ExitNotifier>;
-            TempCleaner::add_exit_notifier(prop.id, exit_notifier);
+            TempCleaner::add_exit_notifier(prop.id.clone(), exit_notifier);
 
             // Add timer for flushing qcow2 metadata.
-            qcow2_flush_metadata(Arc::downgrade(&new_qcow2));
+            qcow2_flush_metadata(Arc::downgrade(&new_qcow2), prop.id);
 
             Ok(new_qcow2)
         }
