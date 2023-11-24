@@ -63,7 +63,7 @@ use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
-use devices::usb::{storage::UsbStorage, UsbDevice};
+use devices::usb::{storage::UsbStorage, uas::UsbUas, UsbDevice};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
@@ -77,6 +77,7 @@ use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
 use machine_manager::config::parse_usb_storage;
+use machine_manager::config::parse_usb_uas;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -1760,6 +1761,12 @@ pub trait MachineOps {
                     .realize()
                     .with_context(|| "Failed to realize usb storage device")?
             }
+            "usb-uas" => {
+                let device_cfg = parse_usb_uas(vm_config, cfg_args)?;
+                let uas = UsbUas::new(device_cfg, self.get_drive_files());
+                uas.realize()
+                    .with_context(|| "Failed to realize usb uas device")?
+            }
             #[cfg(feature = "usb_host")]
             "usb-host" => {
                 let config = UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
@@ -1829,7 +1836,7 @@ pub trait MachineOps {
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
-                ("usb-kbd" | "usb-storage" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
                 #[cfg(feature = "virtio_gpu")]
                 ("virtio-gpu-pci", add_virtio_pci_gpu, cfg_args),
                 #[cfg(feature = "ramfb")]
