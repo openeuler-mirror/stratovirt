@@ -24,7 +24,6 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::error::MachineError;
 use crate::{vm_state, MachineBase, MachineOps};
@@ -549,7 +548,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| StandardVmError::InitPCIeHostErr)?;
+            .with_context(|| MachineError::InitPCIeHostErr)?;
         locked_vm
             .init_ich9_lpc(clone_vm)
             .with_context(|| "Fail to init LPC bridge")?;
@@ -680,7 +679,7 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.read_only,
             )
-            .with_context(|| StandardVmError::InitPflashErr)?;
+            .with_context(|| MachineError::InitPflashErr)?;
             PFlash::realize(
                 pflash,
                 &mut self.base.sysbus,
@@ -688,7 +687,7 @@ impl MachineOps for StdMachine {
                 pfl_size,
                 backend,
             )
-            .with_context(|| StandardVmError::RlzPflashErr)?;
+            .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 
