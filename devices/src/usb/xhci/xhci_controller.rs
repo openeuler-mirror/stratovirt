@@ -1189,6 +1189,7 @@ impl XhciDevice {
             index: 0,
             length: 0,
         };
+        let target_dev = Arc::downgrade(dev) as Weak<Mutex<dyn UsbDevice>>;
         let packet_id = self.generate_packet_id();
         let p = Arc::new(Mutex::new(UsbPacket::new(
             packet_id,
@@ -1196,6 +1197,7 @@ impl XhciDevice {
             0,
             Vec::new(),
             None,
+            Some(target_dev),
         )));
         trace::usb_handle_control(&locked_dev.usb_device_base().base.id, &device_req);
         locked_dev.handle_control(&p, &device_req);
@@ -1939,10 +1941,24 @@ impl XhciDevice {
             }
         }
 
+        let target_dev =
+            if let Ok(target_dev) = self.get_usb_dev(locked_xfer.slotid, locked_xfer.epid) {
+                Some(Arc::downgrade(&target_dev) as Weak<Mutex<dyn UsbDevice>>)
+            } else {
+                None
+            };
+
         let packet_id = self.generate_packet_id();
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);
         let xfer_ops = Arc::downgrade(xfer) as Weak<Mutex<dyn TransferOps>>;
-        let packet = UsbPacket::new(packet_id, dir as u32, ep_number, vec, Some(xfer_ops));
+        let packet = UsbPacket::new(
+            packet_id,
+            dir as u32,
+            ep_number,
+            vec,
+            Some(xfer_ops),
+            target_dev,
+        );
         Ok(Arc::new(Mutex::new(packet)))
     }
 
