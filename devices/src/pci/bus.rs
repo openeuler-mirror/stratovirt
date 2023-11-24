@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
@@ -240,6 +241,12 @@ impl PciBus {
             .lock()
             .unwrap()
             .read_config(offset, data);
+    }
+
+    pub fn update_dev_id(&self, devfn: u8, dev_id: &Arc<AtomicU16>) {
+        let bus_num = self.number(SECONDARY_BUS_NUM as usize);
+        let device_id = ((bus_num as u16) << 8) | (devfn as u16);
+        dev_id.store(device_id, Ordering::Release);
     }
 }
 

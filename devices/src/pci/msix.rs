@@ -13,18 +13,14 @@
 use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::pci::config::{
-    CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM,
-};
-use crate::pci::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
-};
+use crate::pci::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
+use crate::pci::{le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64};
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{
@@ -134,6 +130,24 @@ impl Msix {
         self.func_masked = true;
         self.enabled = true;
         self.mask_all_vectors();
+    }
+
+    pub fn is_enabled(&self, config: &[u8]) -> bool {
+        let offset: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
+        let msix_ctl = le_read_u16(config, offset).unwrap();
+        if msix_ctl & MSIX_CAP_ENABLE > 0 {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_func_masked(&self, config: &[u8]) -> bool {
+        let offset: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
+        let msix_ctl = le_read_u16(config, offset).unwrap();
+        if msix_ctl & MSIX_CAP_FUNC_MASK > 0 {
+            return true;
+        }
+        false
     }
 
     fn mask_all_vectors(&mut self) {
@@ -445,6 +459,35 @@ impl Msix {
         }
     }
 
+    pub fn send_msix(&self, vector: u16, dev_id: u16) {
+        let msg = self.get_message(vector);
+        #[cfg(target_arch = "aarch64")]
+        let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
+        #[cfg(target_arch = "x86_64")]
+        let flags: u32 = 0;
+
+        let kvm_msi = kvm_bindings::kvm_msi {
+            address_lo: msg.address_lo,
+            address_hi: msg.address_hi,
+            data: msg.data,
+            flags,
+            devid: dev_id as u32,
+            pad: [0; 12],
+        };
+
+        if is_test_enabled() {
+            let data = msg.data;
+            let mut addr: u64 = msg.address_hi as u64;
+            addr = (addr << 32) + msg.address_lo as u64;
+            add_msix_msg(addr, data);
+            return;
+        }
+
+        if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
+            error!("Send msix error: {:?}", e);
+        };
+    }
+
     pub fn notify(&mut self, vector: u16, dev_id: u16) {
         if vector >= self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
             warn!("Invalid msix vector {}.", vector);
@@ -456,7 +499,7 @@ impl Msix {
             return;
         }
 
-        send_msix(self.get_message(vector), dev_id);
+        self.send_msix(vector, dev_id);
     }
 
     pub fn write_config(&mut self, config: &[u8], dev_id: u16, offset: usize, data: &[u8]) {
@@ -469,8 +512,8 @@ impl Msix {
             return;
         }
 
-        let masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
-        let enabled: bool = is_msix_enabled(self.msix_cap_offset as usize, config);
+        let masked: bool = self.is_func_masked(config);
+        let enabled: bool = self.is_enabled(config);
         let mask_state_changed = !((self.func_masked == masked) && (self.enabled == enabled));
 
         self.func_masked = masked;
@@ -481,7 +524,7 @@ impl Msix {
             for v in 0..max_vectors_nr {
                 if !self.is_vector_masked(v) && self.is_vector_pending(v) {
                     self.clear_pending_vector(v);
-                    send_msix(self.get_message(v), dev_id);
+                    self.send_msix(v, dev_id);
                 }
             }
         }
@@ -563,59 +606,13 @@ impl MigrationHook for Msix {
 
                 if self.is_vector_pending(vector) {
                     self.clear_pending_vector(vector);
-                    send_msix(msg, self.dev_id.load(Ordering::Acquire));
+                    self.send_msix(vector, self.dev_id.load(Ordering::Acquire));
                 }
             }
         }
 
         Ok(())
     }
-}
-
-pub fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
-    let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
-    let msix_ctl = le_read_u16(config, offset).unwrap();
-    if msix_ctl & MSIX_CAP_ENABLE > 0 {
-        return true;
-    }
-    false
-}
-
-fn is_msix_func_masked(msix_cap_offset: usize, config: &[u8]) -> bool {
-    let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
-    let msix_ctl = le_read_u16(config, offset).unwrap();
-    if msix_ctl & MSIX_CAP_FUNC_MASK > 0 {
-        return true;
-    }
-    false
-}
-
-fn send_msix(msg: Message, dev_id: u16) {
-    #[cfg(target_arch = "aarch64")]
-    let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
-    #[cfg(target_arch = "x86_64")]
-    let flags: u32 = 0;
-
-    let kvm_msi = kvm_bindings::kvm_msi {
-        address_lo: msg.address_lo,
-        address_hi: msg.address_hi,
-        data: msg.data,
-        flags,
-        devid: dev_id as u32,
-        pad: [0; 12],
-    };
-
-    if is_test_enabled() {
-        let data = msg.data;
-        let mut addr: u64 = msg.address_hi as u64;
-        addr = (addr << 32) + msg.address_lo as u64;
-        add_msix_msg(addr, data);
-        return;
-    }
-
-    if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
-        error!("Send msix error: {:?}", e);
-    };
 }
 
 /// MSI-X initialization.
@@ -706,17 +703,6 @@ pub fn init_msix(
     MigrationManager::register_device_instance(MsixState::descriptor(), msix, _id);
 
     Ok(())
-}
-
-pub fn update_dev_id(parent_bus: &Weak<Mutex<PciBus>>, devfn: u8, dev_id: &Arc<AtomicU16>) {
-    let bus_num = parent_bus
-        .upgrade()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .number(SECONDARY_BUS_NUM as usize);
-    let device_id = ((bus_num as u16) << 8) | (devfn as u16);
-    dev_id.store(device_id, Ordering::Release);
 }
 
 #[cfg(test)]
