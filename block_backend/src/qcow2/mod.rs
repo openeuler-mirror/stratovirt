@@ -25,7 +25,10 @@ use std::{
     mem::size_of,
     os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
-    sync::{atomic::AtomicBool, Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc, Mutex, Weak,
+    },
     time::Duration,
 };
 
@@ -234,20 +237,27 @@ impl<T: Clone + 'static> Drop for Qcow2Driver<T> {
 }
 
 /// Add timer for flushing qcow2 metadata.
-pub fn qcow2_flush_metadata<T: Clone + 'static>(qcow2_driver: Weak<Mutex<Qcow2Driver<T>>>) {
-    if qcow2_driver.upgrade().is_none() {
-        info!("Qcow2 flush metadata timer exit");
+pub fn qcow2_flush_metadata<T: Clone + 'static>(
+    qcow2_driver: Weak<Mutex<Qcow2Driver<T>>>,
+    drive_id: String,
+) {
+    let qcow2_d = qcow2_driver.upgrade();
+    if qcow2_d.is_none() {
+        info!("Qcow2 for drive \"{}\" flush metadata timer exit", drive_id);
         return;
     }
 
-    let driver = qcow2_driver.upgrade().unwrap();
+    let driver = qcow2_d.unwrap();
     let mut locked_driver = driver.lock().unwrap();
-    locked_driver
-        .flush()
-        .unwrap_or_else(|e| error!("Flush qcow2 metadata failed, {:?}", e));
+    locked_driver.flush().unwrap_or_else(|e| {
+        error!(
+            "Flush qcow2 metadata failed for drive {}, {:?}",
+            drive_id, e
+        )
+    });
 
     let flush_func = Box::new(move || {
-        qcow2_flush_metadata(qcow2_driver.clone());
+        qcow2_flush_metadata(qcow2_driver.clone(), drive_id.clone());
     });
     let iothread = locked_driver.sync_aio.borrow().prop.iothread.clone();
     EventLoop::get_ctx(iothread.as_ref()).unwrap().timer_add(
@@ -1770,6 +1780,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
     fn drain_request(&self) {
         self.driver.drain_request();
+    }
+
+    fn get_inflight(&self) -> Arc<AtomicU64> {
+        self.driver.incomplete.clone()
     }
 
     fn register_io_event(

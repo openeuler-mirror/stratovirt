@@ -12,7 +12,10 @@
 
 use std::{
     fs::File,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc, Mutex,
+    },
 };
 
 use anyhow::{bail, Result};
@@ -101,6 +104,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
 
     fn drain_request(&self) {
         self.driver.drain_request();
+    }
+
+    fn get_inflight(&self) -> Arc<AtomicU64> {
+        self.driver.incomplete.clone()
     }
 
     fn register_io_event(
