@@ -25,7 +25,7 @@ use machine_manager::{
     event_loop::EventLoop,
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_socket::Socket,
-    signal_handler::{exit_with_code, register_kill_signal, VM_EXIT_GENE_ERR},
+    signal_handler::{exit_with_code, handle_signal, register_kill_signal, VM_EXIT_GENE_ERR},
     temp_cleaner::TempCleaner,
     test_server::TestSock,
 };
@@ -120,6 +120,7 @@ fn run() -> Result<()> {
             info!("MainLoop over, Vm exit");
             // clean temporary file
             TempCleaner::clean();
+            handle_signal();
         }
         Err(ref e) => {
             set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
