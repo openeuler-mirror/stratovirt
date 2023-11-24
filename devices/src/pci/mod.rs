@@ -29,7 +29,7 @@ pub use config::{PciConfig, INTERRUPT_PIN};
 pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
-pub use msix::{init_msix, is_msix_enabled};
+pub use msix::init_msix;
 pub use root_port::RootPort;
 
 use std::{

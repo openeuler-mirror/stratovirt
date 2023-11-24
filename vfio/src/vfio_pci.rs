@@ -36,9 +36,8 @@ use devices::pci::config::{
     PCI_CONFIG_SPACE_SIZE, REG_SIZE,
 };
 use devices::pci::msix::{
-    is_msix_enabled, update_dev_id, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK,
-    MSIX_CAP_ID, MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE,
-    MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
+    Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK, MSIX_CAP_ID, MSIX_CAP_SIZE,
+    MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE, MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
 use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
@@ -501,7 +500,8 @@ impl VfioPciDevice {
             }
             let entry = locked_msix.get_message(vector as u16);
 
-            update_dev_id(&parent_bus, devfn, &dev_id);
+            let parent_bus = parent_bus.upgrade().unwrap();
+            parent_bus.lock().unwrap().update_dev_id(devfn, &dev_id);
             let msix_vector = MsiVector {
                 msg_addr_lo: entry.address_lo,
                 msg_addr_hi: entry.address_hi,
@@ -977,7 +977,9 @@ impl PciDevOps for VfioPciDevice {
             .msix
             .as_ref()
             .map_or(0, |m| m.lock().unwrap().msix_cap_offset as usize);
-        let was_enable = is_msix_enabled(cap_offset, &self.base.config.config);
+        let was_enable = self.base.config.msix.as_ref().map_or(false, |m| {
+            m.lock().unwrap().is_enabled(&self.base.config.config)
+        });
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
         self.base.config.write(
@@ -998,7 +1000,9 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize).unwrap() {
-            let is_enable = is_msix_enabled(cap_offset, &self.base.config.config);
+            let is_enable = self.base.config.msix.as_ref().map_or(false, |m| {
+                m.lock().unwrap().is_enabled(&self.base.config.config)
+            });
 
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {
