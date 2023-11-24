@@ -355,6 +355,7 @@ pub struct GtkDisplayScreen {
     dev_name: String,
     show_menu: RadioMenuItem,
     draw_area: DrawingArea,
+    cursor_trsp: bool, // GTK own default cursor transparent or not
     source_surface: DisplaySurface,
     transfer_surface: Option<DisplaySurface>,
     cairo_image: Option<ImageSurface>,
@@ -405,6 +406,7 @@ impl GtkDisplayScreen {
             window,
             dev_name,
             draw_area: DrawingArea::default(),
+            cursor_trsp: false,
             show_menu: RadioMenuItem::default(),
             source_surface: surface,
             transfer_surface: None,
@@ -951,6 +953,17 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         borrowed_gs.scale_x = window_width / surface_width as f64;
         borrowed_gs.scale_y = window_height / surface_height as f64;
     }
+
+    // Vm desktop manage its own cursor, gtk cursor need to be trsp firstly.
+    if !borrowed_gs.cursor_trsp {
+        if let Some(win) = borrowed_gs.draw_area.window() {
+            let dpy = borrowed_gs.window.display();
+            let gtk_cursor = gdk::Cursor::for_display(&dpy, gdk::CursorType::BlankCursor);
+            win.set_cursor(gtk_cursor.as_ref());
+        }
+        borrowed_gs.cursor_trsp = true;
+    }
+
     drop(borrowed_gs);
 
     if need_resize {
