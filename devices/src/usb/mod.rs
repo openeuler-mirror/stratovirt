@@ -511,6 +511,8 @@ pub struct UsbPacket {
     pub ep_number: u8,
     /// Transfer for complete packet.
     pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
+    /// Target USB device for this packet.
+    pub target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
     /// Stream id.
     pub stream: u32,
 }
@@ -532,6 +534,7 @@ impl UsbPacket {
         ep_number: u8,
         iovecs: Vec<Iovec>,
         xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
+        target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
     ) -> Self {
         Self {
             packet_id,
@@ -543,6 +546,7 @@ impl UsbPacket {
             actual_length: 0,
             ep_number,
             xfer_ops,
+            target_dev,
             stream: 0,
         }
     }
