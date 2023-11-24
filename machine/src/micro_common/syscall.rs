@@ -10,6 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::micro::{arch_ioctl_allow_list, arch_syscall_whitelist};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::micro::{arch_ioctl_allow_list, arch_syscall_whitelist};
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
@@ -41,23 +45,15 @@ const KVM_RUN: u32 = 0xae80;
 /// Create a syscall whitelist for seccomp.
 ///
 /// # Notes
-/// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 60 syscalls
-/// * x86_64-unknown-musl: 58 syscalls
-/// * aarch64-unknown-gnu: 58 syscalls
-/// * aarch64-unknown-musl: 57 syscalls
+///
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
-    vec![
+    let mut syscall = vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_readv),
         BpfRule::new(libc::SYS_write),
         BpfRule::new(libc::SYS_writev),
         ioctl_allow_list(),
-        #[cfg(not(all(target_env = "gnu", target_arch = "x86_64")))]
-        BpfRule::new(libc::SYS_epoll_pwait),
-        #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
-        BpfRule::new(libc::SYS_epoll_wait),
         BpfRule::new(libc::SYS_io_getevents),
         BpfRule::new(libc::SYS_io_submit),
         BpfRule::new(libc::SYS_io_destroy),
@@ -83,8 +79,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 1, libc::F_SETLK as u32),
         BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
-        #[cfg(target_arch = "x86_64")]
-        BpfRule::new(libc::SYS_open),
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
@@ -107,23 +101,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_pwrite64),
         BpfRule::new(libc::SYS_pwritev),
         BpfRule::new(libc::SYS_statx),
-        #[cfg(all(target_env = "musl", target_arch = "x86_64"))]
-        BpfRule::new(libc::SYS_stat),
-        #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
-        BpfRule::new(libc::SYS_newfstatat),
-        #[cfg(target_arch = "aarch64")]
-        BpfRule::new(libc::SYS_newfstatat),
-        #[cfg(target_arch = "x86_64")]
-        BpfRule::new(libc::SYS_unlink),
-        #[cfg(target_arch = "aarch64")]
-        BpfRule::new(libc::SYS_unlinkat),
         BpfRule::new(libc::SYS_renameat),
-        #[cfg(target_arch = "x86_64")]
-        BpfRule::new(libc::SYS_mkdir),
-        #[cfg(target_arch = "aarch64")]
-        BpfRule::new(libc::SYS_mkdirat),
-        #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
-        BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_fallocate),
         BpfRule::new(libc::SYS_socket),
@@ -133,7 +111,10 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clock_gettime),
         madvise_rule(),
-    ]
+    ];
+    syscall.append(&mut arch_syscall_whitelist());
+
+    syscall
 }
 
 /// Create a syscall bpf rule for syscall `ioctl`.
@@ -166,31 +147,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32);
-    ioctl_arch_allow_list(bpf_rule)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn ioctl_arch_allow_list(bpf_rule: BpfRule) -> BpfRule {
-    bpf_rule
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_PIT2() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_CLOCK() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_IRQCHIP() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REGS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEBUGREGS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XCRS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_LAPIC() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MSRS() as u32)
-}
-
-#[cfg(target_arch = "aarch64")]
-fn ioctl_arch_allow_list(bpf_rule: BpfRule) -> BpfRule {
-    bpf_rule
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+    arch_ioctl_allow_list(bpf_rule)
 }
 
 fn madvise_rule() -> BpfRule {

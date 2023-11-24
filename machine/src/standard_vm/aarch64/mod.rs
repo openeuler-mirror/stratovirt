@@ -538,8 +538,6 @@ impl MachineOps for StdMachine {
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
-        use super::error::StandardVmError as StdErrorKind;
-
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -565,7 +563,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| StdErrorKind::InitPCIeHostErr)?;
+            .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
@@ -658,7 +656,6 @@ impl MachineOps for StdMachine {
     }
 
     fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
-        use super::error::StandardVmError as StdErrorKind;
         let mut configs_vec = configs.to_vec();
         configs_vec.sort_by_key(|c| c.unit);
         let sector_len: u32 = 1024 * 256;
@@ -675,9 +672,9 @@ impl MachineOps for StdMachine {
             };
 
             let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
-                .with_context(|| StdErrorKind::InitPflashErr)?;
+                .with_context(|| MachineError::InitPflashErr)?;
             PFlash::realize(pflash, &mut self.base.sysbus, flash_base, flash_size, fd)
-                .with_context(|| StdErrorKind::RlzPflashErr)?;
+                .with_context(|| MachineError::RlzPflashErr)?;
             flash_base += flash_size;
         }
 

@@ -10,19 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod arch;
 pub mod error;
 pub mod standard_vm;
 
 #[cfg(target_arch = "aarch64")]
 mod fdt;
-mod micro_vm;
+mod micro_common;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
 
 pub use anyhow::Result;
 
 pub use crate::error::MachineError;
-pub use micro_vm::LightMachine;
+pub use micro_common::LightMachine;
 pub use standard_vm::StdMachine;
 
 use std::collections::{BTreeMap, HashMap};
@@ -547,10 +548,14 @@ pub trait MachineOps {
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()>;
 
     /// Add RTC device.
-    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
+    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] _mem_size: u64) -> Result<()> {
+        Ok(())
+    }
 
     /// Add Generic event device.
-    fn add_ged_device(&mut self) -> Result<()>;
+    fn add_ged_device(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// Add serial device.
     ///
