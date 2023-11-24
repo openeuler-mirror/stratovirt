@@ -465,3 +465,105 @@ name = "usb_host_req_complete"
 args = "bus_num: u8, addr: u8, packet: u64, status: &dyn fmt::Debug, actual_length: usize"
 message = "dev bus 0x{:X} addr 0x{:X}, packet 0x{:#X}, status {:?} actual length {}"
 enabled = true
+
+[[events]]
+name = "usb_uas_handle_control"
+args = "packet_id: u32, device_id: &str, req: &[u8]"
+message = "USB {} packet received on UAS {} device, the request is {:?}."
+enabled = true
+
+[[events]]
+name = "usb_uas_handle_iu_command"
+args = "device_id: &str, cdb: u8"
+message = "UAS {} device handling IU with cdb[0] {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_fill_sense"
+args = "status: u8, iu_len: usize, sense_len: usize"
+message = "UAS device is filling sense with status {:02} URB length {} sense length {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_fill_fake_sense"
+args = "status: u8, iu_len: usize, sense_len: usize"
+message = "UAS device is filling fake sense with status {:02} URB length {} sense length {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_fill_packet"
+args = "iovec_size: usize"
+message = "UAS device is filling USB packet with iovec of size {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_try_start_next_transfer"
+args = "device_id: &str, xfer_len: i32"
+message = "UAS {} device is trying to start next transfer of length {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_fill_data_ready"
+args = "device_id: &str, data_ready_sent: bool"
+message = "UAS {} device set data_ready_sent to {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_start_next_transfer"
+args = "device_id: &str, stream: usize"
+message = "UAS {} device starting a transfer on stream {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_handle_data"
+args = "device_id: &str, endpoint: u8, stream: usize"
+message = "UAS {} device handling data on endpoint {} and stream {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_command_received"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} command packet received on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_command_completed"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} command packet completed on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_status_received"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} status packet received on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_status_completed"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} status packet completed on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_status_queued_async"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} status packet queued async on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_data_received"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} data packet received on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_data_completed"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} data packet completed on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_data_queued_async"
+args = "packet_id: u32, device_id: &str"
+message = "USB {} data packet queued async on UAS {} device."
+enabled = true

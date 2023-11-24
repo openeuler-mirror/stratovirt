@@ -20,6 +20,7 @@ pub mod hid;
 pub mod keyboard;
 pub mod storage;
 pub mod tablet;
+pub mod uas;
 #[cfg(feature = "usb_host")]
 pub mod usbhost;
 pub mod xhci;
