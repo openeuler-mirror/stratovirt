@@ -121,8 +121,6 @@ pub struct StdMachine {
     shutdown_req: Arc<EventFd>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// FwCfg device.
-    fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
 }
 
 impl StdMachine {
@@ -158,7 +156,6 @@ impl StdMachine {
                 })?,
             ),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
-            fwcfg_dev: None,
         })
     }
 
@@ -267,7 +264,7 @@ impl StdMachineOps for StdMachine {
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.base.sysbus)
             .with_context(|| "Failed to realize fwcfg device")?;
-        self.fwcfg_dev = Some(fwcfg_dev.clone());
+        self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
     }
