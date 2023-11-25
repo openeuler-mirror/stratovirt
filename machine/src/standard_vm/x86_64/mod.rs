@@ -381,6 +381,25 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to write cpu resize request.")?;
         Ok(())
     }
+
+    fn remove_vcpu_device(&mut self, vcpu_id: u8) -> Result<()> {
+        if self.base.numa_nodes.is_some() {
+            bail!("Not support to hotunplug cpu in numa architecture now.")
+        }
+        let mut locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+
+        // Trigger GED cpu resize event.
+        locked_controller.set_hotunplug_cpu(vcpu_id)?;
+        self.cpu_resize_req
+            .write(1)
+            .with_context(|| "Failed to write cpu resize request.")?;
+        Ok(())
+    }
+
+    fn find_cpu_id_by_device_id(&mut self, device_id: &str) -> Option<u8> {
+        let locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+        locked_controller.find_cpu_by_device_id(device_id)
+    }
 }
 
 impl MachineOps for StdMachine {
