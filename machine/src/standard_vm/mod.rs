@@ -243,6 +243,22 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         Ok(())
     }
 
+    /// Remove vcpu device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_id` - The id number of vcpu.
+    #[cfg(target_arch = "x86_64")]
+    fn remove_vcpu_device(&mut self, vcpu_id: u8) -> Result<()>;
+
+    /// Find cpu id by device id.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The name of vcpu device.
+    #[cfg(target_arch = "x86_64")]
+    fn find_cpu_id_by_device_id(&mut self, device_id: &str) -> Option<u8>;
+
     /// Register event notifier for reset of standard machine.
     ///
     /// # Arguments
@@ -1486,7 +1502,19 @@ impl DeviceInterface for StdMachine {
         }
         drop(locked_pci_host);
 
-        // The device is not a pci device, assume it is a usb device.
+        // Assume it is a cpu device, try to find this device in cpu device.
+        #[cfg(target_arch = "x86_64")]
+        if let Some(cpu_id) = self.find_cpu_id_by_device_id(&device_id) {
+            return match self.remove_vcpu_device(cpu_id) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            };
+        }
+
+        // The device is not a pci device and not a cpu device, assume it is a usb device.
         match self.handle_unplug_usb_request(device_id) {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
