@@ -189,7 +189,11 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, _nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    fn add_fwcfg_device(
+        &mut self,
+        _nr_cpus: u8,
+        #[cfg(target_arch = "x86_64")] _max_cpus: u8,
+    ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
     }
 
