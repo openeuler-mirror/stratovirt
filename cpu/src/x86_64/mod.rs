@@ -109,7 +109,7 @@ impl X86CPUTopology {
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
-    nr_vcpus: u32,
+    max_vcpus: u32,
     nr_threads: u32,
     nr_cores: u32,
     nr_dies: u32,
@@ -134,8 +134,8 @@ impl X86CPUState {
     /// # Arguments
     ///
     /// * `vcpu_id` - ID of this `CPU`.
-    /// * `nr_vcpus` - Number of vcpus.
-    pub fn new(vcpu_id: u32, nr_vcpus: u32) -> Self {
+    /// * `max_vcpus` - Number of vcpus.
+    pub fn new(vcpu_id: u32, max_vcpus: u32) -> Self {
         let mp_state = kvm_mp_state {
             mp_state: if vcpu_id == 0 {
                 KVM_MP_STATE_RUNNABLE
@@ -145,7 +145,7 @@ impl X86CPUState {
         };
         X86CPUState {
             apic_id: vcpu_id,
-            nr_vcpus,
+            max_vcpus,
             mp_state,
             nr_threads: 1,
             nr_cores: 1,
@@ -157,7 +157,7 @@ impl X86CPUState {
 
     pub fn set(&mut self, cpu_state: &Arc<Mutex<X86CPUState>>) {
         let locked_cpu_state = cpu_state.lock().unwrap();
-        self.nr_vcpus = locked_cpu_state.nr_vcpus;
+        self.max_vcpus = locked_cpu_state.max_vcpus;
         self.apic_id = locked_cpu_state.apic_id;
         self.regs = locked_cpu_state.regs;
         self.sregs = locked_cpu_state.sregs;
@@ -468,8 +468,8 @@ impl X86CPUState {
                         &mut entry.edx,
                     );
                     entry.eax &= !0xfc00_0000;
-                    if entry.eax & 0x0001_ffff != 0 && self.nr_vcpus > 1 {
-                        entry.eax |= (self.nr_vcpus - 1) << 26;
+                    if entry.eax & 0x0001_ffff != 0 && self.max_vcpus > 1 {
+                        entry.eax |= (self.max_vcpus - 1) << 26;
                     }
                 }
                 6 => {

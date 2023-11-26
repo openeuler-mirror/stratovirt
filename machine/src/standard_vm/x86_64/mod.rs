@@ -251,10 +251,14 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    fn add_fwcfg_device(
+        &mut self,
+        nr_cpus: u8,
+        max_cpus: u8,
+    ) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone());
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
-        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, nr_cpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
         let boot_order = Vec::<u8>::new();
@@ -383,6 +387,7 @@ impl MachineOps for StdMachine {
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
+        let max_cpus = vm_config.machine_config.max_cpus;
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -405,7 +410,7 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
 
-        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
+        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
@@ -421,6 +426,7 @@ impl MachineOps for StdMachine {
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             nr_cpus,
+            max_cpus,
             &topology,
             &boot_config,
         )?);
@@ -649,8 +655,20 @@ impl AcpiBuilder for StdMachine {
             madt.append_child(&lapic.aml_bytes());
         });
 
+        // Add non boot cpu lapic.
+        for cpuid in self.base.cpu_topo.nrcpus as u8..self.base.cpu_topo.max_cpus {
+            let lapic = AcpiLocalApic {
+                type_id: 0,
+                length: size_of::<AcpiLocalApic>() as u8,
+                processor_uid: cpuid,
+                apic_id: cpuid,
+                flags: 2, // Flags: hotplug enabled.
+            };
+            madt.append_child(&lapic.aml_bytes());
+        }
+
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
-            .with_context(|| "Fail to add DSTD table to loader")?;
+            .with_context(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin)
     }
 

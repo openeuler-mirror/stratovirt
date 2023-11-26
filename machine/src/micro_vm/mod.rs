@@ -702,6 +702,7 @@ impl MachineOps for LightMachine {
             locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
                 vm.clone(),
                 vm_config.machine_config.nr_cpus,
+                vm_config.machine_config.max_cpus,
                 &topology,
                 &boot_config,
             )?);
