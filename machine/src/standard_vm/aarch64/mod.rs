@@ -622,11 +622,14 @@ impl MachineOps for StdMachine {
         // If it is direct kernel boot mode, the ACPI can not be enabled.
         if migrate.0 == MigrateMode::Unknown {
             if let Some(fw_cfg) = fwcfg {
+                let mut mem_array = Vec::new();
+                let mem_size = vm_config.machine_config.mem_config.mem_size;
+                mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
                 locked_vm
                     .build_acpi_tables(&fw_cfg)
                     .with_context(|| "Failed to create ACPI tables")?;
                 locked_vm
-                    .build_smbios(&fw_cfg, Vec::new())
+                    .build_smbios(&fw_cfg, mem_array)
                     .with_context(|| "Failed to create smbios tables")?;
             }
         }
