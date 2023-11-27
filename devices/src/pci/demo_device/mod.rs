@@ -109,7 +109,7 @@ impl DemoDev {
         };
         DemoDev {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id.clone(), false),
+                base: DeviceBase::new(cfg.id.clone(), false, Some(parent_bus.clone())),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
                 parent_bus,

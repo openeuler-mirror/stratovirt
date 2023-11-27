@@ -182,7 +182,7 @@ impl ScsiDevice {
         };
 
         ScsiDevice {
-            base: DeviceBase::new(dev_cfg.id.clone(), false),
+            base: DeviceBase::new(dev_cfg.id.clone(), false, None),
             dev_cfg,
             drive_cfg,
             state: ScsiDevState::new(),

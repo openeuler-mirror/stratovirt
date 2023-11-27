@@ -22,15 +22,15 @@ use super::{
     hotplug::HotplugOps,
     PciDevOps, PciIntxState,
 };
-use crate::MsiIrqManager;
+use crate::{Bus, BusBase, MsiIrqManager};
 use address_space::Region;
+use util::gen_base_func;
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
 /// PCI bus structure.
 pub struct PciBus {
-    /// Bus name
-    pub name: String,
+    pub base: BusBase,
     /// Devices attached to the bus.
     pub devices: HashMap<u8, Arc<Mutex<dyn PciDevOps>>>,
     /// Child buses of the bus.
@@ -49,6 +49,10 @@ pub struct PciBus {
     pub msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
 }
 
+impl Bus for PciBus {
+    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
+}
+
 impl PciBus {
     /// Create new bus entity.
     ///
@@ -63,7 +67,7 @@ impl PciBus {
         mem_region: Region,
     ) -> Self {
         Self {
-            name,
+            base: BusBase::new(name),
             devices: HashMap::new(),
             child_buses: Vec::new(),
             parent_bridge: None,
@@ -145,7 +149,7 @@ impl PciBus {
     /// * `name` - Bus name.
     pub fn find_bus_by_name(bus: &Arc<Mutex<Self>>, bus_name: &str) -> Option<Arc<Mutex<Self>>> {
         let locked_bus = bus.lock().unwrap();
-        if locked_bus.name.as_str() == bus_name {
+        if locked_bus.name().as_str() == bus_name {
             return Some((*bus).clone());
         }
         for sub_bus in &locked_bus.child_buses {
@@ -303,13 +307,13 @@ mod tests {
         let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
-        assert_eq!(bus.lock().unwrap().name, "pcie.0");
+        assert_eq!(bus.lock().unwrap().name(), "pcie.0");
         assert_eq!(dev.lock().unwrap().name(), "test1");
 
         let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test2");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
-        assert_eq!(bus.lock().unwrap().name, "pcie.1");
+        assert_eq!(bus.lock().unwrap().name(), "pcie.1");
         assert_eq!(dev.lock().unwrap().name(), "test2");
     }
 

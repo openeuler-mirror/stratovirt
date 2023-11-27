@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn test_init_msix() {
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false),
+            base: DeviceBase::new("msix".to_string(), false, None),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
             parent_bus: Weak::new(),
@@ -747,7 +747,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false),
+            base: DeviceBase::new("msix".to_string(), false, None),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
             parent_bus: Weak::new(),

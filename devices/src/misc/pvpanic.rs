@@ -112,7 +112,7 @@ impl PvPanicPci {
     pub fn new(config: &PvpanicDevConfig, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(config.id.clone(), false),
+                base: DeviceBase::new(config.id.clone(), false, Some(parent_bus.clone())),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
                 parent_bus,
@@ -262,6 +262,7 @@ impl PciDevOps for PvPanicPci {
 mod tests {
     use super::*;
     use crate::pci::{host::tests::create_pci_host, le_read_u16, PciHost};
+    use crate::Bus;
     use machine_manager::config::str_slip_to_clap;
 
     fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
@@ -320,7 +321,7 @@ mod tests {
         let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "pvpanic_test");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
-        assert_eq!(bus.lock().unwrap().name, "pcie.0");
+        assert_eq!(bus.lock().unwrap().name(), "pcie.0");
         assert_eq!(dev.lock().unwrap().name(), "pvpanic_test");
     }
 
