@@ -31,7 +31,6 @@ use crate::pci::config::{
     PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::pci::msix::update_dev_id;
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDevice;
 use crate::{Device, DeviceBase};
@@ -346,9 +345,9 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        update_dev_id(&self.base.parent_bus, self.base.devfn, &self.dev_id);
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
+        locked_parent_bus.update_dev_id(self.base.devfn, &self.dev_id);
 
         self.base.config.write(
             offset,

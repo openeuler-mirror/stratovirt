@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use log::{error, warn};
 
 use crate::pci::intx::Intx;
-use crate::pci::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
+use crate::pci::msix::{Msix, MSIX_TABLE_ENTRY_SIZE};
 use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
@@ -625,7 +625,7 @@ impl PciConfig {
         }
 
         if let Some(msix) = &mut self.msix {
-            if is_msix_enabled(msix.lock().unwrap().msix_cap_offset as usize, &self.config) {
+            if msix.lock().unwrap().is_enabled(&self.config) {
                 if let Some(intx) = &self.intx {
                     intx.lock().unwrap().notify(0);
                 }
