@@ -70,7 +70,7 @@ use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::MigrationManager;
-use ui::input::{key_event, point_event};
+use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
 #[cfg(feature = "vnc")]
 use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
@@ -2104,13 +2104,19 @@ fn send_input_event(key: String, value: String) -> Result<()> {
         }
         "pointer" => {
             let vec: Vec<&str> = value.split(',').collect();
-            if vec.len() != 3 {
+            // There are four expected parameters for input_event,
+            // includes: x, y, button and down.
+            if vec.len() != 4 {
                 bail!("Invalid pointer format: {}", value);
             }
             let x = vec[0].parse::<u32>()?;
             let y = vec[1].parse::<u32>()?;
             let btn = vec[2].parse::<u32>()?;
-            point_event(btn, x, y)?;
+            let down = vec[3].parse::<u32>()?;
+            input_move_abs(Axis::X, x)?;
+            input_move_abs(Axis::Y, y)?;
+            input_button(btn, down != 0)?;
+            input_point_sync()?;
         }
         _ => {
             bail!("Invalid input type: {}", key);
