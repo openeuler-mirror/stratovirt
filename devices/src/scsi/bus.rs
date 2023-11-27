@@ -24,8 +24,9 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
+use crate::{Bus, BusBase};
 use util::aio::{AioCb, AioReqResult, Iovec};
-use util::AsAny;
+use util::{gen_base_func, AsAny};
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -367,16 +368,19 @@ pub enum ScsiXferMode {
 }
 
 pub struct ScsiBus {
-    /// Bus name.
-    pub name: String,
+    pub base: BusBase,
     /// Scsi Devices attached to the bus.
     pub devices: HashMap<(u8, u16), Arc<Mutex<ScsiDevice>>>,
+}
+
+impl Bus for ScsiBus {
+    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
 }
 
 impl ScsiBus {
     pub fn new(bus_name: String) -> ScsiBus {
         ScsiBus {
-            name: bus_name,
+            base: BusBase::new(bus_name),
             devices: HashMap::new(),
         }
     }

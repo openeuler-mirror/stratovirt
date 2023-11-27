@@ -44,7 +44,7 @@ use crate::misc::ivshmem::Ivshmem;
 use crate::misc::pvpanic::PvPanicPci;
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
-use crate::{Device, DeviceBase, MsiIrqManager};
+use crate::{Bus, Device, DeviceBase, MsiIrqManager};
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
 
@@ -221,7 +221,7 @@ pub trait PciDevOps: Device + Send {
     /// Get the path of the PCI bus where the device resides.
     fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<PciBus>>) -> String {
         let locked_parent_bus = parent_bus.lock().unwrap();
-        let parent_dev_path = if locked_parent_bus.name.eq("pcie.0") {
+        let parent_dev_path = if locked_parent_bus.name().eq("pcie.0") {
             String::from("/pci@ffffffffffffffff")
         } else {
             // This else branch will not be executed currently,
@@ -368,7 +368,7 @@ pub fn init_multifunction(
             // Function 0 should set multifunction bit.
             bail!(
                 "PCI: single function device can't be populated in bus {} function {}.{}",
-                &locked_bus.name,
+                &locked_bus.name(),
                 slot,
                 devfn & 0x07
             );
@@ -418,7 +418,7 @@ mod tests {
         pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
             Self {
                 base: PciDevBase {
-                    base: DeviceBase::new(name.to_string(), false),
+                    base: DeviceBase::new(name.to_string(), false, Some(parent_bus.clone())),
                     config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                     devfn,
                     parent_bus,

@@ -71,6 +71,7 @@ use devices::usb::uas::{UsbUas, UsbUasConfig};
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 use devices::usb::UsbDevice;
+use devices::Bus;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
@@ -1511,7 +1512,7 @@ pub trait MachineOps: MachineLifecycle {
             .with_context(|| format!("Bus not found, dev id {}", dev_id))?
             .0;
         let locked_bus = bus.lock().unwrap();
-        if locked_bus.name == "pcie.0" {
+        if locked_bus.name() == "pcie.0" {
             // No need to reset root bus
             return Ok(());
         }

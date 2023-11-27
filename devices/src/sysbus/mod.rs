@@ -35,9 +35,10 @@ use crate::legacy::{FwCfgIO, RTC};
 use crate::legacy::{FwCfgMem, PL011, PL031};
 use crate::legacy::{PFlash, Serial};
 use crate::pci::PciHost;
-use crate::{Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
+use crate::{Bus, BusBase, Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use util::gen_base_func;
 
 // Now that the serial device use a hardcoded IRQ number (4), and the starting
 // free IRQ number can be 5.
@@ -53,6 +54,7 @@ pub const IRQ_BASE: i32 = 32;
 pub const IRQ_MAX: i32 = 191;
 
 pub struct SysBus {
+    pub base: BusBase,
     #[cfg(target_arch = "x86_64")]
     pub sys_io: Arc<AddressSpace>,
     pub sys_mem: Arc<AddressSpace>,
@@ -89,6 +91,7 @@ impl SysBus {
         mmio_region: (u64, u64),
     ) -> Self {
         Self {
+            base: BusBase::new("sysbus".to_string()),
             #[cfg(target_arch = "x86_64")]
             sys_io: sys_io.clone(),
             sys_mem: sys_mem.clone(),
@@ -155,6 +158,10 @@ impl SysBus {
         self.devices.push(dev.clone());
         Ok(())
     }
+}
+
+impl Bus for SysBus {
+    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
 }
 
 #[derive(Clone)]

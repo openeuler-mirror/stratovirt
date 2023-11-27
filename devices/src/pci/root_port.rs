@@ -121,7 +121,7 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id, true),
+                base: DeviceBase::new(cfg.id, true, Some(parent_bus.clone())),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
                 parent_bus,
