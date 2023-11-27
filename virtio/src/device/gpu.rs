@@ -30,7 +30,7 @@ use crate::{
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
-    VIRTIO_GPU_F_EDID, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+    VIRTIO_GPU_F_EDID, VIRTIO_GPU_F_MONOCHROME, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
     VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
     VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
@@ -82,6 +82,7 @@ struct GpuResource {
     scanouts_bitmask: u32,
     host_mem: u64,
     pixman_image: *mut pixman_image_t,
+    monochrome_cursor: Vec<u8>,
 }
 
 impl Default for GpuResource {
@@ -95,6 +96,7 @@ impl Default for GpuResource {
             scanouts_bitmask: 0,
             host_mem: 0,
             pixman_image: ptr::null_mut(),
+            monochrome_cursor: Vec::new(),
         }
     }
 }
@@ -522,7 +524,9 @@ const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
 const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
 const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
 const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
+const VIRTIO_GPU_FORMAT_MONOCHROME: u32 = 500;
 pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
+const VIRTIO_GPU_CURSOR_SIZE: usize = 64;
 
 pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     match format {
@@ -540,10 +544,92 @@ pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     }
 }
 
-pub fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) -> u64 {
-    let bpp = pixman_format_bpp(format as u32);
-    let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
-    height as u64 * stride
+// update curosr from monochrome source
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/display/drawing-monochrome-pointers
+pub fn set_monochrome_cursor(cursor: &mut [u8], source: &[u8], width: usize, height: usize) {
+    let pixels_num = width * height;
+    let mask_value_size = pixels_num / 8;
+    let and_mask_value = &source[0..mask_value_size];
+    let xor_mask_value = &source[mask_value_size..mask_value_size * 2];
+    // Bytes per line
+    let bpl = VIRTIO_GPU_CURSOR_SIZE / 8;
+    // Bytes per pixel for cursor img, which expected export in RGBA format
+    let bpp = 4;
+
+    for row in 0..VIRTIO_GPU_CURSOR_SIZE {
+        for col in 0..bpl {
+            for i in 0..8 {
+                let cursor_index = (row * VIRTIO_GPU_CURSOR_SIZE + col * 8 + i) * bpp;
+
+                if row >= height || col * bpl >= width {
+                    cursor[cursor_index] = 0x00;
+                    cursor[cursor_index + 1] = 0x00;
+                    cursor[cursor_index + 2] = 0x00;
+                    cursor[cursor_index + 3] = 0x00;
+                    continue;
+                }
+
+                let mask_index: u8 = 0x80 >> i;
+                let and_v = (and_mask_value[row * (width / 8) + col] & mask_index) != 0;
+                let xor_v = (xor_mask_value[row * (width / 8) + col] & mask_index) != 0;
+
+                if !and_v && !xor_v {
+                    cursor[cursor_index] = 0x00;
+                    cursor[cursor_index + 1] = 0x00;
+                    cursor[cursor_index + 2] = 0x00;
+                    cursor[cursor_index + 3] = 0xff;
+                } else if !and_v && xor_v {
+                    cursor[cursor_index] = 0xff;
+                    cursor[cursor_index + 1] = 0xff;
+                    cursor[cursor_index + 2] = 0xff;
+                    cursor[cursor_index + 3] = 0xff;
+                } else if and_v && !xor_v {
+                    cursor[cursor_index] = 0x00;
+                    cursor[cursor_index + 1] = 0x00;
+                    cursor[cursor_index + 2] = 0x00;
+                    cursor[cursor_index + 3] = 0x00;
+                } else {
+                    // for inverted, in graphic is hard to get background color, just make it black.
+                    cursor[cursor_index] = 0x00;
+                    cursor[cursor_index + 1] = 0x00;
+                    cursor[cursor_index + 2] = 0x00;
+                    cursor[cursor_index + 3] = 0xff;
+                }
+            }
+        }
+    }
+}
+
+pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>, u32) {
+    // Expected monochrome cursor is 8 pixel aligned.
+    if format == VIRTIO_GPU_FORMAT_MONOCHROME {
+        if width as usize > VIRTIO_GPU_CURSOR_SIZE
+            || height as usize > VIRTIO_GPU_CURSOR_SIZE
+            || width % 8 != 0
+            || height % 8 != 0
+        {
+            error!(
+                "GuestError: monochrome cursor use invalid size: {} {}.",
+                width, height
+            );
+            (None, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER)
+        } else {
+            let mem = (width * height / 8 * 2) as usize;
+            (Some(mem), 0)
+        }
+    } else {
+        let pixman_format = match get_pixman_format(format) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("GuestError: {:?}", e);
+                return (None, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+            }
+        };
+        let bpp = pixman_format_bpp(pixman_format as u32);
+        let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
+        let mem = (height as u64 * stride) as usize;
+        (Some(mem), 0)
+    }
 }
 
 fn is_rect_in_resource(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
@@ -678,7 +764,9 @@ impl GpuIoHandler {
             }
             Some(res_idx) => {
                 let res = &self.resources_list[res_idx];
-                if res.iov.is_empty() || res.pixman_image.is_null() {
+                if res.iov.is_empty()
+                    || (res.pixman_image.is_null() && res.monochrome_cursor.is_empty())
+                {
                     error!(
                         "GuestError: The resource_id {} in {} request has no backing storage.",
                         res_id, caller,
@@ -703,16 +791,26 @@ impl GpuIoHandler {
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         let mse = scanout.mouse.as_mut().unwrap();
         let mse_data_size = mse.data.len();
-        let res_width = get_image_width(res.pixman_image);
-        let res_height = get_image_height(res.pixman_image);
-        if res_width as u32 != mse.width || res_height as u32 != mse.height {
-            return;
-        }
-        let res_data_ptr = get_image_data(res.pixman_image) as *mut u8;
-        // SAFETY: the length of the source and dest pointers can be ensured to be same,
-        // and equal to mse_data_size.
-        unsafe {
-            ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+
+        if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
+            set_monochrome_cursor(
+                &mut mse.data,
+                &res.monochrome_cursor,
+                res.width as usize,
+                res.height as usize,
+            );
+        } else {
+            let res_width = get_image_width(res.pixman_image);
+            let res_height = get_image_height(res.pixman_image);
+            if res_width as u32 != mse.width || res_height as u32 != mse.height {
+                return;
+            }
+            let res_data_ptr = get_image_data(res.pixman_image) as *mut u8;
+            // SAFETY: the length of the source and dest pointers can be ensured to be same,
+            // and equal to mse_data_size.
+            unsafe {
+                ptr::copy(res_data_ptr, mse.data.as_mut_ptr(), mse_data_size);
+            }
         }
 
         // Windows front-end driver does not deliver data in format sequence.
@@ -734,7 +832,12 @@ impl GpuIoHandler {
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         match &mut scanout.mouse {
             None => {
-                let mouse = DisplayMouse::new(64, 64, info_cursor.hot_x, info_cursor.hot_y);
+                let mouse = DisplayMouse::new(
+                    VIRTIO_GPU_CURSOR_SIZE as u32,
+                    VIRTIO_GPU_CURSOR_SIZE as u32,
+                    info_cursor.hot_x,
+                    info_cursor.hot_y,
+                );
                 scanout.mouse = Some(mouse);
             }
             Some(mouse) => {
@@ -872,16 +975,12 @@ impl GpuIoHandler {
             resource_id: info_create_2d.resource_id,
             ..Default::default()
         };
-        let pixman_format = match get_pixman_format(res.format) {
-            Ok(f) => f,
-            Err(e) => {
-                error!("GuestError: {:?}", e);
-                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
-            }
-        };
 
-        res.host_mem =
-            get_image_hostmem(pixman_format, info_create_2d.width, info_create_2d.height);
+        let (mem, error) = cal_image_hostmem(res.format, res.width, res.height);
+        if mem.is_none() {
+            return self.response_nodata(error, req);
+        }
+        res.host_mem = mem.unwrap() as u64;
 
         if res
             .host_mem
@@ -889,15 +988,20 @@ impl GpuIoHandler {
             .filter(|&sum| sum <= self.max_hostmem)
             .is_some()
         {
-            res.pixman_image = create_pixman_image(
-                pixman_format,
-                info_create_2d.width as i32,
-                info_create_2d.height as i32,
-                ptr::null_mut(),
-                0,
-            );
+            if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
+                res.monochrome_cursor = vec![0_u8; (res.width * res.height / 8 * 2) as usize];
+            } else {
+                res.pixman_image = create_pixman_image(
+                    get_pixman_format(res.format).unwrap(),
+                    info_create_2d.width as i32,
+                    info_create_2d.height as i32,
+                    ptr::null_mut(),
+                    0,
+                );
+            }
         }
-        if res.pixman_image.is_null() {
+
+        if res.monochrome_cursor.is_empty() && res.pixman_image.is_null() {
             error!(
                 "GuestError: Fail to create resource(id {}, width {}, height {}) on host.",
                 res.resource_id, res.width, res.height
@@ -923,7 +1027,6 @@ impl GpuIoHandler {
         let res = &mut self.resources_list[res_index];
         unref_pixman_image(res.pixman_image);
         self.used_hostmem -= res.host_mem;
-        res.iov.clear();
         self.resources_list.remove(res_index);
     }
 
@@ -1159,12 +1262,20 @@ impl GpuIoHandler {
         trans_info: &VirtioGpuTransferToHost2d,
         res_idx: usize,
     ) -> Result<()> {
-        let res = &self.resources_list[res_idx];
+        let res = &mut self.resources_list[res_idx];
         let pixman_format = get_image_format(res.pixman_image);
         let width = get_image_width(res.pixman_image) as u32;
         let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
         let stride = get_image_stride(res.pixman_image) as u32;
         let data = get_image_data(res.pixman_image).cast() as *mut u8;
+
+        if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
+            let v = iov_to_buf_direct(&res.iov, 0, &mut res.monochrome_cursor)?;
+            if v != res.monochrome_cursor.len() {
+                error!("No enough data is copied for transfer_to_host_2d with monochrome");
+            }
+            return Ok(());
+        }
 
         // When the dedicated area is continuous.
         if trans_info.rect.x_coord == 0 && trans_info.rect.width == width {
@@ -1560,6 +1671,9 @@ impl VirtioDevice for Gpu {
         if self.cfg.edid {
             self.base.device_features |= 1 << VIRTIO_GPU_F_EDID;
         }
+
+        self.base.device_features |= 1 << VIRTIO_GPU_F_MONOCHROME;
+
         self.build_device_config_space();
         Ok(())
     }
