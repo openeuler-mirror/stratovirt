@@ -182,7 +182,7 @@ impl PowerDev {
         region_size: u64,
     ) -> Result<()> {
         self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
+            .with_context(|| AcpiError::Alignment(region_size as u32))?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size, "PowerDev")?;

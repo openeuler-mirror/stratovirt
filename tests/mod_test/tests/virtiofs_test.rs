@@ -155,12 +155,7 @@ impl VirtioFsTest {
     ) -> Option<u64> {
         if let Some(member) = reqmember {
             let member_size = member.len() as u64;
-            let member_addr = self
-                .allocator
-                .borrow_mut()
-                .alloc(member_size)
-                .try_into()
-                .unwrap();
+            let member_addr = self.allocator.borrow_mut().alloc(member_size);
             self.state.borrow().memwrite(member_addr, &member);
             data_entries.push(TestVringDescEntry {
                 data: member_addr,

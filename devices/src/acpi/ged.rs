@@ -99,7 +99,7 @@ impl Ged {
     ) -> Result<Arc<Mutex<Ged>>> {
         self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
         self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
+            .with_context(|| AcpiError::Alignment(region_size as u32))?;
         self.battery_present = battery_present;
 
         let dev = Arc::new(Mutex::new(self));

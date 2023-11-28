@@ -460,13 +460,8 @@ fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> Ser
 }
 
 fn verify_output_data(test_state: Rc<RefCell<TestState>>, addr: u64, len: u32, test_data: &String) {
-    let mut data_buf: Vec<u8> = Vec::with_capacity(len.try_into().unwrap());
-    data_buf.append(
-        test_state
-            .borrow()
-            .memread(addr, len.try_into().unwrap())
-            .as_mut(),
-    );
+    let mut data_buf: Vec<u8> = Vec::with_capacity(len as usize);
+    data_buf.append(test_state.borrow().memread(addr, len as u64).as_mut());
     let data = String::from_utf8(data_buf).unwrap();
     assert_eq!(data, *test_data);
 }

@@ -622,8 +622,8 @@ pub fn pixman_glyph_from_vgafont(height: i32, ch: u32) -> *mut pixman_image_t {
         );
         let data = pixman_image_get_data(glyph) as *mut u8;
         let mut data_index: usize = 0;
-        let mut font_index: usize = (height * ch as i32).try_into().unwrap();
-        let slice = std::slice::from_raw_parts_mut(data, (height * 8).try_into().unwrap());
+        let mut font_index: usize = (height * ch as i32) as usize;
+        let slice = std::slice::from_raw_parts_mut(data, (height * 8) as usize);
 
         for _y in 0..height {
             for _x in 0..8 {
