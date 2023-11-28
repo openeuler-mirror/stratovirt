@@ -197,6 +197,38 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         bail!("Not implemented");
     }
 
+    /// Register event notifier for hotplug vcpu event.
+    ///
+    /// # Arguments
+    ///
+    /// * `resize_req` - Eventfd of the cpu hotplug request.
+    /// * `clone_vm`  - Reference of the StdMachine.
+    #[cfg(target_arch = "x86_64")]
+    fn register_hotplug_vcpu_event(
+        &self,
+        hotplug_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let hotplug_req_fd = hotplug_req.as_raw_fd();
+        let hotplug_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            read_fd(hotplug_req_fd);
+            if let Err(e) = StdMachine::handle_hotplug_vcpu_request(&clone_vm) {
+                error!("Fail to hotplug vcpu, {}", e);
+            }
+            None
+        });
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            hotplug_req_fd,
+            None,
+            EventSet::IN,
+            vec![hotplug_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
     /// Register event notifier for reset of standard machine.
     ///
     /// # Arguments

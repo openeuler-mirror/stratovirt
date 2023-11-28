@@ -1169,9 +1169,8 @@ pub struct AmlRelease {
     mutex: Vec<u8>,
 }
 
-#[cfg(test)]
 impl AmlRelease {
-    fn new<T: AmlBuilder>(mtx: T) -> AmlRelease {
+    pub fn new<T: AmlBuilder>(mtx: T) -> AmlRelease {
         AmlRelease {
             mutex: mtx.aml_bytes(),
         }
