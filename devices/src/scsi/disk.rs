@@ -11,12 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
 use clap::Parser;
 
-use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
+use crate::ScsiBus::{aio_complete_cb, ScsiCompleteCb};
 use crate::{Device, DeviceBase};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
 use machine_manager::config::{valid_id, DriveConfig, DriveFile, VmConfig};
@@ -135,6 +135,14 @@ impl Device for ScsiDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base);
 }
 
+/// Convert from Arc<Mutex<dyn Device>> to &ScsiDevice.
+#[macro_export]
+macro_rules! SCSI_DEVICE {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+        convert_device_ref!($trait_device, $lock_device, $struct_device, ScsiDevice);
+    };
+}
+
 pub struct ScsiDevice {
     pub base: DeviceBase,
     /// Configuration of the scsi device.
@@ -155,8 +163,6 @@ pub struct ScsiDevice {
     pub block_size: u32,
     /// Scsi device type.
     pub scsi_type: u32,
-    /// Scsi Bus attached to.
-    pub parent_bus: Weak<Mutex<ScsiBus>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     /// Aio context.
@@ -192,7 +198,6 @@ impl ScsiDevice {
             disk_sectors: 0,
             block_size: 0,
             scsi_type,
-            parent_bus: Weak::new(),
             drive_files,
             aio: None,
             iothread,
