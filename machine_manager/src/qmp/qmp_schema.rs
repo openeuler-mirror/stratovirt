@@ -317,6 +317,8 @@ pub struct device_add {
     pub productid: Option<String>,
     pub isobufs: Option<String>,
     pub isobsize: Option<String>,
+    #[serde(rename = "cpu-id")]
+    pub cpu_id: Option<u8>,
 }
 
 pub type DeviceAddArgument = device_add;

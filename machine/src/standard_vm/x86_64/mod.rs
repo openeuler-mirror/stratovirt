@@ -18,7 +18,7 @@ mod syscall;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
@@ -35,7 +35,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CPUTopology};
+use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
 use devices::legacy::{
@@ -233,6 +233,12 @@ impl StdMachine {
         None
     }
 
+    pub fn handle_hotplug_vcpu_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let mut locked_vm = vm.lock().unwrap();
+        locked_vm.add_vcpu_device(vm.clone())?;
+        Ok(())
+    }
+
     fn init_cpu_controller(
         &mut self,
         boot_config: CPUBootConfig,
@@ -328,6 +334,52 @@ impl StdMachineOps for StdMachine {
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
+    }
+
+    fn get_cpu_controller(&self) -> &Arc<Mutex<CpuController>> {
+        self.cpu_controller.as_ref().unwrap()
+    }
+
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()> {
+        let mut locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+        let device_id;
+        let vcpu_id;
+        (device_id, vcpu_id) = locked_controller.get_hotplug_cpu_info();
+
+        // Check if there is a reusable CPU, and if not, create a new one.
+        let vcpu = if let Some(reuse_vcpu) = locked_controller.find_reusable_vcpu() {
+            locked_controller.setup_reuse_vcpu(reuse_vcpu.clone())?;
+            reuse_vcpu
+        } else {
+            let boot_cfg = locked_controller.get_boot_config();
+            let topology = locked_controller.get_topology_config();
+
+            let vcpu = <StdMachine as MachineOps>::create_vcpu(
+                vcpu_id,
+                clone_vm,
+                self.base.cpu_topo.max_cpus,
+            )?;
+            vcpu.realize(boot_cfg, topology).with_context(|| {
+                format!(
+                    "Failed to realize arch cpu register/features for CPU {}/KVM",
+                    vcpu_id
+                )
+            })?;
+
+            locked_controller.setup_hotplug_vcpu(device_id, vcpu_id, vcpu.clone())?;
+            self.base.cpus.push(vcpu.clone());
+            vcpu
+        };
+        // Start vcpu.
+        let cpu_thread_barrier = Arc::new(Barrier::new(1));
+        if let Err(e) = CPU::start(vcpu, cpu_thread_barrier, false) {
+            bail!("Failed to run vcpu-{}, {:?}", vcpu_id, e)
+        };
+        // Trigger GED cpu resize event.
+        self.cpu_resize_req
+            .write(1)
+            .with_context(|| "Failed to write cpu resize request.")?;
+        Ok(())
     }
 }
 
