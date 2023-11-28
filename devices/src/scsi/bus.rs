@@ -1088,7 +1088,7 @@ fn scsi_command_emulate_inquiry(
     }
 
     let buflen = cmp::min(cmd.xfer, SCSI_MAX_INQUIRY_LEN);
-    let mut outbuf: Vec<u8> = vec![0; buflen as usize];
+    let mut outbuf: Vec<u8> = vec![0; SCSI_MAX_INQUIRY_LEN as usize];
 
     let dev_lock = dev.lock().unwrap();
 
