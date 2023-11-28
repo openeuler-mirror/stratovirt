@@ -389,7 +389,7 @@ impl ClientIoHandler {
         unsafe {
             err = sasl_setprop(
                 security.saslconfig.sasl_conn,
-                SASL_SEC_PROPS.try_into()?,
+                SASL_SEC_PROPS as i32,
                 props as *const c_void,
             );
         }

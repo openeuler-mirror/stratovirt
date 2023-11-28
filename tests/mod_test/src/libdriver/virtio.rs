@@ -220,7 +220,7 @@ impl TestVringIndirectDesc {
         self.elem = elem;
         self.desc = alloc
             .borrow_mut()
-            .alloc((size_of::<VringDesc>() * elem as usize).try_into().unwrap());
+            .alloc((size_of::<VringDesc>() * elem as usize) as u64);
 
         for i in 0..elem - 1 {
             test_state
@@ -331,7 +331,7 @@ impl TestVirtQueue {
             test_state.borrow().writew(
                 self.desc
                     + (size_of::<VringDesc>() * i as usize + offset_of!(VringDesc, next)) as u64,
-                (i + 1).try_into().unwrap(),
+                (i + 1) as u16,
             );
         }
 
@@ -376,7 +376,7 @@ impl TestVirtQueue {
         let features = virtio_dev.get_guest_features();
         virtio_dev.queue_select(index);
 
-        let queue_size = virtio_dev.get_queue_size().try_into().unwrap();
+        let queue_size = virtio_dev.get_queue_size() as u32;
         assert!(queue_size != 0);
         assert!(queue_size & (queue_size - 1) == 0);
 

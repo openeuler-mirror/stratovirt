@@ -172,8 +172,8 @@ impl PointerOpts for UsbTabletAdapter {
             InputType::MoveEvent => {
                 let move_event = &input_event.move_event;
                 match move_event.axis {
-                    Axis::X => evt.pos_x = min(move_event.data as u32, INPUT_COORDINATES_MAX),
-                    Axis::Y => evt.pos_y = min(move_event.data as u32, INPUT_COORDINATES_MAX),
+                    Axis::X => evt.pos_x = min(move_event.data, INPUT_COORDINATES_MAX),
+                    Axis::Y => evt.pos_y = min(move_event.data, INPUT_COORDINATES_MAX),
                 }
             }
             _ => bail!(

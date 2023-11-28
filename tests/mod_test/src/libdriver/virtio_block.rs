@@ -183,11 +183,9 @@ pub fn virtio_blk_request(
         }
     }
 
-    let addr = alloc.borrow_mut().alloc(
-        (size_of::<TestVirtBlkReq>() + data_size + 512)
-            .try_into()
-            .unwrap(),
-    );
+    let addr = alloc
+        .borrow_mut()
+        .alloc((size_of::<TestVirtBlkReq>() + data_size + 512) as u64);
 
     let data_addr = if align {
         round_up(addr + REQ_ADDR_LEN as u64, 512).unwrap()

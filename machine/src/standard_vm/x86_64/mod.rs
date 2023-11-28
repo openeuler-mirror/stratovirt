@@ -803,7 +803,7 @@ impl AcpiBuilder for StdMachine {
         });
 
         // Add non boot cpu lapic.
-        for cpuid in self.base.cpu_topo.nrcpus as u8..self.base.cpu_topo.max_cpus {
+        for cpuid in self.base.cpu_topo.nrcpus..self.base.cpu_topo.max_cpus {
             let lapic = AcpiLocalApic {
                 type_id: 0,
                 length: size_of::<AcpiLocalApic>() as u8,

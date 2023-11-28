@@ -187,10 +187,7 @@ impl VirtioScsiTest {
 
         // Request Header.
         let cmdreq_len = size_of::<TestVirtioScsiCmdReq>() as u64;
-        let req_addr = self
-            .alloc
-            .borrow_mut()
-            .alloc(cmdreq_len.try_into().unwrap());
+        let req_addr = self.alloc.borrow_mut().alloc(cmdreq_len);
         let req_bytes = req.as_bytes();
         self.state.borrow().memwrite(req_addr, req_bytes);
 
@@ -204,7 +201,7 @@ impl VirtioScsiTest {
         if let Some(data) = data_out {
             let out_len = data.len() as u32;
             let out_bytes = data.as_bytes().to_vec();
-            let out_addr = self.alloc.borrow_mut().alloc(out_len.try_into().unwrap());
+            let out_addr = self.alloc.borrow_mut().alloc(out_len as u64);
             self.state.borrow().memwrite(out_addr, out_bytes.as_slice());
             data_entries.push(TestVringDescEntry {
                 data: out_addr,
@@ -218,7 +215,7 @@ impl VirtioScsiTest {
         let resp_addr = self
             .alloc
             .borrow_mut()
-            .alloc((cmdresp_len + data_in_len as u64).try_into().unwrap());
+            .alloc(cmdresp_len + data_in_len as u64);
         let resp_bytes = resp.as_bytes();
         self.state.borrow().memwrite(resp_addr, resp_bytes);
 
