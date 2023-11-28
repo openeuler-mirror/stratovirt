@@ -10,5 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(target_arch = "x86_64")]
+pub mod cpu_controller;
 pub mod ged;
 pub mod power;

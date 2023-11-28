@@ -36,6 +36,7 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology};
+use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
 use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
@@ -77,6 +78,7 @@ pub enum LayoutEntryType {
     PcieEcam,
     PcieMmio,
     GedMmio,
+    CpuController,
     Mmio,
     IoApic,
     LocalApic,
@@ -90,6 +92,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0xB000_0000, 0x1000_0000),      // PcieEcam
     (0xC000_0000, 0x3000_0000),      // PcieMmio
     (0xF000_0000, 0x04),             // GedMmio
+    (0xF000_0004, 0x03),             // CpuController
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
@@ -128,6 +131,8 @@ pub struct StdMachine {
     cpu_resize_req: Arc<EventFd>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// Cpu Controller.
+    cpu_controller: Option<Arc<Mutex<CpuController>>>,
 }
 
 impl StdMachine {
@@ -171,6 +176,7 @@ impl StdMachine {
                     .with_context(|| MachineError::InitEventFdErr("cpu resize".to_string()))?,
             ),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            cpu_controller: None,
         })
     }
 
@@ -225,6 +231,42 @@ impl StdMachine {
 
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
         None
+    }
+
+    fn init_cpu_controller(
+        &mut self,
+        boot_config: CPUBootConfig,
+        cpu_topology: CPUTopology,
+        vm: Arc<Mutex<StdMachine>>,
+    ) -> Result<()> {
+        let cpu_controller: CpuController = Default::default();
+
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].0;
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].1;
+        let cpu_config = CpuConfig::new(boot_config, cpu_topology);
+        let hotplug_cpu_req = Arc::new(
+            EventFd::new(libc::EFD_NONBLOCK)
+                .with_context(|| MachineError::InitEventFdErr("hotplug cpu".to_string()))?,
+        );
+
+        let realize_controller = cpu_controller
+            .realize(
+                &mut self.base.sysbus,
+                self.base.cpu_topo.max_cpus,
+                region_base,
+                region_size,
+                cpu_config,
+                hotplug_cpu_req.clone(),
+            )
+            .with_context(|| "Failed to realize Cpu Controller")?;
+
+        let mut lock_controller = realize_controller.lock().unwrap();
+        lock_controller.set_boot_vcpu(self.base.cpus.clone())?;
+        drop(lock_controller);
+
+        self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
+        self.cpu_controller = Some(realize_controller);
+        Ok(())
     }
 }
 
@@ -462,6 +504,8 @@ impl MachineOps for StdMachine {
             &topology,
             &boot_config,
         )?);
+
+        locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
 
         if migrate.0 == MigrateMode::Unknown {
             if let Some(fw_cfg) = fwcfg {
