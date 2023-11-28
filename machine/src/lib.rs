@@ -74,6 +74,7 @@ use devices::usb::UsbDevice;
 use devices::Bus;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
+use devices::ScsiBus::get_scsi_key;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
@@ -1214,13 +1215,9 @@ pub trait MachineOps: MachineLifecycle {
         let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
         let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
         let bus = cntlr.bus.as_ref().unwrap();
-        if bus
-            .lock()
-            .unwrap()
-            .devices
-            .contains_key(&(device_cfg.target, device_cfg.lun))
-        {
-            bail!("Wrong! Two scsi devices have the same scsi-id and lun");
+        let key = get_scsi_key(device_cfg.target, device_cfg.lun);
+        if bus.lock().unwrap().child_dev(key).is_some() {
+            bail!("Wrong! Two scsi devices have the same scsi-id and lun!");
         }
         let iothread = cntlr.config.iothread.clone();
 
@@ -1231,11 +1228,8 @@ pub trait MachineOps: MachineLifecycle {
             iothread,
         )));
         device.lock().unwrap().realize()?;
-        bus.lock()
-            .unwrap()
-            .devices
-            .insert((device_cfg.target, device_cfg.lun), device.clone());
-        device.lock().unwrap().parent_bus = Arc::downgrade(bus);
+        bus.lock().unwrap().attach_child(key, device.clone())?;
+        device.lock().unwrap().base.parent = Some(Arc::downgrade(bus) as Weak<Mutex<dyn Bus>>);
 
         if let Some(bootindex) = device_cfg.bootindex {
             // Eg: OpenFirmware device path(virtio-scsi disk):

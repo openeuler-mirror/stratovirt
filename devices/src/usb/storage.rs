@@ -29,9 +29,10 @@ use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 use crate::{
+    Bus,
     ScsiBus::{
-        ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
-        SCSI_CMD_BUF_SIZE,
+        get_scsi_key, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+        EMULATE_SCSI_OPS, GOOD, SCSI_CMD_BUF_SIZE,
     },
     ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
@@ -561,8 +562,7 @@ impl UsbDevice for UsbStorage {
         self.scsi_bus
             .lock()
             .unwrap()
-            .devices
-            .insert((0, 0), self.scsi_dev.clone());
+            .attach_child(get_scsi_key(0, 0), self.scsi_dev.clone())?;
 
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)

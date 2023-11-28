@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +23,7 @@ use crate::ScsiDisk::{
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
-use crate::{Bus, BusBase};
+use crate::{convert_bus_ref, convert_device_ref, Bus, BusBase, Device, SCSI_DEVICE};
 use util::aio::{AioCb, AioReqResult, Iovec};
 use util::{gen_base_func, AsAny};
 
@@ -357,6 +356,11 @@ const GC_FC_CORE: u16 = 0x0001;
 /// The medium may be removed from the device.
 const GC_FC_REMOVABLE_MEDIUM: u16 = 0x0003;
 
+// BusBase.Children uses `u64` for device's unique address. We use bits [32-39] in `u64`
+// to represent the target number and bits[0-15] in `u64` to the lun number.
+const TARGET_ID_SHIFT: u64 = 32;
+const LUN_ID_MASK: u64 = 0xFFFF;
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum ScsiXferMode {
     /// TEST_UNIT_READY, ...
@@ -367,21 +371,36 @@ pub enum ScsiXferMode {
     ScsiXferToDev,
 }
 
+// Convert from (target, lun) to unique address in BusBase.
+pub fn get_scsi_key(target: u8, lun: u16) -> u64 {
+    (target as u64) << TARGET_ID_SHIFT | lun as u64
+}
+
+// Convert from unique address in BusBase to (target, lun).
+fn parse_scsi_key(key: u64) -> (u8, u16) {
+    ((key >> TARGET_ID_SHIFT) as u8, (key & LUN_ID_MASK) as u16)
+}
+
 pub struct ScsiBus {
     pub base: BusBase,
-    /// Scsi Devices attached to the bus.
-    pub devices: HashMap<(u8, u16), Arc<Mutex<ScsiDevice>>>,
 }
 
 impl Bus for ScsiBus {
     gen_base_func!(bus_base, bus_base_mut, BusBase, base);
 }
 
+/// Convert from Arc<Mutex<dyn Bus>> to &ScsiBus.
+#[macro_export]
+macro_rules! SCSI_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_ref!($trait_bus, $lock_bus, $struct_bus, ScsiBus);
+    };
+}
+
 impl ScsiBus {
     pub fn new(bus_name: String) -> ScsiBus {
         ScsiBus {
             base: BusBase::new(bus_name),
-            devices: HashMap::new(),
         }
     }
 
@@ -389,9 +408,9 @@ impl ScsiBus {
     /// If the device requested by the target number and the lun number is non-existen,
     /// return the first device in ScsiBus's devices list. It's OK because we will not
     /// use this "random" device, we will just use it to prove that the target is existen.
-    pub fn get_device(&self, target: u8, lun: u16) -> Option<Arc<Mutex<ScsiDevice>>> {
-        if let Some(dev) = self.devices.get(&(target, lun)) {
-            return Some((*dev).clone());
+    pub fn get_device(&self, target: u8, lun: u16) -> Option<Arc<Mutex<dyn Device>>> {
+        if let Some(device) = self.child_dev(get_scsi_key(target, lun)) {
+            return Some(device.clone());
         }
 
         // If lun device requested in CDB's LUNS bytes is not found, it may be a target request.
@@ -400,11 +419,11 @@ impl ScsiBus {
         // is non-existent. So, we should find if there exists a lun which has the same id with
         // target id in CBD's LUNS bytes. And, if there exist two or more luns which have the same
         // target id, just return the first one is OK enough.
-        for (id, device) in self.devices.iter() {
-            let (target_id, lun_id) = id;
-            if *target_id == target {
-                trace::scsi_bus_get_device(*target_id, lun, *lun_id);
-                return Some((*device).clone());
+        for (key, device) in self.child_devices() {
+            let (target_id, lun_id) = parse_scsi_key(key);
+            if target_id == target {
+                trace::scsi_bus_get_device(target_id, lun, lun_id);
+                return Some(device.clone());
             }
         }
 
@@ -417,7 +436,7 @@ impl ScsiBus {
 
 fn scsi_bus_parse_req_cdb(
     cdb: [u8; SCSI_CMD_BUF_SIZE],
-    dev: Arc<Mutex<ScsiDevice>>,
+    dev: Arc<Mutex<dyn Device>>,
 ) -> Option<ScsiCommand> {
     let op = cdb[0];
     let len = scsi_cdb_length(&cdb);
@@ -496,7 +515,7 @@ pub struct ScsiRequest {
     pub iovec: Vec<Iovec>,
     // Provided buffer's length.
     pub datalen: u32,
-    pub dev: Arc<Mutex<ScsiDevice>>,
+    pub dev: Arc<Mutex<dyn Device>>,
     // Upper level request which contains this ScsiRequest.
     pub upper_req: Box<dyn ScsiRequestOps>,
 }
@@ -507,18 +526,17 @@ impl ScsiRequest {
         req_lun: u16,
         iovec: Vec<Iovec>,
         datalen: u32,
-        scsidevice: Arc<Mutex<ScsiDevice>>,
+        device: Arc<Mutex<dyn Device>>,
         upper_req: Box<dyn ScsiRequestOps>,
     ) -> Result<Self> {
-        let cmd = scsi_bus_parse_req_cdb(cdb, scsidevice.clone()).with_context(|| "Error cdb!")?;
+        let cmd = scsi_bus_parse_req_cdb(cdb, device.clone()).with_context(|| "Error cdb!")?;
         let op = cmd.op;
         let opstype = scsi_operation_type(op);
 
         if op == WRITE_10 || op == READ_10 {
-            let dev_lock = scsidevice.lock().unwrap();
-            let disk_size = dev_lock.disk_sectors << SECTOR_SHIFT;
-            let disk_type = dev_lock.scsi_type;
-            drop(dev_lock);
+            SCSI_DEVICE!(device, locked_dev, scsi_dev);
+            let disk_size = scsi_dev.disk_sectors << SECTOR_SHIFT;
+            let disk_type = scsi_dev.scsi_type;
             let offset_shift = match disk_type {
                 SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
                 _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
@@ -545,7 +563,7 @@ impl ScsiRequest {
             opstype,
             iovec,
             datalen,
-            dev: scsidevice,
+            dev: device,
             upper_req,
         })
     }
@@ -554,14 +572,14 @@ impl ScsiRequest {
         let mode = self.cmd.mode.clone();
         let op = self.cmd.op;
         let dev = self.dev.clone();
-        let locked_dev = dev.lock().unwrap();
+        SCSI_DEVICE!(dev, locked_dev, scsi_dev);
         // SAFETY: the block_backend is assigned after device realized.
-        let block_backend = locked_dev.block_backend.as_ref().unwrap();
+        let block_backend = scsi_dev.block_backend.as_ref().unwrap();
         let mut locked_backend = block_backend.lock().unwrap();
         let s_req = Arc::new(Mutex::new(self));
 
         let scsicompletecb = ScsiCompleteCb { req: s_req.clone() };
-        let offset_bits = match locked_dev.scsi_type {
+        let offset_bits = match scsi_dev.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
@@ -634,8 +652,8 @@ impl ScsiRequest {
                 Ok(Vec::new())
             }
             TEST_UNIT_READY => {
-                let dev_lock = self.dev.lock().unwrap();
-                if dev_lock.block_backend.is_none() {
+                SCSI_DEVICE!(self.dev, locked_dev, scsi_dev);
+                if scsi_dev.block_backend.is_none() {
                     Err(anyhow!("No scsi backend!"))
                 } else {
                     Ok(Vec::new())
@@ -670,7 +688,9 @@ impl ScsiRequest {
         let mut not_supported_flag = false;
         let mut sense = None;
         let mut status = GOOD;
-        let found_lun = self.dev.lock().unwrap().dev_cfg.lun;
+        SCSI_DEVICE!(self.dev, locked_dev, scsi_dev);
+        let found_lun = scsi_dev.dev_cfg.lun;
+        drop(locked_dev);
 
         // Requested lun id is not equal to found device id means it may be a target request.
         // REPORT LUNS is also a target request command.
@@ -770,10 +790,10 @@ fn scsi_cdb_length(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i32 {
     }
 }
 
-pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
-    let dev_lock = dev.lock().unwrap();
-    let block_size = dev_lock.block_size as i32;
-    drop(dev_lock);
+pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>) -> i32 {
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+    let block_size = scsi_dev.block_size as i32;
+    drop(locked_dev);
 
     let mut xfer = match cdb[0] >> 5 {
         // Group Code  |  Transfer length. |
@@ -883,28 +903,27 @@ fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
 /// VPD: Vital Product Data.
 fn scsi_command_emulate_vpd_page(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     let buflen: usize;
     let mut outbuf: Vec<u8> = vec![0; 4];
-
-    let dev_lock = dev.lock().unwrap();
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
     let page_code = cmd.buf[2];
 
-    outbuf[0] = dev_lock.scsi_type as u8 & 0x1f;
+    outbuf[0] = scsi_dev.scsi_type as u8 & 0x1f;
     outbuf[1] = page_code;
 
     match page_code {
         0x00 => {
             // Supported VPD Pages.
             outbuf.push(0_u8);
-            if !dev_lock.state.serial.is_empty() {
+            if !scsi_dev.state.serial.is_empty() {
                 // 0x80: Unit Serial Number.
                 outbuf.push(0x80);
             }
             // 0x83: Device Identification.
             outbuf.push(0x83);
-            if dev_lock.scsi_type == SCSI_TYPE_DISK {
+            if scsi_dev.scsi_type == SCSI_TYPE_DISK {
                 // 0xb0: Block Limits.
                 outbuf.push(0xb0);
                 // 0xb1: Block Device Characteristics.
@@ -916,20 +935,20 @@ fn scsi_command_emulate_vpd_page(
         }
         0x80 => {
             // Unit Serial Number.
-            let len = dev_lock.state.serial.len();
+            let len = scsi_dev.state.serial.len();
             if len == 0 {
                 bail!("Missed serial number!");
             }
 
             let l = cmp::min(SCSI_INQUIRY_VPD_SERIAL_NUMBER_MAX_LEN, len);
-            let mut serial_vec = dev_lock.state.serial.as_bytes().to_vec();
+            let mut serial_vec = scsi_dev.state.serial.as_bytes().to_vec();
             serial_vec.truncate(l);
             outbuf.append(&mut serial_vec);
             buflen = outbuf.len();
         }
         0x83 => {
             // Device Identification.
-            let mut len: u8 = dev_lock.state.device_id.len() as u8;
+            let mut len: u8 = scsi_dev.state.device_id.len() as u8;
             if len > (255 - 8) {
                 len = 255 - 8;
             }
@@ -941,7 +960,7 @@ fn scsi_command_emulate_vpd_page(
                 // len: identifier length.
                 outbuf.append(&mut [0x2_u8, 0_u8, 0_u8, len].to_vec());
 
-                let mut device_id_vec = dev_lock.state.device_id.as_bytes().to_vec();
+                let mut device_id_vec = scsi_dev.state.device_id.as_bytes().to_vec();
                 device_id_vec.truncate(len as usize);
                 outbuf.append(&mut device_id_vec);
             }
@@ -949,7 +968,7 @@ fn scsi_command_emulate_vpd_page(
         }
         0xb0 => {
             // Block Limits.
-            if dev_lock.scsi_type == SCSI_TYPE_ROM {
+            if scsi_dev.scsi_type == SCSI_TYPE_ROM {
                 bail!("Invalid scsi type: SCSI_TYPE_ROM !");
             }
             outbuf.resize(64, 0);
@@ -1069,7 +1088,7 @@ fn scsi_command_emulate_target_inquiry(lun: u16, cmd: &ScsiCommand) -> Result<Ve
 
 fn scsi_command_emulate_inquiry(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // Byte1 bit0: EVPD(enable vital product data).
     if cmd.buf[1] == 0x1 {
@@ -1083,26 +1102,26 @@ fn scsi_command_emulate_inquiry(
     let buflen = cmp::min(cmd.xfer, SCSI_MAX_INQUIRY_LEN);
     let mut outbuf: Vec<u8> = vec![0; SCSI_MAX_INQUIRY_LEN as usize];
 
-    let dev_lock = dev.lock().unwrap();
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
 
-    outbuf[0] = (dev_lock.scsi_type & 0x1f) as u8;
-    outbuf[1] = match dev_lock.state.features & SCSI_DISK_F_REMOVABLE {
+    outbuf[0] = (scsi_dev.scsi_type & 0x1f) as u8;
+    outbuf[1] = match scsi_dev.state.features & SCSI_DISK_F_REMOVABLE {
         1 => 0x80,
         _ => 0,
     };
 
-    let product_bytes = dev_lock.state.product.as_bytes();
+    let product_bytes = scsi_dev.state.product.as_bytes();
     let product_len = cmp::min(product_bytes.len(), SCSI_INQUIRY_PRODUCT_MAX_LEN);
-    let vendor_bytes = dev_lock.state.vendor.as_bytes();
+    let vendor_bytes = scsi_dev.state.vendor.as_bytes();
     let vendor_len = cmp::min(vendor_bytes.len(), SCSI_INQUIRY_VENDOR_MAX_LEN);
-    let version_bytes = dev_lock.state.version.as_bytes();
+    let version_bytes = scsi_dev.state.version.as_bytes();
     let vension_len = cmp::min(version_bytes.len(), SCSI_INQUIRY_VERSION_MAX_LEN);
 
     outbuf[16..16 + product_len].copy_from_slice(product_bytes);
     outbuf[8..8 + vendor_len].copy_from_slice(vendor_bytes);
     outbuf[32..32 + vension_len].copy_from_slice(version_bytes);
 
-    drop(dev_lock);
+    drop(locked_dev);
 
     // outbuf:
     // Byte2: Version.
@@ -1125,17 +1144,17 @@ fn scsi_command_emulate_inquiry(
 
 fn scsi_command_emulate_read_capacity_10(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     if cmd.buf[8] & 1 == 0 && cmd.lba != 0 {
         // PMI(Partial Medium Indicator)
         bail!("Invalid scsi cmd READ_CAPACITY_10!");
     }
 
-    let dev_lock = dev.lock().unwrap();
-    let block_size = dev_lock.block_size;
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+    let block_size = scsi_dev.block_size;
     let mut outbuf: Vec<u8> = vec![0; 8];
-    let mut nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    let mut nb_sectors = cmp::min(scsi_dev.disk_sectors as u32, u32::MAX);
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
     nb_sectors -= 1;
 
@@ -1150,18 +1169,18 @@ fn scsi_command_emulate_read_capacity_10(
 
 fn scsi_command_emulate_mode_sense(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // disable block descriptors(DBD) bit.
     let mut dbd: bool = cmd.buf[1] & 0x8 != 0;
     let page_code = cmd.buf[2] & 0x3f;
     let page_control = (cmd.buf[2] & 0xc0) >> 6;
     let mut outbuf: Vec<u8> = vec![0];
-    let dev_lock = dev.lock().unwrap();
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
     let mut dev_specific_parameter: u8 = 0;
-    let mut nb_sectors = dev_lock.disk_sectors as u32;
-    let scsi_type = dev_lock.scsi_type;
-    let block_size = dev_lock.block_size;
+    let mut nb_sectors = scsi_dev.disk_sectors as u32;
+    let scsi_type = scsi_dev.scsi_type;
+    let block_size = scsi_dev.block_size;
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
 
     trace::scsi_emulate_mode_sense(
@@ -1175,17 +1194,17 @@ fn scsi_command_emulate_mode_sense(
     // Device specific paramteter field for direct access block devices:
     // Bit 7: WP(Write Protect); bit 4: DPOFUA;
     if scsi_type == SCSI_TYPE_DISK {
-        if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
+        if scsi_dev.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
             dev_specific_parameter = 0x10;
         }
-        if dev_lock.drive_cfg.readonly {
+        if scsi_dev.drive_cfg.readonly {
             // Readonly.
             dev_specific_parameter |= 0x80;
         }
     } else {
         dbd = true;
     }
-    drop(dev_lock);
+    drop(locked_dev);
 
     if cmd.op == MODE_SENSE {
         outbuf.resize(4, 0);
@@ -1361,12 +1380,12 @@ fn scsi_command_emulate_mode_sense_page(
 
 fn scsi_command_emulate_report_luns(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
-    let dev_lock = dev.lock().unwrap();
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
     // Byte 0-3: Lun List Length. Byte 4-7: Reserved.
     let mut outbuf: Vec<u8> = vec![0; 8];
-    let target = dev_lock.dev_cfg.target;
+    let target = scsi_dev.dev_cfg.target;
 
     if cmd.xfer < 16 {
         bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
@@ -1380,27 +1399,24 @@ fn scsi_command_emulate_report_luns(
         );
     }
 
-    let scsi_bus = dev_lock.parent_bus.upgrade().unwrap();
-    let scsi_bus_clone = scsi_bus.lock().unwrap();
+    let bus = scsi_dev.parent_bus().unwrap().upgrade().unwrap();
+    SCSI_BUS!(bus, locked_bus, scsi_bus);
+    drop(locked_dev);
 
-    drop(dev_lock);
-
-    for (_pos, device) in scsi_bus_clone.devices.iter() {
-        let device_lock = device.lock().unwrap();
-        if device_lock.dev_cfg.target != target {
-            drop(device_lock);
+    for device in scsi_bus.child_devices().values() {
+        SCSI_DEVICE!(device, locked_dev, scsi_dev);
+        if scsi_dev.dev_cfg.target != target {
             continue;
         }
         let len = outbuf.len();
-        if device_lock.dev_cfg.lun < 256 {
+        if scsi_dev.dev_cfg.lun < 256 {
             outbuf.push(0);
-            outbuf.push(device_lock.dev_cfg.lun as u8);
+            outbuf.push(scsi_dev.dev_cfg.lun as u8);
         } else {
-            outbuf.push(0x40 | ((device_lock.dev_cfg.lun >> 8) & 0xff) as u8);
-            outbuf.push((device_lock.dev_cfg.lun & 0xff) as u8);
+            outbuf.push(0x40 | ((scsi_dev.dev_cfg.lun >> 8) & 0xff) as u8);
+            outbuf.push((scsi_dev.dev_cfg.lun & 0xff) as u8);
         }
         outbuf.resize(len + 8, 0);
-        drop(device_lock);
     }
 
     let len: u32 = outbuf.len() as u32 - 8;
@@ -1410,20 +1426,19 @@ fn scsi_command_emulate_report_luns(
 
 fn scsi_command_emulate_service_action_in_16(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // Read Capacity(16) Command.
     // Byte 0: Operation Code(0x9e)
     // Byte 1: bit0 - bit4: Service Action(0x10), bit 5 - bit 7: Reserved.
     if cmd.buf[1] & 0x1f == SUBCODE_READ_CAPACITY_16 {
-        let dev_lock = dev.lock().unwrap();
-        let block_size = dev_lock.block_size;
+        SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+        let block_size = scsi_dev.block_size;
         let mut outbuf: Vec<u8> = vec![0; 32];
-        let mut nb_sectors = dev_lock.disk_sectors;
+        let mut nb_sectors = scsi_dev.disk_sectors;
         nb_sectors /= (block_size / DEFAULT_SECTOR_SIZE) as u64;
         nb_sectors -= 1;
-
-        drop(dev_lock);
+        drop(locked_dev);
 
         // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical
         //            block).
@@ -1443,7 +1458,7 @@ fn scsi_command_emulate_service_action_in_16(
 
 fn scsi_command_emulate_read_disc_information(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // Byte1: Bits[0-2]: Data type.
     // Data Type | Returned Data.               |
@@ -1457,9 +1472,11 @@ fn scsi_command_emulate_read_disc_information(
     if data_type != 0 {
         bail!("Unsupported read disc information data type {}!", data_type);
     }
-    if dev.lock().unwrap().scsi_type != SCSI_TYPE_ROM {
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+    if scsi_dev.scsi_type != SCSI_TYPE_ROM {
         bail!("Read disc information command is only for scsi multi-media device!");
     }
+    drop(locked_dev);
 
     // Outbuf:
     // Bytes[0-1]: Disc Information Length(32).
@@ -1507,7 +1524,7 @@ const RT_RAW_TOC: u8 = 0x0010;
 
 fn scsi_command_emulate_read_toc(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // Byte1: Bit1: MSF.(MSF: Minute, Second, Frame)
     // MSF = 1: the address fields in some returned data formats shall be in MSF form.
@@ -1521,7 +1538,8 @@ fn scsi_command_emulate_read_toc(
 
     match format {
         RT_FORMATTED_TOC => {
-            let nb_sectors = dev.lock().unwrap().disk_sectors as u32;
+            SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+            let nb_sectors = scsi_dev.disk_sectors as u32;
             let mut buf = cdrom_read_formatted_toc(nb_sectors, msf, track_number)?;
             outbuf.append(&mut buf);
         }
@@ -1542,11 +1560,11 @@ fn scsi_command_emulate_read_toc(
 
 fn scsi_command_emulate_get_configuration(
     _cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
-    let dev_lock = dev.lock().unwrap();
-    if dev_lock.scsi_type != SCSI_TYPE_ROM {
-        bail!("Invalid scsi type {}", dev_lock.scsi_type);
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
+    if scsi_dev.scsi_type != SCSI_TYPE_ROM {
+        bail!("Invalid scsi type {}", scsi_dev.scsi_type);
     }
 
     // 8 bytes(Feature Header) + 12 bytes(Profile List Feature) +
@@ -1559,7 +1577,7 @@ fn scsi_command_emulate_get_configuration(
     // Bytes[4-5]: Reserved.
     // Bytes[6-7]: Current Profile.
     BigEndian::write_u32(&mut outbuf[0..4], 36);
-    let current = if dev_lock.disk_sectors > CD_MAX_SECTORS as u64 {
+    let current = if scsi_dev.disk_sectors > CD_MAX_SECTORS as u64 {
         GC_PROFILE_DVD_ROM
     } else {
         GC_PROFILE_CD_ROM
@@ -1620,14 +1638,14 @@ fn scsi_command_emulate_get_configuration(
 
 fn scsi_command_emulate_get_event_status_notification(
     cmd: &ScsiCommand,
-    dev: &Arc<Mutex<ScsiDevice>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<Vec<u8>> {
     // Byte4: Notification Class Request.
     let notification_class_request = cmd.buf[4];
-    let dev_lock = dev.lock().unwrap();
+    SCSI_DEVICE!(dev, locked_dev, scsi_dev);
 
-    if dev_lock.scsi_type != SCSI_TYPE_ROM {
-        bail!("Invalid scsi type {}", dev_lock.scsi_type);
+    if scsi_dev.scsi_type != SCSI_TYPE_ROM {
+        bail!("Invalid scsi type {}", scsi_dev.scsi_type);
     }
 
     // Byte1: Bit0: Polled.

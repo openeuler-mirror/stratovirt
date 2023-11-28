@@ -34,9 +34,10 @@ use super::{
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
     USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
+use crate::Bus;
 use crate::{
     ScsiBus::{
-        scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+        get_scsi_key, scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
         CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
         SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE,
     },
@@ -542,7 +543,7 @@ impl UsbUas {
             lun,
             scsi_iovec,
             scsi_iovec_size,
-            Arc::clone(&self.scsi_device),
+            self.scsi_device.clone(),
             uas_request,
         )
         .with_context(|| "failed to create SCSI request")?;
@@ -703,7 +704,7 @@ impl UsbUas {
         let command = self.commands[stream].as_ref().unwrap();
         // SAFETY: IU is guaranteed to be of type command.
         let cdb = unsafe { &command.body.command.cdb };
-        let xfer_len = scsi_cdb_xfer(cdb, Arc::clone(&self.scsi_device));
+        let xfer_len = scsi_cdb_xfer(cdb, self.scsi_device.clone());
         trace::usb_uas_try_start_next_transfer(self.device_id(), xfer_len);
 
         if xfer_len == 0 {
@@ -762,14 +763,13 @@ impl UsbDevice for UsbUas {
         // supported.
         let mut locked_scsi_device = self.scsi_device.lock().unwrap();
         locked_scsi_device.realize()?;
-        locked_scsi_device.parent_bus = Arc::downgrade(&self.scsi_bus);
+        locked_scsi_device.base.parent =
+            Some(Arc::downgrade(&self.scsi_bus) as Weak<Mutex<dyn Bus>>);
         drop(locked_scsi_device);
         self.scsi_bus
             .lock()
             .unwrap()
-            .devices
-            .insert((0, 0), Arc::clone(&self.scsi_device));
-
+            .attach_child(get_scsi_key(0, 0), self.scsi_device.clone())?;
         let uas = Arc::new(Mutex::new(self));
         Ok(uas)
     }
