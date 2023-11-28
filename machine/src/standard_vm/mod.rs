@@ -54,6 +54,8 @@ use address_space::{
     AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
+#[cfg(target_arch = "x86_64")]
+use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
@@ -196,6 +198,18 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
     ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
     }
+
+    /// Get cpu controller.
+    #[cfg(target_arch = "x86_64")]
+    fn get_cpu_controller(&self) -> &Arc<Mutex<CpuController>>;
+
+    /// Add new vcpu device.
+    ///
+    /// # Arguments
+    ///
+    /// * `clone_vm` - Reference of the StdMachine.
+    #[cfg(target_arch = "x86_64")]
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()>;
 
     /// Register event notifier for hotplug vcpu event.
     ///
@@ -1169,6 +1183,39 @@ impl StdMachine {
             shutdown_req,
         );
     }
+
+    #[cfg(target_arch = "x86_64")]
+    fn plug_cpu_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
+        if self.get_numa_nodes().is_some() {
+            bail!("Not support to hotplug/hotunplug cpu in numa architecture now.")
+        }
+        let device_id = args.id.clone();
+        if device_id.is_empty() {
+            bail!("Device id can't be empty.")
+        }
+
+        if let Some(cpu_id) = args.cpu_id {
+            let nr_cpus = self.get_cpu_topo().nrcpus;
+            let max_cpus = self.get_cpu_topo().max_cpus;
+
+            if nr_cpus == max_cpus {
+                bail!("There is no hotpluggable cpu-id for this VM.")
+            }
+            if cpu_id < nr_cpus {
+                bail!("Cpu-id {} already exist.", cpu_id)
+            }
+            if cpu_id >= max_cpus {
+                bail!("Max cpu-id is {}", max_cpus - 1)
+            }
+
+            let mut locked_controller = self.get_cpu_controller().lock().unwrap();
+            locked_controller.check_id_existed(&device_id, cpu_id)?;
+            locked_controller.set_hotplug_cpu_info(device_id, cpu_id)?;
+            locked_controller.trigger_hotplug_cpu()
+        } else {
+            bail!("Argument cpu-id is required.")
+        }
+    }
 }
 
 impl DeviceInterface for StdMachine {
@@ -1351,6 +1398,17 @@ impl DeviceInterface for StdMachine {
             }
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 if let Err(e) = self.plug_usb_device(args.as_ref()) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+                return Response::create_empty_response();
+            }
+            #[cfg(target_arch = "x86_64")]
+            "generic-x86-cpu" => {
+                if let Err(e) = self.plug_cpu_device(args.as_ref()) {
                     error!("{:?}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),

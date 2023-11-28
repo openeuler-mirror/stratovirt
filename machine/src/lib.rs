@@ -409,6 +409,42 @@ pub trait MachineOps {
         self.get_vm_ram().mtree(0_u32);
     }
 
+    /// Create vcpu for virtual machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_id` - The id number of vcpu.
+    /// * `vm` - `MachineInterface` to obtain functions cpu can use.
+    /// * `max_cpus` - max cpu number of virtual machine.
+    fn create_vcpu(
+        vcpu_id: u8,
+        vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
+        #[cfg(target_arch = "x86_64")] max_cpus: u8,
+    ) -> Result<Arc<CPU>>
+    where
+        Self: Sized,
+    {
+        let vcpu_fd = KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_vcpu(vcpu_id as u64)
+            .with_context(|| "Create vcpu failed")?;
+        #[cfg(target_arch = "aarch64")]
+        let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
+        #[cfg(target_arch = "x86_64")]
+        let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(max_cpus));
+
+        let cpu = Arc::new(CPU::new(
+            Arc::new(vcpu_fd),
+            vcpu_id,
+            Arc::new(Mutex::new(arch_cpu)),
+            vm.clone(),
+        ));
+        Ok(cpu)
+    }
+
     /// Init vcpu register with boot message.
     ///
     /// # Arguments
@@ -431,24 +467,12 @@ pub trait MachineOps {
         let mut cpus = Vec::<Arc<CPU>>::new();
 
         for vcpu_id in 0..nr_cpus {
-            let vcpu_fd = KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .create_vcpu(vcpu_id as u64)
-                .with_context(|| "Create vcpu failed")?;
-            #[cfg(target_arch = "aarch64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
-            #[cfg(target_arch = "x86_64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(max_cpus));
-
-            let cpu = Arc::new(CPU::new(
-                Arc::new(vcpu_fd),
+            let cpu = Self::create_vcpu(
                 vcpu_id,
-                Arc::new(Mutex::new(arch_cpu)),
                 vm.clone(),
-            ));
+                #[cfg(target_arch = "x86_64")]
+                max_cpus,
+            )?;
             cpus.push(cpu.clone());
 
             MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
