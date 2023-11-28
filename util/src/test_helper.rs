@@ -46,20 +46,15 @@ static TEST_MSIX_LIST: Lazy<Mutex<Vec<MsixMsg>>> = Lazy::new(|| Mutex::new(Vec::
 static TEST_INTX_LIST: Lazy<Mutex<Vec<IntxInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 pub fn set_test_enabled() {
-    #[cfg(target_arch = "x86_64")]
-    panic!("module test framework does not support x86_64.");
-    #[cfg(target_arch = "aarch64")]
-    {
-        if let Err(_e) = TEST_ENABLED.set(true) {
-            panic!("Failed to enable test server.");
-        }
-        if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
-            panic!("Failed to initialize clock");
-        }
-        unsafe {
-            if TEST_CLOCK.is_none() {
-                TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
-            }
+    if let Err(_e) = TEST_ENABLED.set(true) {
+        panic!("Failed to enable test server.");
+    }
+    if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
+        panic!("Failed to initialize clock");
+    }
+    unsafe {
+        if TEST_CLOCK.is_none() {
+            TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
         }
     }
 }
