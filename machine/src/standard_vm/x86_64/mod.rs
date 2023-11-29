@@ -18,7 +18,7 @@ mod syscall;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
@@ -35,7 +35,9 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CPUTopology};
+use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
+use devices::acpi::cpu_controller::{CpuConfig, CpuController};
+use devices::acpi::ged::{Ged, GedEvent};
 use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
@@ -75,6 +77,8 @@ pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
     PcieEcam,
     PcieMmio,
+    GedMmio,
+    CpuController,
     Mmio,
     IoApic,
     LocalApic,
@@ -87,6 +91,8 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0, 0x8000_0000),                // MemBelow4g
     (0xB000_0000, 0x1000_0000),      // PcieEcam
     (0xC000_0000, 0x3000_0000),      // PcieMmio
+    (0xF000_0000, 0x04),             // GedMmio
+    (0xF000_0004, 0x03),             // CpuController
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
@@ -119,8 +125,14 @@ pub struct StdMachine {
     reset_req: Arc<EventFd>,
     /// Shutdown_req, handle VM 'ShutDown' event.
     shutdown_req: Arc<EventFd>,
+    /// VM power button, handle VM `Powerdown` event.
+    power_button: Arc<EventFd>,
+    /// CPU Resize request, handle vm cpu hot(un)plug event.
+    cpu_resize_req: Arc<EventFd>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// Cpu Controller.
+    cpu_controller: Option<Arc<Mutex<CpuController>>>,
 }
 
 impl StdMachine {
@@ -155,7 +167,16 @@ impl StdMachine {
                     MachineError::InitEventFdErr("shutdown request".to_string())
                 })?,
             ),
+            power_button: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("power button".to_string()))?,
+            ),
+            cpu_resize_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK)
+                    .with_context(|| MachineError::InitEventFdErr("cpu resize".to_string()))?,
+            ),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            cpu_controller: None,
         })
     }
 
@@ -211,6 +232,48 @@ impl StdMachine {
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
         None
     }
+
+    pub fn handle_hotplug_vcpu_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let mut locked_vm = vm.lock().unwrap();
+        locked_vm.add_vcpu_device(vm.clone())?;
+        Ok(())
+    }
+
+    fn init_cpu_controller(
+        &mut self,
+        boot_config: CPUBootConfig,
+        cpu_topology: CPUTopology,
+        vm: Arc<Mutex<StdMachine>>,
+    ) -> Result<()> {
+        let cpu_controller: CpuController = Default::default();
+
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].0;
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].1;
+        let cpu_config = CpuConfig::new(boot_config, cpu_topology);
+        let hotplug_cpu_req = Arc::new(
+            EventFd::new(libc::EFD_NONBLOCK)
+                .with_context(|| MachineError::InitEventFdErr("hotplug cpu".to_string()))?,
+        );
+
+        let realize_controller = cpu_controller
+            .realize(
+                &mut self.base.sysbus,
+                self.base.cpu_topo.max_cpus,
+                region_base,
+                region_size,
+                cpu_config,
+                hotplug_cpu_req.clone(),
+            )
+            .with_context(|| "Failed to realize Cpu Controller")?;
+
+        let mut lock_controller = realize_controller.lock().unwrap();
+        lock_controller.set_boot_vcpu(self.base.cpus.clone())?;
+        drop(lock_controller);
+
+        self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
+        self.cpu_controller = Some(realize_controller);
+        Ok(())
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -251,10 +314,14 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    fn add_fwcfg_device(
+        &mut self,
+        nr_cpus: u8,
+        max_cpus: u8,
+    ) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone());
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
-        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, nr_cpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
         let boot_order = Vec::<u8>::new();
@@ -267,6 +334,71 @@ impl StdMachineOps for StdMachine {
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
+    }
+
+    fn get_cpu_controller(&self) -> &Arc<Mutex<CpuController>> {
+        self.cpu_controller.as_ref().unwrap()
+    }
+
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()> {
+        let mut locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+        let device_id;
+        let vcpu_id;
+        (device_id, vcpu_id) = locked_controller.get_hotplug_cpu_info();
+
+        // Check if there is a reusable CPU, and if not, create a new one.
+        let vcpu = if let Some(reuse_vcpu) = locked_controller.find_reusable_vcpu() {
+            locked_controller.setup_reuse_vcpu(reuse_vcpu.clone())?;
+            reuse_vcpu
+        } else {
+            let boot_cfg = locked_controller.get_boot_config();
+            let topology = locked_controller.get_topology_config();
+
+            let vcpu = <StdMachine as MachineOps>::create_vcpu(
+                vcpu_id,
+                clone_vm,
+                self.base.cpu_topo.max_cpus,
+            )?;
+            vcpu.realize(boot_cfg, topology).with_context(|| {
+                format!(
+                    "Failed to realize arch cpu register/features for CPU {}/KVM",
+                    vcpu_id
+                )
+            })?;
+
+            locked_controller.setup_hotplug_vcpu(device_id, vcpu_id, vcpu.clone())?;
+            self.base.cpus.push(vcpu.clone());
+            vcpu
+        };
+        // Start vcpu.
+        let cpu_thread_barrier = Arc::new(Barrier::new(1));
+        if let Err(e) = CPU::start(vcpu, cpu_thread_barrier, false) {
+            bail!("Failed to run vcpu-{}, {:?}", vcpu_id, e)
+        };
+        // Trigger GED cpu resize event.
+        self.cpu_resize_req
+            .write(1)
+            .with_context(|| "Failed to write cpu resize request.")?;
+        Ok(())
+    }
+
+    fn remove_vcpu_device(&mut self, vcpu_id: u8) -> Result<()> {
+        if self.base.numa_nodes.is_some() {
+            bail!("Not support to hotunplug cpu in numa architecture now.")
+        }
+        let mut locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+
+        // Trigger GED cpu resize event.
+        locked_controller.set_hotunplug_cpu(vcpu_id)?;
+        self.cpu_resize_req
+            .write(1)
+            .with_context(|| "Failed to write cpu resize request.")?;
+        Ok(())
+    }
+
+    fn find_cpu_id_by_device_id(&mut self, device_id: &str) -> Option<u8> {
+        let locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
+        locked_controller.find_cpu_by_device_id(device_id)
     }
 }
 
@@ -367,6 +499,23 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn add_ged_device(&mut self) -> Result<()> {
+        let ged = Ged::default();
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].0;
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].1;
+
+        let ged_event = GedEvent::new(self.power_button.clone(), self.cpu_resize_req.clone());
+        ged.realize(
+            &mut self.base.sysbus,
+            ged_event,
+            false,
+            region_base,
+            region_size,
+        )
+        .with_context(|| "Failed to realize Ged")?;
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
@@ -383,6 +532,7 @@ impl MachineOps for StdMachine {
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
+        let max_cpus = vm_config.machine_config.max_cpus;
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -405,7 +555,7 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
 
-        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
+        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
@@ -421,9 +571,12 @@ impl MachineOps for StdMachine {
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             nr_cpus,
+            max_cpus,
             &topology,
             &boot_config,
         )?);
+
+        locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
 
         if migrate.0 == MigrateMode::Unknown {
             if let Some(fw_cfg) = fwcfg {
@@ -649,8 +802,20 @@ impl AcpiBuilder for StdMachine {
             madt.append_child(&lapic.aml_bytes());
         });
 
+        // Add non boot cpu lapic.
+        for cpuid in self.base.cpu_topo.nrcpus as u8..self.base.cpu_topo.max_cpus {
+            let lapic = AcpiLocalApic {
+                type_id: 0,
+                length: size_of::<AcpiLocalApic>() as u8,
+                processor_uid: cpuid,
+                apic_id: cpuid,
+                flags: 2, // Flags: hotplug enabled.
+            };
+            madt.append_child(&lapic.aml_bytes());
+        }
+
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
-            .with_context(|| "Fail to add DSTD table to loader")?;
+            .with_context(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin)
     }
 

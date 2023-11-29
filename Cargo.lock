@@ -332,6 +332,7 @@ dependencies = [
  "byteorder",
  "cairo-rs",
  "chardev_backend",
+ "cpu",
  "drm-fourcc",
  "hypervisor",
  "kvm-bindings",

@@ -317,6 +317,8 @@ pub struct device_add {
     pub productid: Option<String>,
     pub isobufs: Option<String>,
     pub isobsize: Option<String>,
+    #[serde(rename = "cpu-id")]
+    pub cpu_id: Option<u8>,
 }
 
 pub type DeviceAddArgument = device_add;
@@ -1742,6 +1744,7 @@ define_qmp_event_enum!(
     Stop("STOP", Stop, default),
     Resume("RESUME", Resume, default),
     Powerdown("POWERDOWN", Powerdown, default),
+    CpuResize("CPU_RESIZE", CpuResize, default),
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
     BalloonChanged("BALLOON_CHANGED", BalloonInfo)
 );
@@ -1839,6 +1842,21 @@ pub struct Resume {}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Powerdown {}
+
+/// CpuResize
+///
+/// Emitted when the virtual machine cpu hot(un)plug execution.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "CPU_RESIZE",
+///      "data": {},
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CpuResize {}
 
 /// DeviceDeleted
 ///

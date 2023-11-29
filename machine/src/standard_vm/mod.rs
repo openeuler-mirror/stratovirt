@@ -54,6 +54,8 @@ use address_space::{
     AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
 };
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
+#[cfg(target_arch = "x86_64")]
+use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
@@ -189,9 +191,73 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, _nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    fn add_fwcfg_device(
+        &mut self,
+        _nr_cpus: u8,
+        #[cfg(target_arch = "x86_64")] _max_cpus: u8,
+    ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
     }
+
+    /// Get cpu controller.
+    #[cfg(target_arch = "x86_64")]
+    fn get_cpu_controller(&self) -> &Arc<Mutex<CpuController>>;
+
+    /// Add new vcpu device.
+    ///
+    /// # Arguments
+    ///
+    /// * `clone_vm` - Reference of the StdMachine.
+    #[cfg(target_arch = "x86_64")]
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()>;
+
+    /// Register event notifier for hotplug vcpu event.
+    ///
+    /// # Arguments
+    ///
+    /// * `resize_req` - Eventfd of the cpu hotplug request.
+    /// * `clone_vm`  - Reference of the StdMachine.
+    #[cfg(target_arch = "x86_64")]
+    fn register_hotplug_vcpu_event(
+        &self,
+        hotplug_req: Arc<EventFd>,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let hotplug_req_fd = hotplug_req.as_raw_fd();
+        let hotplug_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            read_fd(hotplug_req_fd);
+            if let Err(e) = StdMachine::handle_hotplug_vcpu_request(&clone_vm) {
+                error!("Fail to hotplug vcpu, {}", e);
+            }
+            None
+        });
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            hotplug_req_fd,
+            None,
+            EventSet::IN,
+            vec![hotplug_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .with_context(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
+    /// Remove vcpu device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_id` - The id number of vcpu.
+    #[cfg(target_arch = "x86_64")]
+    fn remove_vcpu_device(&mut self, vcpu_id: u8) -> Result<()>;
+
+    /// Find cpu id by device id.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - The name of vcpu device.
+    #[cfg(target_arch = "x86_64")]
+    fn find_cpu_id_by_device_id(&mut self, device_id: &str) -> Option<u8>;
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -1133,6 +1199,39 @@ impl StdMachine {
             shutdown_req,
         );
     }
+
+    #[cfg(target_arch = "x86_64")]
+    fn plug_cpu_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
+        if self.get_numa_nodes().is_some() {
+            bail!("Not support to hotplug/hotunplug cpu in numa architecture now.")
+        }
+        let device_id = args.id.clone();
+        if device_id.is_empty() {
+            bail!("Device id can't be empty.")
+        }
+
+        if let Some(cpu_id) = args.cpu_id {
+            let nr_cpus = self.get_cpu_topo().nrcpus;
+            let max_cpus = self.get_cpu_topo().max_cpus;
+
+            if nr_cpus == max_cpus {
+                bail!("There is no hotpluggable cpu-id for this VM.")
+            }
+            if cpu_id < nr_cpus {
+                bail!("Cpu-id {} already exist.", cpu_id)
+            }
+            if cpu_id >= max_cpus {
+                bail!("Max cpu-id is {}", max_cpus - 1)
+            }
+
+            let mut locked_controller = self.get_cpu_controller().lock().unwrap();
+            locked_controller.check_id_existed(&device_id, cpu_id)?;
+            locked_controller.set_hotplug_cpu_info(device_id, cpu_id)?;
+            locked_controller.trigger_hotplug_cpu()
+        } else {
+            bail!("Argument cpu-id is required.")
+        }
+    }
 }
 
 impl DeviceInterface for StdMachine {
@@ -1323,6 +1422,17 @@ impl DeviceInterface for StdMachine {
                 }
                 return Response::create_empty_response();
             }
+            #[cfg(target_arch = "x86_64")]
+            "generic-x86-cpu" => {
+                if let Err(e) = self.plug_cpu_device(args.as_ref()) {
+                    error!("{:?}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+                return Response::create_empty_response();
+            }
             _ => {
                 let err_str = format!("Failed to add device: Driver {} is not support", driver);
                 return Response::create_error_response(
@@ -1392,7 +1502,19 @@ impl DeviceInterface for StdMachine {
         }
         drop(locked_pci_host);
 
-        // The device is not a pci device, assume it is a usb device.
+        // Assume it is a cpu device, try to find this device in cpu device.
+        #[cfg(target_arch = "x86_64")]
+        if let Some(cpu_id) = self.find_cpu_id_by_device_id(&device_id) {
+            return match self.remove_vcpu_device(cpu_id) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            };
+        }
+
+        // The device is not a pci device and not a cpu device, assume it is a usb device.
         match self.handle_unplug_usb_request(device_id) {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
