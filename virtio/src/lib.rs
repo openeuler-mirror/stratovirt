@@ -167,6 +167,8 @@ pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
+/// TODO: need to change to 5 or bigger
+pub const VIRTIO_GPU_F_MONOCHROME: u32 = 4;
 
 /// The device sets control ok status to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
