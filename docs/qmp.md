@@ -522,6 +522,17 @@ Query the value of the guest physical address.
 <- {"return": "B9000001"}
 ```
 
+### query-display-image
+
+Query the display image of virtiogpu. Currently only stdvm and gtk supports.
+
+#### Example
+
+```json
+-> { "execute": "query-display-image" }
+<- { "return": { "fileDir": "/tmp/stratovirt-images", "isSuccess": true } }
+```
+
 ## Others
 
 ### getfd

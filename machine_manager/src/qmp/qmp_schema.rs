@@ -101,6 +101,7 @@ define_qmp_command_enum!(
     query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
     query_balloon("query-balloon", query_balloon, default),
     query_vnc("query-vnc", query_vnc, default),
+    query_display_image("query-display-image", query_display_image, default),
     migrate("migrate", migrate),
     query_migrate("query-migrate", query_migrate, default),
     cancel_migrate("migrate_cancel", cancel_migrate, default),
@@ -1063,6 +1064,30 @@ pub struct VncClientInfo {
     pub service: String,
     #[serde(rename = "family")]
     pub family: String,
+}
+
+/// query-display-image
+///
+/// Information about image of stratovirt.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "query-display-image" }
+/// <- { "return": {
+///         "fileDir": /tmp/stratovirt-images,
+///         "isSuccess": true, } }
+/// ``
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_display_image {}
+generate_command_impl!(query_display_image, GpuInfo);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct GpuInfo {
+    #[serde(rename = "isSuccess")]
+    pub isSuccess: bool,
+    #[serde(rename = "fileDir")]
+    pub fileDir: String,
 }
 
 /// balloon

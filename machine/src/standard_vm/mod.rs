@@ -72,6 +72,8 @@ use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::MigrationManager;
+#[cfg(feature = "gtk")]
+use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
 #[cfg(feature = "vnc")]
 use ui::vnc::qmp_query_vnc;
@@ -1339,6 +1341,20 @@ impl DeviceInterface for StdMachine {
             ),
             None,
         )
+    }
+
+    fn query_display_image(&self) -> Response {
+        let mut _err = String::from("The gtk feature is not supported");
+        #[cfg(feature = "gtk")]
+        match qmp_query_display_image() {
+            Ok(gpu_info) => {
+                return Response::create_response(serde_json::to_value(gpu_info).unwrap(), None);
+            }
+            Err(e) => {
+                _err = format!("Failed to query_display_image: {:?}", e);
+            }
+        };
+        Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(_err), None)
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {

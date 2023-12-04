@@ -996,6 +996,15 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    fn query_display_image(&self) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "query-display-image is not supported".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;

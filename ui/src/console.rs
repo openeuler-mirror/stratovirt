@@ -199,7 +199,7 @@ pub struct DisplayConsole {
     pub console_list: Weak<Mutex<ConsoleList>>,
     pub dev_opts: Arc<dyn HardWareOperations>,
     pub timer_id: Option<u64>,
-    active: bool,
+    pub active: bool,
 }
 
 impl DisplayConsole {

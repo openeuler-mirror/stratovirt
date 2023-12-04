@@ -1678,6 +1678,7 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "bitintr",
+ "cairo-rs",
  "gettext-rs",
  "gtk",
  "libc",

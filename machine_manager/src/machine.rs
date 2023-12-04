@@ -202,6 +202,9 @@ pub trait DeviceInterface {
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
 
+    /// Query display of stratovirt.
+    fn query_display_image(&self) -> Response;
+
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
 
