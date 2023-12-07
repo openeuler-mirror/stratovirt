@@ -258,7 +258,7 @@ fn test_smbios_type0() {
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
     assert_eq!(read_data[6], 24 as u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
-    assert_eq!(talble_len, 339);
+    assert_eq!(talble_len, 372);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
     let talbles_size = test_state.borrow().fw_cfg_read_file(
@@ -322,7 +322,7 @@ fn test_smbios_type1() {
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
     assert_eq!(read_data[6], 24 as u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
-    assert_eq!(talble_len, 381);
+    assert_eq!(talble_len, 414);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
     let talbles_size = test_state.borrow().fw_cfg_read_file(
@@ -662,7 +662,7 @@ fn test_smbios_type17() {
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
     assert_eq!(read_data[6], 24 as u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
-    assert_eq!(talble_len, 434);
+    assert_eq!(talble_len, 467);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
     let talbles_size = test_state.borrow().fw_cfg_read_file(
