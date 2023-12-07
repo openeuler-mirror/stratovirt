@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod pci_host_root;
-mod syscall;
-
 pub use crate::error::MachineError;
 
 use std::mem::size_of;
@@ -24,7 +21,7 @@ use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
 use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
+use crate::standard_common::{AcpiBuilder, StdMachineOps};
 use crate::{MachineBase, MachineOps};
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
@@ -41,6 +38,8 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 
+use super::pci_host_root::PciHostRoot;
+use crate::standard_common::syscall::syscall_whitelist;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
 #[cfg(feature = "ramfb")]
@@ -51,7 +50,7 @@ use devices::legacy::{
 use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::SysBusDevType;
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
-use hypervisor::kvm::KVM_FDS;
+use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
@@ -63,13 +62,11 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
-    MachineLifecycle, MachineTestInterface, MigrateInterface,
+    KvmVmState, MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
+    MigrateInterface,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
-use pci_host_root::PciHostRoot;
-use syscall::syscall_whitelist;
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
 #[cfg(feature = "vnc")]
@@ -77,7 +74,7 @@ use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
-use util::seccomp::BpfRule;
+use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::set_termi_canon_mode;
 
 /// The type of memory layout entry on aarch64
@@ -333,7 +330,7 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
-    fn init_pci_host(&self) -> StdResult<()> {
+    fn init_pci_host(&self) -> Result<()> {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
@@ -353,12 +350,10 @@ impl StdMachineOps for StdMachine {
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
-            .with_context(|| "Failed to realize pcihost root device.")?;
-
-        Ok(())
+            .with_context(|| "Failed to realize pcihost root device.")
     }
 
-    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         if self.base.vm_config.lock().unwrap().pflashs.is_none() {
             return Ok(None);
         }
@@ -429,8 +424,7 @@ impl MachineOps for StdMachine {
         );
         sys_mem
             .root()
-            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
-        Ok(())
+            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
@@ -489,8 +483,7 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
-        .with_context(|| "Failed to realize PL031")?;
-        Ok(())
+        .with_context(|| "Failed to realize PL031")
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
@@ -529,8 +522,7 @@ impl MachineOps for StdMachine {
                 region_size,
                 &self.base.boot_source,
             )
-            .with_context(|| "Failed to realize PL011")?;
-        Ok(())
+            .with_context(|| "Failed to realize PL011")
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
@@ -718,11 +710,10 @@ impl MachineOps for StdMachine {
         let mut ramfb = Ramfb::new(sys_mem.clone(), install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize(&mut self.base.sysbus)?;
-        Ok(())
+        ramfb.realize(&mut self.base.sysbus)
     }
 
-    fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
     }
 
@@ -731,12 +722,48 @@ impl MachineOps for StdMachine {
     }
 }
 
+pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
+    bpf_rule
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32)
+}
+
+pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
+    vec![
+        BpfRule::new(libc::SYS_epoll_pwait),
+        BpfRule::new(libc::SYS_mkdirat),
+        BpfRule::new(libc::SYS_unlinkat),
+        BpfRule::new(libc::SYS_clone),
+        BpfRule::new(libc::SYS_rt_sigaction),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rseq),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(223),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_listen),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fchmodat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmctl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmat),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_shmdt),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_lremovexattr),
+    ]
+}
+
 impl AcpiBuilder for StdMachine {
     fn build_gtdt_table(
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
         gtdt.set_table_len(96);
 
@@ -769,7 +796,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         // Table format described at:
         // https://learn.microsoft.com/en-us/windows-hardware/drivers/bringup/acpi-debug-port-table
 
@@ -852,7 +879,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
         iort.set_table_len(128);
 
@@ -895,7 +922,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut spcr = AcpiTable::new(*b"SPCR", 2, *b"STRATO", *b"VIRTSPCR", 1);
         spcr.set_table_len(80);
 
@@ -939,7 +966,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -971,7 +998,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
         madt.set_table_len(44);
 
@@ -1072,7 +1099,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
         // Reserved
         srat.append_child(&[1_u8; 4_usize]);
@@ -1095,7 +1122,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
         let mut uid = 0;
         self.build_pptt_sockets(&mut pptt, &mut uid);
@@ -1180,16 +1207,6 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
         true
-    }
-}
-
-impl MachineAddressInterface for StdMachine {
-    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
-        self.machine_base().mmio_read(addr, data)
-    }
-
-    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
-        self.machine_base().mmio_write(addr, data)
     }
 }
 

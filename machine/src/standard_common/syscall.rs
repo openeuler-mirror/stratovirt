@@ -10,6 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
@@ -54,18 +58,15 @@ const KVM_RUN: u32 = 0xae80;
 /// Create a syscall allowlist for seccomp.
 ///
 /// # Notes
-/// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 100 syscalls
-/// * aarch64-unknown-musl: 64 syscalls
+///
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
-    vec![
+    let mut syscall = vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_readv),
         BpfRule::new(libc::SYS_write),
         BpfRule::new(libc::SYS_writev),
         ioctl_allow_list(),
-        BpfRule::new(libc::SYS_epoll_pwait),
         BpfRule::new(libc::SYS_io_getevents),
         BpfRule::new(libc::SYS_io_submit),
         BpfRule::new(libc::SYS_io_destroy),
@@ -120,8 +121,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_pwrite64),
         BpfRule::new(libc::SYS_pwritev),
         BpfRule::new(libc::SYS_statx),
-        BpfRule::new(libc::SYS_mkdirat),
-        BpfRule::new(libc::SYS_unlinkat),
         madvise_rule(),
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
@@ -131,7 +130,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_bind),
         BpfRule::new(libc::SYS_connect),
         BpfRule::new(libc::SYS_getcwd),
-        BpfRule::new(libc::SYS_clone),
         BpfRule::new(libc::SYS_prctl),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getsockname),
@@ -166,14 +164,11 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_getrandom),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_shutdown),
-        BpfRule::new(libc::SYS_rt_sigaction),
         BpfRule::new(libc::SYS_setsockopt),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_set_robust_list),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_sched_getaffinity),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_rseq),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_pipe2),
         #[cfg(target_env = "gnu")]
@@ -190,22 +185,11 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_fstatfs),
         #[cfg(target_env = "gnu")]
-        BpfRule::new(223),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_listen),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_fchmodat),
-        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_shmget),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_shmctl),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_shmat),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_shmdt),
-        #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_lremovexattr),
-    ]
+    ];
+    syscall.append(&mut arch_syscall_whitelist());
+
+    syscall
 }
 
 /// Create a syscall bpf rule for syscall `ioctl`.
@@ -261,13 +245,8 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQ_LINE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32);
+    let bpf_rule = arch_ioctl_allow_list(bpf_rule);
 
     #[cfg(feature = "usb_camera_v4l2")]
     let bpf_rule = bpf_rule

@@ -1160,19 +1160,6 @@ One property can be set:
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
 in StratoVirt process by default. It will make a slight influence on performance to StratoVirt.
-* x86_64
-
-| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
-| :----------------: | :-----------: | :------------: |
-|      microvm       |      51       |       50       |
-|        q35         |      85       |       65       |
-
-* aarch64
-
-| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
-| :----------------: | :-----------: | :------------: |
-|      microvm       |      49       |       49       |
-|        virt        |      84       |       62       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
