@@ -12,6 +12,7 @@
 
 pub mod caps;
 mod core_regs;
+mod regs;
 
 pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 
@@ -31,6 +32,7 @@ use kvm_ioctls::{DeviceFd, VcpuFd};
 
 use self::caps::CpregListEntry;
 use self::core_regs::{get_core_regs, set_core_regs};
+use self::regs::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
 use crate::CPU;
 use hypervisor::kvm::KVM_FDS;
 use migration::{
@@ -50,13 +52,6 @@ const PSR_D_BIT: u64 = 0x0000_0200;
 // MPIDR is Multiprocessor Affinity Register
 // [40:63] bit reserved on AArch64 Architecture,
 const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
-
-// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
-// MPIDR - Multiprocessor Affinity Register.
-const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
-// Counter-timer Virtual Count register: Due to the API interface problem, the encode of
-// this register is SYS_CNTV_CVAL_EL0.
-const SYS_CNTV_CNT_EL0: u64 = 0x6030_0000_0013_df1a;
 
 const KVM_MAX_CPREG_ENTRIES: usize = 500;
 
@@ -196,7 +191,7 @@ impl ArmCPUState {
             .vcpu_init(&self.kvi)
             .with_context(|| "Failed to init kvm vcpu")?;
         self.mpidr = vcpu_fd
-            .get_one_reg(SYS_MPIDR_EL1)
+            .get_one_reg(KVM_REG_ARM_MPIDR_EL1)
             .with_context(|| "Failed to get mpidr")? as u64;
 
         self.features = *vcpu_config;
@@ -272,7 +267,7 @@ impl ArmCPUState {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn set_virtual_timer_cnt(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         vcpu_fd
-            .set_one_reg(SYS_CNTV_CNT_EL0, self.vtimer_cnt as u128)
+            .set_one_reg(KVM_REG_ARM_TIMER_CNT, self.vtimer_cnt as u128)
             .with_context(|| "Failed to set virtual timer count")
     }
 
@@ -283,7 +278,7 @@ impl ArmCPUState {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn get_virtual_timer_cnt(&mut self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         self.vtimer_cnt = vcpu_fd
-            .get_one_reg(SYS_CNTV_CNT_EL0)
+            .get_one_reg(KVM_REG_ARM_TIMER_CNT)
             .with_context(|| "Failed to get virtual timer count")? as u64;
         Ok(())
     }
