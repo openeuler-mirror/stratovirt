@@ -15,12 +15,11 @@ use std::sync::{
     Arc, Mutex, Weak,
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::VENDOR_ID_INTEL;
-use crate::standard_vm::Result;
+use crate::arch::x86_64::standard::VENDOR_ID_INTEL;
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use devices::pci::config::{

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{bail, Result};
 use log::error;
 
-use super::VENDOR_ID_INTEL;
+use crate::arch::x86_64::standard::VENDOR_ID_INTEL;
 use address_space::{Region, RegionOps};
 use devices::pci::{
     config::{
