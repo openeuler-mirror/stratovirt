@@ -81,21 +81,12 @@ pub struct ShmemStreamHeader {
 }
 
 impl ShmemStreamHeader {
-    pub fn check(&self, shmem_size: u64, last_end: u64) -> bool {
+    pub fn check(&self, last_end: u64) -> bool {
         if (self.offset as u64) < last_end {
             warn!(
                 "Guest set bad offset {} exceeds last stream buffer end {}",
                 self.offset, last_end
             );
-        }
-
-        let boundary = self.offset as u64 + self.chunk_size as u64 * self.max_chunks as u64;
-        if boundary > shmem_size {
-            error!(
-                "Guest set bad stream params: offset {:x} max chunk num is {}, chunk size is {}",
-                self.offset, self.max_chunks, self.chunk_size
-            );
-            return false;
         }
 
         if self.chunk_idx > self.max_chunks {
@@ -183,7 +174,6 @@ impl StreamData {
         dir: ScreamDirection,
         poll_delay_us: u64,
         hva: u64,
-        shmem_size: u64,
     ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the scream realize.
@@ -219,7 +209,7 @@ impl StreamData {
                     + header.play.chunk_size as u64 * header.play.max_chunks as u64;
             }
 
-            if !stream_header.check(shmem_size, last_end) {
+            if !stream_header.check(last_end) {
                 continue;
             }
 
@@ -233,14 +223,36 @@ impl StreamData {
         }
     }
 
-    fn update_buffer_by_chunk_idx(&mut self, hva: u64, stream_header: &ShmemStreamHeader) {
+    fn update_buffer_by_chunk_idx(
+        &mut self,
+        hva: u64,
+        shmem_size: u64,
+        stream_header: &ShmemStreamHeader,
+    ) -> bool {
         self.audio_size = stream_header.chunk_size;
         self.audio_base = hva
             + stream_header.offset as u64
             + (stream_header.chunk_size as u64) * (self.chunk_idx as u64);
+
+        if (self.audio_base + self.audio_size as u64) > (hva + shmem_size) {
+            error!(
+                "Scream: wrong header: offset {} chunk_idx {} chunk_size {} max_chunks {}",
+                stream_header.offset,
+                stream_header.chunk_idx,
+                stream_header.chunk_size,
+                stream_header.max_chunks,
+            );
+            return false;
+        }
+        true
     }
 
-    fn playback_trans(&mut self, hva: u64, interface: Arc<Mutex<dyn AudioInterface>>) {
+    fn playback_trans(
+        &mut self,
+        hva: u64,
+        shmem_size: u64,
+        interface: Arc<Mutex<dyn AudioInterface>>,
+    ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
@@ -257,19 +269,28 @@ impl StreamData {
                 self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
             }
 
-            self.update_buffer_by_chunk_idx(hva, play);
+            if !self.update_buffer_by_chunk_idx(hva, shmem_size, play) {
+                return;
+            }
             interface.lock().unwrap().send(self);
         }
     }
 
-    fn capture_trans(&mut self, hva: u64, interface: Arc<Mutex<dyn AudioInterface>>) {
+    fn capture_trans(
+        &mut self,
+        hva: u64,
+        shmem_size: u64,
+        interface: Arc<Mutex<dyn AudioInterface>>,
+    ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
 
         while capt.is_started != 0 {
-            self.update_buffer_by_chunk_idx(hva, capt);
+            if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
+                return;
+            }
 
             if interface.lock().unwrap().receive(self) {
                 self.chunk_idx = (self.chunk_idx + 1) % capt.max_chunks;
@@ -334,10 +355,9 @@ impl Scream {
                         ScreamDirection::Playback,
                         POLL_DELAY_US,
                         hva,
-                        shmem_size,
                     );
 
-                    play_data.playback_trans(hva, clone_interface.clone());
+                    play_data.playback_trans(hva, shmem_size, clone_interface.clone());
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
@@ -360,10 +380,9 @@ impl Scream {
                         ScreamDirection::Record,
                         POLL_DELAY_US,
                         hva,
-                        shmem_size,
                     );
 
-                    capt_data.capture_trans(hva, clone_interface.clone());
+                    capt_data.capture_trans(hva, shmem_size, clone_interface.clone());
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
