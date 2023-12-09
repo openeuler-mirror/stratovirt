@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::arch::x86_64::standard::VENDOR_ID_INTEL;
+use crate::x86_64::standard::VENDOR_ID_INTEL;
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use devices::pci::config::{

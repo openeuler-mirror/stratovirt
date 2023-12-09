@@ -10,9 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod arch;
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
 pub mod error;
 pub mod standard_common;
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;
 
 mod micro_common;
 #[cfg(target_arch = "x86_64")]
@@ -231,7 +234,7 @@ impl MachineBase {
 
     #[cfg(target_arch = "x86_64")]
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
-        use crate::arch::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
+        use crate::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
 
         let count = data.len() as u64;
         if addr == SLEEP_CTRL_OFFSET as u64 {

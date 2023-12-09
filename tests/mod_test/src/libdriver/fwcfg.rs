@@ -17,7 +17,7 @@ use crate::libtest::{TestState, MACHINE_TYPE_ARG};
 use crate::utils::{swap_u16, swap_u32, swap_u64};
 use devices::legacy::FwCfgEntryType;
 #[cfg(target_arch = "aarch64")]
-use machine::arch::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
+use machine::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "aarch64")]
 pub const FW_CFG_BASE: u64 = MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0;
