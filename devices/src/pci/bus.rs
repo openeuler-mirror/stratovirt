@@ -54,6 +54,22 @@ impl Bus for PciBus {
     gen_base_func!(bus_base, bus_base_mut, BusBase, base);
 }
 
+/// Convert from Arc<Mutex<dyn Bus>> to &mut PciBus.
+#[macro_export]
+macro_rules! MUT_PCI_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_mut!($trait_bus, $lock_bus, $struct_bus, PciBus);
+    };
+}
+
+/// Convert from Arc<Mutex<dyn Bus>> to &PciBus.
+#[macro_export]
+macro_rules! PCI_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_ref!($trait_bus, $lock_bus, $struct_bus, PciBus);
+    };
+}
+
 impl PciBus {
     /// Create new bus entity.
     ///

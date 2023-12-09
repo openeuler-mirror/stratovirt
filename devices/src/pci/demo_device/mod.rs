@@ -56,7 +56,7 @@ use crate::pci::{
     init_msix, le_write_u16, PciBus, PciDevOps,
 };
 use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
 use util::gen_base_func;
@@ -109,10 +109,9 @@ impl DemoDev {
         };
         DemoDev {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id.clone(), false, Some(parent_bus.clone())),
+                base: DeviceBase::new(cfg.id.clone(), false, Some(parent_bus)),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
-                parent_bus,
             },
             cmd_cfg: cfg,
             mem_region: Region::init_container_region(u32::MAX as u64, "DemoDev"),
@@ -135,14 +134,14 @@ impl DemoDev {
     }
 
     fn attach_to_parent_bus(self) -> Result<()> {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let mut locked_parent_bus = parent_bus.lock().unwrap();
-        if locked_parent_bus.devices.get(&self.base.devfn).is_some() {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        if pci_bus.devices.get(&self.base.devfn).is_some() {
             bail!("device already existed");
         }
         let devfn = self.base.devfn;
         let demo_pci_dev = Arc::new(Mutex::new(self));
-        locked_parent_bus.devices.insert(devfn, demo_pci_dev);
+        pci_bus.devices.insert(devfn, demo_pci_dev);
 
         Ok(())
     }
@@ -223,8 +222,8 @@ impl PciDevOps for DemoDev {
 
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let parent_bus_locked = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
 
         self.base.config.write(
             offset,
@@ -232,7 +231,7 @@ impl PciDevOps for DemoDev {
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
             None,
-            Some(&parent_bus_locked.mem_region),
+            Some(&pci_bus.mem_region),
         );
     }
 

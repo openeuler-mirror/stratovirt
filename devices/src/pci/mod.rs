@@ -44,7 +44,9 @@ use crate::misc::ivshmem::Ivshmem;
 use crate::misc::pvpanic::PvPanicPci;
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
-use crate::{convert_device_ref, Bus, Device, DeviceBase, MsiIrqManager, ROOT_PORT};
+use crate::{
+    convert_bus_ref, convert_device_ref, Bus, Device, DeviceBase, MsiIrqManager, PCI_BUS, ROOT_PORT,
+};
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
 
@@ -141,8 +143,6 @@ pub struct PciDevBase {
     pub config: PciConfig,
     /// Devfn.
     pub devfn: u8,
-    /// Primary Bus.
-    pub parent_bus: Weak<Mutex<PciBus>>,
 }
 
 pub trait PciDevOps: Device + Send {
@@ -219,19 +219,15 @@ pub trait PciDevOps: Device + Send {
     }
 
     /// Get the path of the PCI bus where the device resides.
-    fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<PciBus>>) -> String {
-        let locked_parent_bus = parent_bus.lock().unwrap();
-        let parent_dev_path = if locked_parent_bus.name().eq("pcie.0") {
+    fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<dyn Bus>>) -> String {
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        let parent_dev_path = if pci_bus.name().eq("pcie.0") {
             String::from("/pci@ffffffffffffffff")
         } else {
             // This else branch will not be executed currently,
             // which is mainly to be compatible with new PCI bridge devices.
             // unwrap is safe because pci bus under root port will not return null.
-            let parent_bridge = locked_parent_bus
-                .parent_device()
-                .unwrap()
-                .upgrade()
-                .unwrap();
+            let parent_bridge = pci_bus.parent_device().unwrap().upgrade().unwrap();
             ROOT_PORT!(parent_bridge, locked_bridge, rootport);
             rootport.get_dev_path().unwrap()
         };
@@ -333,7 +329,7 @@ pub fn init_multifunction(
     multifunction: bool,
     config: &mut [u8],
     devfn: u8,
-    parent_bus: Weak<Mutex<PciBus>>,
+    parent_bus: Weak<Mutex<dyn Bus>>,
 ) -> Result<()> {
     let mut header_type =
         le_read_u16(config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
@@ -348,9 +344,9 @@ pub fn init_multifunction(
     // leave the bit to 0.
     let slot = pci_slot(devfn);
     let bus = parent_bus.upgrade().unwrap();
-    let locked_bus = bus.lock().unwrap();
+    PCI_BUS!(bus, locked_bus, pci_bus);
     if pci_func(devfn) != 0 {
-        let pci_dev = locked_bus.devices.get(&pci_devfn(slot, 0));
+        let pci_dev = pci_bus.devices.get(&pci_devfn(slot, 0));
         if pci_dev.is_none() {
             return Ok(());
         }
@@ -379,7 +375,7 @@ pub fn init_multifunction(
 
     // If function 0 is set to single function, the rest function should be None.
     for func in 1..MAX_FUNC {
-        if locked_bus.devices.get(&pci_devfn(slot, func)).is_some() {
+        if pci_bus.devices.get(&pci_devfn(slot, func)).is_some() {
             bail!(
                 "PCI: {}.0 indicates single function, but {}.{} is already populated",
                 slot,
@@ -402,7 +398,7 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
 mod tests {
     use super::*;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
-    use crate::DeviceBase;
+    use crate::{convert_bus_mut, DeviceBase, MUT_PCI_BUS};
     use address_space::{AddressSpace, Region};
     use util::gen_base_func;
 
@@ -415,10 +411,9 @@ mod tests {
         pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
             Self {
                 base: PciDevBase {
-                    base: DeviceBase::new(name.to_string(), false, Some(parent_bus.clone())),
+                    base: DeviceBase::new(name.to_string(), false, Some(parent_bus)),
                     config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                     devfn,
-                    parent_bus,
                 },
             }
         }
@@ -448,12 +443,9 @@ mod tests {
             self.init_write_clear_mask(false)?;
 
             let dev = Arc::new(Mutex::new(self));
-            let parent_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-            parent_bus
-                .lock()
-                .unwrap()
-                .devices
-                .insert(devfn, dev.clone());
+            let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+            MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
+            pci_bus.devices.insert(devfn, dev.clone());
 
             Ok(())
         }

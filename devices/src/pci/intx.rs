@@ -18,7 +18,7 @@ use log::error;
 use super::{PciDevOps, RootPort};
 use crate::interrupt_controller::LineIrqManager;
 use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_PIN_NUM};
-use crate::{convert_device_ref, Bus, ROOT_PORT};
+use crate::{convert_bus_ref, convert_device_ref, Bus, PCI_BUS, ROOT_PORT};
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
 
@@ -121,7 +121,7 @@ impl Intx {
 pub fn init_intx(
     name: String,
     config: &mut PciConfig,
-    parent_bus: Weak<Mutex<PciBus>>,
+    parent_bus: Weak<Mutex<dyn Bus>>,
     devfn: u8,
 ) -> Result<()> {
     if config.config[INTERRUPT_PIN as usize] == 0 {
@@ -131,11 +131,11 @@ pub fn init_intx(
         return Ok(());
     }
 
-    let (irq, intx_state) = if let Some(pci_bus) = parent_bus.upgrade() {
-        let locked_pci_bus = pci_bus.lock().unwrap();
+    let (irq, intx_state) = if let Some(bus) = parent_bus.upgrade() {
+        PCI_BUS!(bus, locked_bus, pci_bus);
         let pin = config.config[INTERRUPT_PIN as usize] - 1;
 
-        let (irq, intx_state) = match &locked_pci_bus.parent_device() {
+        let (irq, intx_state) = match &pci_bus.parent_device() {
             Some(parent_bridge) => {
                 let parent_bridge = parent_bridge.upgrade().unwrap();
                 ROOT_PORT!(parent_bridge, locked_bridge, bridge);
@@ -145,10 +145,10 @@ pub fn init_intx(
                 )
             }
             None => {
-                if locked_pci_bus.intx_state.is_some() {
+                if pci_bus.intx_state.is_some() {
                     (
                         swizzle_map_irq(devfn, pin),
-                        Some(locked_pci_bus.intx_state.as_ref().unwrap().clone()),
+                        Some(pci_bus.intx_state.as_ref().unwrap().clone()),
                     )
                 } else {
                     (std::u32::MAX, None)
