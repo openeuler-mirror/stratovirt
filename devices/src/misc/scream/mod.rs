@@ -263,8 +263,15 @@ impl StreamData {
             // If the difference between the currently processed chunk_idx and the chunk_idx in
             // the shared memory is greater than 4, the processing of the backend device is too
             // slow and the backward data is skipped.
-            if (play.chunk_idx + play.max_chunks - self.chunk_idx) % play.max_chunks > 4 {
-                self.chunk_idx = (play.chunk_idx + play.max_chunks - 1) % play.max_chunks;
+            if play
+                .chunk_idx
+                .wrapping_add(play.max_chunks)
+                .wrapping_sub(self.chunk_idx)
+                % play.max_chunks
+                > 4
+            {
+                self.chunk_idx =
+                    play.chunk_idx.wrapping_add(play.max_chunks).wrapping_sub(1) % play.max_chunks;
             } else {
                 self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
             }
