@@ -41,9 +41,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 
 #[cfg(target_arch = "aarch64")]
-use crate::arch::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
+use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
+use crate::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::{MachineBase, MachineError, MachineOps};
 use cpu::{CPUTopology, CpuLifecycleState};
 use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};

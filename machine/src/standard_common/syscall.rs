@@ -11,9 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 #[cfg(target_arch = "aarch64")]
-use crate::arch::aarch64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
+use crate::aarch64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
+use crate::x86_64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
