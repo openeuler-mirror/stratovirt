@@ -627,8 +627,16 @@ pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>
         };
         let bpp = pixman_format_bpp(pixman_format as u32);
         let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
-        let mem = (height as u64 * stride) as usize;
-        (Some(mem), 0)
+        match stride.checked_mul(height as u64) {
+            None => {
+                error!(
+                    "stride * height is overflow: width {} height {} stride {} bpp {}",
+                    width, height, stride, bpp,
+                );
+                (None, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER)
+            }
+            Some(v) => (Some(v as usize), 0),
+        }
     }
 }
 
