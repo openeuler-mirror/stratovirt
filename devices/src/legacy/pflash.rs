@@ -39,7 +39,7 @@ pub struct PFlash {
     /// This is used to support x16 wide PFlash run in x8 mode.
     max_device_width: u32,
     /// If 0, the PFlash is read normally.
-    write_cycle: i32,
+    write_cycle: u32,
     /// PFlash is read only or not.
     read_only: bool,
     /// Command to control PFlash.
@@ -456,7 +456,7 @@ impl PFlash {
                 return true;
             }
         }
-        self.write_cycle += 1;
+        self.write_cycle = self.write_cycle.wrapping_add(1);
         self.cmd = cmd;
         true
     }
@@ -522,8 +522,8 @@ impl PFlash {
                     error!("Failed to extract bits from u32 value");
                     return false;
                 };
+                self.write_cycle = self.write_cycle.wrapping_add(1);
                 self.counter = value;
-                self.write_cycle += 1;
             }
             0x60 => {
                 if (cmd == 0xd0) || (cmd == 0x01) {
@@ -588,7 +588,7 @@ impl PFlash {
                 self.status |= 0x80;
                 if self.counter == 0 {
                     let mask: u64 = !(self.write_blk_size as u64 - 1);
-                    self.write_cycle += 1;
+                    self.write_cycle = self.write_cycle.wrapping_add(1);
                     if !self.read_only {
                         if let Err(e) = self.update_content(offset & mask, self.write_blk_size) {
                             error!("Failed to update content for PFlash device: {:?}", e);
