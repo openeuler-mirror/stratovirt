@@ -22,7 +22,10 @@ use super::{
     hotplug::HotplugOps,
     PciDevOps, PciIntxState,
 };
-use crate::{Bus, BusBase, MsiIrqManager};
+use crate::pci::RootPort;
+use crate::{
+    convert_device_mut, convert_device_ref, Bus, BusBase, MsiIrqManager, MUT_ROOT_PORT, ROOT_PORT,
+};
 use address_space::Region;
 use util::gen_base_func;
 
@@ -35,8 +38,6 @@ pub struct PciBus {
     pub devices: HashMap<u8, Arc<Mutex<dyn PciDevOps>>>,
     /// Child buses of the bus.
     pub child_buses: Vec<Arc<Mutex<PciBus>>>,
-    /// Pci bridge which the bus originates from.
-    pub parent_bridge: Option<Weak<Mutex<dyn PciDevOps>>>,
     /// IO region which the parent bridge manages.
     #[cfg(target_arch = "x86_64")]
     pub io_region: Region,
@@ -70,7 +71,6 @@ impl PciBus {
             base: BusBase::new(name),
             devices: HashMap::new(),
             child_buses: Vec::new(),
-            parent_bridge: None,
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
@@ -236,18 +236,11 @@ impl PciBus {
     }
 
     fn get_bridge_control_reg(&self, offset: usize, data: &mut [u8]) {
-        if self.parent_bridge.is_none() {
-            return;
+        if let Some(parent_bridge) = self.parent_device() {
+            let bridge = parent_bridge.upgrade().unwrap();
+            MUT_ROOT_PORT!(bridge, locked_bridge, rootport);
+            rootport.read_config(offset, data);
         }
-
-        self.parent_bridge
-            .as_ref()
-            .unwrap()
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .read_config(offset, data);
     }
 
     pub fn generate_dev_id(&self, devfn: u8) -> u16 {
@@ -260,11 +253,11 @@ impl PciBus {
     }
 
     pub fn get_msi_irq_manager(&self) -> Option<Arc<dyn MsiIrqManager>> {
-        match &self.parent_bridge {
+        match self.parent_device().as_ref() {
             Some(parent_bridge) => {
-                let parent_bridge = parent_bridge.upgrade().unwrap();
-                let locked_parent_bridge = parent_bridge.lock().unwrap();
-                locked_parent_bridge.get_msi_irq_manager()
+                let bridge = parent_bridge.upgrade().unwrap();
+                ROOT_PORT!(bridge, locked_bridge, rootport);
+                rootport.get_msi_irq_manager()
             }
             None => self.msi_irq_manager.clone(),
         }

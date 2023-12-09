@@ -44,7 +44,7 @@ use crate::misc::ivshmem::Ivshmem;
 use crate::misc::pvpanic::PvPanicPci;
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
-use crate::{Bus, Device, DeviceBase, MsiIrqManager};
+use crate::{convert_device_ref, Bus, Device, DeviceBase, MsiIrqManager, ROOT_PORT};
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
 
@@ -227,16 +227,13 @@ pub trait PciDevOps: Device + Send {
             // This else branch will not be executed currently,
             // which is mainly to be compatible with new PCI bridge devices.
             // unwrap is safe because pci bus under root port will not return null.
-            locked_parent_bus
-                .parent_bridge
-                .as_ref()
+            let parent_bridge = locked_parent_bus
+                .parent_device()
                 .unwrap()
                 .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .get_dev_path()
-                .unwrap()
+                .unwrap();
+            ROOT_PORT!(parent_bridge, locked_bridge, rootport);
+            rootport.get_dev_path().unwrap()
         };
         parent_dev_path
     }
