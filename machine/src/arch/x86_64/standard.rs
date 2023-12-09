@@ -10,11 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub(crate) mod ich9_lpc;
-
-mod mch;
-mod syscall;
-
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
@@ -24,9 +19,11 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::error::StandardVmError;
-use super::{AcpiBuilder, StdMachineOps};
+use super::ich9_lpc;
+use super::mch::Mch;
 use crate::error::MachineError;
+use crate::standard_common::syscall::syscall_whitelist;
+use crate::standard_common::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineBase, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
@@ -43,7 +40,7 @@ use devices::legacy::{
     SERIAL_ADDR,
 };
 use devices::pci::{PciDevOps, PciHost};
-use hypervisor::kvm::KVM_FDS;
+use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
@@ -52,22 +49,21 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
-    MachineLifecycle, MachineTestInterface, MigrateInterface,
+    KvmVmState, MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
+    MigrateInterface,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
-use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
-use syscall::syscall_whitelist;
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
 #[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
+use util::seccomp::SeccompCmpOpt;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
 
-const VENDOR_ID_INTEL: u16 = 0x8086;
+pub(crate) const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
 const HOLE_640K_END: u64 = 0x0010_0000;
 
@@ -225,8 +221,7 @@ impl StdMachine {
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
-        ich.realize()?;
-        Ok(())
+        ich.realize()
     }
 
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
@@ -235,8 +230,7 @@ impl StdMachine {
 
     pub fn handle_hotplug_vcpu_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
-        locked_vm.add_vcpu_device(vm.clone())?;
-        Ok(())
+        locked_vm.add_vcpu_device(vm.clone())
     }
 
     fn init_cpu_controller(
@@ -310,15 +304,14 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
-        mch.realize()?;
-        Ok(())
+        mch.realize()
     }
 
     fn add_fwcfg_device(
         &mut self,
         nr_cpus: u8,
         max_cpus: u8,
-    ) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+    ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone());
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
@@ -378,8 +371,7 @@ impl StdMachineOps for StdMachine {
         // Trigger GED cpu resize event.
         self.cpu_resize_req
             .write(1)
-            .with_context(|| "Failed to write cpu resize request.")?;
-        Ok(())
+            .with_context(|| "Failed to write cpu resize request.")
     }
 
     fn remove_vcpu_device(&mut self, vcpu_id: u8) -> Result<()> {
@@ -392,8 +384,7 @@ impl StdMachineOps for StdMachine {
         locked_controller.set_hotunplug_cpu(vcpu_id)?;
         self.cpu_resize_req
             .write(1)
-            .with_context(|| "Failed to write cpu resize request.")?;
-        Ok(())
+            .with_context(|| "Failed to write cpu resize request.")
     }
 
     fn find_cpu_id_by_device_id(&mut self, device_id: &str) -> Option<u8> {
@@ -453,8 +444,7 @@ impl MachineOps for StdMachine {
             .lock()
             .unwrap()
             .init_irq_route_table();
-        KVM_FDS.load().commit_irq_routing()?;
-        Ok(())
+        KVM_FDS.load().commit_irq_routing()
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
@@ -494,9 +484,7 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        RTC::realize(rtc, &mut self.base.sysbus).with_context(|| "Failed to realize RTC device")?;
-
-        Ok(())
+        RTC::realize(rtc, &mut self.base.sysbus).with_context(|| "Failed to realize RTC device")
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
@@ -549,7 +537,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .with_context(|| StandardVmError::InitPCIeHostErr)?;
+            .with_context(|| MachineError::InitPCIeHostErr)?;
         locked_vm
             .init_ich9_lpc(clone_vm)
             .with_context(|| "Fail to init LPC bridge")?;
@@ -680,7 +668,7 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.read_only,
             )
-            .with_context(|| StandardVmError::InitPflashErr)?;
+            .with_context(|| MachineError::InitPflashErr)?;
             PFlash::realize(
                 pflash,
                 &mut self.base.sysbus,
@@ -688,7 +676,7 @@ impl MachineOps for StdMachine {
                 pfl_size,
                 backend,
             )
-            .with_context(|| StandardVmError::RlzPflashErr)?;
+            .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 
@@ -731,12 +719,66 @@ impl MachineOps for StdMachine {
     }
 }
 
+pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
+    bpf_rule
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_PIT2() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_CLOCK() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_IRQCHIP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEBUGREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XCRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_LAPIC() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MSRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SUPPORTED_CPUID() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CPUID2() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_SREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_REGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_XSAVE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_XCRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_DEBUGREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_LAPIC() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
+}
+
+pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
+    vec![
+        #[cfg(not(target_env = "gnu"))]
+        BpfRule::new(libc::SYS_epoll_pwait),
+        BpfRule::new(libc::SYS_epoll_wait),
+        BpfRule::new(libc::SYS_open),
+        #[cfg(target_env = "musl")]
+        BpfRule::new(libc::SYS_stat),
+        BpfRule::new(libc::SYS_mkdir),
+        BpfRule::new(libc::SYS_unlink),
+        BpfRule::new(libc::SYS_readlink),
+        #[cfg(target_env = "musl")]
+        BpfRule::new(libc::SYS_clone),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clone3),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rt_sigaction),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_poll),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_access),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sched_setattr),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_fadvise64),
+    ]
+}
+
 impl AcpiBuilder for StdMachine {
     fn build_dsdt_table(
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -774,7 +816,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
 
         madt.append_child(LAPIC_BASE_ADDR.as_bytes());
@@ -918,7 +960,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
         srat.append_child(&[1_u8; 4_usize]);
         srat.append_child(&[0_u8; 8_usize]);
@@ -988,24 +1030,6 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
         true
-    }
-}
-
-impl MachineAddressInterface for StdMachine {
-    fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
-        self.machine_base().pio_in(addr, data)
-    }
-
-    fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
-        self.machine_base().pio_out(addr, data)
-    }
-
-    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
-        self.machine_base().mmio_read(addr, data)
-    }
-
-    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
-        self.machine_base().mmio_write(addr, data)
     }
 }
 

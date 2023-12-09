@@ -10,20 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(target_arch = "aarch64")]
-pub mod aarch64;
-pub mod error;
-
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
+pub mod syscall;
 
 pub use anyhow::Result;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::StdMachine;
-pub use error::StandardVmError;
+pub use crate::arch::aarch64::standard::StdMachine;
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::StdMachine;
+pub use crate::arch::x86_64::standard::StdMachine;
+pub use crate::error::MachineError;
 
 use std::mem::size_of;
 use std::ops::Deref;
@@ -38,12 +33,15 @@ use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-#[cfg(target_arch = "x86_64")]
-use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
-use super::Result as MachineResult;
-use crate::MachineOps;
 #[cfg(target_arch = "aarch64")]
-use aarch64::{LayoutEntryType, MEM_LAYOUT};
+use crate::arch::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::ich9_lpc::{
+    PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET,
+};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
+use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -67,8 +65,9 @@ use machine_manager::config::{
     NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, M, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::MachineLifecycle;
-use machine_manager::machine::{DeviceInterface, KvmVmState};
+use machine_manager::machine::{
+    DeviceInterface, KvmVmState, MachineAddressInterface, MachineLifecycle,
+};
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::MigrationManager;
@@ -85,12 +84,10 @@ use virtio::{
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     VhostKern, VhostUser, VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
-#[cfg(target_arch = "x86_64")]
-use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 const MAX_REGION_SIZE: u64 = 65536;
 
-trait StdMachineOps: AcpiBuilder + MachineOps {
+pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
 
     /// Build all ACPI tables and RSDP, and add them to FwCfg as file entries.
@@ -224,7 +221,7 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         &self,
         hotplug_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> MachineResult<()> {
+    ) -> Result<()> {
         let hotplug_req_fd = hotplug_req.as_raw_fd();
         let hotplug_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             read_fd(hotplug_req_fd);
@@ -241,8 +238,7 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
             vec![hotplug_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")?;
-        Ok(())
+            .with_context(|| "Failed to register event notifier.")
     }
 
     /// Remove vcpu device.
@@ -271,7 +267,7 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
         &self,
         reset_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> MachineResult<()> {
+    ) -> Result<()> {
         let reset_req_fd = reset_req.as_raw_fd();
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             read_fd(reset_req_fd);
@@ -289,15 +285,14 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
             vec![reset_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")?;
-        Ok(())
+            .with_context(|| "Failed to register event notifier.")
     }
 
     fn register_pause_event(
         &self,
         pause_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> MachineResult<()> {
+    ) -> Result<()> {
         let pause_req_fd = pause_req.as_raw_fd();
         let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = pause_req.read();
@@ -315,15 +310,14 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
             vec![pause_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")?;
-        Ok(())
+            .with_context(|| "Failed to register event notifier.")
     }
 
     fn register_resume_event(
         &self,
         resume_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> MachineResult<()> {
+    ) -> Result<()> {
         let resume_req_fd = resume_req.as_raw_fd();
         let resume_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = resume_req.read();
@@ -341,15 +335,14 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
             vec![resume_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")?;
-        Ok(())
+            .with_context(|| "Failed to register event notifier.")
     }
 
     fn register_shutdown_event(
         &self,
         shutdown_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> MachineResult<()> {
+    ) -> Result<()> {
         use util::loop_context::gen_delete_notifiers;
 
         let shutdown_req_fd = shutdown_req.as_raw_fd();
@@ -369,15 +362,14 @@ trait StdMachineOps: AcpiBuilder + MachineOps {
             vec![shutdown_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")?;
-        Ok(())
+            .with_context(|| "Failed to register event notifier.")
     }
 }
 
 /// Trait that helps to build ACPI tables.
 /// Standard machine struct should at least implement `build_dsdt_table`, `build_madt_table`
 /// and `build_mcfg_table` function.
-trait AcpiBuilder {
+pub(crate) trait AcpiBuilder {
     /// Add ACPI table to the end of table loader, returns the offset of ACPI table in `acpi_data`.
     ///
     /// # Arguments
@@ -1156,9 +1148,7 @@ impl StdMachine {
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
-        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)?;
-
-        Ok(())
+        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
     }
 
     fn plug_vfio_pci_device(
@@ -1177,14 +1167,12 @@ impl StdMachine {
         let sysfsdev = args.sysfsdev.as_ref().map_or("", String::as_str);
         let multifunc = args.multifunction.unwrap_or(false);
         self.create_vfio_pci_device(&args.id, bdf, host, sysfsdev, multifunc)
-            .with_context(|| "Failed to plug vfio-pci device.")?;
-
-        Ok(())
+            .with_context(|| "Failed to plug vfio-pci device.")
     }
 
     /// When windows emu exits, stratovirt should exits too.
     #[cfg(feature = "windows_emu_pid")]
-    fn watch_windows_emu_pid(
+    pub(crate) fn watch_windows_emu_pid(
         &self,
         vm_config: &VmConfig,
         power_button: Arc<EventFd>,
@@ -1233,6 +1221,26 @@ impl StdMachine {
         } else {
             bail!("Argument cpu-id is required.")
         }
+    }
+}
+
+impl MachineAddressInterface for StdMachine {
+    #[cfg(target_arch = "x86_64")]
+    fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().pio_in(addr, data)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().pio_out(addr, data)
+    }
+
+    fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+        self.machine_base().mmio_read(addr, data)
+    }
+
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+        self.machine_base().mmio_write(addr, data)
     }
 }
 

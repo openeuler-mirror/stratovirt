@@ -10,20 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod arch;
 pub mod error;
-pub mod standard_vm;
+pub mod standard_common;
 
-#[cfg(target_arch = "aarch64")]
-mod fdt;
-mod micro_vm;
+mod micro_common;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
 
 pub use anyhow::Result;
 
 pub use crate::error::MachineError;
-pub use micro_vm::LightMachine;
-pub use standard_vm::StdMachine;
+pub use micro_common::LightMachine;
+pub use standard_common::StdMachine;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
@@ -93,7 +92,7 @@ use machine_manager::config::{
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
-use standard_vm::Result as StdResult;
+use standard_common::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::file::{clear_file, lock_file, unlock_file};
@@ -232,7 +231,7 @@ impl MachineBase {
 
     #[cfg(target_arch = "x86_64")]
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
-        use standard_vm::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
+        use crate::arch::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
 
         let count = data.len() as u64;
         if addr == SLEEP_CTRL_OFFSET as u64 {
@@ -547,10 +546,14 @@ pub trait MachineOps {
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()>;
 
     /// Add RTC device.
-    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
+    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] _mem_size: u64) -> Result<()> {
+        Ok(())
+    }
 
     /// Add Generic event device.
-    fn add_ged_device(&mut self) -> Result<()>;
+    fn add_ged_device(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// Add serial device.
     ///
