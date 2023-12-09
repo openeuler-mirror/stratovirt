@@ -38,7 +38,9 @@ use crate::pci::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRU
 use crate::pci::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, PciDevOps,
 };
-use crate::{Device, DeviceBase, MsiIrqManager};
+use crate::{
+    convert_bus_mut, convert_bus_ref, Device, DeviceBase, MsiIrqManager, MUT_PCI_BUS, PCI_BUS,
+};
 use address_space::Region;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
@@ -121,10 +123,9 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id, true, Some(parent_bus.clone())),
+                base: DeviceBase::new(cfg.id, true, Some(parent_bus)),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
-                parent_bus,
             },
             port_num: cfg.port,
             sec_bus,
@@ -236,16 +237,13 @@ impl RootPort {
     }
 
     fn register_region(&mut self) {
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
+
         let command: u16 = le_read_u16(&self.base.config.config, COMMAND as usize).unwrap();
         if command & COMMAND_IO_SPACE != 0 {
             #[cfg(target_arch = "x86_64")]
-            if let Err(e) = self
-                .base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
+            if let Err(e) = pci_bus
                 .io_region
                 .add_subregion(self.io_region.clone(), 0)
                 .with_context(|| "Failed to add IO container region.")
@@ -254,13 +252,7 @@ impl RootPort {
             }
         }
         if command & COMMAND_MEMORY_SPACE != 0 {
-            if let Err(e) = self
-                .base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
+            if let Err(e) = pci_bus
                 .mem_region
                 .add_subregion(self.mem_region.clone(), 0)
                 .with_context(|| "Failed to add memory container region.")
@@ -367,6 +359,7 @@ impl PciDevOps for RootPort {
     gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(true)?;
         self.init_write_clear_mask(true)?;
 
@@ -382,7 +375,7 @@ impl PciDevOps for RootPort {
             self.multifunction,
             config_space,
             self.base.devfn,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
         )?;
 
         #[cfg(target_arch = "aarch64")]
@@ -400,18 +393,18 @@ impl PciDevOps for RootPort {
         init_intx(
             self.name(),
             &mut self.base.config,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
             self.base.devfn,
         )?;
 
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let mut locked_parent_bus = parent_bus.lock().unwrap();
+        let bus = parent_bus.upgrade().unwrap();
+        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
         #[cfg(target_arch = "x86_64")]
-        locked_parent_bus
+        pci_bus
             .io_region
             .add_subregion(self.sec_bus.lock().unwrap().io_region.clone(), 0)
             .with_context(|| "Failed to register subregion in I/O space.")?;
-        locked_parent_bus
+        pci_bus
             .mem_region
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .with_context(|| "Failed to register subregion in memory space.")?;
@@ -424,12 +417,10 @@ impl PciDevOps for RootPort {
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
         locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
-        let pci_device = locked_parent_bus.devices.get(&locked_root_port.base.devfn);
+        let pci_device = pci_bus.devices.get(&locked_root_port.base.devfn);
         if pci_device.is_none() {
-            locked_parent_bus
-                .child_buses
-                .push(locked_root_port.sec_bus.clone());
-            locked_parent_bus
+            pci_bus.child_buses.push(locked_root_port.sec_bus.clone());
+            pci_bus
                 .devices
                 .insert(locked_root_port.base.devfn, root_port.clone());
         } else {
@@ -554,7 +545,7 @@ impl PciDevOps for RootPort {
     }
 
     fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         let parent_dev_path = self.get_parent_dev_path(parent_bus);
         let dev_path = self.populate_dev_path(parent_dev_path, self.base.devfn, "/pci-bridge@");
         Some(dev_path)

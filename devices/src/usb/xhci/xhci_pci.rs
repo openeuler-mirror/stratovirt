@@ -34,7 +34,7 @@ use crate::pci::config::{
 };
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDevice;
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
@@ -113,10 +113,9 @@ impl XhciPciDevice {
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(config.id.clone().unwrap(), true, Some(parent_bus.clone())),
+                base: DeviceBase::new(config.id.clone().unwrap(), true, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
-                parent_bus,
             },
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -297,10 +296,11 @@ impl PciDevOps for XhciPciDevice {
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
 
+        let parent_bus = self.parent_bus().unwrap();
         init_intx(
             self.name(),
             &mut self.base.config,
-            self.base.parent_bus.clone(),
+            parent_bus,
             self.base.devfn,
         )?;
 
@@ -337,11 +337,11 @@ impl PciDevOps for XhciPciDevice {
             }));
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&devfn);
+        let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+        let pci_device = pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev);
+            pci_bus.devices.insert(devfn, dev);
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -358,17 +358,17 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
-        locked_parent_bus.update_dev_id(self.base.devfn, &self.dev_id);
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        pci_bus.update_dev_id(self.base.devfn, &self.dev_id);
 
         self.base.config.write(
             offset,
             data,
             self.dev_id.clone().load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
     }
 

@@ -20,16 +20,14 @@ use clap::Parser;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 
-use crate::pci::{
-    config::{
-        PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
-        PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
-        PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
-        SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    le_write_u16, PciBus, PciDevBase, PciDevOps,
+use crate::pci::config::{
+    PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
+    PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
+    PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
+    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::{Device, DeviceBase};
+use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
 use util::gen_base_func;
@@ -112,10 +110,9 @@ impl PvPanicPci {
     pub fn new(config: &PvpanicDevConfig, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(config.id.clone(), false, Some(parent_bus.clone())),
+                base: DeviceBase::new(config.id.clone(), false, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
-                parent_bus,
             },
             dev_id: AtomicU16::new(0),
             pvpanic: Arc::new(PvPanicState::new(config.supported_features)),
@@ -218,16 +215,16 @@ impl PciDevOps for PvPanicPci {
         // Attach to the PCI bus.
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let device_id = locked_pci_bus.generate_dev_id(devfn);
+        let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+        let device_id = pci_bus.generate_dev_id(devfn);
         dev.lock()
             .unwrap()
             .dev_id
             .store(device_id, Ordering::Release);
-        let pci_device = locked_pci_bus.devices.get(&devfn);
+        let pci_device = pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev);
+            pci_bus.devices.insert(devfn, dev);
         } else {
             bail!(
                 "pvpanic: Devfn {:?} has been used by {:?}",
@@ -244,16 +241,16 @@ impl PciDevOps for PvPanicPci {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
 
         self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
     }
 }

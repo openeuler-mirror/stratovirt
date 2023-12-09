@@ -43,7 +43,9 @@ use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
     pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{pci::MsiVector, Device, DeviceBase};
+use devices::{
+    convert_bus_mut, convert_bus_ref, pci::MsiVector, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS,
+};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
@@ -132,10 +134,9 @@ impl VfioPciDevice {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
-                base: DeviceBase::new(name, true, Some(parent_bus.clone())),
+                base: DeviceBase::new(name, true, Some(parent_bus)),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
-                parent_bus,
             },
             config_size: 0,
             config_offset: 0,
@@ -453,7 +454,7 @@ impl VfioPciDevice {
     }
 
     fn unregister_bars(&mut self) -> Result<()> {
-        let bus = self.base.parent_bus.upgrade().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
         self.base.config.unregister_bars(&bus)?;
         Ok(())
     }
@@ -474,9 +475,9 @@ impl VfioPciDevice {
             MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
         )?;
 
-        let msi_irq_manager = if let Some(pci_bus) = self.base.parent_bus.upgrade() {
-            let locked_pci_bus = pci_bus.lock().unwrap();
-            locked_pci_bus.get_msi_irq_manager()
+        let msi_irq_manager = if let Some(bus) = self.parent_bus().unwrap().upgrade() {
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.get_msi_irq_manager()
         } else {
             None
         };
@@ -508,7 +509,7 @@ impl VfioPciDevice {
 
         let cloned_dev = self.vfio_device.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
-        let parent_bus = self.base.parent_bus.clone();
+        let parent_bus = self.parent_bus().unwrap().clone();
         let dev_id = self.dev_id.clone();
         let devfn = self.base.devfn;
         let cloned_msix = msix.clone();
@@ -522,8 +523,9 @@ impl VfioPciDevice {
             }
             let entry = locked_msix.get_message(vector as u16);
 
-            let parent_bus = parent_bus.upgrade().unwrap();
-            parent_bus.lock().unwrap().update_dev_id(devfn, &dev_id);
+            let bus = parent_bus.upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.update_dev_id(devfn, &dev_id);
             let msix_vector = MsiVector {
                 msg_addr_lo: entry.address_lo,
                 msg_addr_hi: entry.address_hi,
@@ -821,6 +823,7 @@ impl PciDevOps for VfioPciDevice {
     gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
@@ -838,21 +841,17 @@ impl PciDevOps for VfioPciDevice {
                 self.multi_func,
                 &mut self.base.config.config,
                 self.base.devfn,
-                self.base.parent_bus.clone(),
+                parent_bus.clone(),
             ),
             || "Failed to init vfio device multifunction.",
         )?;
 
         #[cfg(target_arch = "aarch64")]
         {
-            let bus_num = self
-                .base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .number(SECONDARY_BUS_NUM as usize);
+            let bus = parent_bus.upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            let bus_num = pci_bus.number(SECONDARY_BUS_NUM as usize);
+            drop(locked_bus);
             self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
@@ -867,11 +866,11 @@ impl PciDevOps for VfioPciDevice {
 
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&devfn);
+        let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        let pci_device = pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev);
+            pci_bus.devices.insert(devfn, dev);
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -965,15 +964,15 @@ impl PciDevOps for VfioPciDevice {
         let was_enable = self.base.config.msix.as_ref().map_or(false, |m| {
             m.lock().unwrap().is_enabled(&self.base.config.config)
         });
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
         self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
 
         if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE).unwrap() {

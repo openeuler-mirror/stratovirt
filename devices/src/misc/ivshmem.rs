@@ -17,14 +17,12 @@ use std::sync::{
 
 use anyhow::{bail, Result};
 
-use crate::pci::{
-    config::{
-        PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
-        PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    le_write_u16, PciBus, PciDevBase, PciDevOps,
+use crate::pci::config::{
+    PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::{Device, DeviceBase};
+use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use util::gen_base_func;
 
@@ -52,10 +50,9 @@ impl Ivshmem {
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name, false, Some(parent_bus.clone())),
+                base: DeviceBase::new(name, false, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
-                parent_bus,
             },
             dev_id: Arc::new(AtomicU16::new(0)),
             ram_mem_region,
@@ -123,16 +120,16 @@ impl PciDevOps for Ivshmem {
         self.register_bars()?;
 
         // Attach to the PCI bus.
-        let pci_bus = self.base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&self.base.devfn);
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+        let pci_device = pci_bus.devices.get(&self.base.devfn);
         match pci_device {
             Some(device) => bail!(
                 "Devfn {:?} has been used by {:?}",
                 &self.base.devfn,
                 device.lock().unwrap().name()
             ),
-            None => locked_pci_bus
+            None => pci_bus
                 .devices
                 .insert(self.base.devfn, Arc::new(Mutex::new(self))),
         };
@@ -140,16 +137,16 @@ impl PciDevOps for Ivshmem {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
 
         self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
     }
 }

@@ -46,7 +46,7 @@ use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     PciBus, PciDevBase, PciDevOps, PciError,
 };
-use devices::{Device, DeviceBase};
+use devices::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -332,10 +332,9 @@ impl VirtioPciDevice {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
-                base: DeviceBase::new(name, true, Some(parent_bus.clone())),
+                base: DeviceBase::new(name, true, Some(parent_bus)),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
-                parent_bus,
             },
             device,
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -469,11 +468,9 @@ impl VirtioPciDevice {
         }
         locked_dev.virtio_base_mut().queues = queues;
 
-        let parent = self.base.parent_bus.upgrade().unwrap();
-        parent
-            .lock()
-            .unwrap()
-            .update_dev_id(self.base.devfn, &self.dev_id);
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        pci_bus.update_dev_id(self.base.devfn, &self.dev_id);
         if self.need_irqfd {
             let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
@@ -1012,6 +1009,7 @@ impl PciDevOps for VirtioPciDevice {
 
     fn realize(mut self) -> Result<()> {
         info!("func: realize, id: {:?}", &self.base.base.id);
+        let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -1051,7 +1049,7 @@ impl PciDevOps for VirtioPciDevice {
             self.multi_func,
             &mut self.base.config.config,
             self.base.devfn,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
         )?;
         #[cfg(target_arch = "aarch64")]
         self.base.config.set_interrupt_pin();
@@ -1123,7 +1121,7 @@ impl PciDevOps for VirtioPciDevice {
         init_intx(
             self.name(),
             &mut self.base.config,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
             self.base.devfn,
         )?;
 
@@ -1160,11 +1158,11 @@ impl PciDevOps for VirtioPciDevice {
         )?;
 
         // Register device to pci bus.
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&devfn);
+        let bus = parent_bus.upgrade().unwrap();
+        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+        let pci_device = pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev.clone());
+            pci_bus.devices.insert(devfn, dev.clone());
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -1186,7 +1184,7 @@ impl PciDevOps for VirtioPciDevice {
             .unrealize()
             .with_context(|| "Failed to unrealize the virtio device")?;
 
-        let bus = self.base.parent_bus.upgrade().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
         self.base.config.unregister_bars(&bus)?;
 
         MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
@@ -1213,15 +1211,15 @@ impl PciDevOps for VirtioPciDevice {
         }
         trace::virtio_tpt_write_config(&self.base.base.id, offset as u64, data);
 
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
         self.base.config.write(
             offset,
             data,
             self.dev_id.clone().load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
     }
@@ -1240,7 +1238,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         match self.device.lock().unwrap().device_type() {
             VIRTIO_TYPE_BLOCK => {
                 // The virtio blk device is identified as a single-channel SCSI device,
@@ -1330,12 +1328,12 @@ impl MigrationHook for VirtioPciDevice {
         }
 
         // Reregister ioevents for notifies.
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
         if let Err(e) = self.base.config.update_bar_mapping(
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         ) {
             bail!("Failed to update bar, error is {:?}", e);
         }
@@ -1643,10 +1641,11 @@ mod tests {
         )
         .unwrap();
 
+        let parent_bus = virtio_pci.parent_bus().unwrap();
         init_intx(
             virtio_pci.name(),
             &mut virtio_pci.base.config,
-            virtio_pci.base.parent_bus.clone(),
+            parent_bus.clone(),
             virtio_pci.base.devfn,
         )
         .unwrap();
@@ -1701,11 +1700,12 @@ mod tests {
     fn test_multifunction() {
         let (_, _parent_bus, mut virtio_pci) = virtio_pci_test_init(true);
 
+        let parent_bus = virtio_pci.parent_bus().unwrap();
         assert!(init_multifunction(
             virtio_pci.multi_func,
             &mut virtio_pci.base.config.config,
             virtio_pci.base.devfn,
-            virtio_pci.base.parent_bus.clone()
+            parent_bus,
         )
         .is_ok());
         let header_type =
