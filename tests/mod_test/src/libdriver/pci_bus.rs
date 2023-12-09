@@ -17,9 +17,9 @@ use crate::libdriver::pci::*;
 use crate::libtest::TestState;
 use crate::utils::{read_le_u16, read_le_u32, read_le_u64};
 #[cfg(target_arch = "aarch64")]
-use machine::arch::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
+use machine::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
-use machine::arch::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
+use machine::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
 
 const PCIE_MMIO_BASE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
 const PCIE_MMIO_SIZE: u64 = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;

@@ -15,10 +15,10 @@ pub mod syscall;
 pub use anyhow::Result;
 
 #[cfg(target_arch = "aarch64")]
-pub use crate::arch::aarch64::standard::StdMachine;
-#[cfg(target_arch = "x86_64")]
-pub use crate::arch::x86_64::standard::StdMachine;
+pub use crate::aarch64::standard::StdMachine;
 pub use crate::error::MachineError;
+#[cfg(target_arch = "x86_64")]
+pub use crate::x86_64::standard::StdMachine;
 
 use std::mem::size_of;
 use std::ops::Deref;
@@ -34,13 +34,13 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(target_arch = "aarch64")]
-use crate::arch::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
+use crate::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::ich9_lpc::{
+use crate::x86_64::ich9_lpc::{
     PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET,
 };
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
+use crate::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
 use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;

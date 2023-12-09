@@ -18,7 +18,7 @@ use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicRedistributor, AcpiRsdp, AcpiSratGiccAffinity,
     AcpiSratMemoryAffinity, AcpiTableHeader, CacheHierarchyNode, ProcessorHierarchyNode,
 };
-use machine::arch::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
+use machine::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
 use mod_test::libdriver::fwcfg::bios_args;
 use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
