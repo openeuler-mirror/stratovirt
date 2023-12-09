@@ -347,6 +347,22 @@ impl Device for RootPort {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
+/// Convert from Arc<Mutex<dyn Device>> to &mut RootPort.
+#[macro_export]
+macro_rules! MUT_ROOT_PORT {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+        convert_device_mut!($trait_device, $lock_device, $struct_device, RootPort);
+    };
+}
+
+/// Convert from Arc<Mutex<dyn Device>> to &RootPort.
+#[macro_export]
+macro_rules! ROOT_PORT {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+        convert_device_ref!($trait_device, $lock_device, $struct_device, RootPort);
+    };
+}
+
 impl PciDevOps for RootPort {
     gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
@@ -404,8 +420,8 @@ impl PciDevOps for RootPort {
         let root_port = Arc::new(Mutex::new(self));
         #[allow(unused_mut)]
         let mut locked_root_port = root_port.lock().unwrap();
-        locked_root_port.sec_bus.lock().unwrap().parent_bridge =
-            Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
+        locked_root_port.sec_bus.lock().unwrap().base.parent =
+            Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
         locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
         let pci_device = locked_parent_bus.devices.get(&locked_root_port.base.devfn);

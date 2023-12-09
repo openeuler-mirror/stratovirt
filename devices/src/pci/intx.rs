@@ -15,8 +15,10 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::Result;
 use log::error;
 
+use super::{PciDevOps, RootPort};
 use crate::interrupt_controller::LineIrqManager;
 use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_PIN_NUM};
+use crate::{convert_device_ref, Bus, ROOT_PORT};
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
 
@@ -133,13 +135,13 @@ pub fn init_intx(
         let locked_pci_bus = pci_bus.lock().unwrap();
         let pin = config.config[INTERRUPT_PIN as usize] - 1;
 
-        let (irq, intx_state) = match &locked_pci_bus.parent_bridge {
+        let (irq, intx_state) = match &locked_pci_bus.parent_device() {
             Some(parent_bridge) => {
                 let parent_bridge = parent_bridge.upgrade().unwrap();
-                let locked_parent_bridge = parent_bridge.lock().unwrap();
+                ROOT_PORT!(parent_bridge, locked_bridge, bridge);
                 (
-                    swizzle_map_irq(locked_parent_bridge.pci_base().devfn, pin),
-                    locked_parent_bridge.get_intx_state(),
+                    swizzle_map_irq(bridge.pci_base().devfn, pin),
+                    bridge.get_intx_state(),
                 )
             }
             None => {

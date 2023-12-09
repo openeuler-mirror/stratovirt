@@ -1513,8 +1513,7 @@ pub trait MachineOps: MachineLifecycle {
             return Ok(());
         }
         let parent_bridge = locked_bus
-            .parent_bridge
-            .as_ref()
+            .parent_device()
             .with_context(|| format!("Parent bridge does not exist, dev id {}", dev_id))?;
         let dev = parent_bridge.upgrade().unwrap();
         let locked_dev = dev.lock().unwrap();
