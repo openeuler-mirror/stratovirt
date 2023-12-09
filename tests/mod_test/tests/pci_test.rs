@@ -153,7 +153,7 @@ fn build_root_port_args(root_port_nums: u8) -> Vec<String> {
         multifunc = true;
     }
 
-    let mut root_port_args: Vec<String> = Vec::with_capacity(root_port_nums.try_into().unwrap());
+    let mut root_port_args: Vec<String> = Vec::with_capacity(root_port_nums as usize);
     let mut addr = 1;
     let mut func = 0;
     for bus in 1..=root_port_nums {
@@ -192,8 +192,7 @@ fn build_blk_args(
         assert!(blk_nums < MAX_DEVICE_NUM);
     }
 
-    let mut blk_args: Vec<(String, u8, u8, u8, u8, bool)> =
-        Vec::with_capacity(blk_nums.try_into().unwrap());
+    let mut blk_args: Vec<(String, u8, u8, u8, u8, bool)> = Vec::with_capacity(blk_nums as usize);
     let mut slot = 0;
     let mut func = 0;
     let mut nums = 0;

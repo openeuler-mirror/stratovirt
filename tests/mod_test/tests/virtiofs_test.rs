@@ -155,12 +155,7 @@ impl VirtioFsTest {
     ) -> Option<u64> {
         if let Some(member) = reqmember {
             let member_size = member.len() as u64;
-            let member_addr = self
-                .allocator
-                .borrow_mut()
-                .alloc(member_size)
-                .try_into()
-                .unwrap();
+            let member_addr = self.allocator.borrow_mut().alloc(member_size);
             self.state.borrow().memwrite(member_addr, &member);
             data_entries.push(TestVringDescEntry {
                 data: member_addr,
@@ -230,7 +225,7 @@ impl VirtioFsTest {
         (fuseoutheader_addr.unwrap(), fuseoutbody_addr.unwrap())
     }
 
-    fn vhost_user_fs_start_with_config(
+    fn virtiofsd_start_with_config(
         dir_temp: bool,
         seccomp: Option<SeccompAction>,
         sandbox: Option<SandBoxMechanism>,
@@ -238,7 +233,7 @@ impl VirtioFsTest {
         rlimit_nofile: Option<u32>,
         xattr: bool,
     ) -> (String, String, String) {
-        let binary_path = env::var("VHOST_USER_FS_BINARY").unwrap();
+        let binary_path = env::var("VIRTIOFSD_BINARY").unwrap();
         let (virtiofs_test_dir, virtiofs_shared_dir, virtiofs_test_file) = env_prepare(dir_temp);
         let virtiofs_sock = format!("{}/virtiofs.sock", virtiofs_shared_dir);
 
@@ -288,8 +283,8 @@ impl VirtioFsTest {
         (virtiofs_test_dir, virtiofs_sock, virtiofs_test_file)
     }
 
-    fn vhost_user_fs_start() -> (String, String, String) {
-        VirtioFsTest::vhost_user_fs_start_with_config(true, None, None, None, None, false)
+    fn virtiofsd_start() -> (String, String, String) {
+        VirtioFsTest::virtiofsd_start_with_config(true, None, None, None, None, false)
     }
 
     fn testcase_end(&self, test_dir: String) {
@@ -497,7 +492,7 @@ fn fuse_getattr(fs: &VirtioFsTest, nodeid: u64, fh: u64) -> (FuseOutHeader, Fuse
 fn mount_test() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(
+        VirtioFsTest::virtiofsd_start_with_config(
             true,
             Some(SeccompAction::Kill),
             Some(SandBoxMechanism::Namespace),
@@ -521,7 +516,7 @@ fn mount_test() {
 fn umount_test() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(
+        VirtioFsTest::virtiofsd_start_with_config(
             true,
             Some(SeccompAction::None),
             Some(SandBoxMechanism::Chroot),
@@ -549,7 +544,7 @@ fn umount_test() {
 fn mkdir_test() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(
+        VirtioFsTest::virtiofsd_start_with_config(
             true,
             Some(SeccompAction::Log),
             None,
@@ -598,7 +593,7 @@ fn mkdir_test() {
 fn sync_fun() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(
+        VirtioFsTest::virtiofsd_start_with_config(
             true,
             Some(SeccompAction::Trap),
             None,
@@ -642,8 +637,7 @@ fn sync_fun() {
 #[test]
 fn syncdir_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -677,8 +671,7 @@ fn syncdir_test() {
 #[test]
 fn invalid_fuse_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -710,8 +703,7 @@ fn invalid_fuse_test() {
 #[ignore]
 fn missing_fuseinbody_fuseoutbody_virtiorequest_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -738,8 +730,7 @@ fn missing_fuseinbody_fuseoutbody_virtiorequest_test() {
 #[test]
 fn virtiofs_device_config_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -791,8 +782,7 @@ fn virtiofs_device_config_test() {
 #[test]
 fn ls_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -906,8 +896,7 @@ fn fuse_setattr(
 #[test]
 fn setattr_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1006,8 +995,7 @@ fn setattr_test() {
 #[test]
 fn unlink_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1047,8 +1035,7 @@ fn unlink_test() {
 #[test]
 fn rmdir_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     let mut dir = virtiofs_test_dir.clone();
     dir.push_str("/shared/dir");
@@ -1096,8 +1083,7 @@ fn rmdir_test() {
 #[test]
 fn symlink_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1162,8 +1148,7 @@ fn symlink_test() {
 #[test]
 fn fallocate_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1203,8 +1188,7 @@ fn fallocate_test() {
 #[ignore]
 fn posix_file_lock_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1277,8 +1261,7 @@ fn posix_file_lock_test() {
 #[test]
 fn mknod_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1442,8 +1425,7 @@ fn create_file(fs: &VirtioFsTest, name: String) -> (FuseOutHeader, FuseCreateOut
 fn writefile_fun() {
     let file = "text.txt".to_string();
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1508,8 +1490,7 @@ fn openfile_test() {
     let file = TEST_FILE_NAME.to_string();
 
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1539,8 +1520,7 @@ fn openfile_test() {
 #[test]
 fn rename_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1577,8 +1557,7 @@ fn rename_test() {
 #[test]
 fn link_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1616,8 +1595,7 @@ fn link_test() {
 #[test]
 fn statfs_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1646,8 +1624,7 @@ fn statfs_test() {
 #[test]
 fn virtio_fs_fuse_ioctl_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1679,8 +1656,7 @@ fn virtio_fs_fuse_ioctl_test() {
 #[test]
 fn virtio_fs_fuse_abnormal_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1798,7 +1774,7 @@ fn fuse_listxattr(fs: &VirtioFsTest, nodeid: u64) -> (FuseOutHeader, u64) {
 fn regularfile_xattr_test() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(false, None, None, None, None, true);
+        VirtioFsTest::virtiofsd_start_with_config(false, None, None, None, None, true);
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1856,7 +1832,7 @@ fn regularfile_xattr_test() {
 fn character_file_xattr_test() {
     // start virtiofsd process.
     let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start_with_config(false, None, None, None, None, true);
+        VirtioFsTest::virtiofsd_start_with_config(false, None, None, None, None, true);
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1895,8 +1871,7 @@ fn character_file_xattr_test() {
 #[test]
 fn virtio_fs_fuse_lseek_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1952,8 +1927,7 @@ fn fuse_batch_forget(fs: &VirtioFsTest, nodeid: u64, trim: usize) {
 #[test]
 fn virtio_fs_fuse_batch_forget_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
@@ -1988,8 +1962,7 @@ fn virtio_fs_fuse_batch_forget_test() {
 #[ignore]
 fn virtio_fs_fuse_setlkw_test() {
     // start virtiofsd process.
-    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) =
-        VirtioFsTest::vhost_user_fs_start();
+    let (virtiofs_test_dir, virtiofs_sock, _virtiofs_test_file) = VirtioFsTest::virtiofsd_start();
 
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
