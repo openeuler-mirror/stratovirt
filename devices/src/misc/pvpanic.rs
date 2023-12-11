@@ -222,16 +222,7 @@ impl PciDevOps for PvPanicPci {
             .unwrap()
             .dev_id
             .store(device_id, Ordering::Release);
-        let pci_device = pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            pci_bus.devices.insert(devfn, dev);
-        } else {
-            bail!(
-                "pvpanic: Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        locked_bus.attach_child(devfn as u64, dev)?;
 
         Ok(())
     }
@@ -259,8 +250,16 @@ impl PciDevOps for PvPanicPci {
 mod tests {
     use super::*;
     use crate::pci::{host::tests::create_pci_host, le_read_u16, PciHost};
-    use crate::Bus;
+    use crate::{convert_device_mut, Bus};
     use machine_manager::config::str_slip_to_clap;
+
+    /// Convert from Arc<Mutex<dyn Device>> to &mut PvPanicPci.
+    #[macro_export]
+    macro_rules! MUT_PVPANIC_PCI {
+        ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+            convert_device_mut!($trait_device, $lock_device, $struct_device, PvPanicPci);
+        };
+    }
 
     fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
         let pci_host = create_pci_host();
@@ -311,7 +310,7 @@ mod tests {
         let pvpanic_dev = root_bus.upgrade().unwrap().lock().unwrap().get_device(0, 7);
         assert!(pvpanic_dev.is_some());
         assert_eq!(
-            pvpanic_dev.unwrap().lock().unwrap().pci_base().base.id,
+            pvpanic_dev.unwrap().lock().unwrap().name(),
             "pvpanic_test".to_string()
         );
 
@@ -335,40 +334,28 @@ mod tests {
             .unwrap()
             .get_device(0, 7)
             .unwrap();
-
-        let info = le_read_u16(
-            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
-            VENDOR_ID as usize,
-        )
-        .unwrap_or_else(|_| 0);
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
+        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, VENDOR_ID as usize)
+            .unwrap_or_else(|_| 0);
         assert_eq!(info, PCI_VENDOR_ID_REDHAT);
 
-        let info = le_read_u16(
-            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
-            DEVICE_ID as usize,
-        )
-        .unwrap_or_else(|_| 0);
+        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, DEVICE_ID as usize)
+            .unwrap_or_else(|_| 0);
         assert_eq!(info, PCI_DEVICE_ID_REDHAT_PVPANIC);
 
         let info = le_read_u16(
-            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            &pvpanic.pci_base_mut().config.config,
             SUB_CLASS_CODE as usize,
         )
         .unwrap_or_else(|_| 0);
         assert_eq!(info, PCI_CLASS_SYSTEM_OTHER);
 
-        let info = le_read_u16(
-            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
-            SUBSYSTEM_VENDOR_ID,
-        )
-        .unwrap_or_else(|_| 0);
+        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_VENDOR_ID)
+            .unwrap_or_else(|_| 0);
         assert_eq!(info, PVPANIC_PCI_VENDOR_ID);
 
-        let info = le_read_u16(
-            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
-            SUBSYSTEM_ID,
-        )
-        .unwrap_or_else(|_| 0);
+        let info =
+            le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_ID).unwrap_or_else(|_| 0);
         assert_eq!(info, PCI_SUBDEVICE_ID_QEMU);
     }
 
@@ -385,10 +372,11 @@ mod tests {
             .unwrap()
             .get_device(0, 7)
             .unwrap();
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test read supported_features
         let mut data_read = [0xffu8; 1];
-        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+        let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()
@@ -413,11 +401,12 @@ mod tests {
             .unwrap()
             .get_device(0, 7)
             .unwrap();
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test write panicked event
         let data_write = [PVPANIC_PANICKED as u8; 1];
         let count = data_write.len() as u64;
-        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+        let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()
@@ -438,11 +427,12 @@ mod tests {
             .unwrap()
             .get_device(0, 7)
             .unwrap();
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test write crashload event
         let data_write = [PVPANIC_CRASHLOADED as u8; 1];
         let count = data_write.len() as u64;
-        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+        let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()
@@ -463,11 +453,12 @@ mod tests {
             .unwrap()
             .get_device(0, 7)
             .unwrap();
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test write unknown event
         let data_write = [100u8; 1];
         let count = data_write.len() as u64;
-        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+        let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()

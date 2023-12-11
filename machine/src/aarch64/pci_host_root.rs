@@ -19,7 +19,7 @@ use devices::pci::config::{
     REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
-use devices::{convert_bus_mut, Device, DeviceBase, MUT_PCI_BUS};
+use devices::{Device, DeviceBase};
 use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
@@ -70,8 +70,8 @@ impl PciDevOps for PciHostRoot {
         le_write_u16(&mut self.base.config.config, REVISION_ID, 0)?;
 
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        pci_bus.devices.insert(0, Arc::new(Mutex::new(self)));
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0, Arc::new(Mutex::new(self)))?;
 
         Ok(())
     }

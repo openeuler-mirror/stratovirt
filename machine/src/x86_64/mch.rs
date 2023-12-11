@@ -24,7 +24,7 @@ use devices::pci::{
     },
     le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
+use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
@@ -138,8 +138,8 @@ impl PciDevOps for Mch {
         )?;
 
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        pci_bus.devices.insert(0, Arc::new(Mutex::new(self)));
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0, Arc::new(Mutex::new(self)))?;
         Ok(())
     }
 

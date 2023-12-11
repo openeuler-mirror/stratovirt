@@ -34,12 +34,13 @@ use crate::pci::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
 use crate::pci::hotplug::HotplugOps;
 use crate::pci::intx::init_intx;
 use crate::pci::msix::init_msix;
-use crate::pci::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRUPT_PIN};
 use crate::pci::{
-    le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, PciDevOps,
+    init_multifunction, le_read_u16, le_write_clear_value_u16, le_write_set_value_u16,
+    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, INTERRUPT_PIN,
 };
 use crate::{
-    convert_bus_mut, convert_bus_ref, Device, DeviceBase, MsiIrqManager, MUT_PCI_BUS, PCI_BUS,
+    convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MsiIrqManager, MUT_PCI_BUS, PCI_BUS,
+    PCI_BUS_DEVICE,
 };
 use address_space::Region;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
@@ -221,10 +222,10 @@ impl RootPort {
         // Store device in a temp vector and unlock the bus.
         // If the device unrealize called when the bus is locked, a deadlock occurs.
         // This is because the device unrealize also requires the bus lock.
-        let devices = self.sec_bus.lock().unwrap().devices.clone();
+        let devices = self.sec_bus.lock().unwrap().child_devices().clone();
         for dev in devices.values() {
-            let mut locked_dev = dev.lock().unwrap();
-            if let Err(e) = locked_dev.unrealize() {
+            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+            if let Err(e) = pci_dev.unrealize() {
                 error!("{}", format!("{:?}", e));
                 error!("Failed to unrealize device {}.", locked_dev.name());
             }
@@ -233,7 +234,7 @@ impl RootPort {
             // Send QMP event for successful hot unplugging.
             send_device_deleted_msg(&locked_dev.name());
         }
-        self.sec_bus.lock().unwrap().devices.clear();
+        self.sec_bus.lock().unwrap().bus_base_mut().children.clear();
     }
 
     fn register_region(&mut self) {
@@ -417,12 +418,10 @@ impl PciDevOps for RootPort {
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
         locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
-        let pci_device = pci_bus.devices.get(&locked_root_port.base.devfn);
+        let pci_device = pci_bus.child_dev(locked_root_port.base.devfn as u64);
         if pci_device.is_none() {
             pci_bus.child_buses.push(locked_root_port.sec_bus.clone());
-            pci_bus
-                .devices
-                .insert(locked_root_port.base.devfn, root_port.clone());
+            pci_bus.attach_child(locked_root_port.base.devfn as u64, root_port.clone())?;
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -568,11 +567,13 @@ impl PciDevOps for RootPort {
 }
 
 impl HotplugOps for RootPort {
-    fn plug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+    fn plug(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()> {
         if !dev.lock().unwrap().hotpluggable() {
             bail!("Don't support hot-plug!");
         }
-        let devfn = dev.lock().unwrap().pci_base().devfn;
+        PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+        let devfn = pci_dev.pci_base().devfn;
+        drop(locked_dev);
         // Only if devfn is equal to 0, hot plugging is supported.
         if devfn != 0 {
             return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
@@ -594,7 +595,7 @@ impl HotplugOps for RootPort {
         Ok(())
     }
 
-    fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+    fn unplug_request(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()> {
         let pcie_cap_offset = self.base.config.pci_express_cap_offset;
         let sltctl = le_read_u16(
             &self.base.config.config,
@@ -609,7 +610,9 @@ impl HotplugOps for RootPort {
         if !dev.lock().unwrap().hotpluggable() {
             bail!("Don't support hot-unplug request!");
         }
-        let devfn = dev.lock().unwrap().pci_base().devfn;
+        PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+        let devfn = pci_dev.pci_base().devfn;
+        drop(locked_dev);
         if devfn != 0 {
             return self.unplug(dev);
         }
@@ -647,14 +650,14 @@ impl HotplugOps for RootPort {
         Ok(())
     }
 
-    fn unplug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+    fn unplug(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()> {
         if !dev.lock().unwrap().hotpluggable() {
             bail!("Don't support hot-unplug!");
         }
-        let devfn = dev.lock().unwrap().pci_base().devfn;
-        let mut locked_dev = dev.lock().unwrap();
-        locked_dev.unrealize()?;
-        self.sec_bus.lock().unwrap().devices.remove(&devfn);
+        PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+        let devfn = pci_dev.pci_base().devfn as u64;
+        pci_dev.unrealize()?;
+        self.sec_bus.lock().unwrap().detach_child(devfn)?;
         Ok(())
     }
 }
@@ -700,7 +703,7 @@ impl MigrationHook for RootPort {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pci::host::tests::create_pci_host;
+    use crate::{convert_device_mut, pci::host::tests::create_pci_host, MUT_ROOT_PORT};
 
     #[test]
     fn test_read_config() {
@@ -714,12 +717,10 @@ mod tests {
         let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
-        let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
+        let dev = pci_host.lock().unwrap().find_device(0, 8).unwrap();
         let mut buf = [1_u8; 4];
-        root_port
-            .lock()
-            .unwrap()
-            .read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
+        MUT_ROOT_PORT!(dev, locked_dev, root_port);
+        root_port.read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
         assert_eq!(buf, [1_u8; 4]);
     }
 
@@ -734,19 +735,14 @@ mod tests {
         };
         let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
-        let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
+        let dev = pci_host.lock().unwrap().find_device(0, 8).unwrap();
+        MUT_ROOT_PORT!(dev, locked_dev, root_port);
 
         // Invalid write.
         let data = [1_u8; 4];
-        root_port
-            .lock()
-            .unwrap()
-            .write_config(PCIE_CONFIG_SPACE_SIZE - 1, &data);
+        root_port.write_config(PCIE_CONFIG_SPACE_SIZE - 1, &data);
         let mut buf = [0_u8];
-        root_port
-            .lock()
-            .unwrap()
-            .read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
+        root_port.read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
         assert_eq!(buf, [0_u8]);
     }
 }

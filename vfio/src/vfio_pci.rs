@@ -41,11 +41,9 @@ use devices::pci::msix::{
 };
 use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
-    pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
+    pci_ext_cap_next, pci_ext_cap_ver, MsiVector, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{
-    convert_bus_mut, convert_bus_ref, pci::MsiVector, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS,
-};
+use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
@@ -864,20 +862,11 @@ impl PciDevOps for VfioPciDevice {
         )?));
         Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
-        let devfn = self.base.devfn;
+        let devfn = self.base.devfn as u64;
         let dev = Arc::new(Mutex::new(self));
         let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        let pci_device = pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            pci_bus.devices.insert(devfn, dev);
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(devfn, dev)?;
 
         Ok(())
     }

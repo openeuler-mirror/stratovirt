@@ -46,7 +46,7 @@ use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     PciBus, PciDevBase, PciDevOps, PciError,
 };
-use devices::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
+use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -1139,7 +1139,7 @@ impl PciDevOps for VirtioPciDevice {
             .with_context(|| "Failed to realize virtio device")?;
 
         let name = self.name();
-        let devfn = self.base.devfn;
+        let devfn = self.base.devfn as u64;
         let dev = Arc::new(Mutex::new(self));
         let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
             as u64)
@@ -1159,17 +1159,7 @@ impl PciDevOps for VirtioPciDevice {
 
         // Register device to pci bus.
         let bus = parent_bus.upgrade().unwrap();
-        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
-        let pci_device = pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            pci_bus.devices.insert(devfn, dev.clone());
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        bus.lock().unwrap().attach_child(devfn, dev.clone())?;
 
         MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
 

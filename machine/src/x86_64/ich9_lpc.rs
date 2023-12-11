@@ -27,7 +27,7 @@ use devices::pci::config::{
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
-use devices::{convert_bus_mut, Device, DeviceBase, MUT_PCI_BUS};
+use devices::{Device, DeviceBase};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
@@ -277,10 +277,8 @@ impl PciDevOps for LPCBridge {
             .with_context(|| "Fail to init IO region for PM control register")?;
 
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        pci_bus
-            .devices
-            .insert(0x1F << 3, Arc::new(Mutex::new(self)));
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0x1F << 3, Arc::new(Mutex::new(self)))?;
         Ok(())
     }
 
