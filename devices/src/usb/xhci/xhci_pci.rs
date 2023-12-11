@@ -34,7 +34,7 @@ use crate::pci::config::{
 };
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDevice;
-use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
+use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
@@ -314,7 +314,7 @@ impl PciDevOps for XhciPciDevice {
             mem_region_size,
         )?;
 
-        let devfn = self.base.devfn;
+        let devfn = self.base.devfn as u64;
         // It is safe to unwrap, because it is initialized in init_msix.
         let cloned_msix = self.base.config.msix.as_ref().unwrap().clone();
         let cloned_intx = self.base.config.intx.as_ref().unwrap().clone();
@@ -338,17 +338,7 @@ impl PciDevOps for XhciPciDevice {
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
         let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
-        let pci_device = pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            pci_bus.devices.insert(devfn, dev);
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        bus.lock().unwrap().attach_child(devfn, dev)?;
         Ok(())
     }
 

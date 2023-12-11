@@ -41,22 +41,20 @@ use std::{
     },
 };
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Parser;
 use log::error;
 
+use crate::pci::config::{
+    PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
+    SUB_CLASS_CODE, VENDOR_ID,
+};
 use crate::pci::demo_device::{
-    dpy_device::DemoDisplay, gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse,
+    base_device::BaseDevice, dpy_device::DemoDisplay, gpu_device::DemoGpu,
+    kbd_pointer_device::DemoKbdMouse,
 };
-use crate::pci::{
-    config::{
-        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT,
-        PCIE_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    init_msix, le_write_u16, PciBus, PciDevOps,
-};
-use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
-use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
+use crate::pci::{init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
 use util::gen_base_func;
@@ -134,14 +132,11 @@ impl DemoDev {
     }
 
     fn attach_to_parent_bus(self) -> Result<()> {
+        let devfn = self.base.devfn as u64;
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        if pci_bus.devices.get(&self.base.devfn).is_some() {
-            bail!("device already existed");
-        }
-        let devfn = self.base.devfn;
+        let mut locked_bus = parent_bus.lock().unwrap();
         let demo_pci_dev = Arc::new(Mutex::new(self));
-        pci_bus.devices.insert(devfn, demo_pci_dev);
+        locked_bus.attach_child(devfn, demo_pci_dev)?;
 
         Ok(())
     }

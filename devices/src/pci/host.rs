@@ -16,11 +16,11 @@ use anyhow::{Context, Result};
 
 #[cfg(target_arch = "aarch64")]
 use crate::pci::PCI_INTR_BASE;
-use crate::pci::{bus::PciBus, PciDevOps, PCI_PIN_NUM, PCI_SLOT_MAX};
+use crate::pci::{bus::PciBus, to_pcidevops, PCI_PIN_NUM, PCI_SLOT_MAX};
 #[cfg(target_arch = "x86_64")]
 use crate::pci::{le_read_u32, le_write_u32};
 use crate::sysbus::{SysBusDevBase, SysBusDevOps};
-use crate::{Device, DeviceBase};
+use crate::{Bus, Device, DeviceBase, PCI_BUS_DEVICE};
 use acpi::{
     AmlActiveLevel, AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable,
     AmlCreateDWordField, AmlDWord, AmlDWordDesc, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlElse,
@@ -111,14 +111,16 @@ impl PciHost {
         }
     }
 
-    pub fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+    pub fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn Device>>> {
         let locked_root_bus = self.root_bus.lock().unwrap();
         if bus_num == 0 {
-            return locked_root_bus.get_device(0, devfn);
+            let dev = locked_root_bus.child_dev(devfn as u64)?;
+            return Some(dev.clone());
         }
         for bus in &locked_root_bus.child_buses {
             if let Some(b) = PciBus::find_bus_by_num(bus, bus_num) {
-                return b.lock().unwrap().get_device(bus_num, devfn);
+                let dev = b.lock().unwrap().child_dev(devfn as u64)?.clone();
+                return Some(dev);
             }
         }
         None
@@ -197,7 +199,8 @@ impl PciHost {
             match locked_hb.find_device(bus_num, devfn) {
                 Some(dev) => {
                     offset &= PIO_OFFSET_MASK;
-                    dev.lock().unwrap().read_config(offset as usize, data);
+                    PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                    pci_dev.read_config(offset as usize, data);
                 }
                 None => {
                     for d in data.iter_mut() {
@@ -219,7 +222,8 @@ impl PciHost {
             let devfn = ((offset >> PIO_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;
             if let Some(dev) = locked_hb.find_device(bus_num, devfn) {
                 offset &= PIO_OFFSET_MASK;
-                dev.lock().unwrap().write_config(offset as usize, data);
+                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                pci_dev.write_config(offset as usize, data);
             }
             true
         };
@@ -244,9 +248,9 @@ impl SysBusDevOps for PciHost {
         match self.find_device(bus_num, devfn) {
             Some(dev) => {
                 let addr: usize = (offset & ECAM_OFFSET_MASK) as usize;
-                let dev_name = &dev.lock().unwrap().pci_base().base.id.clone();
-                trace::pci_read_config(dev_name, addr, data);
-                dev.lock().unwrap().read_config(addr, data);
+                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                trace::pci_read_config(&pci_dev.name(), addr, data);
+                pci_dev.read_config(addr, data);
             }
             None => {
                 for d in data.iter_mut() {
@@ -263,9 +267,9 @@ impl SysBusDevOps for PciHost {
         match self.find_device(bus_num, devfn) {
             Some(dev) => {
                 let addr: usize = (offset & ECAM_OFFSET_MASK) as usize;
-                let dev_name = &dev.lock().unwrap().pci_base().base.id.clone();
-                trace::pci_write_config(dev_name, addr, data);
-                dev.lock().unwrap().write_config(addr, data);
+                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                trace::pci_write_config(&pci_dev.name(), addr, data);
+                pci_dev.write_config(addr, data);
                 true
             }
             None => true,
@@ -273,10 +277,9 @@ impl SysBusDevOps for PciHost {
     }
 
     fn reset(&mut self) -> Result<()> {
-        for (_id, pci_dev) in self.root_bus.lock().unwrap().devices.iter_mut() {
+        for dev in self.root_bus.lock().unwrap().child_devices().values() {
+            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
             pci_dev
-                .lock()
-                .unwrap()
                 .reset(true)
                 .with_context(|| "Fail to reset pci device under pci host")?;
         }
@@ -531,6 +534,7 @@ impl AmlBuilder for PciHost {
 
 #[cfg(test)]
 pub mod tests {
+    #[cfg(target_arch = "x86_64")]
     use byteorder::{ByteOrder, LittleEndian};
 
     use super::*;
@@ -538,6 +542,7 @@ pub mod tests {
     use crate::pci::config::SECONDARY_BUS_NUM;
     use crate::pci::root_port::{RootPort, RootPortConfig};
     use crate::pci::tests::TestPciDevice;
+    use crate::pci::{clean_pcidevops_type, register_pcidevops_type, PciDevOps};
     use address_space::Region;
 
     pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
@@ -571,6 +576,8 @@ pub mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_pio_ops() {
+        register_pcidevops_type::<RootPort>().unwrap();
+
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let pio_addr_ops = PciHost::build_pio_addr_ops(pci_host.clone());
@@ -597,7 +604,6 @@ pub mod tests {
         assert_eq!(buf, data);
 
         // Non-DWORD access on CONFIG_ADDR
-
         let mut config = [0_u8; 4];
         (pio_addr_ops.read)(&mut config, GuestAddress(0), 0);
         let data = [0x12, 0x34];
@@ -649,10 +655,15 @@ pub mod tests {
         let mut buf = [0_u8; 4];
         (pio_data_ops.read)(&mut buf, GuestAddress(0), 0);
         assert_eq!(buf, [0xff_u8; 4]);
+
+        clean_pcidevops_type();
     }
 
     #[test]
     fn test_mmio_ops() {
+        register_pcidevops_type::<TestPciDevice>().unwrap();
+        register_pcidevops_type::<RootPort>().unwrap();
+
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(pci_host.clone());
@@ -703,5 +714,7 @@ pub mod tests {
         let mut buf = [0_u8; 2];
         (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
         assert_eq!(buf, data);
+
+        clean_pcidevops_type();
     }
 }

@@ -55,8 +55,8 @@ use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{
-    devices_register_pcidevops_type, register_pcidevops_type, PciBus, PciDevOps, PciHost, RootPort,
-    RootPortConfig,
+    devices_register_pcidevops_type, register_pcidevops_type, to_pcidevops, PciBus, PciDevOps,
+    PciHost, RootPort, RootPortConfig,
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
@@ -77,7 +77,7 @@ use devices::usb::UsbDevice;
 use devices::InterruptController;
 use devices::ScsiBus::get_scsi_key;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
-use devices::{Bus, Device, SYS_BUS_DEVICE};
+use devices::{Bus, Device, PCI_BUS_DEVICE, SYS_BUS_DEVICE};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -1209,11 +1209,11 @@ pub trait MachineOps: MachineLifecycle {
             .get_pci_dev_by_id_and_type(vm_config, Some(&cntlr), "virtio-scsi-pci")
             .with_context(|| format!("Can not find scsi controller from pci bus {}", cntlr))?;
         let locked_pcidev = pci_dev.lock().unwrap();
-        let prefix = locked_pcidev.get_dev_path().unwrap();
         let virtio_pcidev = locked_pcidev
             .as_any()
             .downcast_ref::<VirtioPciDevice>()
             .unwrap();
+        let prefix = virtio_pcidev.get_dev_path().unwrap();
         let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
         let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
         let bus = cntlr.bus.as_ref().unwrap();
@@ -1521,7 +1521,7 @@ pub trait MachineOps: MachineLifecycle {
         drop(locked_dev);
         let mut devfn = None;
         let locked_bus = locked_pci_host.root_bus.lock().unwrap();
-        for (id, dev) in &locked_bus.devices {
+        for (id, dev) in &locked_bus.child_devices() {
             if dev.lock().unwrap().name() == name {
                 devfn = Some(*id);
                 break;
@@ -1529,12 +1529,11 @@ pub trait MachineOps: MachineLifecycle {
         }
         drop(locked_bus);
         // It's safe to call devfn.unwrap(), because the bus exists.
-        match locked_pci_host.find_device(0, devfn.unwrap()) {
-            Some(dev) => dev
-                .lock()
-                .unwrap()
-                .reset(false)
-                .with_context(|| "Failed to reset bus"),
+        match locked_pci_host.find_device(0, devfn.unwrap() as u8) {
+            Some(dev) => {
+                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                pci_dev.reset(false).with_context(|| "Failed to reset bus")
+            }
             None => bail!("Failed to found device"),
         }
     }
@@ -1695,7 +1694,7 @@ pub trait MachineOps: MachineLifecycle {
         vm_config: &VmConfig,
         id: Option<&str>,
         dev_type: &str,
-    ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+    ) -> Option<Arc<Mutex<dyn Device>>> {
         let (id_check, id_str) = if id.is_some() {
             (true, format! {"id={}", id.unwrap()})
         } else {

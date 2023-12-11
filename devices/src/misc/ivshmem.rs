@@ -15,14 +15,14 @@ use std::sync::{
     Arc, Mutex, Weak,
 };
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::pci::config::{
     PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
     PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
-use crate::{convert_bus_mut, convert_bus_ref, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
+use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use util::gen_base_func;
 
@@ -121,18 +121,8 @@ impl PciDevOps for Ivshmem {
 
         // Attach to the PCI bus.
         let bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
-        let pci_device = pci_bus.devices.get(&self.base.devfn);
-        match pci_device {
-            Some(device) => bail!(
-                "Devfn {:?} has been used by {:?}",
-                &self.base.devfn,
-                device.lock().unwrap().name()
-            ),
-            None => pci_bus
-                .devices
-                .insert(self.base.devfn, Arc::new(Mutex::new(self))),
-        };
+        let mut locked_bus = bus.lock().unwrap();
+        locked_bus.attach_child(self.base.devfn as u64, Arc::new(Mutex::new(self)))?;
         Ok(())
     }
 
