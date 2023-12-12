@@ -343,7 +343,8 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
         }
         Some(SnapshotOperation::List) => {
             let info = qcow2_driver.list_snapshots();
-            println!("{}", info);
+            println!("Snapshot list:");
+            print!("{}", info);
         }
         Some(SnapshotOperation::Delete) => {
             qcow2_driver.delete_snapshot(snapshot_name)?;
