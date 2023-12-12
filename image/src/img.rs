@@ -28,7 +28,7 @@ use block_backend::{
 };
 use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
-    aio::{Aio, AioEngine},
+    aio::{Aio, AioEngine, WriteZeroesState},
     file::{lock_file, open_file, unlock_file},
 };
 
@@ -330,6 +330,9 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     // Create qcow2 driver.
     let mut qcow2_conf = BlockProperty::default();
     qcow2_conf.format = DiskFormat::Qcow2;
+    qcow2_conf.discard = true;
+    qcow2_conf.write_zeroes = WriteZeroesState::Unmap;
+
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off).unwrap();
     let mut qcow2_driver = Qcow2Driver::new(image_file.file.try_clone()?, aio, qcow2_conf.clone())?;
     qcow2_driver.load_metadata(qcow2_conf)?;
