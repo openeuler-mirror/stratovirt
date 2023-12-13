@@ -57,7 +57,7 @@ $ ./target/release/stratovirt \
     -serial stdio
 ```
 
-关于制作rootfs镜像、编译内核镜像以及编译StratoVirt的详细指导，请参考[StratoVirt Quickstart](./docs/quickstart.md)。
+关于制作rootfs镜像、编译内核镜像以及编译StratoVirt的详细指导，请参考[StratoVirt Quickstart](./docs/quickstart.ch.md)。
 
 StratoVirt所支持更多特性，详细指导请参考[Configuration Guidebook](docs/config_guidebook.md)。
 

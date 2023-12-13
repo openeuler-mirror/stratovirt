@@ -3,8 +3,8 @@
 ## 1. Download BusyBox, then decompression
 
 ``` shell
-wget https://busybox.net/downloads/busybox-1.31.1.tar.bz2
-tar -xjf busybox-1.31.1.tar.bz2
+wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+tar -xjf busybox-1.36.1.tar.bz2
 ```
 
 ## 2. Compile BusyBox
