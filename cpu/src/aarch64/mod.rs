@@ -282,6 +282,11 @@ impl ArmCPUState {
             .with_context(|| "Failed to get virtual timer count")? as u64;
         Ok(())
     }
+
+    /// Get cpu features.
+    pub fn get_features(&self) -> &ArmCPUFeatures {
+        &self.features
+    }
 }
 
 impl CPU {
