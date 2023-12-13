@@ -27,8 +27,8 @@ use crate::standard_common::{AcpiBuilder, StdMachineOps};
 use crate::{vm_state, MachineBase, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
-    AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
-    AmlString, TableLoader, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
+    AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
+    IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -781,25 +781,15 @@ impl AcpiBuilder for StdMachine {
     ) -> Result<u64> {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
-        // 1. CPU info.
-        let cpus_count = self.base.cpus.len() as u64;
+        // 1. Create pci host bridge node.
         let mut sb_scope = AmlScope::new("\\_SB");
-        for cpu_id in 0..cpus_count {
-            let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
-            dev.append_child(AmlNameDecl::new("_HID", AmlString("ACPI0007".to_string())));
-            dev.append_child(AmlNameDecl::new("_UID", AmlInteger(cpu_id)));
-            dev.append_child(AmlNameDecl::new("_PXM", AmlInteger(0)));
-            sb_scope.append_child(dev);
-        }
-
-        // 2. Create pci host bridge node.
         sb_scope.append_child(self.pci_host.lock().unwrap().clone());
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
-        // 3. Info of devices attached to system bus.
+        // 2. Info of devices attached to system bus.
         dsdt.append_child(self.base.sysbus.aml_bytes().as_slice());
 
-        // 4. Add _S5 sleep state.
+        // 3. Add _S5 sleep state.
         let mut package = AmlPackage::new(4);
         package.append_child(AmlInteger(5));
         package.append_child(AmlInteger(0));
