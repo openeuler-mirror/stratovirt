@@ -26,7 +26,7 @@ $ sudo yum install stratovirt
 
 安装完成后可以找到StratoVirt二进制的路径: `/usr/bin/stratovirt`.
 
-如果需要自己构建StratoVirt二进制, 可以参考[构建指导](./build_guide_ch.md).
+如果需要自己构建StratoVirt二进制, 可以参考[构建指导](./build_guide.ch.md).
 
 ## 3. 运行StratoVirt
 
@@ -34,10 +34,10 @@ $ sudo yum install stratovirt
 StratoVirt当前提供了两种虚拟机：微虚拟机和标准虚拟机（x86_64平台q35主板和aarch平台的virt主板）。
 作为快速入门，以下展示启动微虚拟机。
 首先，需要PE格式的Linux内核二进制和ext4文件系统镜像（作为rootfs）。
-* `x86_64` 启动资源: [内核二进制](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin)
-and [rootfs镜像](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
-* `aarch64` 启动资源: [内核二进制](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/vmlinux.bin)
-and [rootfs镜像](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/openEuler-21.03-stratovirt-aarch64.img.xz).
+* `x86_64` 启动资源: [内核二进制](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/x86_64/vmlinux.bin)
+and [rootfs镜像](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/x86_64/openEuler-22.03-LTS-stratovirt-x86_64.img.xz).
+* `aarch64` 启动资源: [内核二进制](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/aarch64/vmlinux.bin)
+and [rootfs镜像](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/aarch64/openEuler-22.03-LTS-stratovirt-aarch64.img.xz).
 
 也可以通过以下的shell脚本获取内核二进制和rootfs镜像:
 
@@ -45,11 +45,11 @@ and [rootfs镜像](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aar
 arch=`uname -m`
 dest_kernel="vmlinux.bin"
 dest_rootfs="rootfs.ext4"
-image_bucket_url="https://repo.openeuler.org/openEuler-21.03/stratovirt_img"
+image_bucket_url="https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img"
 
 if [ ${arch} = "x86_64" ] || [ ${arch} = "aarch64" ]; then
     kernel="${image_bucket_url}/${arch}/vmlinux.bin"
-    rootfs="${image_bucket_url}/${arch}/openEuler-21.03-stratovirt-${arch}.img.xz"
+    rootfs="${image_bucket_url}/${arch}/openEuler-22.03-LTS-stratovirt-${arch}.img.xz"
 else
     echo "Cannot run StratoVirt on ${arch} architecture!"
     exit 1
@@ -88,7 +88,7 @@ rm -f ${socket_path}
     -serial stdio
 ```
 
-在标准输入输出串口上提示登入客户机。 如果使用我们提供的`openEuler-21.03-stratovirt-aarch64.img`镜像，
+在标准输入输出串口上提示登入客户机。 如果使用我们提供的`openEuler-22.03-LTS-stratovirt.img`镜像，
 可以使用用户名`root`和密码`openEuler12#$`进行登入。
 
 如果想要停止客户机，可以通过在客户机内部输入`reboot`命令来实际关闭StratoVirt。

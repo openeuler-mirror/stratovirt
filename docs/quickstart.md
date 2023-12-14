@@ -37,10 +37,10 @@ are microvm and standard_vm("q35" on x86_64 platform and "virt" on aarch64 platf
 As a quick start, we show how to start a VM with microvm.
 
 First, you will need an PE format Linux kernel binary, and an ext4 file system image (as rootfs).
-* `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin)
-and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
-* `aarch64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/vmlinux.bin)
-and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/openEuler-21.03-stratovirt-aarch64.img.xz).
+* `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/x86_64/vmlinux.bin)
+and [rootfs](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/x86_64/openEuler-22.03-LTS-stratovirt-x86_64.img.xz).
+* `aarch64` boot source: [kernel](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/aarch64/vmlinux.bin)
+and [rootfs](https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/aarch64/openEuler-22.03-LTS-stratovirt-aarch64.img.xz).
 
 Or get the kernel and rootfs with shell:
 
@@ -48,11 +48,11 @@ Or get the kernel and rootfs with shell:
 arch=`uname -m`
 dest_kernel="vmlinux.bin"
 dest_rootfs="rootfs.ext4"
-image_bucket_url="https://repo.openeuler.org/openEuler-21.03/stratovirt_img"
+image_bucket_url="https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img"
 
 if [ ${arch} = "x86_64" ] || [ ${arch} = "aarch64" ]; then
     kernel="${image_bucket_url}/${arch}/vmlinux.bin"
-    rootfs="${image_bucket_url}/${arch}/openEuler-21.03-stratovirt-${arch}.img.xz"
+    rootfs="${image_bucket_url}/${arch}/openEuler-22.03-LTS-stratovirt-${arch}.img.xz"
 else
     echo "Cannot run StratoVirt on ${arch} architecture!"
     exit 1
@@ -92,7 +92,7 @@ rm -f ${socket_path}
 ```
 
 You should now see a serial in stdio prompting you to log into the guest machine.
-If you used our `openEuler-21.03-stratovirt-aarch64.img` image, you can login as
+If you used our `openEuler-22.03-LTS-stratovirt.img` image, you can login as
 `root`, using the password `openEuler12#$`.
 
 If you want to quit the guest machine, using a `reboot` command inside the guest
