@@ -120,9 +120,6 @@ pub struct MachineBase {
     cpu_topo: CpuTopology,
     /// `vCPU` devices.
     cpus: Vec<Arc<CPU>>,
-    /// `vCPU` family and feature configuration. Only supports aarch64 currently.
-    #[cfg(target_arch = "aarch64")]
-    cpu_features: CPUFeatures,
     /// Interrupt controller device.
     #[cfg(target_arch = "aarch64")]
     irq_chip: Option<Arc<InterruptController>>,
@@ -193,8 +190,6 @@ impl MachineBase {
         Ok(MachineBase {
             cpu_topo,
             cpus: Vec::new(),
-            #[cfg(target_arch = "aarch64")]
-            cpu_features: (&vm_config.machine_config.cpu_config).into(),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
             sys_mem,

@@ -227,7 +227,7 @@ impl CompileFDTHelper for MachineBase {
 
         fdt.end_node(cpus_node_dep)?;
 
-        if self.cpu_features.pmu {
+        if self.cpus[0].arch().lock().unwrap().get_features().pmu {
             generate_pmu_node(fdt)?;
         }
 
