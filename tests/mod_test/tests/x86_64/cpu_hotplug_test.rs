@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use machine::standard_vm::x86_64::{LayoutEntryType, MEM_LAYOUT};
+use machine::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
 use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 
 const GED_ADDR_BASE: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].0;
