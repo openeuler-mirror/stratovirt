@@ -598,6 +598,15 @@ pub(crate) trait AcpiBuilder {
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
+        // PM1_EVT_LEN, offset is 88.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(88, 4);
+        // PM1_CNT_LEN, offset is 89.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(89, 2);
+        // PM_TMR_LEN, offset is 91.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(91, 4);
         #[cfg(target_arch = "aarch64")]
         {
             // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
