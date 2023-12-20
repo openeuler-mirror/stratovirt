@@ -802,6 +802,7 @@ impl ClientIoHandler {
         let mut locked_dpm = self.client.client_dpm.lock().unwrap();
         locked_dpm.feature = 0;
         locked_dpm.enc = 0;
+        num_encoding = cmp::min(num_encoding as usize, (buf.len() - 4) / 4) as u16;
         while num_encoding > 0 {
             let offset = (4 * num_encoding) as usize;
             let enc = i32::from_be_bytes([
