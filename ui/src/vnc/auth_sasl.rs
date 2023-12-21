@@ -223,6 +223,7 @@ impl ClientIoHandler {
                     &mut serverout_len,
                 )
             },
+            // SAFETY: The reason is same as above.
             SaslStage::SaslServerStep => unsafe {
                 sasl_server_step(
                     security.saslconfig.sasl_conn,
@@ -244,6 +245,7 @@ impl ClientIoHandler {
             )));
         }
         if serverout_len > SASL_DATA_MAX_LEN {
+            // SAFETY: The reason is same as above.
             unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
             return Err(anyhow!(VncError::AuthFailed(
                 "client_sasl_auth".to_string(),
@@ -254,6 +256,7 @@ impl ClientIoHandler {
         let mut buf = Vec::new();
         if serverout_len > 0 {
             // Authentication related information.
+            // SAFETY: pointer of serverout can be guaranteed not null.
             let serverout = unsafe { CStr::from_ptr(serverout as *const c_char) };
             let auth_message = String::from(serverout.to_str().unwrap_or(""));
             buf.append(&mut (serverout_len + 1).to_be_bytes().to_vec());
@@ -325,6 +328,7 @@ impl ClientIoHandler {
             )));
         }
         let mut saslconfig = SaslConfig::default();
+        // SAFETY: The reason is same as above.
         unsafe {
             err = sasl_server_new(
                 service.as_ptr(),

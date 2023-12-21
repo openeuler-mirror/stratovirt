@@ -258,6 +258,7 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "nix 0.26.2",
  "util",
  "vmm-sys-util",
 ]
@@ -315,6 +316,7 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
+ "nix 0.26.2",
  "thiserror",
  "util",
  "vmm-sys-util",
@@ -1132,6 +1134,7 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "libc",
+ "nix 0.26.2",
  "thiserror",
  "util",
 ]

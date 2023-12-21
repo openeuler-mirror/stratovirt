@@ -20,9 +20,9 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use nix::unistd::{getpid, gettid};
 
 use crate::time::{get_format_time, gettime};
-use crate::unix::gettid;
 
 // Max size of the log file is 100MB.
 const LOG_ROTATE_SIZE_MAX: usize = 100 * 1024 * 1024;
@@ -30,7 +30,10 @@ const LOG_ROTATE_SIZE_MAX: usize = 100 * 1024 * 1024;
 const LOG_ROTATE_COUNT_MAX: u32 = 7;
 
 fn format_now() -> String {
-    let (sec, nsec) = gettime();
+    let (sec, nsec) = gettime().unwrap_or_else(|e| {
+        println!("{:?}", e);
+        (0, 0)
+    });
     let format_time = get_format_time(sec as i64);
 
     format!(
@@ -59,7 +62,7 @@ impl FileRotate {
         }
 
         self.current_size += Wrapping(size_inc);
-        let sec = gettime().0;
+        let sec = gettime()?.0;
         let today = get_format_time(sec as i64)[2];
         if self.current_size < Wrapping(LOG_ROTATE_SIZE_MAX) && self.create_day == today {
             return Ok(());
@@ -114,8 +117,8 @@ impl Log for VmLogger {
             return;
         }
 
-        let pid = unsafe { libc::getpid() };
-        let tid = gettid();
+        let pid = getpid().as_raw();
+        let tid = gettid().as_raw();
         let formatmsg = format_args!(
             "{:<5}: [{}][{}][{}: {}]:{}: {}\n",
             format_now(),

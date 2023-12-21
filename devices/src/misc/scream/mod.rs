@@ -190,6 +190,7 @@ impl StreamData {
                 while header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
                     thread::sleep(time::Duration::from_millis(10));
                     header =
+                        // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
                         &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
                 }
                 self.init(stream_header);

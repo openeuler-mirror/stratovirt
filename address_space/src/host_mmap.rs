@@ -11,13 +11,15 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::min;
+use std::ffi::CString;
 use std::fs::{remove_file, File};
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 use std::thread;
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
 use nix::sys::statfs::fstatfs;
 use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
@@ -182,7 +184,7 @@ fn max_nr_threads(nr_vcpus: u8) -> u8 {
 fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
     let mut addr = start;
     for _i in 0..nr_pages {
-        // Safe, because the data read from raw pointer is written to the same address.
+        // SAFETY: The data read from raw pointer is written to the same address.
         unsafe {
             let read_addr = addr as *mut u8;
             let data: u8 = *read_addr;
@@ -245,16 +247,15 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
                 .with_context(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {
-        let anon_mem_name = String::from("stratovirt_anon_mem");
-
-        // SAFETY: the parameters is constant.
-        let anon_fd =
-            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_fd = memfd_create(
+            &CString::new("stratovirt_anon_mem")?,
+            MemFdCreateFlag::empty(),
+        )?;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
-        // SAFETY: the parameters is constant.
+        // SAFETY: The parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.mem_size)
@@ -294,16 +295,15 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
     let mut f_back: Option<FileBackend> = None;
 
     if mem_config.memfd {
-        let anon_mem_name = String::from("stratovirt_anon_mem");
-
-        // SAFETY: the parameters is constant.
-        let anon_fd =
-            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_fd = memfd_create(
+            &CString::new("stratovirt_anon_mem")?,
+            MemFdCreateFlag::empty(),
+        )?;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
-        // SAFETY: the parameters is constant.
+        // SAFETY: The parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.size)
@@ -394,10 +394,11 @@ pub struct HostMemMapping {
     is_share: bool,
 }
 
-// Send and Sync is not auto-implemented for raw pointer type
-// implementing them is safe because field of HostMemMapping won't change once initialized,
-// only access(r/w) is permitted
+// SAFETY: Send and Sync is not auto-implemented for raw pointer type,
+// implementing them is safe because field of HostMemMapping won't change
+// once initialized, only access(r/w) is permitted
 unsafe impl Send for HostMemMapping {}
+// SAFETY: Same reason as above.
 unsafe impl Sync for HostMemMapping {}
 
 impl HostMemMapping {
@@ -476,6 +477,7 @@ impl HostMemMapping {
 impl Drop for HostMemMapping {
     /// Release the memory mapping.
     fn drop(&mut self) {
+        // SAFETY: self.host_addr and self.size has already been verified during initialization.
         unsafe {
             libc::munmap(
                 self.host_addr as *mut libc::c_void,

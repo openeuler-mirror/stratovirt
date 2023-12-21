@@ -94,6 +94,8 @@ pub struct QmpChannel {
 impl QmpChannel {
     /// Constructs a `QmpChannel` in global `QMP_CHANNEL`.
     pub fn object_init() {
+        // SAFETY: Global variable QMP_CHANNEL is only used in the main thread,
+        // so there are no competition or synchronization.
         unsafe {
             if QMP_CHANNEL.is_none() {
                 QMP_CHANNEL = Some(Arc::new(QmpChannel {
@@ -168,6 +170,8 @@ impl QmpChannel {
     }
 
     fn inner() -> &'static std::sync::Arc<QmpChannel> {
+        // SAFETY: Global variable QMP_CHANNEL is only used in the main thread,
+        // so there are no competition or synchronization.
         unsafe {
             match &QMP_CHANNEL {
                 Some(channel) => channel,

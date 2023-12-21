@@ -20,6 +20,7 @@ pub fn host_cpuid(
     ecx: *mut u32,
     edx: *mut u32,
 ) {
+    // SAFETY: cpuid is created in get_supported_cpuid().
     unsafe {
         let cpuid = __cpuid_count(leaf, subleaf);
 

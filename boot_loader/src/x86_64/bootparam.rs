@@ -171,6 +171,8 @@ impl ByteCode for BootParams {}
 
 impl Default for BootParams {
     fn default() -> Self {
+        // SAFETY: The function of default is only used in trait of ByteCode,
+        // it can be sure all member variables will be initialized later.
         unsafe { ::std::mem::zeroed() }
     }
 }

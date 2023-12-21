@@ -959,7 +959,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.qcow2_update_snapshot_refcount(self.header.l1_table_offset, 1)?;
 
         // Alloc new snapshot table.
-        let (date_sec, date_nsec) = gettime();
+        let (date_sec, date_nsec) = gettime()?;
         let snap = QcowSnapshot {
             l1_table_offset: new_l1_table_offset,
             l1_size: self.header.l1_size,
@@ -1407,6 +1407,7 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type in Aio.
 // We use Arc<Mutex<Qcow2Driver<T>>> to allow used in multi-threading.
 unsafe impl<T: Clone + 'static> Send for Qcow2Driver<T> {}
+// SAFETY: The reason is same as above.
 unsafe impl<T: Clone + 'static> Sync for Qcow2Driver<T> {}
 
 impl<T: Clone + Send + Sync> Qcow2Driver<T> {

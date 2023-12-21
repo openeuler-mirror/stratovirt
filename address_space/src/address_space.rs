@@ -677,6 +677,7 @@ impl AddressSpace {
         // Mark vmm dirty page manually if live migration is active.
         MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
 
+        // SAFETY: The host addr is managed by memory space, it has been verified.
         let mut dst = unsafe {
             std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
@@ -714,6 +715,7 @@ impl AddressSpace {
     pub fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
         let mut obj = T::default();
         let mut dst = obj.as_mut_bytes();
+        // SAFETY: host_addr is managed by address_space, it has been verified for legality.
         let src = unsafe {
             std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };

@@ -19,6 +19,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use nix::fcntl::{fcntl, FcntlArg};
 
 use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
 use crate::OzoneError;
@@ -337,8 +338,7 @@ fn disinfect_process() -> Result<()> {
     }
 
     for fd in open_fds {
-        let ret = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        if ret != -1 {
+        if fcntl(fd, FcntlArg::F_GETFD).is_ok() {
             syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?
         }
     }

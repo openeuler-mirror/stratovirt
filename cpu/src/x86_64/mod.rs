@@ -266,7 +266,7 @@ impl X86CPUState {
             .get_lapic()
             .with_context(|| format!("Failed to get lapic for CPU {}/KVM", self.apic_id))?;
 
-        // The member regs in struct kvm_lapic_state is a u8 array with 1024 entries,
+        // SAFETY: The member regs in struct kvm_lapic_state is a u8 array with 1024 entries,
         // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
         // Safe because all value in this unsafe block is certain.
         unsafe {

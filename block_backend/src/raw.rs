@@ -34,6 +34,7 @@ pub struct RawDriver<T: Clone + 'static> {
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type in Aio.
 // We use Arc<Mutex<RawDriver<T>>> to allow used in multi-threading.
 unsafe impl<T: Clone + 'static> Send for RawDriver<T> {}
+// SAFETY: The reason is same as above.
 unsafe impl<T: Clone + 'static> Sync for RawDriver<T> {}
 
 impl<T: Clone + 'static> RawDriver<T> {

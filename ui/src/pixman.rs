@@ -119,6 +119,8 @@ pub fn get_image_width(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
     }
+
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_get_width(image as *mut pixman_image_t) }
 }
 
@@ -126,6 +128,8 @@ pub fn get_image_height(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
     }
+
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_get_height(image as *mut pixman_image_t) }
 }
 
@@ -133,6 +137,8 @@ pub fn get_image_stride(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
     }
+
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_get_stride(image as *mut pixman_image_t) }
 }
 
@@ -140,6 +146,8 @@ pub fn get_image_data(image: *mut pixman_image_t) -> *mut u32 {
     if image.is_null() {
         return ptr::null_mut() as *mut u32;
     }
+
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_get_data(image as *mut pixman_image_t) }
 }
 
@@ -147,6 +155,8 @@ pub fn get_image_format(image: *mut pixman_image_t) -> pixman_format_code_t {
     if image.is_null() {
         return pixman_format_code_t::PIXMAN_x8r8g8b8;
     }
+
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_get_format(image as *mut pixman_image_t) }
 }
 
@@ -161,6 +171,7 @@ pub fn create_pixman_image(
         return ptr::null_mut() as *mut pixman_image_t;
     }
 
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_create_bits(image_format, width, height, image_data as *mut u32, stride) }
 }
 
@@ -177,6 +188,7 @@ pub fn unref_pixman_image(image: *mut pixman_image_t) {
     if image.is_null() {
         return;
     }
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_unref(image as *mut pixman_image_t) };
 }
 
@@ -188,6 +200,7 @@ pub fn ref_pixman_image(image: *mut pixman_image_t) -> *mut pixman_image_t {
     if image.is_null() {
         return ptr::null_mut() as *mut pixman_image_t;
     }
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_ref(image as *mut pixman_image_t) }
 }
 
@@ -199,6 +212,7 @@ pub fn pixman_image_linebuf_create(
     if !(0..MAX_IMAGE_SIZE).contains(&width) {
         return ptr::null_mut() as *mut pixman_image_t;
     }
+    // SAFETY: The reason is the same as above.
     unsafe { pixman_image_create_bits(image_format, width, 1, ptr::null_mut(), 0) }
 }
 
@@ -217,7 +231,7 @@ pub fn pixman_image_linebuf_fill(
     {
         return;
     };
-
+    // SAFETY: The reason is the same as above.
     unsafe {
         pixman_image_composite(
             pixman_op_t::PIXMAN_OP_SRC,
@@ -609,34 +623,37 @@ const VGA_FONTS: [u16; 256 * 16] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-pub fn pixman_glyph_from_vgafont(height: i32, ch: u32) -> *mut pixman_image_t {
-    let glyph;
+pub fn pixman_glyph_from_vgafont(height: u32, ch: u32) -> *mut pixman_image_t {
+    let glyph = create_pixman_image(
+        pixman_format_code_t::PIXMAN_a8,
+        8,
+        height as i32,
+        ptr::null_mut(),
+        0,
+    );
+    let data = get_image_data(glyph) as *mut u8;
+    if data.is_null() {
+        return glyph;
+    }
 
+    let mut data_index: usize = 0;
+    let mut font_index: usize = height as usize * ch as usize;
+    let slice =
+    // SAFETY: The pointer of data can be guaranteed not null.
     unsafe {
-        glyph = create_pixman_image(
-            pixman_format_code_t::PIXMAN_a8,
-            8,
-            height,
-            ptr::null_mut(),
-            0,
-        );
-        let data = pixman_image_get_data(glyph) as *mut u8;
-        let mut data_index: usize = 0;
-        let mut font_index: usize = (height * ch as i32) as usize;
-        let slice = std::slice::from_raw_parts_mut(data, (height * 8) as usize);
+        std::slice::from_raw_parts_mut(data, height as usize * 8 )
+    };
 
-        for _y in 0..height {
-            for _x in 0..8 {
-                if VGA_FONTS[font_index] & (1 << (7 - _x)) > 0 {
-                    slice[data_index] = 0xff;
-                } else {
-                    slice[data_index] = 0x00;
-                };
-
-                data_index += 1;
-            }
-            font_index += 1;
+    for _ in 0..height {
+        for x in 0..8 {
+            if VGA_FONTS[font_index] & (1 << (7 - x)) > 0 {
+                slice[data_index] = 0xff;
+            } else {
+                slice[data_index] = 0x00;
+            };
+            data_index += 1;
         }
+        font_index += 1;
     }
     glyph
 }
@@ -650,14 +667,14 @@ pub fn pixman_glyph_render(
     cw: i32,
     ch: i32,
 ) {
-    unsafe {
-        // for not_unsafe_ptr_arg_deref check, need declare here
-        let glyph = glyph as *mut pixman_image_t;
-        let surface = surface as *mut pixman_image_t;
-        let fgcolor = fgcolor as *const pixman_color_t;
-        let bgcolor = bgcolor as *const pixman_color_t;
-        let (x, y) = rec;
+    let glyph = glyph as *mut pixman_image_t;
+    let surface = surface as *mut pixman_image_t;
+    let fgcolor = fgcolor as *const pixman_color_t;
+    let bgcolor = bgcolor as *const pixman_color_t;
+    let (x, y) = rec;
 
+    // SAFETY: All pointers can be guaranteed not be null.
+    unsafe {
         let ifg = pixman_image_create_solid_fill(fgcolor);
         let ibg = pixman_image_create_solid_fill(bgcolor);
 
