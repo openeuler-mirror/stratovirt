@@ -14,13 +14,11 @@ mod interrupt;
 
 pub use interrupt::MsiVector;
 
-use std::collections::HashMap;
 use std::mem::{align_of, size_of};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
-use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 use kvm_bindings::*;
 use kvm_ioctls::{Kvm, VmFd};
 use log::error;
@@ -33,8 +31,6 @@ use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
-pub const KVM_SET_USER_MEMORY_REGION: u32 = 0x4020_ae46;
-pub const KVM_IOEVENTFD: u32 = 0x4040_ae79;
 pub const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
@@ -93,7 +89,6 @@ ioctl_iow_nr!(KVM_GET_DEVICE_ATTR, KVMIO, 0xe2, kvm_device_attr);
 ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 #[cfg(target_arch = "aarch64")]
 ioctl_iow_nr!(KVM_ARM_VCPU_INIT, KVMIO, 0xae, kvm_vcpu_init);
-ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
 ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 
 #[allow(clippy::upper_case_acronyms)]
@@ -102,7 +97,6 @@ pub struct KVMFds {
     pub fd: Option<Kvm>,
     pub vm_fd: Option<Arc<VmFd>>,
     pub irq_route_table: Mutex<IrqRouteTable>,
-    pub mem_slots: Arc<Mutex<HashMap<u32, MemorySlot>>>,
 }
 
 impl KVMFds {
@@ -121,7 +115,6 @@ impl KVMFds {
                     fd: Some(fd),
                     vm_fd: Some(Arc::new(vm_fd)),
                     irq_route_table,
-                    mem_slots: Arc::new(Mutex::new(HashMap::new())),
                 }
             }
             Err(e) => {
@@ -185,92 +178,6 @@ impl KVMFds {
             .unwrap()
             .set_irq_line(irq, level)
             .with_context(|| format!("Failed to set irq {} level {:?}.", irq, level))
-    }
-
-    /// Start dirty page tracking in kvm.
-    pub fn start_dirty_log(&self) -> Result<()> {
-        for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
-            region.flags = KVM_MEM_LOG_DIRTY_PAGES;
-            // SAFETY: region from `KVMFds` is reliable.
-            unsafe {
-                self.vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .set_user_memory_region(*region)
-                    .with_context(|| {
-                        format!(
-                            "Failed to start dirty log, error is {}",
-                            std::io::Error::last_os_error()
-                        )
-                    })?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Stop dirty page tracking in kvm.
-    pub fn stop_dirty_log(&self) -> Result<()> {
-        for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
-            region.flags = 0;
-            // SAFETY: region from `KVMFds` is reliable.
-            unsafe {
-                self.vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .set_user_memory_region(*region)
-                    .with_context(|| {
-                        format!(
-                            "Failed to stop dirty log, error is {}",
-                            std::io::Error::last_os_error()
-                        )
-                    })?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Get dirty page bitmap in kvm.
-    pub fn get_dirty_log(&self, slot: u32, mem_size: u64) -> Result<Vec<u64>> {
-        let res = self
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .get_dirty_log(slot, mem_size as usize)
-            .with_context(|| {
-                format!(
-                    "Failed to get dirty log, error is {}",
-                    std::io::Error::last_os_error()
-                )
-            })?;
-
-        Ok(res)
-    }
-
-    /// Add ram memory region to `KVMFds` structure.
-    pub fn add_mem_slot(&self, mem_slot: MemorySlot) -> Result<()> {
-        if mem_slot.flags & KVM_MEM_READONLY != 0 {
-            return Ok(());
-        }
-
-        let mut locked_slots = self.mem_slots.as_ref().lock().unwrap();
-        locked_slots.insert(mem_slot.slot, mem_slot);
-
-        Ok(())
-    }
-
-    /// Remove ram memory region from `KVMFds` structure.
-    pub fn remove_mem_slot(&self, mem_slot: MemorySlot) -> Result<()> {
-        let mut locked_slots = self.mem_slots.as_ref().lock().unwrap();
-        locked_slots.remove(&mem_slot.slot);
-
-        Ok(())
-    }
-
-    /// Get ram memory region from `KVMFds` structure.
-    pub fn get_mem_slots(&self) -> Arc<Mutex<HashMap<u32, MemorySlot>>> {
-        self.mem_slots.clone()
     }
 }
 

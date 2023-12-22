@@ -15,6 +15,7 @@ use crate::aarch64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::standard::{arch_ioctl_allow_list, arch_syscall_whitelist};
 use hypervisor::kvm::*;
+use hypervisor_refactor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};
 #[cfg(feature = "usb_camera_v4l2")]

@@ -547,7 +547,9 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to register resume event")?;
 
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
-        locked_vm.base.hypervisor.lock().unwrap().init_machine()?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.base.sys_mem,
@@ -642,6 +644,7 @@ impl MachineOps for StdMachine {
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
+        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }

@@ -10,11 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Context, Result};
 use kvm_bindings::*;
 
-use super::HypervisorError;
+use crate::kvm::listener::KvmIoListener;
 use crate::kvm::KvmHypervisor;
+use crate::HypervisorError;
+use address_space::Listener;
 
 impl KvmHypervisor {
     pub fn arch_init(&self) -> Result<()> {
@@ -38,5 +42,9 @@ impl KvmHypervisor {
         vm_fd
             .create_pit2(pit_config)
             .with_context(|| HypervisorError::CrtPitErr)
+    }
+
+    pub fn create_io_listener(&self) -> Arc<Mutex<dyn Listener>> {
+        Arc::new(Mutex::new(KvmIoListener::new(self.vm_fd.clone())))
     }
 }

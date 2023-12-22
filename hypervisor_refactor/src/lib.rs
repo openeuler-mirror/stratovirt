@@ -15,12 +15,14 @@
 pub mod error;
 pub mod kvm;
 
-pub use error::HypervisorError;
-
 use std::any::Any;
+use std::sync::Arc;
+
+pub use error::HypervisorError;
 
 use anyhow::Result;
 
+use address_space::AddressSpace;
 use machine_manager::machine::HypervisorType;
 
 pub trait HypervisorOps: Send + Sync + Any {
@@ -28,5 +30,9 @@ pub trait HypervisorOps: Send + Sync + Any {
         HypervisorType::Kvm
     }
 
-    fn init_machine(&self) -> Result<()>;
+    fn init_machine(
+        &self,
+        #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
+        sys_mem: &Arc<AddressSpace>,
+    ) -> Result<()>;
 }
