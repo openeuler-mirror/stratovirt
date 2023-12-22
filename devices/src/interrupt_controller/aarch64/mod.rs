@@ -24,7 +24,7 @@ use anyhow::{anyhow, Context, Result};
 use kvm_ioctls::DeviceFd;
 
 use crate::interrupt_controller::error::InterruptError;
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use machine_manager::machine::{MachineLifecycle, VmState};
 use util::{
     device_tree::{self, FdtBuilder},
     Result as UtilResult,
@@ -182,8 +182,7 @@ impl InterruptController {
 
     /// Change `InterruptController` lifecycle state to `Stopped`.
     pub fn stop(&self) {
-        self.gic
-            .notify_lifecycle(KvmVmState::Running, KvmVmState::Paused);
+        self.gic.notify_lifecycle(VmState::Running, VmState::Paused);
     }
 
     pub fn get_redist_count(&self) -> u8 {

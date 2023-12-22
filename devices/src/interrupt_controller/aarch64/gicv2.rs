@@ -21,7 +21,7 @@ use super::{GICConfig, GICDevice, KvmDevice, UtilResult};
 use crate::interrupt_controller::InterruptError;
 use address_space::AddressSpace;
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use machine_manager::machine::{MachineLifecycle, VmState};
 use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
@@ -81,7 +81,7 @@ pub struct GICv2 {
     /// Guest physical address space of the GICv2 distributor register mappings.
     dist_guest_region: GicDistGuestRegion,
     /// Lifecycle state for GICv2.
-    state: Arc<Mutex<KvmVmState>>,
+    state: Arc<Mutex<VmState>>,
 }
 
 impl GICv2 {
@@ -123,7 +123,7 @@ impl GICv2 {
             nr_irqs: config.max_irq,
             cpu_interface_region,
             dist_guest_region,
-            state: Arc::new(Mutex::new(KvmVmState::Created)),
+            state: Arc::new(Mutex::new(VmState::Created)),
         };
 
         Ok(gicv2)
@@ -170,7 +170,7 @@ impl GICv2 {
         )
         .with_context(|| "Failed to set GICv2 attribute: cpu address")?;
 
-        *self.state.lock().unwrap() = KvmVmState::Running;
+        *self.state.lock().unwrap() = VmState::Running;
 
         Ok(())
     }
@@ -192,14 +192,14 @@ impl MachineLifecycle for GICv2 {
         )
         .is_ok()
         {
-            *self.state.lock().unwrap() = KvmVmState::Running;
+            *self.state.lock().unwrap() = VmState::Running;
             true
         } else {
             false
         }
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         let state = self.state.lock().unwrap();
         if *state != old {
             error!("GICv2 lifecycle error: state check failed.");
@@ -208,7 +208,7 @@ impl MachineLifecycle for GICv2 {
         drop(state);
 
         match (old, new) {
-            (KvmVmState::Running, KvmVmState::Paused) => self.pause(),
+            (VmState::Running, VmState::Paused) => self.pause(),
             _ => true,
         }
     }

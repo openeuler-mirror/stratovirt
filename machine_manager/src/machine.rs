@@ -32,9 +32,9 @@ pub struct PathInfo {
     pub label: String,
 }
 
-/// State for KVM VM.
+/// State for VM.
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
-pub enum KvmVmState {
+pub enum VmState {
     Created = 1,
     Running = 2,
     InMigrating = 3,
@@ -60,7 +60,7 @@ pub enum HypervisorType {
 /// `Created` --`(start)`--> `Running`
 /// `Running` --`(pause)`--> `Paused`
 /// `Paused` --`(resume)`--> `Running`
-/// `KVM_VMSTATE_*` --`(destroy)`--> `None`
+/// `VMSTATE_*` --`(destroy)`--> `None`
 ///
 /// **Notice**:
 ///    1. Migrate state(`Migrated` and `InMigrating`),
@@ -74,42 +74,42 @@ pub enum HypervisorType {
 pub trait MachineLifecycle {
     /// Start VM or Device, VM or Device enter running state after this call return.
     fn start(&self) -> bool {
-        self.notify_lifecycle(KvmVmState::Created, KvmVmState::Paused)
+        self.notify_lifecycle(VmState::Created, VmState::Paused)
     }
 
     /// Pause VM or Device, VM or Device will temporarily stored in memory until it resumed
     /// or destroyed.
     fn pause(&self) -> bool {
-        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused)
+        self.notify_lifecycle(VmState::Running, VmState::Paused)
     }
 
     /// Resume VM or Device, resume VM state to running state after this call return.
     fn resume(&self) -> bool {
-        self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running)
+        self.notify_lifecycle(VmState::Paused, VmState::Running)
     }
 
     /// Close VM or Device, stop running.
     fn destroy(&self) -> bool {
-        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
     }
 
     /// Close VM by power_button.
     fn powerdown(&self) -> bool {
-        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
     }
 
     /// Reset VM, stop running and restart a new VM.
     fn reset(&mut self) -> bool {
-        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
     }
 
     /// When VM or Device life state changed, notify concerned entry.
     ///
     /// # Arguments
     ///
-    /// * `old` - The current `KvmVmState`.
-    /// * `new` - The new `KvmVmState` expected to transform.
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool;
+    /// * `old` - The current `VmState`.
+    /// * `new` - The new `VmState` expected to transform.
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool;
 
     /// Get shutdown_action to determine the poweroff operation.
     fn get_shutdown_action(&self) -> ShutdownAction {

@@ -860,7 +860,7 @@ mod tests {
     use super::*;
     use hypervisor::kvm::{KVMFds, KVM_FDS};
     use machine_manager::machine::{
-        KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
+        MachineAddressInterface, MachineInterface, MachineLifecycle, VmState,
     };
 
     struct TestVm {
@@ -886,7 +886,7 @@ mod tests {
     }
 
     impl MachineLifecycle for TestVm {
-        fn notify_lifecycle(&self, _old: KvmVmState, _new: KvmVmState) -> bool {
+        fn notify_lifecycle(&self, _old: VmState, _new: VmState) -> bool {
             true
         }
     }

@@ -22,7 +22,7 @@ use super::{
 };
 use crate::interrupt_controller::error::InterruptError;
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use machine_manager::machine::{MachineLifecycle, VmState};
 use migration::{
     snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
     MigrationManager, StateTransfer,
@@ -98,7 +98,7 @@ pub struct GICv3 {
     /// GICv3 distributor region size.
     dist_size: u64,
     /// Lifecycle state for GICv3.
-    state: Arc<Mutex<KvmVmState>>,
+    state: Arc<Mutex<VmState>>,
 }
 
 impl GICv3 {
@@ -159,7 +159,7 @@ impl GICv3 {
             redist_regions,
             dist_base: v3config.dist_range.0,
             dist_size: v3config.dist_range.1,
-            state: Arc::new(Mutex::new(KvmVmState::Created)),
+            state: Arc::new(Mutex::new(VmState::Created)),
         };
 
         if let Some(its_range) = v3config.its_range {
@@ -237,7 +237,7 @@ impl GICv3 {
         .with_context(|| "KVM failed to initialize GICv3")?;
 
         let mut state = self.state.lock().unwrap();
-        *state = KvmVmState::Running;
+        *state = VmState::Running;
 
         Ok(())
     }
@@ -285,12 +285,12 @@ impl MachineLifecycle for GICv3 {
         }
 
         let mut state = self.state.lock().unwrap();
-        *state = KvmVmState::Running;
+        *state = VmState::Running;
 
         true
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         let state = self.state.lock().unwrap();
         if *state != old {
             error!("GICv3 lifecycle error: state check failed.");
@@ -299,7 +299,7 @@ impl MachineLifecycle for GICv3 {
         drop(state);
 
         match (old, new) {
-            (KvmVmState::Running, KvmVmState::Paused) => self.pause(),
+            (VmState::Running, VmState::Paused) => self.pause(),
             _ => true,
         }
     }
