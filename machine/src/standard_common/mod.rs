@@ -27,6 +27,7 @@ use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::string::String;
 use std::sync::{Arc, Mutex};
+use std::u64;
 
 use anyhow::{bail, Context};
 use log::error;
@@ -1780,10 +1781,20 @@ impl DeviceInterface for StdMachine {
                     return false;
                 }
 
-                let ptr: *const u8 = data.as_ptr();
-                let ptr: *const u64 = ptr as *const u64;
-                // SAFETY: The ptr can be guaranteed not empty.
-                self.head = unsafe { *ptr } * 2;
+                let val = match u64::from_bytes(data) {
+                    None => {
+                        error!("DummyDevice: cannot read u64 from data");
+                        return false;
+                    }
+                    Some(v) => v,
+                };
+                self.head = match val.checked_mul(2) {
+                    None => {
+                        error!("DummyDevice: val({}) * 2 is overflow", val);
+                        return false;
+                    }
+                    Some(v) => v,
+                };
                 true
             }
         }
