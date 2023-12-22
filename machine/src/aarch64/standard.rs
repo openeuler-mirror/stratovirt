@@ -62,8 +62,8 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    KvmVmState, MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface,
+    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
+    MigrateInterface, VmState,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
@@ -1135,7 +1135,7 @@ impl AcpiBuilder for StdMachine {
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -1144,7 +1144,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
             return false;
         }
         event!(Resume);
@@ -1157,7 +1157,7 @@ impl MachineLifecycle for StdMachine {
             *state
         };
 
-        if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
             warn!("Failed to destroy guest, destroy continue.");
             if self.shutdown_req.write(1).is_err() {
                 error!("Failed to send shutdown request.")
@@ -1196,7 +1196,7 @@ impl MachineLifecycle for StdMachine {
         true
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
             &self.base.cpus,
             &self.base.irq_chip,
@@ -1240,7 +1240,7 @@ impl MachineTestInterface for StdMachine {}
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {
         let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == KvmVmState::Shutdown
+        *vmstate == VmState::Shutdown
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {

@@ -98,7 +98,7 @@ use machine_manager::config::{
     parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{KvmVmState, MachineInterface};
+use machine_manager::machine::{MachineInterface, VmState};
 use migration::MigrationManager;
 use standard_common::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
@@ -136,7 +136,7 @@ pub struct MachineBase {
     /// System bus.
     sysbus: SysBus,
     /// VM running state.
-    vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
+    vm_state: Arc<(Mutex<VmState>, Condvar)>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// All configuration information of virtual machine.
@@ -207,7 +207,7 @@ impl MachineBase {
             #[cfg(target_arch = "x86_64")]
             sys_io,
             sysbus,
-            vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
+            vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
@@ -623,7 +623,7 @@ pub trait MachineOps {
         self.machine_base().vm_config.clone()
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+    fn get_vm_state(&self) -> &Arc<(Mutex<VmState>, Condvar)> {
         &self.machine_base().vm_state
     }
 
@@ -1928,7 +1928,7 @@ pub trait MachineOps {
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
         let vm_state = self.get_vm_state().deref().0.lock().unwrap();
-        if *vm_state == KvmVmState::Running && !drive_file.locked {
+        if *vm_state == VmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
                 VmConfig::remove_drive_file(&mut drive_files, path)?;
                 return Err(e);
@@ -1998,8 +1998,8 @@ pub trait MachineOps {
     ///
     /// * `paused` - After started, paused all vcpu or not.
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         if !paused {
             EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
@@ -2016,9 +2016,9 @@ pub trait MachineOps {
         }
 
         if paused {
-            *vm_state = KvmVmState::Paused;
+            *vm_state = VmState::Paused;
         } else {
-            *vm_state = KvmVmState::Running;
+            *vm_state = VmState::Running;
         }
         cpus_thread_barrier.wait();
 
@@ -2030,12 +2030,12 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
+    /// * `vm_state` - Vm state.
     fn vm_pause(
         &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut KvmVmState,
+        vm_state: &mut VmState,
     ) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().disable_clock();
 
@@ -2052,7 +2052,7 @@ pub trait MachineOps {
         // SAFETY: ARM architecture must have interrupt controllers in user mode.
         irq_chip.as_ref().unwrap().stop();
 
-        *vm_state = KvmVmState::Paused;
+        *vm_state = VmState::Paused;
 
         Ok(())
     }
@@ -2062,8 +2062,8 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().enable_clock();
 
         self.active_drive_files()?;
@@ -2075,7 +2075,7 @@ pub trait MachineOps {
             }
         }
 
-        *vm_state = KvmVmState::Running;
+        *vm_state = VmState::Running;
 
         Ok(())
     }
@@ -2085,14 +2085,14 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
         }
 
-        *vm_state = KvmVmState::Shutdown;
+        *vm_state = VmState::Shutdown;
 
         Ok(())
     }
@@ -2102,18 +2102,18 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
+    /// * `vm_state` - Vm state.
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
     fn vm_state_transfer(
         &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut KvmVmState,
-        old_state: KvmVmState,
-        new_state: KvmVmState,
+        vm_state: &mut VmState,
+        old_state: VmState,
+        new_state: VmState,
     ) -> Result<()> {
-        use KvmVmState::*;
+        use VmState::*;
 
         if *vm_state != old_state {
             bail!("Vm lifecycle error: state check failed.");

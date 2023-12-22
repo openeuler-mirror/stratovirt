@@ -68,7 +68,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    DeviceInterface, KvmVmState, MachineAddressInterface, MachineLifecycle,
+    DeviceInterface, MachineAddressInterface, MachineLifecycle, VmState,
 };
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
@@ -953,12 +953,12 @@ impl DeviceInterface for StdMachine {
         let vm_state = self.get_vm_state();
         let vmstate = vm_state.deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
-            KvmVmState::Running => qmp_schema::StatusInfo {
+            VmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: true,
                 status: qmp_schema::RunState::running,
             },
-            KvmVmState::Paused => qmp_schema::StatusInfo {
+            VmState::Paused => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: false,
                 status: qmp_schema::RunState::paused,
