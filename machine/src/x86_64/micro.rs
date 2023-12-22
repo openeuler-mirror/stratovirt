@@ -157,10 +157,11 @@ impl MachineOps for LightMachine {
         ));
         trace::cpu_topo(&topology);
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
-        locked_vm.base.hypervisor.lock().unwrap().init_machine()?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_io, &locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
-            &locked_vm.base.sys_io,
             &locked_vm.base.sys_mem,
             vm_config.machine_config.nr_cpus,
         )?;
@@ -195,6 +196,7 @@ impl MachineOps for LightMachine {
             vm_state::KvmDeviceState::descriptor(),
             Arc::new(vm_state::KvmDevice {}),
         );
+        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }

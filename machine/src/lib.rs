@@ -42,11 +42,7 @@ use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
-#[cfg(target_arch = "x86_64")]
-use address_space::KvmIoListener;
-use address_space::{
-    create_backend_mem, create_default_mem, AddressSpace, GuestAddress, KvmMemoryListener, Region,
-};
+use address_space::{create_backend_mem, create_default_mem, AddressSpace, GuestAddress, Region};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
@@ -99,7 +95,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{MachineInterface, VmState};
-use migration::MigrationManager;
+use migration::{MigrateOps, MigrationManager};
 use standard_common::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -151,6 +147,8 @@ pub struct MachineBase {
     machine_ram: Arc<Region>,
     /// machine hypervisor.
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
+    /// migrate hypervisor.
+    migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
 }
 
 impl MachineBase {
@@ -214,7 +212,8 @@ impl MachineBase {
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
             fwcfg_dev: None,
             machine_ram,
-            hypervisor,
+            hypervisor: hypervisor.clone(),
+            migration_hypervisor: hypervisor,
         })
     }
 
@@ -379,28 +378,13 @@ pub trait MachineOps {
     fn init_memory(
         &self,
         mem_config: &MachineMemConfig,
-        #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         nr_cpus: u8,
     ) -> Result<()> {
-        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time. The system
-        // call registers some notifier functions in the KVM, which are frequently triggered when
-        // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
-        // needs to be invoked first.
         let migrate_info = self.get_migrate_info();
         if migrate_info.0 != MigrateMode::File {
             self.create_machine_ram(mem_config, nr_cpus)?;
         }
-
-        sys_mem
-            .register_listener(Arc::new(Mutex::new(KvmMemoryListener::new(
-                KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-            ))))
-            .with_context(|| "Failed to register KVM listener for memory space.")?;
-        #[cfg(target_arch = "x86_64")]
-        sys_io
-            .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
-            .with_context(|| "Failed to register KVM listener for I/O address space.")?;
 
         if migrate_info.0 != MigrateMode::File {
             self.init_machine_ram(sys_mem, mem_config.mem_size)?;

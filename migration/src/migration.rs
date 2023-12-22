@@ -17,14 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 use log::{info, warn};
 
 use crate::general::Lifecycle;
 use crate::manager::MIGRATION_MANAGER;
 use crate::protocol::{MemBlock, MigrationStatus, Request, Response, TransStatus};
+use crate::MigrateMemSlot;
 use crate::{MigrationError, MigrationManager};
-use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{get_pci_bdf, PciBdf, VmConfig};
 use util::unix::host_page_size;
 
@@ -411,17 +410,17 @@ impl MigrationManager {
         T: Read + Write,
     {
         let mut blocks: Vec<MemBlock> = Vec::new();
-        let slots = KVM_FDS.load().get_mem_slots();
-        for (_, slot) in slots.lock().unwrap().iter() {
-            blocks.push(MemBlock {
-                gpa: slot.guest_phys_addr,
-                len: slot.memory_size,
-            });
+        if let Some(mgt_object) = &MIGRATION_MANAGER.vmm.read().unwrap().mgt_object {
+            let slots = mgt_object.lock().unwrap().get_mem_slots();
+            for (_, slot) in slots.lock().unwrap().iter() {
+                blocks.push(MemBlock {
+                    gpa: slot.guest_phys_addr,
+                    len: slot.memory_size,
+                });
+            }
         }
 
-        Self::send_memory(fd, blocks)?;
-
-        Ok(())
+        Self::send_memory(fd, blocks)
     }
 
     /// Send dirty memory data to destination VM.
@@ -434,10 +433,12 @@ impl MigrationManager {
         T: Read + Write,
     {
         let mut blocks: Vec<MemBlock> = Vec::new();
-        let mem_slots = KVM_FDS.load().get_mem_slots();
-        for (_, slot) in mem_slots.lock().unwrap().iter() {
-            let sub_blocks: Vec<MemBlock> = Self::get_dirty_log(slot)?;
-            blocks.extend(sub_blocks);
+        if let Some(mgt_object) = &MIGRATION_MANAGER.vmm.read().unwrap().mgt_object {
+            let mem_slots = mgt_object.lock().unwrap().get_mem_slots();
+            for (_, slot) in mem_slots.lock().unwrap().iter() {
+                let sub_blocks: Vec<MemBlock> = Self::get_dirty_log(slot)?;
+                blocks.extend(sub_blocks);
+            }
         }
 
         if blocks.is_empty() {
@@ -669,43 +670,48 @@ impl DirtyBitmap {
 }
 
 pub trait Migratable {
-    /// Start the dirty log in the kvm and vmm.
+    /// Start the dirty log in the migration objects and vmm.
     fn start_dirty_log() -> Result<()> {
         // Create dirty bitmaps for vmm.
         let mut bitmaps = HashMap::<u32, DirtyBitmap>::new();
-        let mem_slots = KVM_FDS.load().get_mem_slots();
-        for (_, slot) in mem_slots.lock().unwrap().iter() {
-            let bitmap =
-                DirtyBitmap::new(slot.guest_phys_addr, slot.userspace_addr, slot.memory_size);
-            bitmaps.insert(slot.slot, bitmap);
+        if let Some(mgt_object) = &MIGRATION_MANAGER.vmm.read().unwrap().mgt_object {
+            let mem_slots = mgt_object.lock().unwrap().get_mem_slots();
+            for (_, slot) in mem_slots.lock().unwrap().iter() {
+                let bitmap =
+                    DirtyBitmap::new(slot.guest_phys_addr, slot.userspace_addr, slot.memory_size);
+                bitmaps.insert(slot.slot, bitmap);
+            }
+
+            // Start logging dirty memory in migration object.
+            mgt_object.lock().unwrap().start_dirty_log()?;
         }
+
         let mut vm_bitmaps = MIGRATION_MANAGER.vmm_bitmaps.write().unwrap();
         *vm_bitmaps = bitmaps;
-
-        // Start logging dirty memory in kvm.
-        KVM_FDS.load().start_dirty_log()?;
 
         Ok(())
     }
 
-    /// Stop the dirty log in the kvm and vmm.
+    /// Stop the dirty log in the migration objects and vmm.
     fn stop_dirty_log() -> Result<()> {
         // Clear dirty bitmaps from vmm.
         let mut vm_bitmaps = MIGRATION_MANAGER.vmm_bitmaps.write().unwrap();
         *vm_bitmaps = HashMap::new();
 
-        // Stop logging dirty memory in kvm.
-        KVM_FDS.load().stop_dirty_log()?;
+        if let Some(mgt_object) = &MIGRATION_MANAGER.vmm.read().unwrap().mgt_object {
+            // Stop logging dirty memory in migration object.
+            mgt_object.lock().unwrap().stop_dirty_log()?;
+        }
 
         Ok(())
     }
 
-    /// Collect the dirty log from kvm and vmm.
+    /// Collect the dirty log from migration object and vmm.
     ///
     /// # Arguments
     ///
     /// * `slot` - The memory slot.
-    fn get_dirty_log(slot: &MemorySlot) -> Result<Vec<MemBlock>> {
+    fn get_dirty_log(slot: &MigrateMemSlot) -> Result<Vec<MemBlock>> {
         // Get dirty memory from vmm.
         let mut vmm_dirty_bitmap = Vec::new();
         let bitmaps = MIGRATION_MANAGER.vmm_bitmaps.write().unwrap();
@@ -715,9 +721,12 @@ pub trait Migratable {
             }
         }
 
-        // Get dirty memory from kvm.
-        let vm_dirty_bitmap = KVM_FDS
-            .load()
+        // Get dirty memory from migration objects.
+        let vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        let mgt_object = vmm.mgt_object.as_ref().unwrap();
+        let vm_dirty_bitmap = mgt_object
+            .lock()
+            .unwrap()
             .get_dirty_log(slot.slot, slot.memory_size)
             .unwrap();
 
@@ -751,11 +760,11 @@ pub trait Migratable {
         }
     }
 
-    /// sync the dirty log from kvm bitmaps.
+    /// sync the dirty log from migration object bitmaps.
     ///
     /// # Arguments
     ///
-    /// * `bitmap` - dirty bitmap from kvm.
+    /// * `bitmap` - dirty bitmap from migration object.
     /// * `addr` - Start address of memory slot.
     fn sync_dirty_bitmap(bitmap: Vec<u64>, addr: u64) -> Vec<MemBlock> {
         let page_size = host_page_size();

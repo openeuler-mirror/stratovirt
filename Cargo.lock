@@ -739,11 +739,17 @@ dependencies = [
 name = "hypervisor_refactor"
 version = "2.3.0"
 dependencies = [
+ "address_space",
  "anyhow",
  "kvm-bindings",
  "kvm-ioctls",
+ "libc",
+ "log",
  "machine_manager",
+ "migration",
  "thiserror",
+ "util",
+ "vmm-sys-util",
 ]
 
 [[package]]
@@ -943,6 +949,7 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "hex",
+ "kvm-bindings",
  "libc",
  "log",
  "once_cell",
