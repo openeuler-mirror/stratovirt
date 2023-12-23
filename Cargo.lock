@@ -1721,6 +1721,7 @@ dependencies = [
  "serde_json",
  "sscanf",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
