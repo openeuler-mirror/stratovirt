@@ -169,6 +169,7 @@ impl XhciTransferRing {
             let mut trb = read_trb(&self.mem, dequeue)?;
             trb.addr = dequeue;
             trb.ccs = ccs;
+            trace::usb_xhci_fetch_trb(&dequeue, &trb.parameter, &trb.status, &trb.control);
             let trb_type = trb.get_type();
             if trb_type == TRBType::TrLink {
                 link_cnt += 1;

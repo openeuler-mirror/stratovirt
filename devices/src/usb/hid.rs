@@ -12,7 +12,7 @@
 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use log::{debug, error};
+use log::error;
 
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
@@ -267,10 +267,8 @@ impl Hid {
         let index = key | ((self.keyboard.modifiers as u32 & (1 << 8)) >> 1);
         let hid_code = HID_CODE[index as usize];
         self.keyboard.modifiers &= !(1 << 8);
-        debug!(
-            "convert_to_hid_code hid_code {} index {} key {}",
-            hid_code, index, key
-        );
+        trace::usb_convert_to_hid_code(&hid_code, &index, &key);
+
         if hid_code == 0x0 {
             return;
         }
@@ -469,7 +467,7 @@ impl Hid {
         match device_req.request {
             HID_SET_REPORT => match self.kind {
                 HidType::Keyboard => {
-                    debug!("Keyboard set report {}", data[0]);
+                    trace::usb_keyboard_set_report(&data[0]);
                     set_kbd_led_state(data[0]);
                 }
                 _ => {
@@ -507,7 +505,7 @@ impl Hid {
         let mut buf = Vec::new();
         if p.ep_number == 1 {
             if self.num == 0 {
-                debug!("No data in usb device.");
+                trace::usb_no_data_in_usb_device();
                 p.status = UsbPacketStatus::Nak;
                 return;
             }
