@@ -201,3 +201,21 @@ name = "gtk_scroll_callback"
 args = "direction: &dyn fmt::Debug"
 message = "direction={:?}"
 enabled = true
+
+[[events]]
+name = "console_dpy_refresh"
+args = "interval: &dyn fmt::Debug"
+message = "interval={:?} ms"
+enabled = true
+
+[[events]]
+name = "console_dpy_ui_info"
+args = "dev_name: &dyn fmt::Debug, width: &dyn fmt::Debug, height: &dyn fmt::Debug, last_width: &dyn fmt::Debug, last_height: &dyn fmt::Debug"
+message = "dev_name={:?} width={:?} height={:?} last_width={:?} last_height={:?}"
+enabled = true
+
+[[events]]
+name = "console_select"
+args = "con_id: &dyn fmt::Debug"
+message = "console id={:?}"
+enabled = true
