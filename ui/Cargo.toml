@@ -24,6 +24,7 @@ rustls-pemfile = { version = "1.0.2", optional = true }
 sasl2-sys = { version = "0.1.20", optional = true }
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
+trace = { path = "../trace" }
 
 [features]
 keycode = []

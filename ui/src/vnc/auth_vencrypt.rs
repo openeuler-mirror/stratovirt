@@ -90,6 +90,8 @@ pub struct TlsCreds {
 impl ClientIoHandler {
     /// Exchange auth version with client
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
+        trace::vnc_client_vencrypt_init();
+
         let buf = self.read_incoming_msg();
         let client = self.client.clone();
         let subauth = self.server.security_type.borrow().subauth;
@@ -124,6 +126,7 @@ impl ClientIoHandler {
         let auth = u32::from_be_bytes(buf);
         let client = self.client.clone();
         let subauth = self.server.security_type.borrow().subauth;
+        trace::vnc_client_vencrypt_auth(&auth, &subauth);
 
         if auth != subauth as u32 {
             let mut buf = Vec::new();
@@ -206,6 +209,8 @@ impl ClientIoHandler {
     }
 
     fn tls_handshake_done(&mut self) -> Result<()> {
+        trace::vnc_client_tls_handshake_done();
+
         let handler = self.handlers.get("vnc_client_io").unwrap().clone();
         let handlers = vec![handler];
         EventLoop::update_event(

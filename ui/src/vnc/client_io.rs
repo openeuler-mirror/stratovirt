@@ -521,6 +521,7 @@ impl ClientIoHandler {
             }
         };
 
+        trace::vnc_client_handle_version(&ver.0, &ver.1);
         let mut version = VncVersion::new(ver.0 as u16, ver.1 as u16);
         if version.major != 3 || ![3, 4, 5, 7, 8].contains(&version.minor) {
             let mut buf = Vec::new();
@@ -573,6 +574,7 @@ impl ClientIoHandler {
         let addr = client.addr.clone();
         let mut locked_clients = server.client_handlers.lock().unwrap();
         let mut len = locked_clients.len() as i32;
+        trace::vnc_client_handle_init(&len, &server.conn_limits);
         for client in locked_clients.values_mut() {
             if len <= server.conn_limits as i32 {
                 break;
@@ -612,6 +614,7 @@ impl ClientIoHandler {
     /// Authentication
     fn handle_auth(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
+        trace::vnc_client_handle_auth(&buf[0]);
         let auth = self.server.security_type.borrow().auth;
         let client = self.client.clone();
         let version = client.conn_state.lock().unwrap().version.clone();
@@ -925,6 +928,8 @@ impl ClientIoHandler {
         let down: bool = buf[1] != 0;
         let org_keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
         let mut keysym = org_keysym;
+
+        trace::vnc_client_key_event(&keysym, &down);
         let server = self.server.clone();
 
         // Uppercase -> Lowercase.
@@ -966,6 +971,7 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let mut x = ((buf[2] as u16) << 8) + buf[3] as u16;
         let mut y = ((buf[4] as u16) << 8) + buf[5] as u16;
+        trace::vnc_client_point_event(&buf[1], &x, &y);
 
         // Window size alignment.
         let locked_surface = self.server.vnc_surface.lock().unwrap();
@@ -1274,6 +1280,8 @@ pub fn desktop_resize(
     let locked_surface = server.vnc_surface.lock().unwrap();
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
+    trace::vnc_server_desktop_resize(&width, &height);
+
     if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
         return Err(anyhow!(VncError::InvalidImageSize(width, height)));
     }
