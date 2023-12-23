@@ -127,6 +127,7 @@ fn da_enter_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     _event: &gdk::EventCrossing,
 ) -> Result<()> {
+    trace::gtk_enter_callback(&"enter".to_string());
     update_keyboard_grab(gs, true);
     Ok(())
 }
@@ -135,6 +136,7 @@ fn da_leave_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     _event: &gdk::EventCrossing,
 ) -> Result<()> {
+    trace::gtk_enter_callback(&"leave".to_string());
     update_keyboard_grab(gs, false);
     Ok(())
 }
@@ -159,6 +161,8 @@ fn da_configure_callback(
     gs: &Rc<RefCell<GtkDisplayScreen>>,
     event_configure: &gdk::EventConfigure,
 ) -> Result<()> {
+    trace::gtk_configure_callback(&event_configure.size().0, &event_configure.size().1);
+
     let borrowed_gs = gs.borrow();
     if !borrowed_gs.scale_mode.borrow().is_free_scale() {
         return Ok(());
@@ -190,6 +194,7 @@ fn da_key_callback(
         Some(k) => *k,
         None => 0,
     };
+    trace::gtk_key_event_callback(&key_value, &press);
     update_key_state(press, org_key_value, keycode)?;
     input::key_event(keycode, press)?;
     Ok(())
@@ -215,6 +220,7 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
         Some(value) => value,
         None => return Ok(()),
     };
+    trace::gtk_cursor_move_event(&x, &y);
     let (real_x, real_y) = borrowed_gs.convert_coord(x, y)?;
     let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
     let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
@@ -231,6 +237,7 @@ fn da_pointer_callback(button_event: &gdk::EventButton) -> Result<()> {
         3 => INPUT_POINT_MIDDLE,
         _ => return Ok(()),
     };
+    trace::gtk_pointer_callback(&button_mask);
 
     match button_event.event_type() {
         gdk::EventType::ButtonRelease => {
@@ -250,6 +257,8 @@ fn da_pointer_callback(button_event: &gdk::EventButton) -> Result<()> {
 }
 
 fn da_scroll_callback(scroll_event: &gdk::EventScroll) -> Result<()> {
+    trace::gtk_scroll_callback(&scroll_event.direction());
+
     match scroll_event.direction() {
         ScrollDirection::Up => press_mouse(INPUT_BUTTON_WHEEL_UP),
         ScrollDirection::Down => press_mouse(INPUT_BUTTON_WHEEL_DOWN),

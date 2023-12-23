@@ -117,3 +117,87 @@ name = "vnc_server_send_mech_list"
 args = "mech_list: &dyn fmt::Debug"
 message = "mech_list={:?}"
 enabled = true
+
+[[events]]
+name = "gtk_enter_callback"
+args = "enter_or_leave: &dyn fmt::Debug"
+message = "{:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_switch"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_refresh"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_image_update"
+args = "dev_name: &dyn fmt::Debug, x: &i32, y: &i32, w: &i32, h: &i32"
+message = "device_name={:?} x={:?} y={:?} w={:?} h={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_cursor_update"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_switch"
+args = "old_width: &dyn fmt::Debug, old_height: &dyn fmt::Debug, new_width: &dyn fmt::Debug, new_height: &dyn fmt::Debug"
+message = "old_width={:?} old_height={:?} new_width={:?} new_height={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_update"
+args = "x: &dyn fmt::Debug, y: &dyn fmt::Debug, w: &dyn fmt::Debug, h: &dyn fmt::Debug"
+message = "x={:?} y={:?} w={:?} h={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_refresh"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "gtk_dyp_cursor_define"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug, hot_x: &dyn fmt::Debug, hot_y: &dyn fmt::Debug, data_len: &dyn fmt::Debug"
+message = "width={:?} height={:?} hot_x={:?} hot_y={:?} data_len={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_configure_callback"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug"
+message = "width={:?} height={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_key_event_callback"
+args = "key_value: &dyn fmt::Debug, press: &dyn fmt::Debug"
+message = "key_value={:?} press={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_pointer_callback"
+args = "button_mask: &dyn fmt::Debug"
+message = "button_mask={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_cursor_move_event"
+args = "x: &dyn fmt::Debug, y: &dyn fmt::Debug"
+message = "x={:?} y={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_scroll_callback"
+args = "direction: &dyn fmt::Debug"
+message = "direction={:?}"
+enabled = true

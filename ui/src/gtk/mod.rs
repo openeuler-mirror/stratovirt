@@ -155,6 +155,8 @@ impl GtkInterface {
 
 impl DisplayChangeListenerOperations for GtkInterface {
     fn dpy_switch(&self, _surface: &crate::console::DisplaySurface) -> Result<()> {
+        trace::gtk_dyp_channel_switch(&self.dev_name.clone());
+
         let event = DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplaySwitch);
         self.dce_sender.send(event)?;
         Ok(())
@@ -164,6 +166,8 @@ impl DisplayChangeListenerOperations for GtkInterface {
         &self,
         dcl: &std::sync::Arc<std::sync::Mutex<DisplayChangeListener>>,
     ) -> Result<()> {
+        trace::gtk_dyp_channel_refresh(&self.dev_name.clone());
+
         // The way virtio-gpu devices are used in phase OS and others is different.
         if self.dev_name.starts_with("virtio-gpu") {
             if get_run_stage() == VmRunningStage::Os {
@@ -182,6 +186,8 @@ impl DisplayChangeListenerOperations for GtkInterface {
     }
 
     fn dpy_image_update(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        trace::gtk_dyp_channel_image_update(&self.dev_name.clone(), &x, &y, &w, &h);
+
         let mut event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::DisplayUpdate);
         event.x = x;
@@ -193,6 +199,8 @@ impl DisplayChangeListenerOperations for GtkInterface {
     }
 
     fn dpy_cursor_update(&self, cursor_data: &DisplayMouse) -> Result<()> {
+        trace::gtk_dyp_channel_cursor_update(&self.dev_name.clone());
+
         let mut event =
             DisplayChangeEvent::new(self.dev_name.clone(), DisplayEventType::CursorDefine);
         event.cursor = Some(cursor_data.clone());
@@ -676,6 +684,8 @@ fn gs_show_menu_callback(
 /// So, the refresh operation will always check if the image has been switched, if
 /// the result is yes, then use the switch operation to switch the latest image.
 fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
+    trace::gtk_dyp_refresh();
+
     let borrowed_gs = gs.borrow();
     let active_con = borrowed_gs.con.upgrade();
     let con = match active_con {
@@ -707,6 +717,8 @@ fn do_cursor_define(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEven
         None => bail!("Invalid Cursor image"),
     };
 
+    trace::gtk_dyp_cursor_define(&c.width, &c.height, &c.hot_x, &c.hot_y, &c.data.len());
+
     if c.data.len() < ((c.width * c.height) as usize) * 4 {
         bail!("Invalid Cursor image");
     }
@@ -735,6 +747,8 @@ fn do_cursor_define(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEven
 
 // Update dirty area of image.
 fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent) -> Result<()> {
+    trace::gtk_dyp_update(&event.x, &event.y, &event.w, &event.h);
+
     let borrowed_gs = gs.borrow();
     let active_con = borrowed_gs.con.upgrade();
     let con = match active_con {
@@ -853,6 +867,8 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
     let surface_width = surface.width();
     let surface_height = surface.height();
     let surface_stride = surface.stride();
+    trace::gtk_dyp_switch(&width, &height, &surface_width, &surface_height);
+
     if width != 0 && height != 0 && width == surface_width && height == surface_height {
         need_resize = false;
     }
