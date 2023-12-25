@@ -254,7 +254,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd usb storage: -device usb-storage,id=<storage>,drive=<drive_id>; \
                    \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
                    \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \
-                   \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>")
+                   \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>; \
+                   \n\t\tadd pvpanic: -device pvpanic,id=<pvpanic_pci>,bus=<pcie.0>,addr=<0x7>[,supported-features=<0|1|2|3>];")
             .takes_values(true),
         )
         .arg(
