@@ -300,6 +300,9 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
 
+// PvPanic device id
+pub const PCI_DEVICE_ID_REDHAT_PVPANIC: u16 = 0x0011;
+
 // Device classes and subclasses
 pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;

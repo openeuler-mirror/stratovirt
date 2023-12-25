@@ -15,3 +15,6 @@ pub mod scream;
 
 #[cfg(feature = "scream")]
 mod ivshmem;
+
+#[cfg(feature = "pvpanic")]
+pub mod pvpanic;

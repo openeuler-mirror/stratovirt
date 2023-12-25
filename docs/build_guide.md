@@ -60,6 +60,7 @@ List of optional features:
 - vnc: enable VNC display
 - ramfb: enable ramfb display device
 - virtio_gpu: enable virtio-gpu virtualized graphics card
+- pvpanic: enable virtualized pvpanic pci device
 
 ```shell
 $ cargo build --workspace --bins --release --features "scream_alsa"

@@ -51,6 +51,8 @@ use address_space::{
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
+#[cfg(feature = "pvpanic")]
+use devices::misc::pvpanic::PvPanicPci;
 #[cfg(feature = "scream")]
 use devices::misc::scream::Scream;
 #[cfg(feature = "demo_device")]
@@ -75,6 +77,8 @@ use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
+#[cfg(feature = "pvpanic")]
+use machine_manager::config::parse_pvpanic;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::parse_usb_camera;
 #[cfg(feature = "usb_host")]
@@ -1045,6 +1049,20 @@ pub trait MachineOps {
         locked_boot_order_list.retain(|item| item.id != dev_id);
     }
 
+    #[cfg(feature = "pvpanic")]
+    fn add_pvpanic(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let device_cfg = parse_pvpanic(cfg_args)?;
+
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let pcidev = PvPanicPci::new(&device_cfg, devfn, parent_bus);
+        pcidev
+            .realize()
+            .with_context(|| "Failed to realize pvpanic device")?;
+
+        Ok(())
+    }
+
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1841,6 +1859,10 @@ pub trait MachineOps {
                 #[cfg(feature = "scream")]
                 "ivshmem-scream" => {
                     self.add_ivshmem_scream(vm_config, cfg_args)?;
+                }
+                #[cfg(feature = "pvpanic")]
+                "pvpanic" => {
+                    self.add_pvpanic(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
