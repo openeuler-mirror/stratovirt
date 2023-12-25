@@ -21,7 +21,6 @@ use crate::{
 use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
 use devices::legacy::FwCfgOps;
-use hypervisor::kvm::KVM_FDS;
 use hypervisor::kvm::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
@@ -84,14 +83,10 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .create_irq_chip()
-            .with_context(|| MachineError::CrtIrqchipErr)
+    fn init_interrupt_controller(&mut self, _vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        locked_hypervisor.create_interrupt_controller(vm_config)
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
@@ -168,7 +163,8 @@ impl MachineOps for LightMachine {
 
         let migrate_info = locked_vm.get_migrate_info();
 
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm
+            .init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus), vm_config)?;
 
         // Add mmio devices
         locked_vm
