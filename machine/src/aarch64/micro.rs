@@ -18,10 +18,9 @@ use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError}
 use crate::{LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
-use devices::{
-    legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX,
-};
+use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::*;
+use hypervisor_refactor::kvm::aarch64::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::{
@@ -78,7 +77,7 @@ impl MachineOps for LightMachine {
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
     }
 
-    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
         let v3 = ICGICv3Config {
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
@@ -102,8 +101,11 @@ impl MachineOps for LightMachine {
             v3: Some(v3),
             v2: Some(v2),
         };
-        let irq_chip = InterruptController::new(&intc_conf)?;
-        self.base.irq_chip = Some(Arc::new(irq_chip));
+
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        self.base.irq_chip =
+            Some(locked_hypervisor.create_interrupt_controller(&intc_conf, vm_config)?);
         self.base.irq_chip.as_ref().unwrap().realize()
     }
 
@@ -179,7 +181,8 @@ impl MachineOps for LightMachine {
             &cpu_config,
         )?);
 
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm
+            .init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus), vm_config)?;
 
         locked_vm.cpu_post_init(&cpu_config)?;
 

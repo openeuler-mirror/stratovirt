@@ -17,7 +17,7 @@
 //! ## Design
 //!
 //! This module offers support for:
-//! 1. Create kvm-based interrupt controller.
+//! 1. Create hypervisor-based interrupt controller.
 //! 2. Manager lifecycle for `GIC`.
 //!
 //! ## Platform Support
@@ -30,10 +30,10 @@ mod error;
 
 pub use anyhow::Result;
 
-pub use aarch64::GICConfig as ICGICConfig;
-pub use aarch64::GICv2Config as ICGICv2Config;
-pub use aarch64::GICv3Config as ICGICv3Config;
-pub use aarch64::InterruptController;
-pub use aarch64::GIC_IRQ_INTERNAL;
-pub use aarch64::GIC_IRQ_MAX;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::{
+    GICConfig as ICGICConfig, GICDevice, GICVersion, GICv2, GICv2Access,
+    GICv2Config as ICGICv2Config, GICv3, GICv3Access, GICv3Config as ICGICv3Config, GICv3ItsAccess,
+    GICv3ItsState, GICv3State, GicRedistRegion, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
+};
 pub use error::InterruptError;

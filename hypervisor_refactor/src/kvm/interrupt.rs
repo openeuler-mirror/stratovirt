@@ -10,9 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
-use kvm_bindings::{KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
-use kvm_ioctls::{Cap, Kvm};
+use std::mem::{align_of, size_of};
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP};
+use kvm_ioctls::{Cap, Kvm, VmFd};
+use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
 use util::bitmap::Bitmap;
 
@@ -20,6 +24,8 @@ pub(crate) type IrqRoute = kvm_bindings::kvm_irq_routing;
 pub(crate) type IrqRouteEntry = kvm_bindings::kvm_irq_routing_entry;
 type IrqRouteChip = kvm_bindings::kvm_irq_routing_irqchip;
 type IrqChip = kvm_bindings::kvm_irq_routing_entry__bindgen_ty_1;
+
+ioctl_io_nr!(KVM_CHECK_EXTENSION, KVMIO, 0x03);
 
 #[cfg(target_arch = "x86_64")]
 const IOAPIC_NUM_PINS: u32 = 24;
@@ -125,70 +131,6 @@ impl IrqRouteTable {
         }
     }
 
-    /// Add msi irq route to irq routing table.
-    pub fn add_msi_route(&mut self, gsi: u32, msi_vector: MsiVector) -> Result<()> {
-        let mut kroute = IrqRouteEntry {
-            gsi,
-            type_: KVM_IRQ_ROUTING_MSI,
-            flags: 0,
-            ..Default::default()
-        };
-        kroute.u.msi.address_lo = msi_vector.msg_addr_lo;
-        kroute.u.msi.address_hi = msi_vector.msg_addr_hi;
-        kroute.u.msi.data = msi_vector.msg_data;
-        #[cfg(target_arch = "aarch64")]
-        {
-            kroute.flags = kvm_bindings::KVM_MSI_VALID_DEVID;
-            kroute.u.msi.__bindgen_anon_1.devid = msi_vector.dev_id;
-        }
-        self.irq_routes.push(kroute);
-
-        Ok(())
-    }
-
-    fn remove_irq_route(&mut self, gsi: u32) {
-        while let Some((index, _)) = self
-            .irq_routes
-            .iter()
-            .enumerate()
-            .find(|(_, e)| e.gsi == gsi)
-        {
-            self.irq_routes.remove(index);
-        }
-    }
-
-    /// Update msi irq route to irq routing table.
-    pub fn update_msi_route(&mut self, gsi: u32, msi_vector: MsiVector) -> Result<()> {
-        self.remove_irq_route(gsi);
-        self.add_msi_route(gsi, msi_vector)
-            .with_context(|| "Failed to add msi route")?;
-
-        Ok(())
-    }
-
-    /// Allocate free gsi number.
-    pub fn allocate_gsi(&mut self) -> Result<u32> {
-        let free_gsi = self
-            .gsi_bitmap
-            .find_next_zero(0)
-            .with_context(|| "Failed to get new free gsi")?;
-        self.gsi_bitmap.set(free_gsi)?;
-        Ok(free_gsi as u32)
-    }
-
-    /// Release gsi number to free.
-    ///
-    /// # Notions
-    ///
-    /// If registered irqfd with this gsi, it's necessary to unregister irqfd first.
-    pub fn release_gsi(&mut self, gsi: u32) -> Result<()> {
-        self.gsi_bitmap
-            .clear(gsi as usize)
-            .with_context(|| "Failed to release gsi")?;
-        self.remove_irq_route(gsi);
-        Ok(())
-    }
-
     /// Get `IrqRouteEntry` by given gsi number.
     /// A gsi number may have several entries. If no gsi number in table, is will
     /// return an empty vector.
@@ -202,51 +144,48 @@ impl IrqRouteTable {
 
         entries
     }
-}
 
-/// Basic data for msi vector.
-#[derive(Copy, Clone, Default)]
-pub struct MsiVector {
-    pub msg_addr_lo: u32,
-    pub msg_addr_hi: u32,
-    pub msg_data: u32,
-    pub masked: bool,
-    #[cfg(target_arch = "aarch64")]
-    pub dev_id: u32,
+    /// Sets the gsi routing table entries. It will overwrite previously set entries.
+    pub fn commit_irq_routing(&self, vm_fd: &Arc<VmFd>) -> Result<()> {
+        let routes = self.irq_routes.clone();
+
+        let layout = std::alloc::Layout::from_size_align(
+            size_of::<IrqRoute>() + routes.len() * size_of::<IrqRouteEntry>(),
+            std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
+        )?;
+
+        // SAFETY: data in `routes` is reliable.
+        unsafe {
+            let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            if irq_routing.is_null() {
+                bail!("Failed to alloc irq routing");
+            }
+            (*irq_routing).nr = routes.len() as u32;
+            (*irq_routing).flags = 0;
+            let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
+            entries.copy_from_slice(&routes);
+
+            let ret = vm_fd
+                .set_gsi_routing(&*irq_routing)
+                .with_context(|| "Failed to set gsi routing");
+
+            std::alloc::dealloc(irq_routing as *mut u8, layout);
+            ret
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::KVMFds;
+    use super::get_maximum_gsi_cnt;
+    use crate::kvm::KvmHypervisor;
 
     #[test]
-    fn test_alloc_and_release_gsi() {
-        let kvm_fds = KVMFds::new();
-        if kvm_fds.vm_fd.is_none() {
+    fn test_get_maximum_gsi_cnt() {
+        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        if kvm_hyp.vm_fd.is_none() {
             return;
         }
-        let mut irq_route_table = kvm_fds.irq_route_table.lock().unwrap();
-        irq_route_table.init_irq_route_table();
-
-        #[cfg(target_arch = "x86_64")]
-        {
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 24);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 25);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 26);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 27);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 28);
-            assert!(irq_route_table.release_gsi(26).is_ok());
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 26);
-        }
-        #[cfg(target_arch = "aarch64")]
-        {
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 192);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 193);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 194);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 195);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 196);
-            assert!(irq_route_table.release_gsi(195).is_ok());
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 195);
-        }
+        assert!(get_maximum_gsi_cnt(kvm_hyp.fd.as_ref().unwrap()) > 0);
     }
 }

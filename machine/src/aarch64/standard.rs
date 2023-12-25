@@ -49,8 +49,9 @@ use devices::legacy::{
 };
 use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::SysBusDevType;
-use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
+use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
 use hypervisor::kvm::*;
+use hypervisor_refactor::kvm::aarch64::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
@@ -427,7 +428,7 @@ impl MachineOps for StdMachine {
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
     }
 
-    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
         let v3 = ICGICv3Config {
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
@@ -444,16 +445,12 @@ impl MachineOps for StdMachine {
             v2: None,
             v3: Some(v3),
         };
-        let irq_chip = InterruptController::new(&intc_conf)?;
-        self.base.irq_chip = Some(Arc::new(irq_chip));
+
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        self.base.irq_chip =
+            Some(locked_hypervisor.create_interrupt_controller(&intc_conf, vm_config)?);
         self.base.irq_chip.as_ref().unwrap().realize()?;
-        KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .init_irq_route_table();
-        KVM_FDS.load().commit_irq_routing()?;
 
         let root_bus = &self.pci_host.lock().unwrap().root_bus;
         let irq_handler = Box::new(move |gsi: u32, level: bool| -> Result<()> {
@@ -586,7 +583,7 @@ impl MachineOps for StdMachine {
         )?);
 
         // Interrupt Controller Chip init
-        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus), vm_config)?;
 
         locked_vm.cpu_post_init(&cpu_config)?;
 

@@ -24,4 +24,9 @@ pub enum HypervisorError {
     #[cfg(target_arch = "x86_64")]
     #[error("Failed to create PIT.")]
     CrtPitErr,
+    #[error("Failed to create irq chip.")]
+    #[cfg(target_arch = "x86_64")]
+    CrtIrqchipErr,
+    #[error("Failed to create KVM device: {0:#?}.")]
+    CreateKvmDevice(kvm_ioctls::Error),
 }

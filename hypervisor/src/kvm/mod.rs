@@ -30,7 +30,6 @@ use vmm_sys_util::{
 use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
-pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 pub const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
@@ -78,13 +77,10 @@ ioctl_ior_nr!(KVM_GET_DEBUGREGS, KVMIO, 0xa1, kvm_debugregs);
 ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
 #[cfg(target_arch = "x86_64")]
 ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
-ioctl_iowr_nr!(KVM_CREATE_DEVICE, KVMIO, 0xe0, kvm_create_device);
 #[cfg(target_arch = "aarch64")]
 ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
 #[cfg(target_arch = "aarch64")]
 ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_GET_DEVICE_ATTR, KVMIO, 0xe2, kvm_device_attr);
 #[cfg(target_arch = "aarch64")]
 ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 #[cfg(target_arch = "aarch64")]

@@ -512,7 +512,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `vcpu_count` - The number of vcpu.
-    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()>;
+    fn init_interrupt_controller(&mut self, vcpu_count: u64, vm_config: &VmConfig) -> Result<()>;
 
     /// Add RTC device.
     fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] _mem_size: u64) -> Result<()> {
