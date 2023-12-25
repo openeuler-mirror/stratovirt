@@ -243,10 +243,13 @@ impl PciBus {
             .read_config(offset, data);
     }
 
-    pub fn update_dev_id(&self, devfn: u8, dev_id: &Arc<AtomicU16>) {
+    pub fn generate_dev_id(&self, devfn: u8) -> u16 {
         let bus_num = self.number(SECONDARY_BUS_NUM as usize);
-        let device_id = ((bus_num as u16) << 8) | (devfn as u16);
-        dev_id.store(device_id, Ordering::Release);
+        ((bus_num as u16) << 8) | (devfn as u16)
+    }
+
+    pub fn update_dev_id(&self, devfn: u8, dev_id: &Arc<AtomicU16>) {
+        dev_id.store(self.generate_dev_id(devfn), Ordering::Release);
     }
 }
 
