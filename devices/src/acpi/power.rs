@@ -260,7 +260,7 @@ impl SysBusDevOps for PowerDev {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

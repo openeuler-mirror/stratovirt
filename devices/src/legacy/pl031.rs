@@ -15,7 +15,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
@@ -121,17 +120,6 @@ impl PL031 {
     fn get_current_value(&self) -> u32 {
         (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
     }
-
-    fn inject_interrupt(&self) {
-        if let Some(evt_fd) = self.interrupt_evt() {
-            if let Err(e) = evt_fd.write(1) {
-                error!("pl031: failed to write interrupt eventfd ({:?}).", e);
-            }
-            trace::pl031_inject_interrupt();
-            return;
-        }
-        error!("pl031: failed to get interrupt event fd.");
-    }
 }
 
 impl Device for PL031 {
@@ -198,10 +186,12 @@ impl SysBusDevOps for PL031 {
             RTC_IMSC => {
                 self.state.imsr = value & 1;
                 self.inject_interrupt();
+                trace::pl031_inject_interrupt();
             }
             RTC_ICR => {
                 self.state.risr = 0;
                 self.inject_interrupt();
+                trace::pl031_inject_interrupt();
             }
             _ => {}
         }
@@ -209,7 +199,7 @@ impl SysBusDevOps for PL031 {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

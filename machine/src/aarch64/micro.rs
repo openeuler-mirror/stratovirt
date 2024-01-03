@@ -76,7 +76,7 @@ impl MachineOps for LightMachine {
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
     }
 
-    fn init_interrupt_controller(&mut self, vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
         let v3 = ICGICv3Config {
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
@@ -103,9 +103,12 @@ impl MachineOps for LightMachine {
 
         let hypervisor = self.get_hypervisor();
         let mut locked_hypervisor = hypervisor.lock().unwrap();
-        self.base.irq_chip =
-            Some(locked_hypervisor.create_interrupt_controller(&intc_conf, vm_config)?);
-        self.base.irq_chip.as_ref().unwrap().realize()
+        self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
+        self.base.irq_chip.as_ref().unwrap().realize()?;
+
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
@@ -182,8 +185,7 @@ impl MachineOps for LightMachine {
             &cpu_config,
         )?);
 
-        locked_vm
-            .init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus), vm_config)?;
+        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
         locked_vm.cpu_post_init(&cpu_config)?;
 

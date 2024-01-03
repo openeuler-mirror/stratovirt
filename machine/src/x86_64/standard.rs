@@ -40,7 +40,6 @@ use devices::legacy::{
     SERIAL_ADDR,
 };
 use devices::pci::{PciDevOps, PciHost};
-use hypervisor::kvm::*;
 use hypervisor_refactor::kvm::x86_64::*;
 use hypervisor_refactor::kvm::*;
 #[cfg(feature = "gtk")]
@@ -434,10 +433,17 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn init_interrupt_controller(&mut self, _vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
+    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
         let hypervisor = self.get_hypervisor();
         let mut locked_hypervisor = hypervisor.lock().unwrap();
-        locked_hypervisor.create_interrupt_controller(vm_config)
+        locked_hypervisor.create_interrupt_controller()?;
+
+        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+
+        Ok(())
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
@@ -527,7 +533,7 @@ impl MachineOps for StdMachine {
             nr_cpus,
         )?;
 
-        locked_vm.init_interrupt_controller(u64::from(nr_cpus), vm_config)?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
 
         locked_vm
             .init_pci_host()

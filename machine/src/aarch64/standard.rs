@@ -16,8 +16,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
-use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -47,11 +46,11 @@ use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
-use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
+use devices::pci::{PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::SysBusDevType;
-use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
-use hypervisor::kvm::*;
+use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor_refactor::kvm::aarch64::*;
+use hypervisor_refactor::kvm::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
@@ -428,7 +427,7 @@ impl MachineOps for StdMachine {
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
     }
 
-    fn init_interrupt_controller(&mut self, vcpu_count: u64, vm_config: &VmConfig) -> Result<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
         let v3 = ICGICv3Config {
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
@@ -448,26 +447,25 @@ impl MachineOps for StdMachine {
 
         let hypervisor = self.get_hypervisor();
         let mut locked_hypervisor = hypervisor.lock().unwrap();
-        self.base.irq_chip =
-            Some(locked_hypervisor.create_interrupt_controller(&intc_conf, vm_config)?);
+        self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
         self.base.irq_chip.as_ref().unwrap().realize()?;
 
         let root_bus = &self.pci_host.lock().unwrap().root_bus;
-        let irq_handler = Box::new(move |gsi: u32, level: bool| -> Result<()> {
-            // The handler is only used to send PCI INTx interrupt.
-            // PCI INTx interrupt is belong to SPI interrupt type.
-            let irq = gsi + GIC_IRQ_INTERNAL;
-            let irqtype = KVM_ARM_IRQ_TYPE_SPI;
-            let kvm_irq = irqtype << KVM_ARM_IRQ_TYPE_SHIFT | irq;
-
-            KVM_FDS.load().set_irq_line(kvm_irq, level)
-        }) as InterruptHandler;
-
-        let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
-            IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
-            irq_handler,
-        ))));
-        root_bus.lock().unwrap().intx_state = irq_state;
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        let line_irq_manager = irq_manager.line_irq_manager;
+        if let Some(line_irq_manager) = line_irq_manager.clone() {
+            let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
+                IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
+                line_irq_manager.clone(),
+            ))));
+            root_bus.lock().unwrap().intx_state = irq_state;
+        } else {
+            return Err(anyhow!(
+                "Failed to create intx state: legacy irq manager is none."
+            ));
+        }
+        self.base.sysbus.irq_manager = line_irq_manager;
 
         Ok(())
     }
@@ -585,7 +583,7 @@ impl MachineOps for StdMachine {
         )?);
 
         // Interrupt Controller Chip init
-        locked_vm.init_interrupt_controller(u64::from(nr_cpus), vm_config)?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
 
         locked_vm.cpu_post_init(&cpu_config)?;
 
@@ -944,7 +942,7 @@ impl AcpiBuilder for StdMachine {
         for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
+                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as u32;
                 break;
             }
         }
