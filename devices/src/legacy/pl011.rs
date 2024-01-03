@@ -132,27 +132,21 @@ impl PL011 {
     pub fn new(cfg: SerialConfig) -> Result<Self> {
         Ok(PL011 {
             base: SysBusDevBase {
-                base: DeviceBase::default(),
                 dev_type: SysBusDevType::PL011,
-                res: SysRes::default(),
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                ..Default::default()
             },
             state: PL011State::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         })
     }
 
-    fn interrupt(&self) {
+    fn interrupt(&mut self) {
         let irq_mask = INT_E | INT_MS | INT_RT | INT_TX | INT_RX;
 
         let flag = self.state.int_level & self.state.int_enabled;
         if flag & irq_mask != 0 {
-            if let Err(e) = self.interrupt_evt().unwrap().write(1) {
-                error!(
-                    "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {:?}",
-                    flag, e,
-                )
-            }
+            self.inject_interrupt();
             trace::pl011_interrupt(flag);
         }
     }
@@ -413,7 +407,7 @@ impl SysBusDevOps for PL011 {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

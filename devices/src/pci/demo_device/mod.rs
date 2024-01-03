@@ -192,15 +192,7 @@ impl PciDevOps for DemoDev {
     fn realize(mut self) -> Result<()> {
         self.init_pci_config()?;
         if self.cmd_cfg.bar_num > 0 {
-            init_msix(
-                0,
-                1,
-                &mut self.base.config,
-                self.dev_id.clone(),
-                &self.base.base.id,
-                None,
-                None,
-            )?;
+            init_msix(&mut self.base, 0, 1, self.dev_id.clone(), None, None)?;
         }
 
         self.register_data_handling_bar()?;

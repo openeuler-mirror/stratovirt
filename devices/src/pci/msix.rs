@@ -19,10 +19,12 @@ use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::pci::config::{CapId, PciConfig, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
-use crate::pci::{le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64};
+use crate::pci::config::{CapId, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
+use crate::pci::{
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciDevBase,
+};
+use crate::MsiIrqManager;
 use address_space::{GuestAddress, Region, RegionOps};
-use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -49,6 +51,17 @@ pub const MSIX_CAP_SIZE: u8 = 12;
 pub const MSIX_CAP_ID: u8 = 0x11;
 pub const MSIX_CAP_TABLE: u8 = 0x04;
 const MSIX_CAP_PBA: u8 = 0x08;
+
+/// Basic data for msi vector.
+#[derive(Copy, Clone, Default)]
+pub struct MsiVector {
+    pub msg_addr_lo: u32,
+    pub msg_addr_hi: u32,
+    pub msg_data: u32,
+    pub masked: bool,
+    #[cfg(target_arch = "aarch64")]
+    pub dev_id: u32,
+}
 
 /// MSI-X message structure.
 #[derive(Copy, Clone)]
@@ -94,6 +107,7 @@ pub struct Msix {
     pub dev_id: Arc<AtomicU16>,
     /// Maintains a list of GSI with irqfds that are registered to kvm.
     gsi_msi_routes: HashMap<u16, GsiMsiRoute>,
+    pub msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
 }
 
 impl Msix {
@@ -110,6 +124,7 @@ impl Msix {
         pba_size: u32,
         msix_cap_offset: u16,
         dev_id: Arc<AtomicU16>,
+        msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
     ) -> Self {
         let mut msix = Msix {
             table: vec![0; table_size as usize],
@@ -119,6 +134,7 @@ impl Msix {
             msix_cap_offset,
             dev_id,
             gsi_msi_routes: HashMap::new(),
+            msi_irq_manager,
         };
         msix.mask_all_vectors();
         msix
@@ -218,50 +234,21 @@ impl Msix {
             dev_id: self.dev_id.load(Ordering::Acquire) as u32,
         };
 
+        let irq_manager = self.msi_irq_manager.as_ref().unwrap();
+
         if is_masked {
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .unregister_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
-                .map_err(|e| {
-                    error!("Failed to unregister irq, error is {:?}", e);
-                    e
-                })?;
+            irq_manager.unregister_irqfd(route.irq_fd.clone(), route.gsi as u32)?;
         } else {
             let msg = &route.msg;
             if msg.data != entry.data
                 || msg.address_lo != entry.address_lo
                 || msg.address_hi != entry.address_hi
             {
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .update_msi_route(route.gsi as u32, msix_vector)
-                    .map_err(|e| {
-                        error!("Failed to update MSI-X route, error is {:?}", e);
-                        e
-                    })?;
-                KVM_FDS.load().commit_irq_routing().map_err(|e| {
-                    error!("Failed to commit irq routing, error is {:?}", e);
-                    e
-                })?;
+                irq_manager.update_route_table(route.gsi as u32, msix_vector)?;
                 route.msg = entry;
             }
 
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .register_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
-                .map_err(|e| {
-                    error!("Failed to register irq, error is {:?}", e);
-                    e
-                })?;
+            irq_manager.register_irqfd(route.irq_fd.clone(), route.gsi as u32)?;
         }
         Ok(())
     }
@@ -277,43 +264,10 @@ impl Msix {
             dev_id: self.dev_id.load(Ordering::Acquire) as u32,
         };
 
-        let gsi = KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .allocate_gsi()
-            .map_err(|e| {
-                error!("Failed to allocate gsi, error is {:?}", e);
-                e
-            })?;
+        let irq_manager = self.msi_irq_manager.as_ref().unwrap();
 
-        KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .add_msi_route(gsi, msix_vector)
-            .map_err(|e| {
-                error!("Failed to add MSI-X route, error is {:?}", e);
-                e
-            })?;
-
-        KVM_FDS.load().commit_irq_routing().map_err(|e| {
-            error!("Failed to commit irq routing, error is {:?}", e);
-            e
-        })?;
-
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .register_irqfd(call_fd.as_ref(), gsi)
-            .map_err(|e| {
-                error!("Failed to register irq, error is {:?}", e);
-                e
-            })?;
+        let gsi = irq_manager.allocate_irq(msix_vector)?;
+        irq_manager.register_irqfd(call_fd.clone(), gsi)?;
 
         let gsi_route = GsiMsiRoute {
             irq_fd: call_fd,
@@ -325,25 +279,10 @@ impl Msix {
     }
 
     pub fn unregister_irqfd(&mut self) -> Result<()> {
+        let irq_manager = &self.msi_irq_manager.as_ref().unwrap();
         for (_, route) in self.gsi_msi_routes.iter() {
-            KVM_FDS
-                .load()
-                .unregister_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
-                .map_err(|e| {
-                    error!("Failed to unregister irq, error is {:?}", e);
-                    e
-                })?;
-
-            KVM_FDS
-                .load()
-                .irq_route_table
-                .lock()
-                .unwrap()
-                .release_gsi(route.gsi as u32)
-                .map_err(|e| {
-                    error!("Failed to release gsi, error is {:?}", e);
-                    e
-                })?;
+            irq_manager.unregister_irqfd(route.irq_fd.clone(), route.gsi as u32)?;
+            irq_manager.release_irq(route.gsi as u32)?;
         }
         self.gsi_msi_routes.clear();
         Ok(())
@@ -461,19 +400,6 @@ impl Msix {
 
     pub fn send_msix(&self, vector: u16, dev_id: u16) {
         let msg = self.get_message(vector);
-        #[cfg(target_arch = "aarch64")]
-        let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
-        #[cfg(target_arch = "x86_64")]
-        let flags: u32 = 0;
-
-        let kvm_msi = kvm_bindings::kvm_msi {
-            address_lo: msg.address_lo,
-            address_hi: msg.address_hi,
-            data: msg.data,
-            flags,
-            devid: dev_id as u32,
-            pad: [0; 12],
-        };
 
         if is_test_enabled() {
             let data = msg.data;
@@ -483,7 +409,17 @@ impl Msix {
             return;
         }
 
-        if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
+        let msix_vector = MsiVector {
+            msg_addr_lo: msg.address_lo,
+            msg_addr_hi: msg.address_hi,
+            msg_data: msg.data,
+            masked: false,
+            #[cfg(target_arch = "aarch64")]
+            dev_id: dev_id as u32,
+        };
+
+        let irq_manager = self.msi_irq_manager.as_ref().unwrap();
+        if let Err(e) = irq_manager.trigger(None, msix_vector, dev_id as u32) {
             error!("Send msix error: {:?}", e);
         };
     }
@@ -581,28 +517,16 @@ impl MigrationHook for Msix {
                 let msg = self.get_message(vector);
 
                 // update and commit irq routing
-                {
-                    let kvm_fds = KVM_FDS.load();
-                    let mut locked_irq_table = kvm_fds.irq_route_table.lock().unwrap();
-                    let allocated_gsi = match locked_irq_table.allocate_gsi() {
-                        Ok(gsi) => gsi,
-                        Err(e) => bail!("Failed to allocate new gsi: {}", e),
-                    };
-                    let msi_vector = MsiVector {
-                        msg_addr_hi: msg.address_hi,
-                        msg_addr_lo: msg.address_lo,
-                        msg_data: msg.data,
-                        masked: false,
-                        #[cfg(target_arch = "aarch64")]
-                        dev_id: self.dev_id.load(Ordering::Acquire) as u32,
-                    };
-                    if let Err(e) = locked_irq_table.add_msi_route(allocated_gsi, msi_vector) {
-                        bail!("Failed to add msi route to global irq routing table: {}", e);
-                    }
-                }
-                if let Err(e) = KVM_FDS.load().commit_irq_routing() {
-                    bail!("Failed to commit irq routing: {}", e);
-                }
+                let msi_vector = MsiVector {
+                    msg_addr_hi: msg.address_hi,
+                    msg_addr_lo: msg.address_lo,
+                    msg_data: msg.data,
+                    masked: false,
+                    #[cfg(target_arch = "aarch64")]
+                    dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+                };
+                let irq_manager = self.msi_irq_manager.as_ref().unwrap();
+                irq_manager.allocate_irq(msi_vector)?;
 
                 if self.is_vector_pending(vector) {
                     self.clear_pending_vector(vector);
@@ -619,23 +543,23 @@ impl MigrationHook for Msix {
 ///
 /// # Arguments
 ///
+/// * `pcidev_base ` - The Base of PCI device
 /// * `bar_id` - BAR id.
 /// * `vector_nr` - The number of vector.
-/// * `config` - The PCI config.
 /// * `dev_id` - Dev id.
-/// * `_id` - MSI-X id used in MigrationManager.
 /// * `parent_region` - Parent region which the MSI-X region registered. If none, registered in BAR.
 /// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the
 ///   table_offset and pba_offset together.
 pub fn init_msix(
+    pcidev_base: &mut PciDevBase,
     bar_id: usize,
     vector_nr: u32,
-    config: &mut PciConfig,
     dev_id: Arc<AtomicU16>,
-    _id: &str,
     parent_region: Option<&Region>,
     offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
+    let config = &mut pcidev_base.config;
+    let parent_bus = &pcidev_base.parent_bus;
     if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!(
             "invalid msix vectors, which should be in [1, {}]",
@@ -669,11 +593,20 @@ pub fn init_msix(
     offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
+    let msi_irq_manager = if let Some(pci_bus) = parent_bus.upgrade() {
+        let locked_pci_bus = pci_bus.lock().unwrap();
+        locked_pci_bus.get_msi_irq_manager()
+    } else {
+        error!("Msi irq controller is none");
+        None
+    };
+
     let msix = Arc::new(Mutex::new(Msix::new(
         table_size,
         pba_size,
         msix_cap_offset as u16,
         dev_id.clone(),
+        msi_irq_manager,
     )));
     if let Some(region) = parent_region {
         Msix::register_memory_region(
@@ -700,54 +633,45 @@ pub fn init_msix(
     config.msix = Some(msix.clone());
 
     #[cfg(not(test))]
-    MigrationManager::register_device_instance(MsixState::descriptor(), msix, _id);
+    MigrationManager::register_device_instance(MsixState::descriptor(), msix, &pcidev_base.base.id);
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
     use super::*;
-    use crate::pci::config::PCI_CONFIG_SPACE_SIZE;
+    use crate::{
+        pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE},
+        DeviceBase,
+    };
 
     #[test]
     fn test_init_msix() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
-
+        let mut base = PciDevBase {
+            base: DeviceBase::new("msix".to_string(), false),
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            devfn: 1,
+            parent_bus: Weak::new(),
+        };
         // Too many vectors.
         assert!(init_msix(
+            &mut base,
             0,
             MSIX_TABLE_SIZE_MAX as u32 + 2,
-            &mut pci_config,
             Arc::new(AtomicU16::new(0)),
-            "msix",
             None,
             None,
         )
         .is_err());
 
         // No vector.
-        assert!(init_msix(
-            0,
-            0,
-            &mut pci_config,
-            Arc::new(AtomicU16::new(0)),
-            "msix",
-            None,
-            None,
-        )
-        .is_err());
+        assert!(init_msix(&mut base, 0, 0, Arc::new(AtomicU16::new(0)), None, None,).is_err());
 
-        init_msix(
-            1,
-            2,
-            &mut pci_config,
-            Arc::new(AtomicU16::new(0)),
-            "msix",
-            None,
-            None,
-        )
-        .unwrap();
+        init_msix(&mut base, 1, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
+        let pci_config = base.config;
         let msix_cap_start = 64_u8;
         assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
         // Capabilities pointer
@@ -777,6 +701,7 @@ mod tests {
             64,
             64,
             Arc::new(AtomicU16::new(0)),
+            None,
         );
 
         assert!(msix.table[MSIX_TABLE_VEC_CTL as usize] & MSIX_TABLE_MASK_BIT > 0);
@@ -798,6 +723,7 @@ mod tests {
             64,
             64,
             Arc::new(AtomicU16::new(0)),
+            None,
         );
 
         msix.set_pending_vector(0);
@@ -813,6 +739,7 @@ mod tests {
             64,
             64,
             Arc::new(AtomicU16::new(0)),
+            None,
         );
         le_write_u32(&mut msix.table, 0, 0x1000_0000).unwrap();
         le_write_u32(&mut msix.table, 4, 0x2000_0000).unwrap();
@@ -826,26 +753,22 @@ mod tests {
 
     #[test]
     fn test_write_config() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
-        init_msix(
-            0,
-            2,
-            &mut pci_config,
-            Arc::new(AtomicU16::new(0)),
-            "msix",
-            None,
-            None,
-        )
-        .unwrap();
-        let msix = pci_config.msix.as_ref().unwrap();
+        let mut base = PciDevBase {
+            base: DeviceBase::new("msix".to_string(), false),
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            devfn: 1,
+            parent_bus: Weak::new(),
+        };
+        init_msix(&mut base, 0, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
+        let msix = base.config.msix.as_ref().unwrap();
         let mut locked_msix = msix.lock().unwrap();
         locked_msix.enabled = false;
         let offset = locked_msix.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
-        let val = le_read_u16(&pci_config.config, offset).unwrap();
-        le_write_u16(&mut pci_config.config, offset, val | MSIX_CAP_ENABLE).unwrap();
+        let val = le_read_u16(&base.config.config, offset).unwrap();
+        le_write_u16(&mut base.config.config, offset, val | MSIX_CAP_ENABLE).unwrap();
         locked_msix.set_pending_vector(0);
         locked_msix.write_config(
-            &pci_config.config,
+            &base.config.config,
             0,
             offset,
             &[0, val as u8 | MSIX_CAP_ENABLE as u8],

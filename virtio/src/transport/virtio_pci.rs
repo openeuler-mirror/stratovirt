@@ -1088,11 +1088,10 @@ impl PciDevOps for VirtioPciDevice {
 
         let nvectors = self.device.lock().unwrap().queue_num() + 1;
         init_msix(
+            &mut self.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             nvectors as u32,
-            &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.base.id,
             None,
             None,
         )?;
@@ -1552,13 +1551,11 @@ mod tests {
             false,
         );
 
-        let id = virtio_pci.name();
         assert!(init_msix(
+            &mut virtio_pci.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             (virtio_dev.lock().unwrap().queue_num() + 1) as u32,
-            &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &id,
             None,
             None,
         )
@@ -1709,20 +1706,18 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         virtio_pci.base.config.set_interrupt_pin();
 
-        let id = virtio_pci.name();
         init_msix(
+            &mut virtio_pci.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
-            &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &id,
             None,
             None,
         )
         .unwrap();
 
         init_intx(
-            id,
+            virtio_pci.name(),
             &mut virtio_pci.base.config,
             virtio_pci.base.parent_bus.clone(),
             virtio_pci.base.devfn,

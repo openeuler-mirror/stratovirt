@@ -38,7 +38,7 @@ use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info};
 use vmm_sys_util::{
-    ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+    eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
     signal::register_signal_handler,
 };
 
@@ -55,15 +55,14 @@ use cpu::{
     ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
     CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
 };
+use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
 use devices::{
     GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
+    GIC_IRQ_INTERNAL,
 };
 use interrupt::IrqRouteTable;
-use machine_manager::{
-    config::{MachineType, VmConfig},
-    machine::HypervisorType,
-};
+use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::{
     snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
@@ -76,6 +75,7 @@ use util::test_helper::is_test_enabled;
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 pub const KVM_SET_USER_MEMORY_REGION: u32 = 0x4020_ae46;
 pub const KVM_IOEVENTFD: u32 = 0x4040_ae79;
+pub const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
@@ -87,6 +87,10 @@ ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
 ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
 ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
 ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
+ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
+ioctl_iow_nr!(KVM_IRQFD, KVMIO, 0x76, kvm_irqfd);
+ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
+ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
@@ -96,7 +100,6 @@ pub struct KvmHypervisor {
     pub mem_slots: Arc<Mutex<HashMap<u32, KvmMemSlot>>>,
     #[cfg(target_arch = "aarch64")]
     pub irq_chip: Option<Arc<InterruptController>>,
-    pub irq_route_table: Option<Mutex<IrqRouteTable>>,
 }
 
 impl KvmHypervisor {
@@ -113,14 +116,13 @@ impl KvmHypervisor {
                         }
                     }))
                 };
-                let irq_route_table = Mutex::new(IrqRouteTable::new(&kvm_fd));
+
                 Ok(KvmHypervisor {
                     fd: Some(kvm_fd),
                     vm_fd,
                     mem_slots: Arc::new(Mutex::new(HashMap::new())),
                     #[cfg(target_arch = "aarch64")]
                     irq_chip: None,
-                    irq_route_table: Some(irq_route_table),
                 })
             }
             Err(e) => {
@@ -135,13 +137,6 @@ impl KvmHypervisor {
             self.vm_fd.clone(),
             self.mem_slots.clone(),
         )))
-    }
-
-    fn init_irq_route_table(&self) -> Result<()> {
-        let irq_route_table = self.irq_route_table.as_ref().unwrap();
-        let mut locked_irq_route_table = irq_route_table.lock().unwrap();
-        locked_irq_route_table.init_irq_route_table();
-        locked_irq_route_table.commit_irq_routing(self.vm_fd.as_ref().unwrap())
     }
 }
 
@@ -168,7 +163,6 @@ impl HypervisorOps for KvmHypervisor {
     fn create_interrupt_controller(
         &mut self,
         gic_conf: &ICGICConfig,
-        vm_config: &VmConfig,
     ) -> Result<Arc<InterruptController>> {
         gic_conf.check_sanity()?;
 
@@ -203,31 +197,21 @@ impl HypervisorOps for KvmHypervisor {
             Ok(Arc::new(InterruptController::new(gicv2)))
         };
 
-        let interrupt_controller = match &gic_conf.version {
+        match &gic_conf.version {
             Some(GICVersion::GICv3) => create_gicv3(),
             Some(GICVersion::GICv2) => create_gicv2(),
             // Try v3 by default if no version specified.
             None => create_gicv3().or_else(|_| create_gicv2()),
-        };
-
-        if vm_config.machine_config.mach_type == MachineType::StandardVm {
-            self.init_irq_route_table()?;
         }
-
-        interrupt_controller
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn create_interrupt_controller(&mut self, vm_config: &VmConfig) -> Result<()> {
+    fn create_interrupt_controller(&mut self) -> Result<()> {
         self.vm_fd
             .as_ref()
             .unwrap()
             .create_irq_chip()
             .with_context(|| HypervisorError::CrtIrqchipErr)?;
-
-        if vm_config.machine_config.mach_type == MachineType::StandardVm {
-            self.init_irq_route_table()?;
-        }
 
         Ok(())
     }
@@ -247,6 +231,26 @@ impl HypervisorOps for KvmHypervisor {
             self.vm_fd.clone(),
             vcpu_fd,
         )))
+    }
+
+    fn create_irq_manager(&mut self) -> Result<IrqManager> {
+        let kvm = Kvm::new().unwrap();
+        let irqfd_enable = kvm.check_extension(Cap::Irqfd);
+        let irq_route_table = Mutex::new(IrqRouteTable::new(self.fd.as_ref().unwrap()));
+        let irq_manager = Arc::new(KVMInterruptManager::new(
+            irqfd_enable,
+            self.vm_fd.clone().unwrap(),
+            irq_route_table,
+        ));
+        let mut locked_irq_route_table = irq_manager.irq_route_table.lock().unwrap();
+        locked_irq_route_table.init_irq_route_table();
+        locked_irq_route_table.commit_irq_routing(self.vm_fd.as_ref().unwrap())?;
+        drop(locked_irq_route_table);
+
+        Ok(IrqManager {
+            line_irq_manager: Some(irq_manager.clone()),
+            msi_irq_manager: Some(irq_manager),
+        })
     }
 }
 
@@ -595,6 +599,186 @@ impl CPUHypervisorOps for KvmCpu {
     fn kick(&self) -> Result<()> {
         self.fd.set_kvm_immediate_exit(1);
         Ok(())
+    }
+}
+
+struct KVMInterruptManager {
+    pub irqfd_cap: bool,
+    pub vm_fd: Arc<VmFd>,
+    pub irq_route_table: Mutex<IrqRouteTable>,
+}
+
+impl KVMInterruptManager {
+    pub fn new(irqfd_cap: bool, vm_fd: Arc<VmFd>, irq_route_table: Mutex<IrqRouteTable>) -> Self {
+        KVMInterruptManager {
+            irqfd_cap,
+            vm_fd,
+            irq_route_table,
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn arch_map_irq(&self, gsi: u32) -> u32 {
+        gsi
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn arch_map_irq(&self, gsi: u32) -> u32 {
+        let irq = gsi + GIC_IRQ_INTERNAL;
+        let irqtype = KVM_ARM_IRQ_TYPE_SPI;
+        irqtype << KVM_ARM_IRQ_TYPE_SHIFT | irq
+    }
+}
+
+impl LineIrqManager for KVMInterruptManager {
+    fn irqfd_enable(&self) -> bool {
+        self.irqfd_cap
+    }
+
+    fn register_irqfd(
+        &self,
+        irq_fd: Arc<EventFd>,
+        irq: u32,
+        trigger_mode: TriggerMode,
+    ) -> Result<()> {
+        if !self.irqfd_cap {
+            bail!("Hypervisor doesn't support irqfd feature!")
+        }
+
+        match trigger_mode {
+            TriggerMode::Edge => {
+                self.vm_fd
+                    .register_irqfd(&irq_fd, irq as u32)
+                    .map_err(|e| {
+                        error!("Failed to register irq, error is {:?}", e);
+                        e
+                    })?;
+            }
+            _ => {
+                bail!("Unsupported registering irq fd for interrupt of level mode.");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
+        self.vm_fd
+            .unregister_irqfd(&irq_fd, irq as u32)
+            .map_err(|e| {
+                error!("Failed to unregister irq, error is {:?}", e);
+                e
+            })?;
+
+        Ok(())
+    }
+
+    fn set_irq_line(&self, gsi: u32, level: bool) -> Result<()> {
+        let kvm_irq = self.arch_map_irq(gsi);
+        self.vm_fd
+            .set_irq_line(kvm_irq, level)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, level))?;
+
+        Ok(())
+    }
+
+    fn write_irqfd(&self, irq_fd: Arc<EventFd>) -> Result<()> {
+        irq_fd.write(1)?;
+
+        Ok(())
+    }
+}
+
+impl MsiIrqManager for KVMInterruptManager {
+    fn allocate_irq(&self, vector: MsiVector) -> Result<u32> {
+        let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
+        let gsi = locked_irq_route_table.allocate_gsi().map_err(|e| {
+            error!("Failed to allocate gsi, error is {:?}", e);
+            e
+        })?;
+
+        locked_irq_route_table
+            .add_msi_route(gsi, vector)
+            .map_err(|e| {
+                error!("Failed to add MSI-X route, error is {:?}", e);
+                e
+            })?;
+
+        locked_irq_route_table
+            .commit_irq_routing(&self.vm_fd.clone())
+            .map_err(|e| {
+                error!("Failed to commit irq routing, error is {:?}", e);
+                e
+            })?;
+
+        Ok(gsi)
+    }
+
+    fn release_irq(&self, irq: u32) -> Result<()> {
+        let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
+
+        locked_irq_route_table.release_gsi(irq).map_err(|e| {
+            error!("Failed to release gsi, error is {:?}", e);
+            e
+        })
+    }
+
+    fn register_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
+        self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
+            error!("Failed to register irq, error is {:?}", e);
+            e
+        })?;
+
+        Ok(())
+    }
+
+    fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
+        self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
+            error!("Failed to unregister irq, error is {:?}", e);
+            e
+        })?;
+
+        Ok(())
+    }
+
+    fn trigger(&self, irq_fd: Option<Arc<EventFd>>, vector: MsiVector, dev_id: u32) -> Result<()> {
+        if irq_fd.is_some() {
+            irq_fd.unwrap().write(1)?;
+        } else {
+            #[cfg(target_arch = "aarch64")]
+            let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
+            #[cfg(target_arch = "x86_64")]
+            let flags: u32 = 0;
+
+            let kvm_msi = kvm_bindings::kvm_msi {
+                address_lo: vector.msg_addr_lo,
+                address_hi: vector.msg_addr_hi,
+                data: vector.msg_data,
+                flags,
+                devid: dev_id,
+                pad: [0; 12],
+            };
+
+            self.vm_fd.signal_msi(kvm_msi)?;
+        }
+
+        Ok(())
+    }
+
+    fn update_route_table(&self, gsi: u32, vector: MsiVector) -> Result<()> {
+        let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
+        locked_irq_route_table
+            .update_msi_route(gsi, vector)
+            .map_err(|e| {
+                error!("Failed to update MSI-X route, error is {:?}", e);
+                e
+            })?;
+        locked_irq_route_table
+            .commit_irq_routing(&self.vm_fd.clone())
+            .map_err(|e| {
+                error!("Failed to commit irq routing, error is {:?}", e);
+                e
+            })
     }
 }
 

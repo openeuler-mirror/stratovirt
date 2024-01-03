@@ -877,7 +877,7 @@ impl SysBusDevOps for PFlash {
         }
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 
@@ -887,7 +887,7 @@ impl SysBusDevOps for PFlash {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        let res = self.get_sys_resource().unwrap();
+        let res = self.get_sys_resource_mut().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         res.irq = 0;

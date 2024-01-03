@@ -24,9 +24,9 @@ use anyhow::Result;
 
 use address_space::AddressSpace;
 use cpu::CPUHypervisorOps;
+use devices::IrqManager;
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, InterruptController};
-use machine_manager::config::VmConfig;
 use machine_manager::machine::HypervisorType;
 
 pub trait HypervisorOps: Send + Sync + Any {
@@ -44,12 +44,13 @@ pub trait HypervisorOps: Send + Sync + Any {
     fn create_interrupt_controller(
         &mut self,
         gic_conf: &ICGICConfig,
-        vm_config: &VmConfig,
     ) -> Result<Arc<InterruptController>>;
 
     #[cfg(target_arch = "x86_64")]
-    fn create_interrupt_controller(&mut self, vm_config: &VmConfig) -> Result<()>;
+    fn create_interrupt_controller(&mut self) -> Result<()>;
 
     fn create_hypervisor_cpu(&self, vcpu_id: u8)
         -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>>;
+
+    fn create_irq_manager(&mut self) -> Result<IrqManager>;
 }
