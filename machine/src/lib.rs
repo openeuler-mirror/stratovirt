@@ -18,8 +18,6 @@ pub mod standard_common;
 pub mod x86_64;
 
 mod micro_common;
-#[cfg(target_arch = "x86_64")]
-mod vm_state;
 
 pub use anyhow::Result;
 

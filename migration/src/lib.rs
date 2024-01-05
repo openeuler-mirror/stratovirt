@@ -189,4 +189,6 @@ pub trait MigrateOps: Send + Sync {
     fn start_dirty_log(&self) -> Result<()>;
 
     fn stop_dirty_log(&self) -> Result<()>;
+
+    fn register_instance(&self) -> Result<()>;
 }
