@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use anyhow::Result;
+use kvm_ioctls::DeviceFd;
 
 use address_space::AddressSpace;
 use cpu::CPUHypervisorOps;
@@ -53,4 +54,6 @@ pub trait HypervisorOps: Send + Sync + Any {
         -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>>;
 
     fn create_irq_manager(&mut self) -> Result<IrqManager>;
+
+    fn create_vfio_device(&self) -> Option<DeviceFd>;
 }

@@ -28,37 +28,13 @@ use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
-use log::error;
 use once_cell::sync::Lazy;
 
-use hypervisor::kvm::KVM_FDS;
 use vfio_dev::VfioGroup;
 
-pub static KVM_DEVICE_FD: Lazy<Option<DeviceFd>> = Lazy::new(create_kvm_vfio_device);
+pub static KVM_DEVICE_FD: Lazy<Mutex<Option<DeviceFd>>> = Lazy::new(|| Mutex::new(None));
 pub static CONTAINERS: Lazy<Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 pub static GROUPS: Lazy<Mutex<HashMap<u32, Arc<VfioGroup>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-
-fn create_kvm_vfio_device() -> Option<DeviceFd> {
-    let mut device = kvm_create_device {
-        type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
-        fd: 0,
-        flags: 0,
-    };
-    match KVM_FDS
-        .load()
-        .vm_fd
-        .as_ref()
-        .unwrap()
-        .create_device(&mut device)
-    {
-        Ok(fd) => Some(fd),
-        Err(e) => {
-            error!("{:?}", e);
-            None
-        }
-    }
-}

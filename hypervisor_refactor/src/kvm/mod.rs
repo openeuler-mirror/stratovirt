@@ -34,6 +34,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
+use kvm_ioctls::DeviceFd;
 use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info};
@@ -251,6 +252,23 @@ impl HypervisorOps for KvmHypervisor {
             line_irq_manager: Some(irq_manager.clone()),
             msi_irq_manager: Some(irq_manager),
         })
+    }
+
+    fn create_vfio_device(&self) -> Option<DeviceFd> {
+        let mut device = kvm_create_device {
+            type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
+            fd: 0,
+            flags: 0,
+        };
+        let vfio_device_fd = match self.vm_fd.as_ref().unwrap().create_device(&mut device) {
+            Ok(fd) => Some(fd),
+            Err(_) => {
+                error!("Failed to create VFIO device.");
+                None
+            }
+        };
+
+        vfio_device_fd
     }
 }
 
