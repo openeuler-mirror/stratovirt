@@ -10,10 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use kvm_bindings::{kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_IRQCHIP_IOAPIC};
+use kvm_ioctls::VmFd;
 
-use hypervisor::kvm::KVM_FDS;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -21,7 +23,15 @@ use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
 /// Structure to wrapper kvm_device related function.
-pub struct KvmDevice {}
+pub struct KvmDevice {
+    vm_fd: Arc<VmFd>,
+}
+
+impl KvmDevice {
+    pub fn new(vm_fd: Arc<VmFd>) -> Self {
+        Self { vm_fd }
+    }
+}
 
 /// Status of kvm device.
 /// Kvm device include pit, kvm_clock, irq on x86_64 platform.
@@ -36,8 +46,7 @@ pub struct KvmDeviceState {
 
 impl StateTransfer for KvmDevice {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+        let vm_fd = self.vm_fd.clone();
 
         // save pit
         let pit_state = vm_fd.get_pit2()?;
@@ -64,8 +73,7 @@ impl StateTransfer for KvmDevice {
     }
 
     fn set_state(&self, state: &[u8]) -> migration::Result<()> {
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+        let vm_fd = self.vm_fd.clone();
 
         let kvm_state = KvmDeviceState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("KVM_DEVICE"))?;

@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::vm_state;
 use crate::{
     micro_common::syscall::syscall_whitelist, LightMachine, MachineBase, MachineError, MachineOps,
 };
@@ -195,11 +194,9 @@ impl MachineOps for LightMachine {
         )?);
 
         MigrationManager::register_vm_instance(vm.clone());
-        MigrationManager::register_kvm_instance(
-            vm_state::KvmDeviceState::descriptor(),
-            Arc::new(vm_state::KvmDevice {}),
-        );
-        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
+        let migration_hyp = locked_vm.base.migration_hypervisor.clone();
+        migration_hyp.lock().unwrap().register_instance()?;
+        MigrationManager::register_migration_instance(migration_hyp);
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }

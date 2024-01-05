@@ -18,6 +18,9 @@ pub mod x86_64;
 mod interrupt;
 mod listener;
 
+#[cfg(target_arch = "x86_64")]
+pub mod vm_state;
+
 #[cfg(target_arch = "aarch64")]
 pub use self::aarch64::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
 #[cfg(target_arch = "aarch64")]
@@ -65,11 +68,8 @@ use devices::{
 use interrupt::IrqRouteTable;
 use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
-use migration::{
-    snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
-    MigrationManager,
-};
-use migration::{MigrateMemSlot, MigrateOps};
+use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
+use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
 use util::test_helper::is_test_enabled;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
@@ -288,7 +288,6 @@ impl MigrateOps for KvmHypervisor {
         Arc::new(Mutex::new(mgt_mem_slots))
     }
 
-    /// Get dirty page bitmap in kvm.
     fn get_dirty_log(&self, slot: u32, mem_size: u64) -> Result<Vec<u64>> {
         self.vm_fd
             .as_ref()
@@ -342,6 +341,16 @@ impl MigrateOps for KvmHypervisor {
                     })?;
             }
         }
+
+        Ok(())
+    }
+
+    fn register_instance(&self) -> Result<()> {
+        #[cfg(target_arch = "x86_64")]
+        MigrationManager::register_kvm_instance(
+            vm_state::KvmDeviceState::descriptor(),
+            Arc::new(vm_state::KvmDevice::new(self.vm_fd.clone().unwrap())),
+        );
 
         Ok(())
     }

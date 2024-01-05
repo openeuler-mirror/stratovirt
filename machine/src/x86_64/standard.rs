@@ -24,7 +24,7 @@ use super::mch::Mch;
 use crate::error::MachineError;
 use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{vm_state, MachineBase, MachineOps};
+use crate::{MachineBase, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
@@ -612,11 +612,9 @@ impl MachineOps for StdMachine {
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
-        MigrationManager::register_kvm_instance(
-            vm_state::KvmDeviceState::descriptor(),
-            Arc::new(vm_state::KvmDevice {}),
-        );
-        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
+        let migration_hyp = locked_vm.base.migration_hypervisor.clone();
+        migration_hyp.lock().unwrap().register_instance()?;
+        MigrationManager::register_migration_instance(migration_hyp);
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
