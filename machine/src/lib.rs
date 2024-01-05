@@ -104,7 +104,7 @@ use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
-use vfio::{VfioDevice, VfioPciDevice};
+use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
@@ -1298,6 +1298,10 @@ pub trait MachineOps {
     }
 
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
+        let hypervisor = self.get_hypervisor();
+        let locked_hypervisor = hypervisor.lock().unwrap();
+        *KVM_DEVICE_FD.lock().unwrap() = locked_hypervisor.create_vfio_device();
+
         let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let bdf = get_pci_bdf(cfg_args)?;
         let multifunc = get_multi_function(cfg_args)?;

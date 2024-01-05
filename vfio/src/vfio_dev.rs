@@ -369,11 +369,11 @@ impl VfioGroup {
             attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
             addr: &self.fd.as_raw_fd() as *const i32 as u64,
         };
-        match KVM_DEVICE_FD.as_ref() {
+        match KVM_DEVICE_FD.lock().unwrap().as_ref() {
             Some(fd) => fd
                 .set_device_attr(&attr)
                 .with_context(|| "Failed to add group to kvm device.")?,
-            None => bail!("Failed to create kvm device."),
+            None => bail!("Kvm device hasn't been created."),
         }
         Ok(())
     }
@@ -389,7 +389,7 @@ impl VfioGroup {
             attr: u64::from(KVM_DEV_VFIO_GROUP_DEL),
             addr: &self.fd.as_raw_fd() as *const i32 as u64,
         };
-        match KVM_DEVICE_FD.as_ref() {
+        match KVM_DEVICE_FD.lock().unwrap().as_ref() {
             Some(fd) => fd
                 .set_device_attr(&attr)
                 .with_context(|| "Failed to delete group from kvm device.")?,
