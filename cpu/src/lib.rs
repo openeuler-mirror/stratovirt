@@ -570,7 +570,7 @@ impl CPUInterface for CPU {
                         self.fd.set_kvm_immediate_exit(0);
                     }
                     _ => {
-                        return Err(anyhow!(CpuError::UnhandledKvmExit(self.id())));
+                        return Err(anyhow!(CpuError::UnhandledKvmExit(self.id(), e.errno())));
                     }
                 };
             }
