@@ -14,8 +14,81 @@ use anyhow::Result;
 use regex::Regex;
 
 use super::{CmdParser, VmConfig};
+use crate::qmp::qmp_schema;
 
 impl VmConfig {
+    /// Add config of hot-plugged devices to `VmConfig`.
+    pub fn add_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) -> String {
+        let mut device_info = args.driver.clone();
+
+        device_info = format!("{},id={}", device_info, args.id);
+        if let Some(addr) = &args.addr {
+            device_info = format!("{},addr={}", device_info, addr);
+        }
+        if let Some(bus) = &args.bus {
+            device_info = format!("{},bus={}", device_info, bus);
+        }
+        if let Some(drive) = &args.drive {
+            device_info = format!("{},drive={}", device_info, drive);
+        }
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+        if let Some(iothread) = &args.iothread {
+            device_info = format!("{},iothread={}", device_info, iothread);
+        }
+        if let Some(multi) = &args.multifunction {
+            if *multi {
+                device_info = format!("{},multifunction=on", device_info);
+            } else {
+                device_info = format!("{},multifunction=off", device_info);
+            }
+        }
+        if let Some(queues) = &args.queues {
+            device_info = format!("{},num-queues={}", device_info, queues);
+        }
+        if let Some(size) = &args.queue_size {
+            device_info = format!("{},queue-size={}", device_info, size);
+        }
+
+        // For net devices only.
+        if let Some(mac) = &args.mac {
+            device_info = format!("{},mac={}", device_info, mac);
+        }
+        if let Some(netdev) = &args.netdev {
+            device_info = format!("{},netdev={}", device_info, netdev);
+        }
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+
+        // For vhost devices only.
+        if let Some(chardev) = &args.chardev {
+            device_info = format!("{},chardev={}", device_info, chardev);
+        }
+
+        // For block devices only.
+        if let Some(serial_num) = &args.serial_num {
+            device_info = format!("{},serial={}", device_info, serial_num);
+        }
+        if let Some(boot_index) = &args.boot_index {
+            device_info = format!("{},bootindex={}", device_info, boot_index);
+        }
+
+        // For vfio devices only.
+        if let Some(host) = &args.host {
+            device_info = format!("{},addr={}", device_info, host);
+        }
+        if let Some(sysfsdev) = &args.sysfsdev {
+            device_info = format!("{},addr={}", device_info, sysfsdev);
+        }
+
+        self.devices
+            .push((args.driver.clone(), device_info.clone()));
+
+        device_info
+    }
+
     pub fn add_device(&mut self, device_config: &str) -> Result<()> {
         let mut cmd_params = CmdParser::new("device");
         cmd_params.push("");

@@ -285,18 +285,18 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         netdevinterfacecfg.queue_size = queue_size;
     }
 
-    if let Some(netcfg) = &vm_config.netdevs.remove(&netdev) {
-        netdevinterfacecfg.id = netid;
-        netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
-        netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
-        netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
-        netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
-        netdevinterfacecfg.queues = netcfg.queues;
-        if let Some(chardev) = &netcfg.chardev {
-            netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
-        }
-    } else {
-        bail!("Netdev: {:?} not found for net device", &netdev);
+    let netcfg = &vm_config
+        .netdevs
+        .remove(&netdev)
+        .with_context(|| format!("Netdev: {:?} not found for net device", &netdev))?;
+    netdevinterfacecfg.id = netid;
+    netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
+    netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
+    netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
+    netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
+    netdevinterfacecfg.queues = netcfg.queues;
+    if let Some(chardev) = &netcfg.chardev {
+        netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
     }
 
     netdevinterfacecfg.check()?;
@@ -453,47 +453,6 @@ impl VmConfig {
             bail!("Netdev {} not found", id);
         }
         Ok(())
-    }
-
-    /// Add 'net devices' to `VmConfig devices`.
-    pub fn add_net_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
-        let mut device_info = args.driver.clone();
-
-        device_info = format!("{},id={}", device_info, args.id);
-
-        if let Some(netdev) = &args.netdev {
-            device_info = format!("{},netdev={}", device_info, netdev);
-        }
-
-        if let Some(mac) = &args.mac {
-            device_info = format!("{},mac={}", device_info, mac);
-        }
-
-        if let Some(addr) = &args.addr {
-            device_info = format!("{},addr={}", device_info, addr);
-        }
-
-        if let Some(bus) = &args.bus {
-            device_info = format!("{},bus={}", device_info, bus);
-        }
-
-        if args.multifunction.is_some() {
-            if args.multifunction.unwrap() {
-                device_info = format!("{},multifunction=on", device_info);
-            } else {
-                device_info = format!("{},multifunction=off", device_info);
-            }
-        }
-
-        if let Some(iothread) = &args.iothread {
-            device_info = format!("{},iothread={}", device_info, iothread);
-        }
-
-        if let Some(mq) = &args.mq {
-            device_info = format!("{},mq={}", device_info, mq);
-        }
-
-        self.devices.push((args.driver.clone(), device_info));
     }
 }
 

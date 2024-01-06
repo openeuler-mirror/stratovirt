@@ -1063,7 +1063,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_blk(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
@@ -1100,11 +1105,18 @@ pub trait MachineOps {
             device,
             &device_cfg.id,
         );
-        self.reset_bus(&device_cfg.id)?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
         Ok(())
     }
 
-    fn add_virtio_pci_scsi(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_scsi(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
@@ -1121,7 +1133,9 @@ pub trait MachineOps {
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio scsi controller")?;
-        self.reset_bus(&device_cfg.id)?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
         device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
         Ok(())
     }
@@ -1192,7 +1206,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_net(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_net(vm_config, cfg_args)?;
@@ -1220,11 +1239,18 @@ pub trait MachineOps {
             device
         };
         self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, need_irqfd)?;
-        self.reset_bus(&device_cfg.id)?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
         Ok(())
     }
 
-    fn add_vhost_user_blk_pci(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_vhost_user_blk_pci(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
@@ -1250,7 +1276,9 @@ pub trait MachineOps {
                 self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
         }
-        self.reset_bus(&device_cfg.id)?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
         Ok(())
     }
 
@@ -1298,7 +1326,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
+    fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
         let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let bdf = get_pci_bdf(cfg_args)?;
         let multifunc = get_multi_function(cfg_args)?;
@@ -1309,7 +1337,9 @@ pub trait MachineOps {
             &device_cfg.sysfsdev,
             multifunc,
         )?;
-        self.reset_bus(&device_cfg.id)?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
         Ok(())
     }
 
@@ -1774,10 +1804,10 @@ pub trait MachineOps {
                     self.add_virtio_mmio_block(vm_config, cfg_args)?;
                 }
                 "virtio-blk-pci" => {
-                    self.add_virtio_pci_blk(vm_config, cfg_args)?;
+                    self.add_virtio_pci_blk(vm_config, cfg_args, false)?;
                 }
                 "virtio-scsi-pci" => {
-                    self.add_virtio_pci_scsi(vm_config, cfg_args)?;
+                    self.add_virtio_pci_scsi(vm_config, cfg_args, false)?;
                 }
                 "scsi-hd" => {
                     self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_DISK)?;
@@ -1789,7 +1819,7 @@ pub trait MachineOps {
                     self.add_virtio_mmio_net(vm_config, cfg_args)?;
                 }
                 "virtio-net-pci" => {
-                    self.add_virtio_pci_net(vm_config, cfg_args)?;
+                    self.add_virtio_pci_net(vm_config, cfg_args, false)?;
                 }
                 "pcie-root-port" => {
                     self.add_pci_root_port(cfg_args)?;
@@ -1813,13 +1843,13 @@ pub trait MachineOps {
                     self.add_virtio_rng(vm_config, cfg_args)?;
                 }
                 "vfio-pci" => {
-                    self.add_vfio_device(cfg_args)?;
+                    self.add_vfio_device(cfg_args, false)?;
                 }
                 "vhost-user-blk-device" => {
                     self.add_vhost_user_blk_device(vm_config, cfg_args)?;
                 }
                 "vhost-user-blk-pci" => {
-                    self.add_vhost_user_blk_pci(vm_config, cfg_args)?;
+                    self.add_vhost_user_blk_pci(vm_config, cfg_args, false)?;
                 }
                 "vhost-user-fs-pci" | "vhost-user-fs-device" => {
                     self.add_virtio_fs(vm_config, cfg_args)?;
