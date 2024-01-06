@@ -5,7 +5,19 @@ message = "{}: Request received from guest {}, ready to start processing."
 enabled = true
 
 [[events]]
-name = "virtio_send_interrupt"
-args = "device: String"
-message = "{}: StratoVirt processing complete, ready to send interrupt to guest."
+name = "virtqueue_send_interrupt"
+args = "device: &str, queue: u64"
+message = "{}: virtqueue 0x{:X?} processing complete, ready to send interrupt to guest."
+enabled = true
+
+[[events]]
+name = "virtio_scsi_handle_cmd_req"
+args = "target: u8, lun: u16, tag: u64, cmd: u8"
+message = "target={}, lun={}, tag={}, cmd={}."
+enabled = true
+
+[[events]]
+name = "virtio_scsi_handle_cmd_resp"
+args = "target: u8, lun: u16, tag: u64, status: u8, response: u8"
+message = "target={}, lun={}, tag={}, status={}, response={}."
 enabled = true

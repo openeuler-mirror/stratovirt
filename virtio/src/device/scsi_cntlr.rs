@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -561,6 +561,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
                         VirtioInterruptType::Vring,
                     )
                 })?;
+            trace::virtqueue_send_interrupt("ScsiCntlr", &*queue_lock as *const _ as u64);
         }
 
         Ok(())
@@ -584,6 +585,7 @@ struct ScsiCtrlQueueHandler {
 
 impl ScsiCtrlQueueHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
+        trace::virtio_receive_request("ScsiCntlr".to_string(), "to ctrl".to_string());
         let result = self.handle_ctrl_queue_requests();
         if result.is_err() {
             report_virtio_error(
@@ -728,6 +730,13 @@ impl ScsiRequestOps for CmdQueueRequest {
         }
         self.resp.response = VIRTIO_SCSI_S_OK;
         self.resp.status = status;
+        trace::virtio_scsi_handle_cmd_resp(
+            self.req.lun[1],
+            virtio_scsi_get_lun_id(self.req.lun),
+            self.req.tag,
+            self.resp.status,
+            self.resp.response,
+        );
         self.complete()?;
 
         Ok(())
@@ -785,6 +794,7 @@ impl EventNotifierHelper for ScsiCmdQueueHandler {
 
 impl ScsiCmdQueueHandler {
     fn handle_cmd(&mut self) -> Result<()> {
+        trace::virtio_receive_request("ScsiCntlr".to_string(), "to cmd".to_string());
         let result = self.handle_cmd_queue_requests();
         if result.is_err() {
             report_virtio_error(
@@ -817,7 +827,12 @@ impl ScsiCmdQueueHandler {
                 self.driver_features,
                 &elem,
             )?;
-
+            trace::virtio_scsi_handle_cmd_req(
+                cmdq_request.req.lun[1],
+                virtio_scsi_get_lun_id(cmdq_request.req.lun),
+                cmdq_request.req.tag,
+                cmdq_request.req.cdb[0],
+            );
             let mut need_handle = false;
             self.check_cmd_queue_request(&mut cmdq_request, &mut need_handle)?;
             if !need_handle {
@@ -847,6 +862,13 @@ impl ScsiCmdQueueHandler {
             // If neither dataout nor datain is empty, return VIRTIO_SCSI_S_FAILURE immediately.
             qrequest.resp.response = VIRTIO_SCSI_S_FAILURE;
             qrequest.complete()?;
+            trace::virtio_scsi_handle_cmd_resp(
+                qrequest.req.lun[1],
+                virtio_scsi_get_lun_id(qrequest.req.lun),
+                qrequest.req.tag,
+                qrequest.resp.status,
+                qrequest.resp.response,
+            );
             return Ok(());
         }
 
@@ -859,7 +881,13 @@ impl ScsiCmdQueueHandler {
             // It's not an error!
             qrequest.resp.response = VIRTIO_SCSI_S_BAD_TARGET;
             qrequest.complete()?;
-            debug!("no such scsi device, target {} lun {}", target_id, lun_id);
+            trace::virtio_scsi_handle_cmd_resp(
+                qrequest.req.lun[1],
+                virtio_scsi_get_lun_id(qrequest.req.lun),
+                qrequest.req.tag,
+                qrequest.resp.status,
+                qrequest.resp.response,
+            );
             return Ok(());
         }
 
@@ -903,9 +931,12 @@ impl ScsiCmdQueueHandler {
             // Wrong virtio scsi request which doesn't provide enough datain/dataout buffer.
             qrequest.resp.response = VIRTIO_SCSI_S_OVERRUN;
             qrequest.complete()?;
-            debug!(
-                "command {:x} requested data's length({}),provided buffer length({})",
-                sreq.cmd.op, sreq.cmd.xfer, sreq.datalen
+            trace::virtio_scsi_handle_cmd_resp(
+                qrequest.req.lun[1],
+                virtio_scsi_get_lun_id(qrequest.req.lun),
+                qrequest.req.tag,
+                qrequest.resp.status,
+                qrequest.resp.response,
             );
             return Ok(());
         }

@@ -853,7 +853,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                trace::virtio_send_interrupt("Net".to_string());
+                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
             }
 
             rx_packets += 1;
@@ -940,7 +940,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                trace::virtio_send_interrupt("Net".to_string());
+                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
             }
             tx_packets += 1;
             if tx_packets >= self.queue_size {

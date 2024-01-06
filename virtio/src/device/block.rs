@@ -180,7 +180,7 @@ impl AioCompleteCb {
                 .with_context(|| {
                     VirtioError::InterruptTrigger("blk io completion", VirtioInterruptType::Vring)
                 })?;
-            trace::virtio_send_interrupt("Block".to_string());
+            trace::virtqueue_send_interrupt("Block", &*queue_lock as *const _ as u64);
         }
         Ok(())
     }
