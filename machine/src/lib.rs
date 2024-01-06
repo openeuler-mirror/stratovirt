@@ -1681,89 +1681,62 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add usb keyboard.
+    /// Add usb device.
     ///
     /// # Arguments
     ///
-    /// * `cfg_args` - Keyboard Configuration.
-    fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_keyboard(cfg_args)?;
-        // SAFETY: id is already checked not none in parse_usb_keyboard().
-        let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
-        let kbd = keyboard
-            .realize()
-            .with_context(|| "Failed to realize usb keyboard device")?;
-        self.attach_usb_to_xhci_controller(vm_config, kbd)?;
-        Ok(())
-    }
+    /// * `driver` - USB device class.
+    /// * `cfg_args` - USB device Configuration.
+    fn add_usb_device(
+        &mut self,
+        driver: &str,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let usb_device = match driver {
+            "usb-kbd" => {
+                let device_cfg = parse_usb_keyboard(cfg_args)?;
+                // SAFETY: id is already checked not none in parse_usb_keyboard().
+                let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
+                keyboard
+                    .realize()
+                    .with_context(|| "Failed to realize usb keyboard device")?
+            }
+            "usb-tablet" => {
+                let device_cfg = parse_usb_tablet(cfg_args)?;
+                // SAFETY: id is already checked not none in parse_usb_tablet().
+                let tablet = UsbTablet::new(device_cfg.id.unwrap());
+                tablet
+                    .realize()
+                    .with_context(|| "Failed to realize usb tablet device")?
+            }
+            #[cfg(feature = "usb_camera")]
+            "usb-camera" => {
+                let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
+                let camera = UsbCamera::new(device_cfg)?;
+                camera
+                    .realize()
+                    .with_context(|| "Failed to realize usb camera device")?
+            }
+            "usb-storage" => {
+                let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
+                let storage = UsbStorage::new(device_cfg, self.get_drive_files());
+                storage
+                    .realize()
+                    .with_context(|| "Failed to realize usb storage device")?
+            }
+            #[cfg(feature = "usb_host")]
+            "usb-host" => {
+                let device_cfg = parse_usb_host(cfg_args)?;
+                let usbhost = UsbHost::new(device_cfg)?;
+                usbhost
+                    .realize()
+                    .with_context(|| "Failed to realize usb host device")?
+            }
+            _ => bail!("Unknown usb device classes."),
+        };
 
-    /// Add usb tablet.
-    ///
-    /// # Arguments
-    ///
-    /// * `cfg_args` - Tablet Configuration.
-    fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_tablet(cfg_args)?;
-        // SAFETY: id is already checked not none in parse_usb_tablet().
-        let tablet = UsbTablet::new(device_cfg.id.unwrap());
-        let tbt = tablet
-            .realize()
-            .with_context(|| "Failed to realize usb tablet device")?;
-
-        self.attach_usb_to_xhci_controller(vm_config, tbt)?;
-
-        Ok(())
-    }
-
-    /// Add usb camera.
-    ///
-    /// # Arguments
-    ///
-    /// * `cfg_args` - Camera Configuration.
-    #[cfg(feature = "usb_camera")]
-    fn add_usb_camera(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
-        let camera = UsbCamera::new(device_cfg)?;
-        let camera = camera.realize()?;
-
-        self.attach_usb_to_xhci_controller(vm_config, camera)?;
-
-        Ok(())
-    }
-
-    /// Add usb storage.
-    ///
-    /// # Arguments
-    ///
-    /// * `cfg_args` - USB Storage Configuration.
-    fn add_usb_storage(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
-        let storage = UsbStorage::new(device_cfg, self.get_drive_files());
-        let stg = storage
-            .realize()
-            .with_context(|| "Failed to realize usb storage device")?;
-
-        self.attach_usb_to_xhci_controller(vm_config, stg)?;
-
-        Ok(())
-    }
-
-    /// Add usb host.
-    ///
-    /// # Arguments
-    ///
-    /// * `cfg_args` - USB Host Configuration.
-    #[cfg(feature = "usb_host")]
-    fn add_usb_host(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_usb_host(cfg_args)?;
-        let usbhost = UsbHost::new(device_cfg)?;
-
-        let usbhost = usbhost
-            .realize()
-            .with_context(|| "Failed to realize usb host device")?;
-
-        self.attach_usb_to_xhci_controller(vm_config, usbhost)?;
-
+        self.attach_usb_to_xhci_controller(vm_config, usb_device)?;
         Ok(())
     }
 
@@ -1857,22 +1830,8 @@ pub trait MachineOps {
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
-                "usb-kbd" => {
-                    self.add_usb_keyboard(vm_config, cfg_args)?;
-                }
-                "usb-tablet" => {
-                    self.add_usb_tablet(vm_config, cfg_args)?;
-                }
-                #[cfg(feature = "usb_camera")]
-                "usb-camera" => {
-                    self.add_usb_camera(vm_config, cfg_args)?;
-                }
-                "usb-storage" => {
-                    self.add_usb_storage(vm_config, cfg_args)?;
-                }
-                #[cfg(feature = "usb_host")]
-                "usb-host" => {
-                    self.add_usb_host(vm_config, cfg_args)?;
+                "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-storage" | "usb-host" => {
+                    self.add_usb_device(&dev.0, vm_config, cfg_args)?;
                 }
                 #[cfg(feature = "virtio_gpu")]
                 "virtio-gpu-pci" => {
