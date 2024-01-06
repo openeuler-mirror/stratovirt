@@ -145,7 +145,7 @@ impl RngHandler {
                 .with_context(|| {
                     VirtioError::InterruptTrigger("rng", VirtioInterruptType::Vring)
                 })?;
-            trace::virtio_send_interrupt("Rng".to_string())
+            trace::virtqueue_send_interrupt("Rng", &*queue_lock as *const _ as u64)
         }
 
         Ok(())

@@ -1,0 +1,35 @@
+[[events]]
+name = "scsi_bus_get_device"
+args = "target_id: u8, lun: u16, lun_id: u16"
+message = "target request, target {}, requested lun {}, found lun {}."
+enabled = true
+
+[[events]]
+name = "scsi_bus_get_no_device"
+args = "target: u8, lun: u16"
+message = "can't find scsi device target {} lun {}."
+enabled = true
+
+[[events]]
+name = "scsi_emulate_execute"
+args = "op: u8"
+message = "emulate scsi command is {:#x}."
+enabled = true
+
+[[events]]
+name = "scsi_emulate_execute_error"
+args = "op: u8, result: &dyn fmt::Debug"
+message = "error in processing scsi command {:#x}, err is {:?}"
+enabled = true
+
+[[events]]
+name = "scsi_emulate_mode_sense"
+args = "page_code: u8, page_control: u8, subpage: u8, dbd: u8, length: u8"
+message = "MODE SENSE page_code {:x}, page_control {:x}, subpage {:x}, dbd bit {:x}, Allocation length {}."
+enabled = true
+
+[[events]]
+name = "scsi_outbuf_to_iov"
+args = "cmd: u8, outbuf_len: usize, iov_len: u64, idx: usize, iovec_size: usize"
+message = "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}."
+enabled = true

@@ -38,6 +38,7 @@ alsa = { version = "0.7.0", optional = true }
 rusb = { version = "0.9", optional = true }
 libusb1-sys = { version = "0.6.4", optional = true }
 cairo-rs = { version = "0.17.10", optional = true }
+trace = { path = "../trace" }
 
 [features]
 default = []
