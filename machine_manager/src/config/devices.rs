@@ -83,6 +83,33 @@ impl VmConfig {
             device_info = format!("{},addr={}", device_info, sysfsdev);
         }
 
+        // For usb camera devices only.
+        if let Some(cameradev) = &args.cameradev {
+            device_info = format!("{},cameradev={}", device_info, cameradev);
+        }
+
+        // For usb host devices only.
+        if args.driver == "usb-host" {
+            let default_value = "0".to_string();
+            let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
+            let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
+            let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
+            let productid = args.productid.as_ref().unwrap_or(&default_value);
+            device_info = format!(
+                "{},hostbus={},hostaddr={},vendorid={},productid={}",
+                device_info, hostbus, hostaddr, vendorid, productid
+            );
+            if let Some(hostport) = &args.hostport {
+                device_info = format!("{},hostport={}", device_info, hostport);
+            }
+            if let Some(isobufs) = &args.isobufs {
+                device_info = format!("{},isobufs={}", device_info, isobufs);
+            }
+            if let Some(isobsize) = &args.isobsize {
+                device_info = format!("{},isobsize={}", device_info, isobsize);
+            }
+        }
+
         self.devices
             .push((args.driver.clone(), device_info.clone()));
 

@@ -60,9 +60,11 @@ use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
+#[cfg(feature = "windows_emu_pid")]
+use machine_manager::config::VmConfig;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, memory_unit_conversion, ConfigCheck, DiskFormat,
-    DriveConfig, ExBool, NumaNode, NumaNodes, VmConfig, M,
+    DriveConfig, ExBool, NumaNode, NumaNodes, M,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -866,64 +868,6 @@ pub(crate) trait AcpiBuilder {
 }
 
 impl StdMachine {
-    fn plug_usb_device(
-        &mut self,
-        vm_config: &mut VmConfig,
-        args: &qmp_schema::DeviceAddArgument,
-    ) -> Result<()> {
-        let driver = args.driver.as_str();
-        let cfg_args = format!("id={}", args.id);
-        match driver {
-            "usb-kbd" => {
-                self.add_usb_keyboard(vm_config, &cfg_args)?;
-            }
-            "usb-tablet" => {
-                self.add_usb_tablet(vm_config, &cfg_args)?;
-            }
-            #[cfg(feature = "usb_camera")]
-            "usb-camera" => {
-                let mut cfg_args = format!("id={}", args.id);
-                if let Some(cameradev) = &args.cameradev {
-                    cfg_args = format!("{},cameradev={}", cfg_args, cameradev);
-                }
-                if let Some(iothread) = args.iothread.as_ref() {
-                    cfg_args = format!("{},iothread={}", cfg_args, iothread);
-                }
-                self.add_usb_camera(vm_config, &cfg_args)?;
-            }
-            #[cfg(feature = "usb_host")]
-            "usb-host" => {
-                let mut cfg_args = format!("id={}", args.id);
-                let default_value = "0".to_string();
-                let hostbus = args.hostbus.as_ref().unwrap_or(&default_value);
-                let hostaddr = args.hostaddr.as_ref().unwrap_or(&default_value);
-                let vendorid = args.vendorid.as_ref().unwrap_or(&default_value);
-                let productid = args.productid.as_ref().unwrap_or(&default_value);
-
-                cfg_args = format!(
-                    "{},hostbus={},hostaddr={},vendorid={},productid={}",
-                    cfg_args, hostbus, hostaddr, vendorid, productid
-                );
-                if args.hostport.is_some() {
-                    cfg_args = format!("{},hostport={}", cfg_args, args.hostport.as_ref().unwrap());
-                }
-                if args.isobufs.is_some() {
-                    cfg_args = format!("{},isobufs={}", cfg_args, args.isobufs.as_ref().unwrap());
-                }
-                if args.isobsize.is_some() {
-                    cfg_args = format!("{},isobsize={}", cfg_args, args.isobsize.as_ref().unwrap());
-                }
-
-                self.add_usb_host(vm_config, &cfg_args)?;
-            }
-            _ => {
-                bail!("Invalid usb device driver '{}'", driver);
-            }
-        };
-
-        Ok(())
-    }
-
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
@@ -1198,8 +1142,10 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
-                if let Err(e) = self.plug_usb_device(&mut locked_vmconfig, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_usb_device(driver, &mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
