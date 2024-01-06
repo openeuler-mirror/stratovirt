@@ -61,9 +61,8 @@ use devices::pci::PciBus;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, get_pci_df, memory_unit_conversion, BlkDevConfig,
-    ChardevType, ConfigCheck, DiskFormat, DriveConfig, ExBool, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE, M, MAX_VIRTIO_QUEUE,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, ConfigCheck, DiskFormat,
+    DriveConfig, ExBool, NumaNode, NumaNodes, VmConfig, M,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -71,7 +70,6 @@ use machine_manager::machine::{
 };
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
-use migration::MigrationManager;
 #[cfg(feature = "gtk")]
 use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
@@ -80,11 +78,7 @@ use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
-use virtio::{
-    qmp_balloon, qmp_query_balloon, Block, BlockState,
-    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
-    VhostKern, VhostUser, VirtioDevice, VirtioNetState, VirtioPciDevice,
-};
+use virtio::{qmp_balloon, qmp_query_balloon};
 
 const MAX_REGION_SIZE: u64 = 65536;
 
@@ -871,245 +865,20 @@ pub(crate) trait AcpiBuilder {
     }
 }
 
-fn get_device_bdf(bus: Option<String>, addr: Option<String>) -> Result<PciBdf> {
-    let mut pci_bdf = PciBdf {
-        bus: bus.unwrap_or_else(|| String::from("pcie.0")),
-        addr: (0, 0),
-    };
-    let addr = addr.unwrap_or_else(|| String::from("0x0"));
-    pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get device num or function num")?;
-    Ok(pci_bdf)
-}
-
 impl StdMachine {
-    fn plug_virtio_pci_blk(
+    fn plug_usb_device(
         &mut self,
-        pci_bdf: &PciBdf,
+        vm_config: &mut VmConfig,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
-        let multifunction = args.multifunction.unwrap_or(false);
-        let drive = args.drive.as_ref().with_context(|| "Drive not set")?;
-        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
-        let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
-        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
-        let blk = if let Some(conf) = locked_vmconfig.drives.get(drive) {
-            let dev = BlkDevConfig {
-                id: args.id.clone(),
-                path_on_host: conf.path_on_host.clone(),
-                read_only: conf.read_only,
-                direct: conf.direct,
-                serial_num: args.serial_num.clone(),
-                iothread: args.iothread.clone(),
-                iops: conf.iops,
-                queues: args.queues.unwrap_or_else(|| {
-                    VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
-                }),
-                boot_index: args.boot_index,
-                chardev: None,
-                socket_path: None,
-                aio: conf.aio,
-                queue_size,
-                discard: conf.discard,
-                write_zeroes: conf.write_zeroes,
-                format: conf.format,
-                l2_cache_size: conf.l2_cache_size,
-                refcount_cache_size: conf.refcount_cache_size,
-            };
-            dev.check()?;
-            dev
-        } else {
-            bail!("Drive not found");
-        };
-        locked_vmconfig.add_blk_device_config(args);
-        drop(locked_vmconfig);
-
-        if let Some(bootindex) = args.boot_index {
-            self.check_bootindex(bootindex)
-                .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
-        }
-
-        let blk_id = blk.id.clone();
-        let blk = Arc::new(Mutex::new(Block::new(blk, self.get_drive_files())));
-        let pci_dev = self
-            .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
-            .with_context(|| "Failed to add virtio pci block device")?;
-
-        if let Some(bootindex) = args.boot_index {
-            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &args.id);
-            }
-        }
-
-        MigrationManager::register_device_instance(BlockState::descriptor(), blk, &blk_id);
-        Ok(())
-    }
-
-    fn plug_virtio_pci_scsi(
-        &mut self,
-        pci_bdf: &PciBdf,
-        args: &qmp_schema::DeviceAddArgument,
-    ) -> Result<()> {
-        let multifunction = args.multifunction.unwrap_or(false);
-        let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
-        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
-        let dev_cfg = ScsiCntlrConfig {
-            id: args.id.clone(),
-            iothread: args.iothread.clone(),
-            queues: args.queues.unwrap_or_else(|| {
-                VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
-            }) as u32,
-            boot_prefix: None,
-            queue_size,
-        };
-        dev_cfg.check()?;
-
-        let device = Arc::new(Mutex::new(ScsiCntlr::new(dev_cfg.clone())));
-
-        let bus_name = format!("{}.0", dev_cfg.id);
-        scsi_cntlr_create_scsi_bus(&bus_name, &device)?;
-
-        let virtio_pci_dev = self
-            .add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false)
-            .with_context(|| "Failed to add virtio scsi controller")?;
-        device.lock().unwrap().config.boot_prefix = virtio_pci_dev.lock().unwrap().get_dev_path();
-
-        Ok(())
-    }
-
-    fn plug_vhost_user_blk_pci(
-        &mut self,
-        pci_bdf: &PciBdf,
-        args: &qmp_schema::DeviceAddArgument,
-    ) -> Result<()> {
-        let multifunction = args.multifunction.unwrap_or(false);
-        let vm_config = self.get_vm_config();
-        let locked_vmconfig = vm_config.lock().unwrap();
-        let chardev = args.chardev.as_ref().with_context(|| "Chardev not set")?;
-        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
-        let socket_path = self
-            .get_socket_path(&locked_vmconfig, chardev.to_string())
-            .with_context(|| "Failed to get socket path")?;
-        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
-        let dev = BlkDevConfig {
-            id: args.id.clone(),
-            queues: args.queues.unwrap_or_else(|| {
-                VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
-            }),
-            boot_index: args.boot_index,
-            chardev: Some(chardev.to_string()),
-            socket_path,
-            queue_size,
-            ..BlkDevConfig::default()
-        };
-
-        dev.check()?;
-        drop(locked_vmconfig);
-
-        let blk = Arc::new(Mutex::new(VhostUser::Block::new(&dev, self.get_sys_mem())));
-        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction, true)
-            .with_context(|| "Failed to add vhost user blk pci device")?;
-
-        Ok(())
-    }
-
-    fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
-        let char_dev = vm_config
-            .chardev
-            .get(&chardev)
-            .with_context(|| format!("Chardev: {:?} not found for character device", &chardev))?;
-
-        let socket_path = match &char_dev.backend {
-            ChardevType::UnixSocket {
-                path,
-                server,
-                nowait,
-            } => {
-                if *server || *nowait {
-                    bail!(
-                        "Argument \'server\' or \'nowait\' is not needed for chardev \'{}\'",
-                        &chardev
-                    );
-                }
-                Some(path.clone())
-            }
-            _ => {
-                bail!("Chardev {:?} backend should be unix-socket type.", &chardev);
-            }
-        };
-
-        Ok(socket_path)
-    }
-
-    fn plug_virtio_pci_net(
-        &mut self,
-        pci_bdf: &PciBdf,
-        args: &qmp_schema::DeviceAddArgument,
-    ) -> Result<()> {
-        let multifunction = args.multifunction.unwrap_or(false);
-        let netdev = args.netdev.as_ref().with_context(|| "Netdev not set")?;
-        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
-        let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
-        let dev = if let Some(conf) = locked_vmconfig.netdevs.get(netdev) {
-            let mut socket_path: Option<String> = None;
-            if let Some(chardev) = &conf.chardev {
-                socket_path = self
-                    .get_socket_path(&locked_vmconfig, (&chardev).to_string())
-                    .with_context(|| "Failed to get socket path")?;
-            }
-            let dev = NetworkInterfaceConfig {
-                id: args.id.clone(),
-                host_dev_name: conf.ifname.clone(),
-                mac: args.mac.clone(),
-                tap_fds: conf.tap_fds.clone(),
-                vhost_type: conf.vhost_type.clone(),
-                vhost_fds: conf.vhost_fds.clone(),
-                iothread: args.iothread.clone(),
-                queues: conf.queues,
-                mq: conf.queues > 2,
-                socket_path,
-                queue_size,
-            };
-            dev.check()?;
-            dev
-        } else {
-            bail!("Netdev not found");
-        };
-        locked_vmconfig.add_net_device_config(args);
-        drop(locked_vmconfig);
-
-        if dev.vhost_type.is_some() {
-            let net: Arc<Mutex<dyn VirtioDevice>> =
-                if dev.vhost_type == Some(String::from("vhost-kernel")) {
-                    Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
-                } else {
-                    Arc::new(Mutex::new(VhostUser::Net::new(&dev, self.get_sys_mem())))
-                };
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, true)
-                .with_context(|| "Failed to add vhost-kernel/vhost-user net device")?;
-        } else {
-            let net_id = dev.id.clone();
-            let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
-                .with_context(|| "Failed to add virtio net device")?;
-            MigrationManager::register_device_instance(VirtioNetState::descriptor(), net, &net_id);
-        }
-
-        Ok(())
-    }
-
-    fn plug_usb_device(&mut self, args: &qmp_schema::DeviceAddArgument) -> Result<()> {
         let driver = args.driver.as_str();
-        let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
         let cfg_args = format!("id={}", args.id);
         match driver {
             "usb-kbd" => {
-                self.add_usb_keyboard(&mut locked_vmconfig, &cfg_args)?;
+                self.add_usb_keyboard(vm_config, &cfg_args)?;
             }
             "usb-tablet" => {
-                self.add_usb_tablet(&mut locked_vmconfig, &cfg_args)?;
+                self.add_usb_tablet(vm_config, &cfg_args)?;
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
@@ -1120,7 +889,7 @@ impl StdMachine {
                 if let Some(iothread) = args.iothread.as_ref() {
                     cfg_args = format!("{},iothread={}", cfg_args, iothread);
                 }
-                self.add_usb_camera(&mut locked_vmconfig, &cfg_args)?;
+                self.add_usb_camera(vm_config, &cfg_args)?;
             }
             #[cfg(feature = "usb_host")]
             "usb-host" => {
@@ -1145,7 +914,7 @@ impl StdMachine {
                     cfg_args = format!("{},isobsize={}", cfg_args, args.isobsize.as_ref().unwrap());
                 }
 
-                self.add_usb_host(&mut locked_vmconfig, &cfg_args)?;
+                self.add_usb_host(vm_config, &cfg_args)?;
             }
             _ => {
                 bail!("Invalid usb device driver '{}'", driver);
@@ -1159,25 +928,6 @@ impl StdMachine {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
-    }
-
-    fn plug_vfio_pci_device(
-        &mut self,
-        bdf: &PciBdf,
-        args: &qmp_schema::DeviceAddArgument,
-    ) -> Result<()> {
-        if args.host.is_none() && args.sysfsdev.is_none() {
-            bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");
-        }
-        if args.host.is_some() && args.sysfsdev.is_some() {
-            bail!("Both option \"host\" and \"sysfsdev\" was provided.");
-        }
-
-        let host = args.host.as_ref().map_or("", String::as_str);
-        let sysfsdev = args.sysfsdev.as_ref().map_or("", String::as_str);
-        let multifunc = args.multifunction.unwrap_or(false);
-        self.create_vfio_pci_device(&args.id, bdf, host, sysfsdev, multifunc)
-            .with_context(|| "Failed to plug vfio-pci device.")
     }
 
     /// When windows emu exits, stratovirt should exits too.
@@ -1383,23 +1133,16 @@ impl DeviceInterface for StdMachine {
             );
         }
 
-        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following
-        // process.
-        let pci_bdf = match get_device_bdf(args.bus.clone(), args.addr.clone()) {
-            Ok(bdf) => bdf,
-            Err(e) => {
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                    None,
-                )
-            }
-        };
-
         let driver = args.driver.as_str();
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let mut vm_config_clone = locked_vmconfig.clone();
         match driver {
             "virtio-blk-pci" => {
-                if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_virtio_pci_blk(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     let err_str = format!("Failed to add virtio pci blk: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1408,8 +1151,10 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "virtio-scsi-pci" => {
-                if let Err(e) = self.plug_virtio_pci_scsi(&pci_bdf, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_virtio_pci_scsi(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     let err_str = format!("Failed to add virtio scsi controller: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1418,8 +1163,10 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "vhost-user-blk-pci" => {
-                if let Err(e) = self.plug_vhost_user_blk_pci(&pci_bdf, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vhost_user_blk_pci(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     let err_str = format!("Failed to add vhost user blk pci: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1428,8 +1175,10 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "virtio-net-pci" => {
-                if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_virtio_pci_net(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     let err_str = format!("Failed to add virtio pci net: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1438,8 +1187,10 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "vfio-pci" => {
-                if let Err(e) = self.plug_vfio_pci_device(&pci_bdf, args.as_ref()) {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vfio_device(&cfg_args, true) {
                     error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1447,7 +1198,7 @@ impl DeviceInterface for StdMachine {
                 }
             }
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
-                if let Err(e) = self.plug_usb_device(args.as_ref()) {
+                if let Err(e) = self.plug_usb_device(&mut locked_vmconfig, args.as_ref()) {
                     error!("{:?}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1475,6 +1226,7 @@ impl DeviceInterface for StdMachine {
                 );
             }
         }
+        drop(locked_vmconfig);
 
         // It's safe to call get_pci_host().unwrap() because it has been checked before.
         let locked_pci_host = self.get_pci_host().unwrap().lock().unwrap();
