@@ -1,0 +1,23 @@
+[[events]]
+name = "camera_register_fd"
+args = "id: &str, fd: i32"
+message = "camera {} register fd {}."
+enabled = true
+
+[[events]]
+name = "camera_unregister_fd"
+args = "id: &str, fd: i32"
+message = "camera {} unregister fd {}."
+enabled = true
+
+[[events]]
+name = "camera_set_format"
+args = "id: &str, fd: i32"
+message = "camera {} set format open fd {}."
+enabled = true
+
+[[events]]
+name = "camera_get_format_by_index"
+args = "format_index: u8, frame_index: u8, out: &dyn fmt::Debug"
+message = "V4l2 fmt {}, frm {}, info {:?}."
+enabled = true

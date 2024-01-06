@@ -1,0 +1,23 @@
+[[events]]
+name = "usb_handle_control"
+args = "device: &str, req: &dyn fmt::Debug"
+message = "device {} handle control request {:?}."
+enabled = true
+
+[[events]]
+name = "usb_camera_vs_control_request"
+args = "cs: u8, vs_control: &dyn fmt::Debug"
+message = "VideoStreamingControl {} {:?}."
+enabled = true
+
+[[events]]
+name = "usb_camera_handle_control"
+args = ""
+message = "camera control handled by descriptor."
+enabled = true
+
+[[events]]
+name = "usb_camera_handle_payload"
+args = "frame_offset: usize, payload_offset: usize, data_size: u64, copied: usize"
+message = "camera handle payload, frame_offset {} payloadoffset {} data_size {} copied {}."
+enabled = true

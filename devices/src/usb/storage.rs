@@ -549,7 +549,6 @@ impl UsbDevice for UsbStorage {
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
-        debug!("Storage device handle_control request {:?}, ", device_req);
         let mut locked_packet = packet.lock().unwrap();
         match self
             .base

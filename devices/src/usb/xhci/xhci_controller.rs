@@ -1178,6 +1178,7 @@ impl XhciDevice {
             Vec::new(),
             None,
         )));
+        trace::usb_handle_control(&locked_dev.usb_device_base().base.id, &device_req);
         locked_dev.handle_control(&p, &device_req);
     }
 
