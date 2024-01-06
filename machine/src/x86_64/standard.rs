@@ -525,6 +525,7 @@ impl MachineOps for StdMachine {
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        locked_vm.base.hypervisor.lock().unwrap().init_machine()?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.base.sys_io,
@@ -533,7 +534,6 @@ impl MachineOps for StdMachine {
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
-        locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
         locked_vm
             .init_pci_host()

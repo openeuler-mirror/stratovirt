@@ -73,6 +73,7 @@ use devices::usb::{
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::kvm::KVM_FDS;
+use hypervisor_refactor::{kvm::KvmHypervisor, HypervisorOps};
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
@@ -148,6 +149,8 @@ pub struct MachineBase {
     fwcfg_dev: Option<Arc<Mutex<dyn FwCfgOps>>>,
     /// machine all backend memory region tree
     machine_ram: Arc<Region>,
+    /// machine hypervisor.
+    hypervisor: Arc<Mutex<dyn HypervisorOps>>,
 }
 
 impl MachineBase {
@@ -191,6 +194,10 @@ impl MachineBase {
             mmio_region,
         );
 
+        let hypervisor = Arc::new(Mutex::new(KvmHypervisor::new(
+            KVM_FDS.load().vm_fd.clone(),
+        )?));
+
         Ok(MachineBase {
             cpu_topo,
             cpus: Vec::new(),
@@ -207,6 +214,7 @@ impl MachineBase {
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
             fwcfg_dev: None,
             machine_ram,
+            hypervisor,
         })
     }
 
@@ -499,31 +507,6 @@ pub trait MachineOps {
         Ok(cpus)
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn arch_init(&self, identity_addr: u64) -> Result<()> {
-        use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-
-        vm_fd
-            .set_identity_map_address(identity_addr)
-            .with_context(|| MachineError::SetIdentityMapAddr)?;
-
-        // Page table takes 1 page, TSS takes the following 3 pages.
-        vm_fd
-            .set_tss_address((identity_addr + 0x1000) as usize)
-            .with_context(|| MachineError::SetTssErr)?;
-
-        let pit_config = kvm_pit_config {
-            flags: KVM_PIT_SPEAKER_DUMMY,
-            pad: Default::default(),
-        };
-        vm_fd
-            .create_pit2(pit_config)
-            .with_context(|| MachineError::CrtPitErr)
-    }
-
     /// Must be called after the CPUs have been realized and GIC has been created.
     ///
     /// # Arguments
@@ -650,6 +633,10 @@ pub trait MachineOps {
 
     fn get_numa_nodes(&self) -> &Option<NumaNodes> {
         &self.machine_base().numa_nodes
+    }
+
+    fn get_hypervisor(&self) -> Arc<Mutex<dyn HypervisorOps>> {
+        self.machine_base().hypervisor.clone()
     }
 
     /// Get migration mode and path from VM config. There are four modes in total:
