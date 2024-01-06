@@ -21,3 +21,15 @@ name = "virtio_scsi_handle_cmd_resp"
 args = "target: u8, lun: u16, tag: u64, status: u8, response: u8"
 message = "target={}, lun={}, tag={}, status={}, response={}."
 enabled = true
+
+[[events]]
+name = "virtio_serial_output_data"
+args = "iovec_size: u64, size: u64"
+message = "iovec size {}, write size {}."
+enabled = true
+
+[[events]]
+name = "virtio_serial_disconnected_port"
+args = ""
+message = "virtio-serial port is none or disconnected."
+enabled = true
