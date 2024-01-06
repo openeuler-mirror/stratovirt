@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -678,7 +678,7 @@ impl UsbCamera {
             .as_mut_bytes()
             .copy_from_slice(&self.base.data_buf[0..len]);
         let cs = (device_req.value >> 8) as u8;
-        debug!("VideoStreamingControl {} {:?}", cs, vs_control);
+        trace::usb_camera_vs_control_request(cs, &vs_control);
         match device_req.request {
             SET_CUR => match cs {
                 VS_PROBE_CONTROL => {
@@ -790,7 +790,7 @@ impl UsbDevice for UsbCamera {
         {
             Ok(handled) => {
                 if handled {
-                    debug!("Camera control handled by descriptor, return directly.");
+                    trace::usb_camera_handle_control();
                     return;
                 }
             }
@@ -991,9 +991,11 @@ impl CameraIoHandler {
             frame_data_size as usize,
         )?;
         pkt.actual_length += copied as u32;
-        debug!(
-            "Camera handle payload, frame_offset {} payloadoffset {} data_size {} copied {}",
-            locked_payload.frame_offset, locked_payload.payload_offset, frame_data_size, copied
+        trace::usb_camera_handle_payload(
+            locked_payload.frame_offset,
+            locked_payload.payload_offset,
+            frame_data_size,
+            copied,
         );
         locked_payload.frame_offset += frame_data_size as usize;
         locked_payload.payload_offset += frame_data_size as usize;
