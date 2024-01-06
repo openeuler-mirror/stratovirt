@@ -736,6 +736,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypervisor_refactor"
+version = "2.3.0"
+dependencies = [
+ "anyhow",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "machine_manager",
+ "thiserror",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -909,6 +920,7 @@ dependencies = [
  "cpu",
  "devices",
  "hypervisor",
+ "hypervisor_refactor",
  "kvm-bindings",
  "libc",
  "log",

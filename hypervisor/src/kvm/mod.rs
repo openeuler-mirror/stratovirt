@@ -100,7 +100,7 @@ ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 #[derive(Default)]
 pub struct KVMFds {
     pub fd: Option<Kvm>,
-    pub vm_fd: Option<VmFd>,
+    pub vm_fd: Option<Arc<VmFd>>,
     pub irq_route_table: Mutex<IrqRouteTable>,
     pub mem_slots: Arc<Mutex<HashMap<u32, MemorySlot>>>,
 }
@@ -119,7 +119,7 @@ impl KVMFds {
                 let irq_route_table = Mutex::new(IrqRouteTable::new(&fd));
                 KVMFds {
                     fd: Some(fd),
-                    vm_fd: Some(vm_fd),
+                    vm_fd: Some(Arc::new(vm_fd)),
                     irq_route_table,
                     mem_slots: Arc::new(Mutex::new(HashMap::new())),
                 }

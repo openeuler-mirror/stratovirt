@@ -43,6 +43,13 @@ pub enum KvmVmState {
     Shutdown = 6,
 }
 
+/// Type for Hypervisor.
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HypervisorType {
+    #[default]
+    Kvm,
+}
+
 /// Trait to handle virtual machine lifecycle.
 ///
 /// # Notes
