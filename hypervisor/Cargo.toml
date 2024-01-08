@@ -1,5 +1,5 @@
 [package]
-name = "hypervisor_refactor"
+name = "hypervisor"
 version = "2.3.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"

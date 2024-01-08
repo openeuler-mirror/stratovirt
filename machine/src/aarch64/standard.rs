@@ -49,8 +49,8 @@ use devices::legacy::{
 use devices::pci::{PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::SysBusDevType;
 use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
-use hypervisor_refactor::kvm::aarch64::*;
-use hypervisor_refactor::kvm::*;
+use hypervisor::kvm::aarch64::*;
+use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
 use machine_manager::config::ShutdownAction;
