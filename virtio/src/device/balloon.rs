@@ -26,8 +26,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
     error::*, read_config_default, report_virtio_error, virtio_has_feature, Element, Queue,
-    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_BALLOON,
 };
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
@@ -608,10 +608,10 @@ impl BalloonIoHandler {
     /// balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
         let queue = if req_type {
-            self.trace_request("Balloon".to_string(), "to inflate".to_string());
+            trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
         } else {
-            self.trace_request("Balloon".to_string(), "to deflate".to_string());
+            trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
@@ -1177,8 +1177,6 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_timerfd_gettime),
     ])
 }
-
-impl VirtioTrace for BalloonIoHandler {}
 
 #[cfg(test)]
 mod tests {

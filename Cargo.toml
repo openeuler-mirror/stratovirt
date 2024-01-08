@@ -13,6 +13,7 @@ log = "0.4"
 machine = { path = "machine" }
 machine_manager = { path = "machine_manager" }
 util = { path = "util" }
+trace = { path = "trace" }
 
 [workspace]
 members = [
@@ -34,6 +35,8 @@ gtk = ["machine/gtk"]
 vnc = ["machine/vnc"]
 ramfb = ["machine/ramfb"]
 virtio_gpu = ["machine/virtio_gpu"]
+trace_to_logger = ["trace/trace_to_logger"]
+trace_to_ftrace = ["trace/trace_to_ftrace"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

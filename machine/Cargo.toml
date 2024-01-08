@@ -28,6 +28,7 @@ virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
 block_backend = { path = "../block_backend" }
 ui = { path = "../ui" }
+trace = { path = "../trace" }
 
 [features]
 default = []

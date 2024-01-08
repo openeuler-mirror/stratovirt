@@ -318,6 +318,7 @@ dependencies = [
  "migration_derive",
  "nix 0.26.2",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -915,6 +916,7 @@ dependencies = [
  "migration_derive",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "vfio",
@@ -937,6 +939,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -1534,6 +1537,7 @@ dependencies = [
  "machine",
  "machine_manager",
  "thiserror",
+ "trace",
  "util",
 ]
 
@@ -1673,6 +1677,28 @@ dependencies = [
  "serde_spanned",
  "toml_datetime",
  "winnow",
+]
+
+[[package]]
+name = "trace"
+version = "2.3.0"
+dependencies = [
+ "anyhow",
+ "lazy_static",
+ "log",
+ "regex",
+ "trace_generator",
+]
+
+[[package]]
+name = "trace_generator"
+version = "2.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 2.0.18",
+ "toml",
 ]
 
 [[package]]
@@ -1822,6 +1848,7 @@ dependencies = [
  "once_cell",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "vmm-sys-util",

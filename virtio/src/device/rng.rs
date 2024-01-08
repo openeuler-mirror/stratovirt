@@ -25,7 +25,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
 use crate::{
-    ElemIovec, Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    ElemIovec, Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
 use address_space::AddressSpace;
@@ -92,7 +92,7 @@ impl RngHandler {
     }
 
     fn process_queue(&mut self) -> Result<()> {
-        self.trace_request("Rng".to_string(), "to IO".to_string());
+        trace::virtio_receive_request("Rng".to_string(), "to IO".to_string());
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
 
@@ -145,7 +145,7 @@ impl RngHandler {
                 .with_context(|| {
                     VirtioError::InterruptTrigger("rng", VirtioInterruptType::Vring)
                 })?;
-            self.trace_send_interrupt("Rng".to_string());
+            trace::virtio_send_interrupt("Rng".to_string())
         }
 
         Ok(())
@@ -347,8 +347,6 @@ impl StateTransfer for Rng {
 }
 
 impl MigrationHook for Rng {}
-
-impl VirtioTrace for RngHandler {}
 
 #[cfg(test)]
 mod tests {
