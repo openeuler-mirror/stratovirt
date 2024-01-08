@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_get_maximum_gsi_cnt() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_alloc_and_release_gsi() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }

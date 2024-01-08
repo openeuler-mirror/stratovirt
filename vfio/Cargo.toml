@@ -18,7 +18,6 @@ vmm-sys-util = "0.11.1"
 vfio-bindings = "0.3"
 once_cell = "1.18.0"
 address_space = { path = "../address_space" }
-hypervisor = { path = "../hypervisor" }
 hypervisor_refactor = { path = "../hypervisor_refactor"}
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }

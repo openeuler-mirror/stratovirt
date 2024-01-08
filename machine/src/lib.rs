@@ -66,7 +66,6 @@ use devices::usb::{
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
-use hypervisor::kvm::KVM_FDS;
 use hypervisor_refactor::{kvm::KvmHypervisor, HypervisorOps};
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
@@ -190,9 +189,7 @@ impl MachineBase {
             mmio_region,
         );
 
-        let hypervisor = Arc::new(Mutex::new(KvmHypervisor::new(
-            KVM_FDS.load().vm_fd.clone(),
-        )?));
+        let hypervisor = Arc::new(Mutex::new(KvmHypervisor::new()?));
 
         Ok(MachineBase {
             cpu_topo,

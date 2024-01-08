@@ -104,19 +104,15 @@ pub struct KvmHypervisor {
 }
 
 impl KvmHypervisor {
-    pub fn new(kvm_vm_fd: Option<Arc<VmFd>>) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         match Kvm::new() {
             Ok(kvm_fd) => {
-                let vm_fd: Option<Arc<VmFd>> = if kvm_vm_fd.is_some() {
-                    kvm_vm_fd
-                } else {
-                    Some(Arc::new(match kvm_fd.create_vm() {
-                        Ok(fd) => fd,
-                        Err(e) => {
-                            bail!("Failed to create VM in KVM: {:?}", e);
-                        }
-                    }))
-                };
+                let vm_fd: Option<Arc<VmFd>> = Some(Arc::new(match kvm_fd.create_vm() {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        bail!("Failed to create VM in KVM: {:?}", e);
+                    }
+                }));
 
                 Ok(KvmHypervisor {
                     fd: Some(kvm_fd),
@@ -889,7 +885,7 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_x86_64_kvm_cpu() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -996,7 +992,7 @@ mod test {
     #[test]
     #[allow(unused)]
     fn test_cpu_lifecycle_with_kvm() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }

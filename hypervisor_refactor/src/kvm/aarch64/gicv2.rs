@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_create_kvm_gicv2() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
