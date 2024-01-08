@@ -97,7 +97,7 @@ Add a block backend.
 #### Example
 
 ```json
--> { "execute": "blockdev-add", "arguments": { "node-name": "drive-0", "file": { "driver": "file", "filename": "/path/to/block", "aio": native }, "cache": { "direct": true }, "read-only": false } }
+-> { "execute": "blockdev-add", "arguments": { "node-name": "drive-0", "file": { "driver": "file", "filename": "/path/to/block", "aio": "native" }, "cache": { "direct": true }, "read-only": false } }
 <- { "return": {} }
 ```
 
