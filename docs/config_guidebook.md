@@ -1144,6 +1144,22 @@ Note: Only supported on aarch64.
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable ramfb.
 
+### 2.21 pvpanic
+pvpanic is a virtual pci device. It is used to give the virtual machine the ability to sense guest os crashes or failures.
+
+Four properties are supported for pvpanic device.
+* id: unique device id.
+* bus: bus number of the device.
+* addr: slot number.
+* supported-features: supported features, 0-3 refers to `None`, `panicked`, `crashload` and `panicked and crashload` respectively. 3 is suggested.
+
+Sample Configuration：
+```shell
+-device pvpanic,id=<pvpanic_pci>,bus=<pcie.0>,addr=<0x7>[,supported-features=<0|1|2|3>]
+```
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable pvpanic.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
