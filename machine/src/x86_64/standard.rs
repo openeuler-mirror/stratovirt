@@ -40,8 +40,8 @@ use devices::legacy::{
     SERIAL_ADDR,
 };
 use devices::pci::{PciDevOps, PciHost};
-use hypervisor_refactor::kvm::x86_64::*;
-use hypervisor_refactor::kvm::*;
+use hypervisor::kvm::x86_64::*;
+use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{

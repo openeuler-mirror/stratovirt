@@ -66,7 +66,7 @@ use devices::usb::{
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
-use hypervisor_refactor::{kvm::KvmHypervisor, HypervisorOps};
+use hypervisor::{kvm::KvmHypervisor, HypervisorOps};
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
