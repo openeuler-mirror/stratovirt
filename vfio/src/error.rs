@@ -24,11 +24,6 @@ pub enum VfioError {
         #[from]
         source: address_space::error::AddressSpaceError,
     },
-    #[error("Hypervisor")]
-    Hypervisor {
-        #[from]
-        source: hypervisor::error::HypervisorError,
-    },
     #[error("Failed to add sub region at the BAR {0} in memory space.")]
     AddRegBar(usize),
     #[error("Vfio ioctl failed: {0}, error is: {1:?}")]

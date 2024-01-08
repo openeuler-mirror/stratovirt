@@ -60,11 +60,6 @@ pub enum MachineError {
         #[from]
         source: machine_manager::config::error::ConfigError,
     },
-    #[error("Hypervisor")]
-    Hypervisor {
-        #[from]
-        source: hypervisor::error::HypervisorError,
-    },
     #[error("Io")]
     Io {
         #[from]

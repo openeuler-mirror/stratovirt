@@ -20,7 +20,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -308,7 +307,6 @@ name = "cpu"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -337,7 +335,6 @@ dependencies = [
  "chardev_backend",
  "cpu",
  "drm-fourcc",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -721,21 +718,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hypervisor"
-version = "2.3.0"
-dependencies = [
- "anyhow",
- "arc-swap",
- "kvm-bindings",
- "kvm-ioctls",
- "log",
- "once_cell",
- "thiserror",
- "util",
- "vmm-sys-util",
-]
-
-[[package]]
 name = "hypervisor_refactor"
 version = "2.3.0"
 dependencies = [
@@ -928,7 +910,6 @@ dependencies = [
  "boot_loader",
  "cpu",
  "devices",
- "hypervisor",
  "hypervisor_refactor",
  "kvm-bindings",
  "libc",
@@ -1005,7 +986,6 @@ name = "migration"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "log",
@@ -1833,7 +1813,6 @@ dependencies = [
  "anyhow",
  "byteorder",
  "devices",
- "hypervisor",
  "hypervisor_refactor",
  "kvm-bindings",
  "kvm-ioctls",
@@ -1864,7 +1843,6 @@ dependencies = [
  "byteorder",
  "chardev_backend",
  "devices",
- "hypervisor",
  "kvm-ioctls",
  "libc",
  "log",

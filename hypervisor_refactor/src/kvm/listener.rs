@@ -599,7 +599,7 @@ mod test {
 
     #[test]
     fn test_alloc_slot() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -623,7 +623,7 @@ mod test {
 
     #[test]
     fn test_add_del_ram_region() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -649,7 +649,7 @@ mod test {
 
     #[test]
     fn test_add_region_align() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -671,7 +671,7 @@ mod test {
 
     #[test]
     fn test_add_del_ioeventfd() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -717,7 +717,7 @@ mod test {
 
     #[test]
     fn test_ioeventfd_with_data_match() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -771,7 +771,7 @@ mod test {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }

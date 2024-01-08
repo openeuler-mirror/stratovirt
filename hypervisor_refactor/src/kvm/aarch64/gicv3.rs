@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_create_kvm_gicv3() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_create_kvm_gicv3its() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_realize_gic_device_without_its() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_gic_redist_regions() {
-        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
