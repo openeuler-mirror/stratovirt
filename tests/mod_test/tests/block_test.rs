@@ -12,6 +12,7 @@
 
 use std::cell::RefCell;
 use std::mem::size_of;
+use std::os::linux::fs::MetadataExt;
 use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -44,6 +45,7 @@ use util::offset_of;
 use virtio::device::block::VirtioBlkConfig;
 
 const TEST_IMAGE_SIZE_1M: u64 = 1024 * 1024;
+const DEFAULT_SECTOR_SIZE: u64 = 512;
 
 fn execute_cmd(cmd: String) -> Vec<u8> {
     let args = cmd.split(' ').collect::<Vec<&str>>();
@@ -120,12 +122,15 @@ fn virtio_blk_discard_and_write_zeroes(
 }
 
 fn get_disk_size(img_path: Rc<String>) -> u64 {
-    let out = execute_cmd(format!("du -shk {}", img_path));
-    let str_out = std::str::from_utf8(&out)
-        .unwrap()
-        .split('\t')
-        .collect::<Vec<&str>>();
-    serde_json::from_str::<u64>(str_out[0]).unwrap()
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(img_path.as_ref())
+        .unwrap();
+    let meta_data = file.metadata().unwrap();
+    let blk_size = meta_data.st_blocks() * DEFAULT_SECTOR_SIZE;
+    blk_size >> 10
 }
 
 fn virtio_blk_check_discard_config(blk: Rc<RefCell<TestVirtioPciDev>>) {
@@ -1765,7 +1770,7 @@ fn blk_feature_discard() {
             );
             if image_type == ImageType::Raw && status == VIRTIO_BLK_S_OK {
                 let image_size = get_disk_size(image_path.clone());
-                assert_eq!(image_size, (TEST_IMAGE_SIZE >> 10) - num_sectors as u64 / 2);
+                assert_eq!(image_size, full_disk_size - num_sectors as u64 / 2);
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
                 && (num_sectors as u64 * 512 & CLUSTER_SIZE - 1) == 0
@@ -1935,7 +1940,7 @@ fn blk_feature_write_zeroes() {
                 && (write_zeroes == "unmap" && discard == "unmap" && flags == 1 || len != wz_len)
             {
                 let image_size = get_disk_size(image_path.clone());
-                assert_eq!(image_size, (TEST_IMAGE_SIZE >> 10) - num_sectors as u64 / 2);
+                assert_eq!(image_size, full_disk_size - num_sectors as u64 / 2);
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
                 && (write_zeroes == "unmap" && discard == "unmap" && flags == 1 || len != wz_len)
