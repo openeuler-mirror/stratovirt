@@ -1,0 +1,17 @@
+[[events]]
+name = "pl031_read"
+args = "addr: u64, value: u32"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pl031_write"
+args = "addr: u64, value: u32"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pl031_inject_interrupt"
+args = ""
+message = ""
+enabled = true
