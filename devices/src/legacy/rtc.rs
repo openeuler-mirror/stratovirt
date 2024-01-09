@@ -226,6 +226,7 @@ impl RTC {
                 data[0] = self.cmos_data[self.cur_index as usize];
             }
         }
+        trace::rtc_read(self.cur_index, data[0]);
 
         true
     }
@@ -235,6 +236,7 @@ impl RTC {
             error!("RTC only supports writing data byte by byte.");
             return false;
         }
+        trace::rtc_write(self.cur_index, data[0]);
 
         match self.cur_index {
             RTC_SECONDS | RTC_MINUTES | RTC_HOURS | RTC_DAY_OF_WEEK | RTC_DAY_OF_MONTH
@@ -278,6 +280,7 @@ impl RTC {
             if let Err(e) = evt_fd.write(1) {
                 error!("cmos rtc: failed to write interrupt eventfd ({:?}).", e);
             }
+            trace::rtc_inject_interrupt();
             return;
         }
         error!("cmos rtc: failed to get interrupt event fd.");

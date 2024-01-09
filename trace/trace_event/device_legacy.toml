@@ -15,3 +15,21 @@ name = "pl031_inject_interrupt"
 args = ""
 message = ""
 enabled = true
+
+[[events]]
+name = "rtc_read"
+args = "addr: u8, value: u8"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "rtc_write"
+args = "addr: u8, value: u8"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "rtc_inject_interrupt"
+args = ""
+message = ""
+enabled = true
