@@ -33,3 +33,45 @@ name = "rtc_inject_interrupt"
 args = ""
 message = ""
 enabled = true
+
+[[events]]
+name = "pl011_read"
+args = "addr: u64, value: u32"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pl011_read_fifo"
+args = "read_count: u32"
+message = "FIFO read, read_count now {}"
+enabled = true
+
+[[events]]
+name = "pl011_write"
+args = "addr: u64, value: u32"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pl011_interrupt"
+args = "flag: u32"
+message = "flag 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pl011_baudrate_change"
+args = "ibrd: u32, fbrd: u32"
+message = "ibrd {}, fbrd {}"
+enabled = true
+
+[[events]]
+name = "pl011_receive"
+args = "value: u32, read_count: u32"
+message = "new char 0x{:X}, read_count now {}"
+enabled = true
+
+[[events]]
+name = "pl011_receive_full"
+args = ""
+message = "FIFO now full, RXFF set"
+enabled = true
