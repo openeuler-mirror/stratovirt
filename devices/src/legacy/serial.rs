@@ -195,6 +195,7 @@ impl Serial {
             }
             error!("serial: failed to update iir.");
         }
+        trace::serial_update_iir(self.state.iir);
     }
 
     // Read one byte data from a certain register selected by `offset`.
@@ -258,6 +259,7 @@ impl Serial {
             }
             _ => {}
         }
+        trace::serial_read(offset, ret);
 
         ret
     }
@@ -276,6 +278,7 @@ impl Serial {
     // * fail to write serial.
     // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
+        trace::serial_write(offset, data);
         match offset {
             0 => {
                 if self.state.lcr & UART_LCR_DLAB != 0 {
@@ -356,6 +359,7 @@ impl InputReceiver for Serial {
             self.rbr.extend(data);
             self.state.lsr |= UART_LSR_DR;
             self.update_iir();
+            trace::serial_receive(data.len());
         }
     }
 

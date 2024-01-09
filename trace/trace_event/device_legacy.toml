@@ -75,3 +75,27 @@ name = "pl011_receive_full"
 args = ""
 message = "FIFO now full, RXFF set"
 enabled = true
+
+[[events]]
+name = "serial_read"
+args = "addr: u64, value: u8"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "serial_write"
+args = "addr: u64, value: u8"
+message = "addr 0x{:X} value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "serial_update_iir"
+args = "iir: u8"
+message = "value 0x{:X}"
+enabled = true
+
+[[events]]
+name = "serial_receive"
+args = "len: usize"
+message = "data length {}"
+enabled = true
