@@ -21,3 +21,39 @@ name = "usb_camera_handle_payload"
 args = "frame_offset: usize, payload_offset: usize, data_size: u64, copied: usize"
 message = "camera handle payload, frame_offset {} payloadoffset {} data_size {} copied {}."
 enabled = true
+
+[[events]]
+name = "usb_storage_handle_control"
+args = ""
+message = "storage control handled by descriptor."
+enabled = true
+
+[[events]]
+name = "usb_storage_handle_data"
+args = "ep_number: u8, pid: u32, mode: &dyn fmt::Debug"
+message = "endpoint {}, pid 0x{:X}, mode {:?}"
+enabled = true
+
+[[events]]
+name = "usb_storage_handle_token_out"
+args = "cbw: &dyn fmt::Debug"
+message = "cbw {:?}"
+enabled = true
+
+[[events]]
+name = "usb_storage_handle_token_in"
+args = "csw: &dyn fmt::Debug"
+message = "csw {:?}"
+enabled = true
+
+[[events]]
+name = "usb_storage_handle_data_inout_packet"
+args = "len: u32"
+message = "iovec length {}"
+enabled = true
+
+[[events]]
+name = "usb_storage_handle_scsi_request"
+args = "csw: &dyn fmt::Debug"
+message = "csw {:?}"
+enabled = true
