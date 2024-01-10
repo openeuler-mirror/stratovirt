@@ -33,3 +33,9 @@ name = "virtio_serial_disconnected_port"
 args = ""
 message = "virtio-serial port is none or disconnected."
 enabled = true
+
+[[events]]
+name = "virtio_rng_write_req_data"
+args = "size: u32"
+message = "size {}"
+enabled = true

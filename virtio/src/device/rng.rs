@@ -87,6 +87,7 @@ impl RngHandler {
 
             offset += iov.len as usize;
         }
+        trace::virtio_rng_write_req_data(size);
 
         Ok(())
     }
