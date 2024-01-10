@@ -13,7 +13,6 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::os::linux::fs::MetadataExt;
-use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use std::{thread, time};
@@ -46,25 +45,6 @@ use virtio::device::block::VirtioBlkConfig;
 
 const TEST_IMAGE_SIZE_1M: u64 = 1024 * 1024;
 const DEFAULT_SECTOR_SIZE: u64 = 512;
-
-fn execute_cmd(cmd: String) -> Vec<u8> {
-    let args = cmd.split(' ').collect::<Vec<&str>>();
-    if args.len() <= 0 {
-        return vec![];
-    }
-
-    let mut cmd_exe = Command::new(args[0]);
-    for i in 1..args.len() {
-        cmd_exe.arg(args[i]);
-    }
-
-    let output = cmd_exe
-        .output()
-        .expect(format!("Failed to execute {}", cmd).as_str());
-    println!("{:?}, output: {:?}", args, output);
-    assert!(output.status.success());
-    output.stdout
-}
 
 fn virtio_blk_discard_and_write_zeroes(
     blk: Rc<RefCell<TestVirtioPciDev>>,
@@ -122,7 +102,7 @@ fn virtio_blk_discard_and_write_zeroes(
 }
 
 fn get_disk_size(img_path: Rc<String>) -> u64 {
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
