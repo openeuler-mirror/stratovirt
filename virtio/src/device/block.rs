@@ -148,6 +148,7 @@ impl AioCompleteCb {
     }
 
     fn complete_request(&self, status: u8) -> Result<()> {
+        trace::virtio_blk_complete_request(status);
         let mut req = Some(self.req.as_ref());
         while let Some(req_raw) = req {
             self.complete_one_request(req_raw, status)?;
@@ -171,6 +172,7 @@ impl AioCompleteCb {
                     req.desc_index, req.in_len
                 )
             })?;
+        trace::virtio_blk_complete_one_request(req.desc_index, req.in_len);
 
         if queue_lock
             .vring
@@ -314,6 +316,7 @@ impl Request {
                 MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
             }
         }
+        trace::virtio_blk_execute(request_type, iovecs.len(), offset);
 
         let serial_num = &iohandler.serial_num;
         let mut locked_backend = block_backend.lock().unwrap();
@@ -418,6 +421,7 @@ impl Request {
         let mut locked_backend = block_backend.lock().unwrap();
         let offset = (sector as usize) << SECTOR_SHIFT;
         let nbytes = (num_sectors as u64) << SECTOR_SHIFT;
+        trace::virtio_blk_handle_discard_write_zeroes_req(&opcode, flags, offset, nbytes);
         if opcode == OpCode::Discard {
             if flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP {
                 error!("Discard request must not set unmap flags");
@@ -546,6 +550,7 @@ impl BlockIoHandler {
                 merged_iovs = req_iovs;
                 merged_bytes = req_bytes;
             }
+            trace::virtio_blk_merge_req_queue(can_merge, merged_reqs, merged_iovs, merged_bytes);
         }
 
         merge_req_queue
@@ -645,6 +650,7 @@ impl BlockIoHandler {
                 *locked_status = BlockStatus::NormalIO;
             }
         }
+        trace::virtio_blk_process_queue_suppress_notify(len);
 
         let mut done = false;
         let start_time = Instant::now();
@@ -1123,13 +1129,16 @@ impl VirtioDevice for Block {
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
         let config = &self.config_space.as_bytes()[..config_len];
-        read_config_default(config, offset, data)
+        read_config_default(config, offset, data)?;
+        trace::virtio_blk_read_config(offset, data);
+        Ok(())
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let config_len = self.get_blk_config_size();
         let config = &self.config_space.as_bytes()[..config_len];
         check_config_space_rw(config, offset, data)?;
+        trace::virtio_blk_write_config(offset, data);
         // The only writable field is "writeback", but it's not supported for now,
         // so do nothing here.
         Ok(())
