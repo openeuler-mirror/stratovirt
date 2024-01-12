@@ -240,7 +240,8 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
 }
 
 extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
-    if unsafe { (*host_transfer).user_data.is_null() } {
+    // SAFETY: the pointer has been verified.
+    if host_transfer.is_null() || unsafe { (*host_transfer).user_data.is_null() } {
         free_host_transfer(host_transfer);
         return;
     }
@@ -265,6 +266,7 @@ pub fn fill_transfer_by_type(
 ) {
     // SAFETY: node only deleted when request completed.
     let packet = unsafe { (*node).value.packet.clone() };
+    // SAFETY: the reason is same as above.
     let buffer_ptr = unsafe { (*node).value.buffer.as_mut_ptr() };
     let size = packet.lock().unwrap().get_iovecs_size();
 
@@ -276,7 +278,9 @@ pub fn fill_transfer_by_type(
     // SAFETY: have checked the validity of parameters of libusb_fill_*_transfer
     // before call libusb_fill_*_transfer.
     match transfer_type {
-        TransferType::Control => unsafe {
+        TransferType::Control =>
+        // SAFETY: the reason is as shown above.
+        unsafe {
             libusb1_sys::libusb_fill_control_transfer(
                 transfer,
                 handle.unwrap().as_raw(),
@@ -286,7 +290,9 @@ pub fn fill_transfer_by_type(
                 CONTROL_TIMEOUT,
             );
         },
-        TransferType::Bulk => unsafe {
+        TransferType::Bulk =>
+        // SAFETY: the reason is  as shown above.
+        unsafe {
             libusb1_sys::libusb_fill_bulk_transfer(
                 transfer,
                 handle.unwrap().as_raw(),
@@ -298,7 +304,9 @@ pub fn fill_transfer_by_type(
                 BULK_TIMEOUT,
             );
         },
-        TransferType::Interrupt => unsafe {
+        TransferType::Interrupt =>
+        // SAFETY: the reason is as shown above.
+        unsafe {
             libusb1_sys::libusb_fill_interrupt_transfer(
                 transfer,
                 handle.unwrap().as_raw(),

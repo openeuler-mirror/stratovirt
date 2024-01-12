@@ -29,7 +29,7 @@ pub use config::{PciConfig, INTERRUPT_PIN};
 pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
-pub use msix::{init_msix, is_msix_enabled};
+pub use msix::init_msix;
 pub use root_port::RootPort;
 
 use std::{
@@ -422,6 +422,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(

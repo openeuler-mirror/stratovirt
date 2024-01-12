@@ -18,12 +18,12 @@ mod message;
 mod net;
 mod sock;
 
+pub use self::block::Block;
 pub use self::client::*;
 pub use self::fs::*;
 pub use self::message::*;
+pub use self::net::Net;
 pub use self::sock::*;
-pub use block::Block;
-pub use net::Net;
 
 use std::sync::{Arc, Mutex};
 
@@ -33,7 +33,7 @@ use crate::{
     vhost::{VhostIoHandler, VhostNotify},
     NotifyEventFds, VirtioBase, VirtioInterrupt,
 };
-use client::VhostUserClient;
+
 use machine_manager::event_loop::register_event_helper;
 use util::loop_context::EventNotifierHelper;
 

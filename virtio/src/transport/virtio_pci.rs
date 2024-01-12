@@ -40,7 +40,7 @@ use devices::pci::config::{
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
     STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::msix::{update_dev_id, MsixState};
+use devices::pci::msix::MsixState;
 use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
@@ -459,7 +459,11 @@ impl VirtioPciDevice {
         }
         locked_dev.virtio_base_mut().queues = queues;
 
-        update_dev_id(&self.base.parent_bus, self.base.devfn, &self.dev_id);
+        let parent = self.base.parent_bus.upgrade().unwrap();
+        parent
+            .lock()
+            .unwrap()
+            .update_dev_id(self.base.devfn, &self.dev_id);
         if self.need_irqfd {
             let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
@@ -1422,6 +1426,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
@@ -1478,6 +1483,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
@@ -1527,6 +1533,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
@@ -1603,6 +1610,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
@@ -1642,6 +1650,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
@@ -1666,6 +1675,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let mem_size: u64 = 1024 * 1024;
@@ -1772,6 +1782,7 @@ mod tests {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(

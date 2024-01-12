@@ -11,19 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 #[cfg(target_arch = "aarch64")]
-mod acpi_test;
+mod aarch64;
 mod balloon_test;
 mod block_test;
 mod fwcfg_test;
-#[cfg(target_arch = "aarch64")]
-mod ged_test;
 mod memory_test;
 mod net_test;
 mod pci_test;
-#[cfg(target_arch = "aarch64")]
-mod pl031_test;
-#[cfg(target_arch = "aarch64")]
-mod ramfb_test;
 mod rng_test;
 mod scream_test;
 mod scsi_test;
@@ -35,3 +29,5 @@ mod virtio_gpu_test;
 mod virtio_test;
 mod virtiofs_test;
 mod vnc_test;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;

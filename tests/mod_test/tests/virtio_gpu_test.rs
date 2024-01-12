@@ -26,12 +26,11 @@ use mod_test::libdriver::virtio_gpu::{
 use mod_test::libdriver::virtio_gpu::{set_up, tear_down};
 use util::byte_code::ByteCode;
 use virtio::{
-    get_image_hostmem, get_pixman_format, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
-    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_FORMAT_INVALID_UNORM,
-    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
-    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
-    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
-    VIRTIO_GPU_RESP_OK_NODATA,
+    cal_image_hostmem, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
+    VIRTIO_GPU_FORMAT_INVALID_UNORM, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID,
+    VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
+    VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA,
 };
 
 const D_RES_ID: u32 = 1;
@@ -50,8 +49,8 @@ const D_INVALID_NR_ENTRIES: u32 = 1 + 16384;
 
 #[test]
 fn image_display_fun() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -193,8 +192,8 @@ fn cursor_display_fun() {
     let image_1: Vec<u8> = vec![1 as u8; D_IMG_SIZE as usize];
     let image_byte_1 = vec![1 as u8; 1];
 
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -254,8 +253,8 @@ fn cursor_display_fun() {
 
 #[test]
 fn resource_create_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -315,8 +314,9 @@ fn resource_create_dfx() {
 
 #[test]
 fn resource_destroy_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
+
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
     let (dpy, gpu) = set_up(&gpu_cfg);
@@ -357,8 +357,8 @@ fn resource_destroy_dfx() {
 
 #[test]
 fn resource_attach_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -424,8 +424,8 @@ fn resource_attach_dfx() {
 
 #[test]
 fn resource_detach_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -460,8 +460,8 @@ fn resource_detach_dfx() {
 
 #[test]
 fn resource_transfer_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -537,8 +537,8 @@ fn resource_transfer_dfx() {
 
 #[test]
 fn scanout_set_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -614,8 +614,8 @@ fn scanout_set_dfx() {
 
 #[test]
 fn scanout_flush_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -664,8 +664,8 @@ fn scanout_flush_dfx() {
 
 #[test]
 fn cursor_update_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -703,8 +703,8 @@ fn cursor_update_dfx() {
 
 #[test]
 fn invalid_cmd_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;
@@ -720,8 +720,8 @@ fn invalid_cmd_dfx() {
 
 #[test]
 fn crash_dfx() {
-    let pixman_format = get_pixman_format(D_FMT).unwrap();
-    let image_size = get_image_hostmem(pixman_format, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
     gpu_cfg.max_hostmem = image_size;

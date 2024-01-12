@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
+
 use util::byte_code::ByteCode;
 
 pub const FUSE_LOOKUP: u32 = 1;
@@ -302,6 +304,10 @@ impl FuseMknodIn {
         bytes.append(&mut vec![0]);
         bytes
     }
+
+    pub fn len(&self) -> usize {
+        size_of::<u32>() * 4 + self.name.len() + 1
+    }
 }
 
 #[repr(C)]
@@ -322,6 +328,10 @@ impl FuseRenameIn {
         bytes.append(&mut vec![0]);
         bytes
     }
+
+    pub fn len(&self) -> usize {
+        size_of::<u64>() + self.oldname.len() + self.newname.len() + 2
+    }
 }
 
 #[repr(C)]
@@ -338,6 +348,10 @@ impl FuseLinkIn {
         bytes.append(&mut self.newname.as_bytes().to_vec());
         bytes.append(&mut vec![0]);
         bytes
+    }
+
+    pub fn len(&self) -> usize {
+        size_of::<u64>() + self.newname.len() + 1
     }
 }
 
@@ -491,6 +505,10 @@ impl FuseSetxattrIn {
         bytes.append(&mut vec![0]);
         bytes
     }
+
+    pub fn len(&self) -> usize {
+        size_of::<u32>() * 2 + self.name.len() + self.value.len() + 2
+    }
 }
 
 #[repr(C)]
@@ -509,6 +527,10 @@ impl FuseGetxattrIn {
         bytes.append(&mut self.name.as_bytes().to_vec());
         bytes.append(&mut vec![0]);
         bytes
+    }
+
+    pub fn len(&self) -> usize {
+        size_of::<u32>() * 2 + self.name.len() + 1
     }
 }
 
@@ -728,6 +750,10 @@ impl FuseUnlinkrIn {
         bytes.append(&mut vec![0]);
         bytes
     }
+
+    pub fn len(&self) -> usize {
+        self.name.len() + 1
+    }
 }
 
 #[repr(C)]
@@ -765,10 +791,14 @@ impl FuseMkdirIn {
         bytes.append(&mut vec![0]);
         bytes
     }
+
+    pub fn len(&self) -> usize {
+        size_of::<u32>() * 2 + self.name.len() + 1
+    }
 }
 
 pub enum SeccompAction {
-    Allow,
+    None,
     Kill,
     Log,
     Trap,
@@ -780,7 +810,7 @@ impl std::fmt::Display for SeccompAction {
             f,
             "{}",
             match self {
-                SeccompAction::Allow => "allow",
+                SeccompAction::None => "none",
                 SeccompAction::Kill => "kill",
                 SeccompAction::Log => "log",
                 SeccompAction::Trap => "trap",

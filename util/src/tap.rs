@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
 
@@ -85,6 +86,7 @@ impl Tap {
                 .open(TUNTAP_PATH)
                 .with_context(|| format!("Open {} failed.", TUNTAP_PATH))?;
 
+            // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
             let ret = unsafe { ioctl_with_mut_ref(&file_, TUNSETIFF(), &mut if_req) };
             if ret < 0 {
                 return Err(anyhow!(
@@ -95,10 +97,10 @@ impl Tap {
 
             file = file_;
         } else if let Some(fd) = fd {
-            file = unsafe {
-                libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
-                File::from_raw_fd(fd)
-            };
+            let fcnt_arg = FcntlArg::F_SETFL(OFlag::from_bits(libc::O_NONBLOCK).unwrap());
+            fcntl(fd, fcnt_arg)?;
+            // SAFETY: The fd has been verified.
+            file = unsafe { File::from_raw_fd(fd) };
         } else {
             return Err(anyhow!(
                 "Open tap failed, unsupported operation, error is {}",
@@ -107,6 +109,7 @@ impl Tap {
         }
 
         let mut features = 0;
+        // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_mut_ref(&file, TUNGETFEATURES(), &mut features) };
         if ret < 0 {
             return Err(anyhow!(
@@ -127,6 +130,7 @@ impl Tap {
 
     pub fn set_offload(&self, flags: u32) -> Result<()> {
         let ret =
+            // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
             unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETOFFLOAD failed.".to_string()));
@@ -136,6 +140,7 @@ impl Tap {
     }
 
     pub fn set_hdr_size(&self, len: u32) -> Result<()> {
+        // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_ref(self.file.as_ref(), TUNSETVNETHDRSZ(), &len) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETVNETHDRSZ failed.".to_string()));
@@ -146,8 +151,10 @@ impl Tap {
 
     pub fn has_ufo(&self) -> bool {
         let flags = TUN_F_CSUM | TUN_F_UFO;
-        (unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) })
-            >= 0
+        (
+            // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) }
+        ) >= 0
     }
 
     pub fn set_queue(&mut self, enable: bool) -> i32 {
@@ -164,6 +171,7 @@ impl Tap {
             ifr_flags,
         };
 
+        // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_mut_ref(self.file.as_ref(), TUNSETQUEUE(), &mut if_req) };
         if ret == 0 {
             self.enabled = enable;

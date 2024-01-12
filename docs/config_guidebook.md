@@ -107,7 +107,7 @@ The path has to be absolute path.
 -mem-path <filebackend_path>
 ```
 
-### 1.4.1 hugepages
+#### 1.4.1 hugepages
 
 Memory backend file can be used to let guest use hugetlbfs on host. It supports 2M or 1G hugepages memory.
 The following steps show how to use hugepages:
@@ -425,14 +425,19 @@ Virtio-net is a virtual Ethernet card in VM. It can enable the network capabilit
 
 Six properties are supported for netdev.
 * tap/vhost-user: the type of net device. NB: currently only tap and vhost-user is supported.
+
 * id: unique netdev id.
+
 * ifname: name of tap device in host.
+
 * fd: the file descriptor of opened tap device.
+
 * fds: file descriptors of opened tap device.
+
 * queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or
-  vhost-net device. The max queues number supported is no more than 16.
-NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
-the tap device would be created according to `ifname`.
+  vhost-net device. The max queues number supported is no more than 16. 
+
+NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, the tap device would be created according to `ifname`.
 
 Eight properties are supported for virtio-net-device or virtio-net-pci.
 * id: unique net device id.
@@ -560,7 +565,7 @@ redirection will be required. See [section 2.12 Chardev](#212-chardev) for detai
 Three properties can be set for virtconsole(console port) and virtserialport(generic port).
 * id: unique device-id.
 * chardev: char device of this console/generic port.
-* nr: unique port number for this port. (optional) If set, all virtserialports and virtconsoles should set. nr = 0 is only allowed for virtconsole.
+* nr: unique port number for this port. (optional) If set, all virtserialports and virtconsoles should set. nr = 0 is only allowed for virtconsole. The default nr for generic port starts from 1 and starts from 0 for console port. If not set, nr = 0 will be assigned to the first console port in the command line. And nr = 0 will be reserved if there is no console port in the command line.
 
 For virtio-serial-pci, Four more properties are required.
 * bus: bus number of virtio console.
@@ -657,6 +662,7 @@ Or you can simply use `-serial dev` to bind serial with character device.
 -serial stdio
 -serial pty
 -serial socket,path=<socket_path>,server,nowait
+-serial socket,port=<port>[,host=<host>],server,nowait
 -serial file,path=<file_path>
 ```
 
@@ -773,19 +779,32 @@ See [VFIO](./vfio.md) for more details.
 ### 2.12 Chardev
 The type of chardev backend could be: stdio, pty, socket and file(output only).
 
-Five properties can be set for chardev.
-
+One property can be set for chardev of stdio or pty type.
 * id: unique chardev-id.
-* backend: the type of redirect method.
-* path: the path of backend in the host. This argument is only required for socket-type chardev and file-type chardev.
-* server: run as a server. This argument is only required for socket-type chardev.
-* nowait: do not wait for connection. This argument is only required for socket-type chardev.
+
+Four properties can be set for chardev of unix-socket type.
+* id: unique chardev-id.
+* path: path to the unix-socket file on the host.
+* server: run as a server.
+* nowait: do not wait for connection.
+
+Five properties can be set for chardev of tcp-socket type.
+* id: unique chardev-id.
+* host: host for binding on (in case of server mode) or connecting to (in case of non-server mode). Default value for binding is '0.0.0.0'.
+* port: port for binding on (in case of server mode) or connecting to (in case of non-server mode).
+* server: run as a server.
+* nowait: do not wait for connection.
+
+Two properties can be set for chardev of file type.
+* id: unique chardev-id.
+* path: path to the input data file on the host.
 
 ```shell
 # redirect methods
 -chardev stdio,id=<chardev_id>
 -chardev pty,id=<chardev_id>
 -chardev socket,id=<chardev_id>,path=<socket_path>[,server,nowait]
+-chardev socket,id=<chardev_id>,port=<port>[,host=<host>][,server,nowait]
 -chardev file,id=<chardev_id>,path=<file_path>
 ```
 
@@ -1040,27 +1059,13 @@ Three properties can be set for virtio fs device.
 ```
 
 #### 2.17.2 vhost_user_fs
-The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
-Seven properties are supported for vhost_user_fs.
-* source: Shared directory path.
-* socket-path: vhost user socket path.
-* rlimit-nofile: Set maximum number of file descriptors, The limit of file resources which can be opened for the process.
-* D: log file path.
-* seccomp: Action to take when seccomp finds a not allowed syscall (allow, kill, log, trap).
-  - **allow**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule.
-  - **kill**: The process will be killed by the kernel when it calls a syscall that matches the filter rule.
-  - **log**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule but the syscall will be logged.
-  - **trap**: The thread will throw a SIGSYS signal when it calls a syscall that matches the filter rule.
-* sandbox: Sandbox mechanism to isolate the daemon process (chroot, namespace).
-  - **chroot**: The program invokes `chroot(2)` to make the shared directory tree its root when it does not have permission to create namespaces itself.
-  - **namespace**: The program invodes `pivot_root(2)` to make the shared directory tree its root.
-* modcaps: Add/delete capabilities, For example, `--modcaps=-LEASE,+KILL` stands for delete CAP_LEASE, add CAP_KILL. Capabilityes list do not need prefix `CAP_`.
+Note: The vhost_user_fs binary of StratoVirt has been removed. As there is a new Rust implementation of virtiofsd at "https://gitlab.com/virtio-fs/virtiofsd", it's marked as stable and existing project should consider to use it instead.
 
-*How to start vhost_user_fs process?*
+*How to setup file sharing based on StratoVirt and virtiofsd?*
 
 ```shell
-host# ./path/to/vhost_user_fs -source /tmp/shared -socket-path /tmp/shared/virtio_fs.sock -D
+host# Setup virtiofsd server, refer to "https://gitlab.com/virtio-fs/virtiofsd/-/blob/main/README.md"
 
 host# stratovirt \
         -machine type=q35,dump-guest-core=off,mem-share=on \
@@ -1072,7 +1077,7 @@ host# stratovirt \
         -qmp unix:/tmp/qmp2.socket,server,nowait \
         -drive id=drive_id,file=<your image>,direct=on \
         -device virtio-blk-pci,drive=drive_id,bug=pcie.0,addr=1,id=blk -serial stdio -disable-seccomp \
-        -chardev socket,id=virtio_fs,path=/tmp/shared/virtio_fs.sock,server,nowait \
+        -chardev socket,id=virtio_fs,path=/path/to/virtiofsd.sock,server,nowait \
         -device vhost-user-fs-pci,id=device_id,chardev=virtio_fs,tag=myfs,bus=pcie.0,addr=0x7
 
 guest# mount -t virtiofs myfs /mnt
@@ -1139,6 +1144,22 @@ Note: Only supported on aarch64.
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable ramfb.
 
+### 2.21 pvpanic
+pvpanic is a virtual pci device. It is used to give the virtual machine the ability to sense guest os crashes or failures.
+
+Four properties are supported for pvpanic device.
+* id: unique device id.
+* bus: bus number of the device.
+* addr: slot number.
+* supported-features: supported features, 0-3 refers to `None`, `panicked`, `crashload` and `panicked and crashload` respectively. 3 is suggested.
+
+Sample Configuration：
+```shell
+-device pvpanic,id=<pvpanic_pci>,bus=<pcie.0>,addr=<0x7>[,supported-features=<0|1|2|3>]
+```
+
+Please see the [4. Build with features](docs/build_guide.md) if you want to enable pvpanic.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
@@ -1155,19 +1176,6 @@ One property can be set:
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
 in StratoVirt process by default. It will make a slight influence on performance to StratoVirt.
-* x86_64
-
-| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
-| :----------------: | :-----------: | :------------: |
-|      microvm       |      51       |       50       |
-|        q35         |      85       |       65       |
-
-* aarch64
-
-| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
-| :----------------: | :-----------: | :------------: |
-|      microvm       |      49       |       49       |
-|        virt        |      84       |       62       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell

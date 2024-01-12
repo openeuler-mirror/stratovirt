@@ -1,0 +1,11 @@
+[[events]]
+name = "virtio_receive_request"
+args = "device: String, behaviour: String"
+message = "{}: Request received from guest {}, ready to start processing."
+enabled = true
+
+[[events]]
+name = "virtio_send_interrupt"
+args = "device: String"
+message = "{}: StratoVirt processing complete, ready to send interrupt to guest."
+enabled = true

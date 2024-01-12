@@ -3,6 +3,22 @@
 StratoVirt provides two kinds of machine, which are microvm and standard VM. The
 boot process of these two machines are as follows.
 
+## pre-parameter setting
+
+```shell
+arch=`uname -m`
+if [ ${arch} = "x86_64" ]; then
+    con=ttyS0
+    machine="q35"
+elif [ ${arch} = "aarch64" ]; then
+    con=ttyAMA0
+    machine="virt"
+else
+    echo "${arch} architecture not supported."
+    exit 1
+fi
+```
+
 ## microvm boot process
 
 ### 1. Build kernel
@@ -56,7 +72,7 @@ be mounted at boot time in StratoVirt. You can check [Appendix](#2Appendix).
     -kernel /path/to/kernel \
     -smp 1 \
     -m 1024m \
-    -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
+    -append "console=${con} pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
     -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
@@ -232,18 +248,6 @@ be omitted whose unit is 1. But code storage file with unit 0 is necessary.
 Run the following commands to boot with the kernel and rootfs:
 
 ```shell
-arch=`uname -m`
-if [ ${arch} = "x86_64" ]; then
-    con=ttyS0
-    machine="q35"
-elif [ ${arch} = "aarch64" ]; then
-    con=ttyAMA0
-    machine="virt"
-else
-    echo "${arch} architecture not supported."
-    exit 1
-fi
-
 /usr/bin/stratovirt \
     -machine ${machine} \
     -kernel /path/to/kernel \

@@ -14,6 +14,11 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MachineError {
+    #[error("")]
+    Cpu {
+        #[from]
+        source: cpu::error::CpuError,
+    },
     #[error("AddressSpace")]
     AddressSpace {
         #[from]
@@ -30,20 +35,20 @@ pub enum MachineError {
         #[from]
         source: devices::legacy::error::LegacyError,
     },
-    #[error("MicroVm")]
-    MicroVm {
+    #[error("")]
+    PciErr {
         #[from]
-        source: super::micro_vm::error::MicroVmError,
-    },
-    #[error("StdVm")]
-    StdVm {
-        #[from]
-        source: super::standard_vm::error::StandardVmError,
+        source: devices::pci::error::PciError,
     },
     #[error("Util")]
     Util {
         #[from]
         source: util::error::UtilError,
+    },
+    #[error("")]
+    Acpi {
+        #[from]
+        source: acpi::error::AcpiError,
     },
     #[error("Virtio")]
     Virtio {
@@ -65,6 +70,8 @@ pub enum MachineError {
         #[from]
         source: std::io::Error,
     },
+    #[error("Failed to init PCIe host.")]
+    InitPCIeHostErr,
     #[error("Failed to add {0} device.")]
     AddDevErr(String),
     #[error("Failed to load kernel.")]
@@ -107,4 +114,16 @@ pub enum MachineError {
     ResumeVcpuErr(u8),
     #[error("Failed to destroy vcpu{0}.")]
     DestroyVcpuErr(u8),
+    #[error("A maximum of {0} {1} replaceable devices are supported.")]
+    RplDevLmtErr(String, usize),
+    #[error("The device type is {0}, but the target config is not for this type.")]
+    DevTypeErr(String),
+    #[error("{0}: failed to update config.")]
+    UpdCfgErr(String),
+    #[error("Failed to open file: {0}.")]
+    OpenFileErr(String),
+    #[error("Failed to init pflash device.")]
+    InitPflashErr,
+    #[error("Failed to realize pflash device.")]
+    RlzPflashErr,
 }

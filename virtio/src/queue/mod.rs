@@ -166,6 +166,14 @@ pub trait VringOps {
 
     /// Get the region cache information of the SplitVring.
     fn get_cache(&self) -> &Option<RegionCache>;
+
+    /// Get the available bytes of the vring to read from or write to the guest
+    fn get_avail_bytes(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        max_size: usize,
+        is_in: bool,
+    ) -> Result<usize>;
 }
 
 /// Virtio queue.

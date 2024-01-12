@@ -46,20 +46,16 @@ static TEST_MSIX_LIST: Lazy<Mutex<Vec<MsixMsg>>> = Lazy::new(|| Mutex::new(Vec::
 static TEST_INTX_LIST: Lazy<Mutex<Vec<IntxInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 pub fn set_test_enabled() {
-    #[cfg(target_arch = "x86_64")]
-    panic!("module test framework does not support x86_64.");
-    #[cfg(target_arch = "aarch64")]
-    {
-        if let Err(_e) = TEST_ENABLED.set(true) {
-            panic!("Failed to enable test server.");
-        }
-        if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
-            panic!("Failed to initialize clock");
-        }
-        unsafe {
-            if TEST_CLOCK.is_none() {
-                TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
-            }
+    if let Err(_e) = TEST_ENABLED.set(true) {
+        panic!("Failed to enable test server.");
+    }
+    if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
+        panic!("Failed to initialize clock");
+    }
+    // SAFETY: This module is only used for test.
+    unsafe {
+        if TEST_CLOCK.is_none() {
+            TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
         }
     }
 }
@@ -69,6 +65,7 @@ pub fn is_test_enabled() -> bool {
 }
 
 pub fn set_test_clock(value: u64) {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");
@@ -83,6 +80,7 @@ pub fn set_test_clock(value: u64) {
 }
 
 pub fn get_test_clock() -> u64 {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");
@@ -93,6 +91,7 @@ pub fn get_test_clock() -> u64 {
 }
 
 pub fn get_test_time() -> Instant {
+    // SAFETY: This module is only used for test.
     unsafe {
         if TEST_CLOCK.is_none() {
             panic!("TEST_CLOCK has not been initialized.");

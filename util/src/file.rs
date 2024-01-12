@@ -16,6 +16,8 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 use anyhow::{bail, Context, Ok, Result};
+use nix::fcntl::{fcntl, FcntlArg};
+use nix::unistd::getpid;
 
 const MIN_FILE_ALIGN: u32 = 512;
 const MAX_FILE_ALIGN: u32 = 4096;
@@ -111,11 +113,10 @@ fn do_fcntl_lock(
     flock: libc::flock,
     is_lock: bool,
 ) -> Result<()> {
-    // SAFETY: the file has a valid raw fd.
-    let ret = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &flock) };
-    if ret >= 0 {
-        return Ok(());
-    }
+    let err = match fcntl(file.as_raw_fd(), FcntlArg::F_SETLK(&flock)) {
+        Err(e) => e,
+        _ => return Ok(()),
+    };
 
     if is_lock {
         bail!(
@@ -123,13 +124,13 @@ fn do_fcntl_lock(
             another process using the same file? Error: {}",
             lockname,
             path,
-            std::io::Error::last_os_error(),
+            err as i32,
         );
     } else {
         bail!(
             "Failed to release lock on file: {}. Error: {}",
             path,
-            std::io::Error::last_os_error(),
+            err as i32,
         );
     }
 }
@@ -141,7 +142,7 @@ fn lock_or_unlock_file(
     lock_name: &str,
     is_lock: bool,
 ) -> Result<()> {
-    let pid = unsafe { libc::getpid() };
+    let pid = getpid().as_raw();
     let mut flock = libc::flock {
         l_whence: libc::SEEK_SET as i16,
         l_len: 1,

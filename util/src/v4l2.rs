@@ -77,6 +77,7 @@ impl V4l2Backend {
 
     pub fn query_cap(&self) -> Result<v4l2_capability> {
         let mut cap = new_init::<v4l2_capability>();
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_mut_ref(self, VIDIOC_QUERYCAP(), &mut cap) };
         if ret < 0 {
             bail!(
@@ -88,6 +89,7 @@ impl V4l2Backend {
     }
 
     pub fn set_format(&self, fmt: &v4l2_format) -> Result<()> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_S_FMT(), fmt) };
         if ret < 0 {
             bail!(
@@ -105,6 +107,7 @@ impl V4l2Backend {
         let cnt = locked_buf.len() as u32;
         // Ensure the count is equal to the length of buffer.
         bufs.count = cnt;
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_REQBUFS(), bufs) };
         if ret < 0 {
             bail!(
@@ -118,6 +121,7 @@ impl V4l2Backend {
             buf.index = i;
             buf.type_ = bufs.type_;
             buf.memory = bufs.memory;
+            // SAFETY: self.fd is created in function new().
             let ret = unsafe { ioctl_with_ref(self, VIDIOC_QUERYBUF(), &buf) };
             if ret < 0 {
                 bail!(
@@ -127,6 +131,9 @@ impl V4l2Backend {
                 );
             }
 
+            // SAFETY:
+            // 1. self.fd is created in function new().
+            // 2. buf can be guaranteed not be null.
             let ret = unsafe {
                 libc::mmap(
                     std::ptr::null_mut() as *mut libc::c_void,
@@ -158,6 +165,7 @@ impl V4l2Backend {
             if buf.is_none() {
                 continue;
             }
+            // SAFETY: buf can be guaranteed not be null.
             let ret = unsafe {
                 libc::munmap(
                     buf.iov_base as *mut libc::c_void,
@@ -177,6 +185,7 @@ impl V4l2Backend {
     }
 
     pub fn stream_on(&self, vtype: std::os::raw::c_int) -> Result<()> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_STREAMON(), &vtype) };
         if ret < 0 {
             bail!(
@@ -188,6 +197,7 @@ impl V4l2Backend {
     }
 
     pub fn stream_off(&self, vtype: std::os::raw::c_int) -> Result<()> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_STREAMOFF(), &vtype) };
         if ret < 0 {
             bail!(
@@ -199,6 +209,7 @@ impl V4l2Backend {
     }
 
     pub fn queue_buffer(&self, buf: &v4l2_buffer) -> Result<()> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_QBUF(), buf) };
         if ret < 0 {
             bail!(
@@ -210,6 +221,7 @@ impl V4l2Backend {
     }
 
     pub fn dequeue_buffer(&self, buf: &v4l2_buffer) -> Result<bool> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_DQBUF(), buf) };
         if ret < 0 {
             if nix::errno::errno() == libc::EAGAIN {
@@ -224,6 +236,7 @@ impl V4l2Backend {
     }
 
     pub fn enum_format(&self, desc: &mut v4l2_fmtdesc) -> Result<bool> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_mut_ref(self, VIDIOC_ENUM_FMT(), desc) };
         if ret < 0 {
             let err = std::io::Error::last_os_error();
@@ -236,6 +249,7 @@ impl V4l2Backend {
     }
 
     pub fn enum_frame_size(&self, frmsize: &mut v4l2_frmsizeenum) -> Result<bool> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_mut_ref(self, VIDIOC_ENUM_FRAMESIZES(), frmsize) };
         if ret < 0 {
             let err = std::io::Error::last_os_error();
@@ -248,6 +262,7 @@ impl V4l2Backend {
     }
 
     pub fn enum_frame_interval(&self, frame_val: &mut v4l2_frmivalenum) -> Result<bool> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_mut_ref(self, VIDIOC_ENUM_FRAMEINTERVALS(), frame_val) };
         if ret < 0 {
             let err = std::io::Error::last_os_error();
@@ -260,6 +275,7 @@ impl V4l2Backend {
     }
 
     pub fn set_stream_parameter(&self, parm: &v4l2_streamparm) -> Result<()> {
+        // SAFETY: self.fd is created in function new().
         let ret = unsafe { ioctl_with_ref(self, VIDIOC_S_PARM(), parm) };
         if ret < 0 {
             bail!(
@@ -279,6 +295,7 @@ impl AsRawFd for V4l2Backend {
 
 pub fn new_init<T>() -> T {
     let mut s = ::std::mem::MaybeUninit::<T>::uninit();
+    // SAFETY: s can be guaranteed not be null.
     unsafe {
         ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
         s.assume_init()

@@ -23,6 +23,7 @@ pub mod legacy;
 pub mod misc;
 pub mod pci;
 pub mod scsi;
+pub mod smbios;
 pub mod sysbus;
 pub mod usb;
 

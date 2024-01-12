@@ -93,11 +93,11 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
     if let Some(name) = cmd_parser.get_value::<String>("chardev")? {
         if let Some(char_dev) = vm_config.chardev.remove(&name) {
             match &char_dev.backend {
-                ChardevType::Socket { path, .. } => {
+                ChardevType::UnixSocket { path, .. } => {
                     fs_cfg.sock = path.clone();
                 }
                 _ => {
-                    bail!("Chardev {:?} backend should be socket type.", &name);
+                    bail!("Chardev {:?} backend should be unix-socket type.", &name);
                 }
             }
         } else {

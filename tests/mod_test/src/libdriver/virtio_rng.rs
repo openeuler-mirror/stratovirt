@@ -16,7 +16,7 @@ use std::rc::Rc;
 use super::machine::TestStdMachine;
 use super::malloc::GuestAllocator;
 use super::virtio_pci_modern::TestVirtioPciDev;
-use crate::libtest::{test_init, TestState};
+use crate::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 
 pub fn create_rng(
     random_file: String,
@@ -31,7 +31,7 @@ pub fn create_rng(
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let rng_pci_args = format!(

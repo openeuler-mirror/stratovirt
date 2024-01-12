@@ -25,7 +25,7 @@ use mod_test::libdriver::virtio::{
     VIRTIO_F_BAD_FEATURE, VIRTIO_RING_F_EVENT_IDX, VIRTIO_RING_F_INDIRECT_DESC,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
 use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
@@ -187,10 +187,7 @@ impl VirtioScsiTest {
 
         // Request Header.
         let cmdreq_len = size_of::<TestVirtioScsiCmdReq>() as u64;
-        let req_addr = self
-            .alloc
-            .borrow_mut()
-            .alloc(cmdreq_len.try_into().unwrap());
+        let req_addr = self.alloc.borrow_mut().alloc(cmdreq_len);
         let req_bytes = req.as_bytes();
         self.state.borrow().memwrite(req_addr, req_bytes);
 
@@ -204,7 +201,7 @@ impl VirtioScsiTest {
         if let Some(data) = data_out {
             let out_len = data.len() as u32;
             let out_bytes = data.as_bytes().to_vec();
-            let out_addr = self.alloc.borrow_mut().alloc(out_len.try_into().unwrap());
+            let out_addr = self.alloc.borrow_mut().alloc(out_len as u64);
             self.state.borrow().memwrite(out_addr, out_bytes.as_slice());
             data_entries.push(TestVringDescEntry {
                 data: out_addr,
@@ -218,7 +215,7 @@ impl VirtioScsiTest {
         let resp_addr = self
             .alloc
             .borrow_mut()
-            .alloc((cmdresp_len + data_in_len as u64).try_into().unwrap());
+            .alloc(cmdresp_len + data_in_len as u64);
         let resp_bytes = resp.as_bytes();
         self.state.borrow().memwrite(resp_addr, resp_bytes);
 
@@ -592,7 +589,7 @@ fn scsi_test_init(
     Rc<RefCell<TestState>>,
     Rc<RefCell<GuestAllocator>>,
 ) {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
 
     let pci_fn = 0;
     let pci_slot = 0x4;

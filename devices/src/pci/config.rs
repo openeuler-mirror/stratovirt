@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use log::{error, warn};
 
 use crate::pci::intx::Intx;
-use crate::pci::msix::{is_msix_enabled, Msix, MSIX_TABLE_ENTRY_SIZE};
+use crate::pci::msix::{Msix, MSIX_TABLE_ENTRY_SIZE};
 use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
@@ -299,6 +299,9 @@ pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 
 // XHCI device id
 pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
+
+// PvPanic device id
+pub const PCI_DEVICE_ID_REDHAT_PVPANIC: u16 = 0x0011;
 
 // Device classes and subclasses
 pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
@@ -625,7 +628,7 @@ impl PciConfig {
         }
 
         if let Some(msix) = &mut self.msix {
-            if is_msix_enabled(msix.lock().unwrap().msix_cap_offset as usize, &self.config) {
+            if msix.lock().unwrap().is_enabled(&self.config) {
                 if let Some(intx) = &self.intx {
                     intx.lock().unwrap().notify(0);
                 }
@@ -1342,11 +1345,16 @@ mod tests {
         .unwrap();
 
         #[cfg(target_arch = "x86_64")]
-        let sys_io =
-            AddressSpace::new(Region::init_container_region(1 << 16, "sysio"), "sysio").unwrap();
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sysio"),
+            "sysio",
+            None,
+        )
+        .unwrap();
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
+            None,
         )
         .unwrap();
         assert_eq!(pci_config.bars[1].address, BAR_SPACE_UNMAPPED);

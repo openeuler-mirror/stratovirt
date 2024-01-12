@@ -709,7 +709,9 @@ impl ScsiRequest {
 }
 
 fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<usize> {
-    let mut slice = unsafe {
+    let mut slice =
+    // SAFETY: The hva is managed by Address Space, it can be guaranteed to be legal.
+    unsafe {
         std::slice::from_raw_parts_mut(hva as *mut u8, cmp::min(buf.len(), max as usize))
     };
     let size = (&mut slice)
@@ -1088,7 +1090,7 @@ fn scsi_command_emulate_inquiry(
     }
 
     let buflen = cmp::min(cmd.xfer, SCSI_MAX_INQUIRY_LEN);
-    let mut outbuf: Vec<u8> = vec![0; buflen as usize];
+    let mut outbuf: Vec<u8> = vec![0; SCSI_MAX_INQUIRY_LEN as usize];
 
     let dev_lock = dev.lock().unwrap();
 

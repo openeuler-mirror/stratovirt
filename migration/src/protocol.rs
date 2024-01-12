@@ -187,6 +187,7 @@ impl Request {
     pub fn send_msg(fd: &mut dyn Write, status: TransStatus, length: u64) -> Result<()> {
         let request = Request { length, status };
         let data =
+            // SAFETY: The pointer of request can be guaranteed not null.
             unsafe { from_raw_parts(&request as *const Self as *const u8, size_of::<Self>()) };
         fd.write_all(data)
             .with_context(|| format!("Failed to write request data {:?}", data))?;
@@ -205,7 +206,9 @@ impl Request {
     /// The socket file descriptor is broken.
     pub fn recv_msg(fd: &mut dyn Read) -> Result<Request> {
         let mut request = Request::default();
-        let data = unsafe {
+        let data =
+        // SAFETY: The pointer of request can be guaranteed not null.
+        unsafe {
             from_raw_parts_mut(&mut request as *mut Request as *mut u8, size_of::<Self>())
         };
         fd.read_exact(data)
@@ -239,6 +242,7 @@ impl Response {
     pub fn send_msg(fd: &mut dyn Write, status: TransStatus) -> Result<()> {
         let response = Response { status };
         let data =
+            // SAFETY: The pointer of response can be guaranteed not null.
             unsafe { from_raw_parts(&response as *const Self as *const u8, size_of::<Self>()) };
         fd.write_all(data)
             .with_context(|| format!("Failed to write response data {:?}", data))?;
@@ -257,7 +261,9 @@ impl Response {
     /// The socket file descriptor is broken.
     pub fn recv_msg(fd: &mut dyn Read) -> Result<Response> {
         let mut response = Response::default();
-        let data = unsafe {
+        let data =
+        // SAFETY: The pointer of response can be guaranteed not null.
+        unsafe {
             from_raw_parts_mut(&mut response as *mut Response as *mut u8, size_of::<Self>())
         };
         fd.read_exact(data)
@@ -326,11 +332,11 @@ impl EndianType {
 fn cpu_model() -> [u8; 16] {
     use core::arch::x86_64::__cpuid_count;
 
-    // Safe because we only use cpuid for cpu info in x86_64.
+    // SAFETY: We only use cpuid for cpu info in x86_64.
     let result = unsafe { __cpuid_count(EAX_VENDOR_INFO, 0) };
     let vendor_slice = [result.ebx, result.edx, result.ecx];
 
-    // Safe because we known those brand string length.
+    // SAFETY: We known those brand string length.
     let vendor_array = unsafe {
         let brand_string_start = vendor_slice.as_ptr() as *const u8;
         std::slice::from_raw_parts(brand_string_start, 3 * 4)
@@ -443,6 +449,12 @@ impl MigrationHeader {
         if current_kvm_version < self.hypervisor_version {
             return Err(anyhow!(MigrationError::HeaderItemNotFit(
                 "Hypervisor version".to_string()
+            )));
+        }
+
+        if self.desc_len > (1 << 20) {
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Desc length".to_string()
             )));
         }
 
@@ -563,6 +575,7 @@ impl DeviceStateDesc {
     pub fn add_padding(&self, desc: &DeviceStateDesc, current_slice: &mut Vec<u8>) -> Result<()> {
         let tmp_slice = current_slice.clone();
         current_slice.clear();
+        // SAFETY: size has been checked in restore_desc_db().
         current_slice.resize(self.size as usize, 0);
         for field in self.clone().fields {
             if desc.contains(&field.alias) {

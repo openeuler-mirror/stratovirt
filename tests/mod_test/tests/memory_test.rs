@@ -10,13 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{cell::RefCell, fs::File, process::Command, rc::Rc, string::String};
+use std::cell::RefCell;
+use std::fs::{remove_file, File};
+use std::process::Command;
+use std::rc::Rc;
+use std::string::String;
 
 use serde_json::{json, Value::String as JsonString};
 
 use mod_test::{
     libdriver::{machine::TestStdMachine, malloc::GuestAllocator},
-    libtest::{test_init, TestState},
+    libtest::{test_init, TestState, MACHINE_TYPE_ARG},
 };
 
 pub struct MemoryTest {
@@ -29,10 +33,6 @@ const PAGE_SIZE: u64 = 4096;
 const ADDRESS_BASE: u64 = 0x4000_0000;
 const ROM_DEV_PATH: &str = "rom_dev_file.fd";
 const RAM_DEV_PATH: &str = "ram_dev_file.fd";
-
-fn remove_file(path: String) {
-    let _output = Command::new("rm").arg("-f").arg(path).output();
-}
 
 impl MemoryTest {
     pub fn new(
@@ -264,7 +264,7 @@ fn region_update_exception() {
 #[test]
 fn rom_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
-    let addr = 0x100_0000_0000; // 1TB
+    let addr = 0x1_0000_0000; // 4GB
 
     // Add a dummy rom device by qmp. The function of the device is to multiply the written value by
     // 2 through the write interface and save it, and read the saved value through the read
@@ -275,7 +275,7 @@ fn rom_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"rom_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"read_only_mode\": false,
@@ -290,7 +290,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x02u8; 8]);
-    remove_file(ROM_DEV_PATH.to_string());
+    remove_file(ROM_DEV_PATH).unwrap();
 
     // Write overflow
     memory_test
@@ -314,7 +314,7 @@ fn rom_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"rom_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"read_only_mode\": true,
@@ -329,7 +329,7 @@ fn rom_device_region_readwrite() {
         .borrow_mut()
         .memread(addr, std::mem::size_of::<u64>() as u64);
     assert_eq!(ret, [0x00u8; 8]);
-    remove_file(ROM_DEV_PATH.to_string());
+    remove_file(ROM_DEV_PATH).unwrap();
 
     memory_test.state.borrow_mut().stop();
 }
@@ -349,7 +349,7 @@ fn rom_device_region_readwrite() {
 #[test]
 fn ram_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
-    let addr = 0x100_0000_0000; // 1TB
+    let addr = 0x1_0000_0000; // 4GB
 
     let file = File::create(&RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
@@ -357,7 +357,7 @@ fn ram_device_region_readwrite() {
         "{{ \"execute\": \"update_region\",
                         \"arguments\": {{ \"update_type\": \"add\",
                                         \"region_type\": \"ram_device_region\",
-                                        \"offset\": 1099511627776,
+                                        \"offset\": 4294967296,
                                         \"size\": 4096,
                                         \"priority\": 99,
                                         \"device_fd_path\": {:?} }} }}",
@@ -389,9 +389,9 @@ fn ram_device_region_readwrite() {
     memory_test
         .state
         .borrow_mut()
-        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 1099511627776, \"size\": 4096, \"priority\": 99 }}");
+        .qmp("{ \"execute\": \"update_region\", \"arguments\": { \"update_type\": \"delete\", \"region_type\": \"ram_device_region\", \"offset\": 4294967296, \"size\": 4096, \"priority\": 99 }}");
 
-    remove_file(RAM_DEV_PATH.to_string());
+    remove_file(RAM_DEV_PATH).unwrap();
 
     memory_test.state.borrow_mut().stop();
 }
@@ -610,7 +610,7 @@ fn ram_readwrite_exception() {
 #[test]
 fn ram_readwrite_numa() {
     let mut args: Vec<&str> = Vec::new();
-    let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
 
     let cpu = 8;
@@ -666,7 +666,7 @@ fn ram_readwrite_numa() {
 #[test]
 fn ram_readwrite_numa1() {
     let mut args: Vec<&str> = Vec::new();
-    let mut extra_args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
 
     let cpu = 8;
@@ -724,6 +724,7 @@ fn ram_readwrite_numa1() {
     test_state.borrow_mut().qmp(&qmp_str);
 
     test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
-    remove_file(RAM_DEV_PATH.to_string());
+    remove_file(RAM_DEV_PATH).unwrap();
     test_state.borrow_mut().stop();
+    remove_file("test.fd").unwrap();
 }

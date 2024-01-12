@@ -22,8 +22,8 @@ use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
     Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
-    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent, Target,
-    TypeLists, UpdateRegionArgument,
+    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
+    QueryMemGpaArgument, QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -201,6 +201,9 @@ pub trait DeviceInterface {
 
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
+
+    /// Query display of stratovirt.
+    fn query_display_image(&self) -> Response;
 
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
@@ -482,6 +485,20 @@ pub trait DeviceInterface {
         _args: BlockdevSnapshotInternalArgument,
     ) -> Response {
         Response::create_empty_response()
+    }
+
+    fn query_vcpu_reg(&self, _args: QueryVcpuRegArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query_vcpu_reg is not supported yet".to_string()),
+            None,
+        )
+    }
+
+    fn query_mem_gpa(&self, _args: QueryMemGpaArgument) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query_mem_gpa is not supported yet".to_string()),
+            None,
+        )
     }
 }
 

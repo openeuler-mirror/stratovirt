@@ -79,7 +79,7 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             iInterface: 0,
         },
         other_desc: vec![Arc::new(UsbDescOther {
-            /// HID descriptor
+            // HID descriptor
             data: vec![0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0],
         })],
         endpoints: vec![Arc::new(UsbDescEndpoint {

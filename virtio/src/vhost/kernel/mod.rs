@@ -240,7 +240,9 @@ impl VhostBackend {
         rawfd: Option<RawFd>,
     ) -> Result<VhostBackend> {
         let fd = match rawfd {
-            Some(rawfd) => unsafe { File::from_raw_fd(rawfd) },
+            Some(rawfd) =>
+            // SAFETY: this fd was configured in cmd line.
+            unsafe { File::from_raw_fd(rawfd) },
             None => OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -263,6 +265,8 @@ impl AsRawFd for VhostBackend {
 
 impl VhostOps for VhostBackend {
     fn set_owner(&self) -> Result<()> {
+        // SAFETY: self.fd was created in function new() and the
+        // return value will be checked later.
         let ret = unsafe { ioctl(self, VHOST_SET_OWNER()) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -273,6 +277,8 @@ impl VhostOps for VhostBackend {
     }
 
     fn reset_owner(&self) -> Result<()> {
+        // SAFETY: self.fd was created in function new() and the
+        // return value will be checked later.
         let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -284,6 +290,8 @@ impl VhostOps for VhostBackend {
 
     fn get_features(&self) -> Result<u64> {
         let mut avail_features: u64 = 0;
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_mut_ref(self, VHOST_GET_FEATURES(), &mut avail_features) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -294,6 +302,8 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_FEATURES(), &features) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -324,6 +334,8 @@ impl VhostOps for VhostBackend {
                 .copy_from_slice(region.as_bytes());
         }
 
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ptr(self, VHOST_SET_MEM_TABLE(), bytes.as_ptr()) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -338,6 +350,8 @@ impl VhostOps for VhostBackend {
             index: queue_idx as u32,
             num: u32::from(num),
         };
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_NUM(), &vring_state) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -383,6 +397,8 @@ impl VhostOps for VhostBackend {
             log_guest_addr: 0_u64,
         };
 
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_ADDR(), &vring_addr) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -397,6 +413,8 @@ impl VhostOps for VhostBackend {
             index: queue_idx as u32,
             num: u32::from(num),
         };
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_BASE(), &vring_state) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -412,6 +430,8 @@ impl VhostOps for VhostBackend {
             num: 0,
         };
 
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_GET_VRING_BASE(), &vring_state) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -426,6 +446,8 @@ impl VhostOps for VhostBackend {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
         };
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_CALL(), &vring_file) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -440,6 +462,8 @@ impl VhostOps for VhostBackend {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
         };
+        // SAFETY: self.fd was created in function new()  and the
+        // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_KICK(), &vring_file) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(

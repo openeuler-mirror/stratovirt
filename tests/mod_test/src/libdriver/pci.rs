@@ -198,18 +198,18 @@ impl TestPciDev {
         self.msix_table_bar = if let Some(addr) = bar_addr {
             addr
         } else {
-            self.io_map(bar_table.try_into().unwrap())
+            self.io_map(bar_table as u8)
         };
-        self.msix_table_off = (table & !PCI_MSIX_TABLE_BIR).try_into().unwrap();
+        self.msix_table_off = (table & !PCI_MSIX_TABLE_BIR) as u64;
 
         let table = self.config_readl(addr + PCI_MSIX_PBA);
         let bar_pba = table & PCI_MSIX_TABLE_BIR;
         if bar_pba != bar_table {
-            self.msix_pba_bar = self.io_map(bar_pba.try_into().unwrap());
+            self.msix_pba_bar = self.io_map(bar_pba as u8);
         } else {
             self.msix_pba_bar = self.msix_table_bar;
         }
-        self.msix_pba_off = (table & !PCI_MSIX_TABLE_BIR).try_into().unwrap();
+        self.msix_pba_off = (table & !PCI_MSIX_TABLE_BIR) as u64;
         self.msix_enabled = true;
     }
 
@@ -419,12 +419,12 @@ impl PciMsixOps for TestPciDev {
         self.io_writel(
             msix_table_bar,
             offset + PCI_MSIX_ENTRY_LOWER_ADDR,
-            msix_addr.try_into().unwrap(),
+            msix_addr as u32,
         );
         self.io_writel(
             msix_table_bar,
             offset + PCI_MSIX_ENTRY_UPPER_ADDR,
-            (msix_addr >> 32).try_into().unwrap(),
+            (msix_addr >> 32) as u32,
         );
         self.io_writel(msix_table_bar, offset + PCI_MSIX_ENTRY_DATA, msix_data);
 

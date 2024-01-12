@@ -11,13 +11,17 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::min;
-use std::fs::File;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::ffi::CString;
+use std::fs::{remove_file, File};
+use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 use std::thread;
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
+use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
+use nix::sys::statfs::fstatfs;
+use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
@@ -44,18 +48,8 @@ pub struct FileBackend {
 }
 
 fn file_unlink(file_path: &str) {
-    let fs_cstr = std::ffi::CString::new(file_path).unwrap().into_raw();
-
-    if unsafe { libc::unlink(fs_cstr) } != 0 {
-        error!(
-            "Failed to unlink file \"{}\", error: {:?}",
-            file_path,
-            std::io::Error::last_os_error()
-        );
-    }
-    // SAFETY: fs_cstr obtained by calling CString::into_raw.
-    unsafe {
-        drop(std::ffi::CString::from_raw(fs_cstr));
+    if let Err(e) = remove_file(file_path) {
+        error!("Failed to unlink file \"{}\", error: {:?}", file_path, e);
     }
 }
 
@@ -94,30 +88,25 @@ impl FileBackend {
             // The last six characters of template file must be "XXXXXX" for `mkstemp`
             // function to create unique temporary file.
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
-            let fs_cstr = std::ffi::CString::new(fs_path.clone()).unwrap().into_raw();
 
-            let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
-            if raw_fd < 0 {
-                // SAFETY: fs_cstr obtained by calling CString::into_raw.
-                unsafe {
-                    drop(std::ffi::CString::from_raw(fs_cstr));
+            let (raw_fd, fs_tmp_path) = match mkstemp(fs_path.as_str()) {
+                Ok((fd, p)) => (fd, p),
+                Err(_) => {
+                    return Err(std::io::Error::last_os_error()).with_context(|| {
+                        format!("Failed to create file in directory: {} ", file_path)
+                    });
                 }
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("Failed to create file in directory: {} ", file_path)
-                });
+            };
+
+            if unlink(fs_tmp_path.as_path()).is_err() {
+                error!(
+                    "Failed to unlink file \"{:?}\", error: {:?}",
+                    fs_tmp_path.as_path(),
+                    std::io::Error::last_os_error()
+                )
             }
 
-            if unsafe { libc::unlink(fs_cstr) } != 0 {
-                error!(
-                    "Failed to unlink file \"{}\", error: {:?}",
-                    fs_path,
-                    std::io::Error::last_os_error()
-                );
-            }
-            // SAFETY: fs_cstr obtained by calling CString::into_raw.
-            unsafe {
-                drop(std::ffi::CString::from_raw(fs_cstr));
-            }
+            // SAFETY: only one FileBackend instance has the ownership of the file descriptor
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
             need_unlink = !path.exists();
@@ -130,13 +119,10 @@ impl FileBackend {
                 .with_context(|| format!("Failed to open file: {}", file_path))?
         };
 
-        // Safe because struct `statfs` only contains plain-data-type field,
-        // and set to all-zero will not cause any undefined behavior.
-        let mut fstat: libc::statfs = unsafe { std::mem::zeroed() };
-        unsafe { libc::fstatfs(file.as_raw_fd(), &mut fstat) };
+        let fstat = fstatfs(&file).with_context(|| "Failed to fstatfs file")?;
         info!(
             "Using memory backing file, the page size is {}",
-            fstat.f_bsize
+            fstat.optimal_transfer_size()
         );
 
         let old_file_len = file.metadata().unwrap().len();
@@ -149,16 +135,16 @@ impl FileBackend {
             }
         } else if old_file_len < file_len {
             bail!(
-            "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
-            file_path,
-            file_len
-        );
+                "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
+                file_path,
+                file_len
+            );
         }
 
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
-            page_size: fstat.f_bsize as u64,
+            page_size: fstat.optimal_transfer_size() as u64,
         })
     }
 }
@@ -169,12 +155,23 @@ impl FileBackend {
 ///
 /// * `nr_vcpus` - Number of vcpus.
 fn max_nr_threads(nr_vcpus: u8) -> u8 {
-    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    if nr_host_cpu > 0 {
-        return min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus);
-    }
+    let conf = sysconf(SysconfVar::_NPROCESSORS_ONLN);
+
     // If fails to call `sysconf` function, just use a single thread to touch pages.
-    1
+    if conf.is_err() || conf.unwrap().is_none() {
+        log::warn!("Failed to get sysconf of _NPROCESSORS_ONLN");
+        return 1;
+    }
+    let nr_host_cpu = conf.unwrap().unwrap();
+    if nr_host_cpu <= 0 {
+        log::warn!(
+            "The sysconf of _NPROCESSORS_ONLN: {} is ignored",
+            nr_host_cpu
+        );
+        return 1;
+    }
+
+    min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus)
 }
 
 /// Touch pages to pre-alloc memory for VM.
@@ -187,7 +184,7 @@ fn max_nr_threads(nr_vcpus: u8) -> u8 {
 fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
     let mut addr = start;
     for _i in 0..nr_pages {
-        // Safe, because the data read from raw pointer is written to the same address.
+        // SAFETY: The data read from raw pointer is written to the same address.
         unsafe {
             let read_addr = addr as *mut u8;
             let data: u8 = *read_addr;
@@ -250,14 +247,15 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
                 .with_context(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {
-        let anon_mem_name = String::from("stratovirt_anon_mem");
-
-        let anon_fd =
-            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_fd = memfd_create(
+            &CString::new("stratovirt_anon_mem")?,
+            MemFdCreateFlag::empty(),
+        )?;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
+        // SAFETY: The parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.mem_size)
@@ -297,14 +295,15 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
     let mut f_back: Option<FileBackend> = None;
 
     if mem_config.memfd {
-        let anon_mem_name = String::from("stratovirt_anon_mem");
-
-        let anon_fd =
-            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_fd = memfd_create(
+            &CString::new("stratovirt_anon_mem")?,
+            MemFdCreateFlag::empty(),
+        )?;
         if anon_fd < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
+        // SAFETY: The parameters is constant.
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(mem_config.size)
@@ -354,6 +353,7 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
     let mut max_node = nodes[nodes.len() - 1] as usize;
 
     let mut nmask: Vec<u64> = Vec::new();
+    // Upper limit of max_node is MAX_NODES.
     nmask.resize(max_node / 64 + 1, 0);
     for node in nodes.iter() {
         nmask[(*node / 64) as usize] |= 1_u64 << (*node % 64);
@@ -394,10 +394,11 @@ pub struct HostMemMapping {
     is_share: bool,
 }
 
-// Send and Sync is not auto-implemented for raw pointer type
-// implementing them is safe because field of HostMemMapping won't change once initialized,
-// only access(r/w) is permitted
+// SAFETY: Send and Sync is not auto-implemented for raw pointer type,
+// implementing them is safe because field of HostMemMapping won't change
+// once initialized, only access(r/w) is permitted
 unsafe impl Send for HostMemMapping {}
+// SAFETY: Same reason as above.
 unsafe impl Sync for HostMemMapping {}
 
 impl HostMemMapping {
@@ -476,6 +477,7 @@ impl HostMemMapping {
 impl Drop for HostMemMapping {
     /// Release the memory mapping.
     fn drop(&mut self) {
+        // SAFETY: self.host_addr and self.size has already been verified during initialization.
         unsafe {
             libc::munmap(
                 self.host_addr as *mut libc::c_void,

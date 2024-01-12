@@ -30,9 +30,10 @@ use crate::{
     console::console_select,
     error::VncError,
     input::{
-        key_event, keyboard_modifier_get, keyboard_state_reset, point_event, update_key_state,
-        KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
-        INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+        input_button, input_move_abs, input_point_sync, key_event, keyboard_modifier_get,
+        keyboard_state_reset, update_key_state, Axis, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z,
+        INPUT_BUTTON_MAX_NUM, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1,
+        KEYCODE_9, UPPERCASE_TO_LOWERCASE,
     },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
@@ -182,6 +183,8 @@ pub struct DisplayMode {
     pub client_be: bool,
     /// The pixel need to convert.
     pub convert: bool,
+    /// Last button state.
+    pub last_button: u8,
     /// Image pixel format in pixman.
     pub pf: PixelFormat,
 }
@@ -195,6 +198,7 @@ impl DisplayMode {
             enc,
             client_be,
             convert,
+            last_button: 0,
             pf,
         }
     }
@@ -798,6 +802,7 @@ impl ClientIoHandler {
         let mut locked_dpm = self.client.client_dpm.lock().unwrap();
         locked_dpm.feature = 0;
         locked_dpm.enc = 0;
+        num_encoding = cmp::min(num_encoding as usize, (buf.len() - 4) / 4) as u16;
         while num_encoding > 0 {
             let offset = (4 * num_encoding) as usize;
             let enc = i32::from_be_bytes([
@@ -971,14 +976,30 @@ impl ClientIoHandler {
         y = ((y as u64 * ABS_MAX) / height as u64) as u16;
 
         // ASCII -> HidCode.
-        let button_mask: u8 = match buf[1] {
-            INPUT_POINT_LEFT => 0x01,
-            INPUT_POINT_MIDDLE => 0x04,
-            INPUT_POINT_RIGHT => 0x02,
-            _ => buf[1],
-        };
+        let new_button = buf[1];
+        let last_button = self.client.client_dpm.lock().unwrap().last_button;
+        if last_button != new_button {
+            for bit in 0..INPUT_BUTTON_MAX_NUM {
+                let button_mask = 1 << bit;
+                if last_button & button_mask == new_button & button_mask {
+                    continue;
+                }
 
-        point_event(button_mask as u32, x as u32, y as u32)?;
+                let button = match button_mask {
+                    INPUT_POINT_LEFT => 0x01,
+                    INPUT_POINT_MIDDLE => 0x04,
+                    INPUT_POINT_RIGHT => 0x02,
+                    _ => button_mask,
+                };
+                input_button(button as u32, new_button & button_mask != 0)?;
+            }
+            self.client.client_dpm.lock().unwrap().last_button = new_button;
+        }
+
+        input_move_abs(Axis::X, x as u32)?;
+        input_move_abs(Axis::Y, y as u32)?;
+        input_point_sync()?;
+
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }

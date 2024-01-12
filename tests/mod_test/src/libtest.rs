@@ -27,6 +27,10 @@ use serde_json::Value;
 use crate::utils::get_tmp_dir;
 
 const MAX_SOCKET_MSG_LENGTH: usize = 8192;
+#[cfg(target_arch = "x86_64")]
+pub const MACHINE_TYPE_ARG: &str = "-machine q35";
+#[cfg(target_arch = "aarch64")]
+pub const MACHINE_TYPE_ARG: &str = "-machine virt";
 
 pub struct StreamHandler {
     stream: UnixStream,

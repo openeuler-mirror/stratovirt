@@ -360,7 +360,11 @@ impl InputReceiver for Serial {
     }
 
     fn remain_size(&mut self) -> usize {
-        RECEIVER_BUFF_SIZE
+        if (self.state.mcr & UART_MCR_LOOP == 0) && (self.rbr.len() < RECEIVER_BUFF_SIZE) {
+            RECEIVER_BUFF_SIZE - self.rbr.len()
+        } else {
+            0
+        }
     }
 }
 

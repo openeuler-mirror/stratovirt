@@ -26,8 +26,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::{
     gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default, report_virtio_error,
     Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_CONSOLE,
+    VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
@@ -417,7 +416,7 @@ struct SerialControlHandler {
 
 impl SerialPortHandler {
     fn output_handle(&mut self) {
-        self.trace_request("Serial".to_string(), "to IO".to_string());
+        trace::virtio_receive_request("Serial".to_string(), "to IO".to_string());
 
         self.output_handle_internal().unwrap_or_else(|e| {
             error!("Port handle output error: {:?}", e);
@@ -513,6 +512,31 @@ impl SerialPortHandler {
         };
     }
 
+    fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
+        let port = self.port.as_ref();
+        if port.is_none() || !port.unwrap().lock().unwrap().guest_connected {
+            debug!("virtio-serial port is none or disconnected");
+            return 0;
+        }
+
+        if self.device_broken.load(Ordering::SeqCst) {
+            warn!("virtio-serial device is broken");
+            return 0;
+        }
+
+        let mut locked_queue = self.input_queue.lock().unwrap();
+        match locked_queue
+            .vring
+            .get_avail_bytes(&self.mem_space, max_size, true)
+        {
+            Ok(n) => n,
+            Err(_) => {
+                warn!("error occurred while getting available bytes of vring");
+                0
+            }
+        }
+    }
+
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
@@ -590,8 +614,6 @@ impl SerialPortHandler {
     }
 }
 
-impl VirtioTrace for SerialPortHandler {}
-
 impl EventNotifierHelper for SerialPortHandler {
     fn internal_notifiers(serial_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
@@ -631,7 +653,7 @@ impl InputReceiver for SerialPortHandler {
     }
 
     fn remain_size(&mut self) -> usize {
-        BUF_SIZE
+        self.get_input_avail_bytes(BUF_SIZE)
     }
 }
 

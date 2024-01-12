@@ -31,6 +31,8 @@ pub struct TempCleaner {
 
 impl TempCleaner {
     pub fn object_init() {
+        // SAFETY: This global variable is only used in single thread,
+        // so there is no data competition or synchronization problem.
         unsafe {
             if GLOBAL_TEMP_CLEANER.is_none() {
                 GLOBAL_TEMP_CLEANER = Some(TempCleaner {
@@ -43,6 +45,8 @@ impl TempCleaner {
 
     /// Add to be removed file path
     pub fn add_path(path: String) {
+        // SAFETY: This global variable is only used in single thread,
+        // so there is no data competition or synchronization problem.
         unsafe {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 tmp.paths.push(path);
@@ -52,6 +56,8 @@ impl TempCleaner {
 
     /// Add exit notifier.
     pub fn add_exit_notifier(id: String, exit: Arc<ExitNotifier>) {
+        // SAFETY: This global variable is only used in single thread,
+        // so there is no data competition or synchronization problem.
         unsafe {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 tmp.notifiers.insert(id, exit);
@@ -61,6 +67,8 @@ impl TempCleaner {
 
     /// Remove exit notifier by id.
     pub fn remove_exit_notifier(id: &str) {
+        // SAFETY: This global variable is only used in single thread,
+        // so there is no data competition or synchronization problem.
         unsafe {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 tmp.notifiers.remove(id);
@@ -106,6 +114,8 @@ impl TempCleaner {
 
     /// Clean the resources
     pub fn clean() {
+        // SAFETY: This global variable is only used in single thread,
+        // so there is no data competition or synchronization problem.
         unsafe {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 tmp.clean_files();

@@ -147,7 +147,11 @@ impl UsbHostRequest {
     }
 }
 
+// SAFETY: The UsbHostRequest is created in main thread and then be passed to the
+// libUSB thread. Once this data is processed, it is cleaned up. So there will be
+// no problem with data sharing or synchronization.
 unsafe impl Sync for UsbHostRequest {}
+// SAFETY: The reason is same as above.
 unsafe impl Send for UsbHostRequest {}
 
 pub struct IsoTransfer {
@@ -235,9 +239,9 @@ impl IsoTransfer {
             // and packet is guaranteed to be not out of boundary.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
-        // SAFETY: buffer is already allocated and size will not be exceed
-        // the size of buffer.
         lockecd_packet.transfer_packet(
+            // SAFETY: buffer is already allocated and size will not be exceed
+            // the size of buffer.
             unsafe { std::slice::from_raw_parts_mut(buffer, size) },
             size,
         );
@@ -248,7 +252,9 @@ impl IsoTransfer {
     }
 }
 
+// SAFETY: The operation of libusb_transfer is protected by lock.
 unsafe impl Sync for IsoTransfer {}
+// SAFETY: The reason is same as above.
 unsafe impl Send for IsoTransfer {}
 
 pub struct IsoQueue {
@@ -360,6 +366,7 @@ pub struct UsbHost {
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
 // Implementing them is safe because List add Mutex.
 unsafe impl Sync for UsbHost {}
+// SAFETY: The reason is same as above.
 unsafe impl Send for UsbHost {}
 
 impl UsbHost {
@@ -586,9 +593,9 @@ impl UsbHost {
     fn register_exit(&mut self) {
         let exit = self as *const Self as u64;
         let exit_notifier = Arc::new(move || {
-            // SAFETY: This callback is deleted after the device hot-unplug, so it is called only
-            // when the vm exits abnormally.
             let usb_host =
+                // SAFETY: This callback is deleted after the device hot-unplug, so it is called only
+                // when the vm exits abnormally.
                 &mut unsafe { std::slice::from_raw_parts_mut(exit as *mut UsbHost, 1) }[0];
             usb_host.release_dev_to_host();
         }) as Arc<ExitNotifier>;

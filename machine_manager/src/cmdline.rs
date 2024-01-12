@@ -10,17 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::net::UnixListener;
-
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
+    config::{parse_trace_options, ChardevType, CmdParser, MachineType, VmConfig},
+    qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
 use util::file::clear_file;
-use util::unix::{limit_permission, parse_unix_uri};
+use util::unix::limit_permission;
+use util::{
+    arg_parser::{Arg, ArgMatches, ArgParser},
+    socket::SocketListener,
+};
 
 /// This macro is to run struct $z 's function $s whose arg is $x 's inner member.
 /// There is a multi-macro-cast in cases of vec and bool.
@@ -180,8 +182,9 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("qmp")
             .long("qmp")
-            .value_name("unix:<socket_path>")
-            .help("set QMP's unix socket path")
+            .value_name("<parameters>")
+            .help("\n\t\tset unix socket path: unix:<socket_path>,server,nowait; \
+                   \n\t\tset tcp socket path: tcp:ip:port,server,nowait")
             .takes_value(true)
         )
         .arg(
@@ -215,8 +218,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("chardev")
             .multiple(true)
             .long("chardev")
-            .value_name("socket,id=<str>,path=<socket_path>")
-            .help("set char device virtio console for vm")
+            .value_name("<parameters>")
+            .help("\n\t\tadd standard i/o device: -chardev stdio,id=<char_id>; \
+                   \n\t\tadd pseudo-terminal: -chardev pty,id=<char_id>; \
+                   \n\t\tadd file: -chardev file,id=<char_id>,path=<path>; \
+                   \n\t\tadd unix-socket: -chardev socket,id=<char_id>,path=<path>[,server][,nowait]; \
+                   \n\t\tadd tcp-socket: -chardev socket,id=<char_id>,port=<port>[,host=host][,server][,nowait];")
             .takes_values(true),
         )
         .arg(
@@ -247,14 +254,21 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd usb storage: -device usb-storage,id=<storage>,drive=<drive_id>; \
                    \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
                    \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \
-                   \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>")
+                   \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>; \
+                   \n\t\tadd pvpanic: -device pvpanic,id=<pvpanic_pci>,bus=<pcie.0>,addr=<0x7>[,supported-features=<0|1|2|3>];")
             .takes_values(true),
         )
         .arg(
             Arg::with_name("serial")
             .long("serial")
-            .value_name("backend[,path=<str>,server,nowait] or chardev:<char_id>")
-            .help("add serial and set chardev for it")
+            .value_name("<parameters>")
+            .help("\n\t\tuse chardev device: -serial chardev:<char_id>; \
+                   \n\t\tuse standard i/o device: -serial stdio; \
+                   \n\t\tuse pseudo-terminal: -serial pty; \
+                   \n\t\tuse file: -serial file,path=<path>; \
+                   \n\t\tuse unix-socket: -serial socket,path=<path>[,server][,nowait]; \
+                   \n\t\tuse tcp-socket: -serial socket,port=<port>[,host=<host>][,server][,nowait]; \
+                  ")
             .takes_value(true),
         )
         .arg(
@@ -572,9 +586,8 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     #[cfg(feature = "usb_camera")]
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
     add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
-
-    if let Some(s) = args.value_of("trace") {
-        add_trace_events(&s)?;
+    if let Some(opt) = args.value_of("trace") {
+        parse_trace_options(&opt)?;
     }
 
     // Check the mini-set for Vm to start is ok
@@ -595,7 +608,10 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 /// # Errors
 ///
 /// The value of `qmp` is illegel.
-pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<Vec<UnixListener>> {
+pub fn check_api_channel(
+    args: &ArgMatches,
+    vm_config: &mut VmConfig,
+) -> Result<Vec<SocketListener>> {
     let mut sock_paths = Vec::new();
     if let Some(qmp_config) = args.value_of("qmp") {
         let mut cmd_parser = CmdParser::new("qmp");
@@ -603,9 +619,9 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 
         cmd_parser.parse(&qmp_config)?;
         if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let api_path =
-                parse_unix_uri(&uri).with_context(|| "Failed to parse qmp socket path")?;
-            sock_paths.push(api_path);
+            let sock_path =
+                QmpSocketPath::new(uri).with_context(|| "Failed to parse qmp socket path")?;
+            sock_paths.push(sock_path);
         } else {
             bail!("No uri found for qmp");
         }
@@ -634,7 +650,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
         }
 
         if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::Socket {
+            if let ChardevType::UnixSocket {
                 path,
                 server,
                 nowait,
@@ -646,9 +662,25 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
                         path
                     );
                 }
-                sock_paths.push(path);
+                sock_paths.push(
+                    QmpSocketPath::new(path).with_context(|| "Failed to parse qmp socket path")?,
+                );
+            } else if let ChardevType::TcpSocket {
+                host,
+                port,
+                server,
+                nowait,
+            } = cfg.backend
+            {
+                if !server || !nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}:{}\'",
+                        host, port
+                    );
+                }
+                sock_paths.push(QmpSocketPath::Tcp { host, port });
             } else {
-                bail!("Only socket-type of chardev can be used for monitor");
+                bail!("Only chardev of unix-socket type can be used for monitor");
             }
         } else {
             bail!("No chardev found: {}", &chardev);
@@ -659,23 +691,34 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
         bail!("Please use \'-qmp\' or \'-mon\' to give a qmp path for Unix socket");
     }
     let mut listeners = Vec::new();
-    for path in sock_paths {
-        listeners.push(
-            bind_socket(path.clone())
-                .with_context(|| format!("Failed to bind socket for path: {:?}", &path))?,
-        )
+    for sock_path in sock_paths {
+        listeners.push(bind_socket(&sock_path).with_context(|| {
+            format!(
+                "Failed to bind socket for path: {:?}",
+                sock_path.to_string()
+            )
+        })?)
     }
 
     Ok(listeners)
 }
 
-fn bind_socket(path: String) -> Result<UnixListener> {
-    clear_file(path.clone())?;
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("Failed to bind socket file {}", &path))?;
-    // Add file to temporary pool, so it could be cleaned when vm exits.
-    TempCleaner::add_path(path.clone());
-    limit_permission(&path)
-        .with_context(|| format!("Failed to limit permission for socket file {}", &path))?;
-    Ok(listener)
+fn bind_socket(path: &QmpSocketPath) -> Result<SocketListener> {
+    match path {
+        QmpSocketPath::Tcp { host, port } => {
+            let listener = SocketListener::bind_by_tcp(host, *port)
+                .with_context(|| format!("Failed to bind tcp socket {}:{}", &host, &port))?;
+            Ok(listener)
+        }
+        QmpSocketPath::Unix { path } => {
+            clear_file(path.clone())?;
+            let listener = SocketListener::bind_by_uds(path)
+                .with_context(|| format!("Failed to bind socket file {}", &path))?;
+            // Add file to temporary pool, so it could be cleaned when vm exits.
+            TempCleaner::add_path(path.clone());
+            limit_permission(path)
+                .with_context(|| format!("Failed to limit permission for socket file {}", &path))?;
+            Ok(listener)
+        }
+    }
 }

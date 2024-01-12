@@ -167,6 +167,8 @@ pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
+/// TODO: need to change to 5 or bigger
+pub const VIRTIO_GPU_F_MONOCHROME: u32 = 4;
 
 /// The device sets control ok status to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
@@ -766,26 +768,6 @@ fn read_config_default(config: &[u8], offset: u64, mut data: &mut [u8]) -> Resul
     let read_end = offset as usize + data.len();
     data.write_all(&config[offset as usize..read_end])?;
     Ok(())
-}
-
-/// The trait for trace descriptions of virtio device interactions
-/// on the front and back ends.
-pub trait VirtioTrace {
-    fn trace_request(&self, device: String, behaviour: String) {
-        util::ftrace!(
-            trace_request,
-            "{} : Request received from Guest {}, ready to start processing.",
-            device,
-            behaviour
-        );
-    }
-    fn trace_send_interrupt(&self, device: String) {
-        util::ftrace!(
-            trace_send_interrupt,
-            "{} : stratovirt processing complete, ready to send interrupt to guest.",
-            device
-        );
-    }
 }
 
 /// The function used to inject interrupt to guest when encounter an virtio error.

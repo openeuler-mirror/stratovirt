@@ -213,6 +213,7 @@ impl RefCount {
             );
         }
         let mut new_table = self.refcount_table.clone();
+        // SAFETY: Upper limit of new_table_size is disk file size.
         new_table.resize(new_table_size as usize, 0);
         let start_offset = start_idx * self.cluster_size;
         let mut table_offset = start_offset;
@@ -727,6 +728,7 @@ mod test {
             rc_block.push(0x00);
             rc_block.push(0x01);
         }
+        // SAFETY: Upper limit of following value is decided by disk file size.
         rc_table.resize((rct * cluster_sz) as usize, 0);
         rc_block.resize((rcb * cluster_sz) as usize, 0);
         let header = QcowHeader {

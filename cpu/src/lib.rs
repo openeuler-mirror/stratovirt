@@ -67,6 +67,7 @@ use anyhow::{anyhow, Context, Result};
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
+use nix::unistd::gettid;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
@@ -256,7 +257,7 @@ impl CPU {
 
     /// Set thread id for `CPU`.
     fn set_tid(&self) {
-        *self.tid.lock().unwrap() = Some(util::unix::gettid());
+        *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
     }
 }
 
@@ -267,7 +268,7 @@ impl CPUInterface for CPU {
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
     ) -> Result<()> {
-        trace_cpu_boot_config(boot);
+        trace::cpu_boot_config(boot);
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(anyhow!(CpuError::RealizeVcpu(format!(
@@ -836,10 +837,6 @@ impl CpuTopology {
             thread_id: Some(threadid as isize),
         }
     }
-}
-
-fn trace_cpu_boot_config(cpu_boot_config: &CPUBootConfig) {
-    util::ftrace!(trace_CPU_boot_config, "{:#?}", cpu_boot_config);
 }
 
 /// Capture the boot signal that trap from guest kernel, and then record

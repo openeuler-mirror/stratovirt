@@ -1,0 +1,29 @@
+[[events]]
+name = "cpu_topo"
+args = "cpu_topo: &dyn fmt::Debug"
+message = "{:#?}"
+enabled = true
+
+[[events]]
+name = "sysbus"
+args = "sysbus: &dyn fmt::Debug"
+message = "{:#?}"
+enabled = true
+
+[[events]]
+name = "replaceable_info"
+args = "replaceable_info: &dyn fmt::Debug"
+message = "{:#?}"
+enabled = true
+
+[[events]]
+name = "vm_state"
+args = "vm_state: &dyn fmt::Debug"
+message = "{:#?}"
+enabled = true
+
+[[events]]
+name = "mmio_replaceable_config"
+args = "mmio_replaceable_config: &dyn fmt::Debug"
+message = "{:#?}"
+enabled = true

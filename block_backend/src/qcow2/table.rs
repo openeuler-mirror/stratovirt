@@ -25,10 +25,8 @@ use crate::{
     },
     BlockProperty,
 };
+use machine_manager::config::MAX_L2_CACHE_SIZE;
 use util::num_ops::div_round_up;
-
-// L2 Cache max size is 32M.
-const MAX_L2_CACHE_SIZE: u64 = 32 * (1 << 20);
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Qcow2ClusterType {

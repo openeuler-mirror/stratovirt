@@ -62,6 +62,7 @@ impl VhostNetBackend for VhostBackend {
             fd,
         };
 
+        // SAFETY: self.fd was created in function new() and the return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_NET_SET_BACKEND(), &vring_file) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(
@@ -415,7 +416,7 @@ mod tests {
 
     fn vhost_address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem").unwrap();
+        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),

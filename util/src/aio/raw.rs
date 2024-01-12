@@ -12,11 +12,9 @@
 
 use std::os::unix::io::RawFd;
 
-use libc::{
-    c_int, c_void, fallocate, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t,
-    FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_ZERO_RANGE,
-};
+use libc::{c_int, c_void, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t};
 use log::error;
+use vmm_sys_util::fallocate::{fallocate, FallocateMode};
 
 use super::Iovec;
 
@@ -141,44 +139,57 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
     ret
 }
 
-pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let ret = do_fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, size);
-    if ret < 0 && ret != -libc::ENOTSUP as i64 {
-        error!(
-            "Failed to fallocate for {}, errno {}.",
-            fd,
-            nix::errno::errno(),
-        );
+pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i32 {
+    let ret = do_fallocate(fd, FallocateMode::PunchHole, true, offset as u64, size);
+
+    if ret < 0 && ret != -libc::ENOTSUP {
+        error!("Failed to fallocate for {}, errno {}.", fd, ret);
     }
     ret
 }
 
-pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i64 {
-    let ret = do_fallocate(fd, FALLOC_FL_ZERO_RANGE, offset, size);
-    if ret < 0 && ret != -libc::ENOTSUP as i64 {
+pub fn raw_write_zeroes(fd: RawFd, offset: usize, size: u64) -> i32 {
+    let ret = do_fallocate(fd, FallocateMode::ZeroRange, false, offset as u64, size);
+
+    if ret < 0 && ret != -libc::ENOTSUP {
         error!(
             "Failed to fallocate zero range for fd {}, errno {}.",
-            fd,
-            nix::errno::errno(),
+            fd, ret,
         );
     }
     ret
 }
 
-fn do_fallocate(fd: RawFd, mode: i32, offset: usize, size: u64) -> i64 {
+fn do_fallocate(
+    fd: RawFd,
+    fallocate_mode: FallocateMode,
+    keep_size: bool,
+    offset: u64,
+    size: u64,
+) -> i32 {
+    let mut ret = 0;
     loop {
-        // SAFETY: fd is valid.
-        let ret = unsafe { fallocate(fd as c_int, mode, offset as i64, size as i64) as i64 };
+        let mode = match &fallocate_mode {
+            FallocateMode::PunchHole => FallocateMode::PunchHole,
+            FallocateMode::ZeroRange => FallocateMode::ZeroRange,
+        };
+
+        if let Err(e) = fallocate(&fd, mode, keep_size, offset, size) {
+            ret = e.errno()
+        };
+
         if ret == 0 {
-            return 0;
+            return ret;
         }
-        if nix::errno::errno() != libc::EINTR {
+
+        if ret != libc::EINTR {
             break;
         }
     }
 
-    if [libc::ENODEV, libc::ENOSYS, libc::EOPNOTSUPP, libc::ENOTTY].contains(&nix::errno::errno()) {
-        return -libc::ENOTSUP as i64;
+    if [libc::ENODEV, libc::ENOSYS, libc::EOPNOTSUPP, libc::ENOTTY].contains(&ret) {
+        ret = libc::ENOTSUP;
     }
-    -nix::errno::errno() as i64
+
+    -ret
 }

@@ -36,6 +36,11 @@ const MIN_QUEUE_SIZE_BLK: u16 = 2;
 // Max size of each virtqueue for virtio-blk.
 const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
+// L2 Cache max size is 32M.
+pub const MAX_L2_CACHE_SIZE: u64 = 32 * (1 << 20);
+// Refcount table cache max size is 32M.
+const MAX_REFTABLE_CACHE_SIZE: u64 = 32 * (1 << 20);
+
 /// Represent a single drive backend file.
 pub struct DriveFile {
     /// Drive id.
@@ -226,7 +231,7 @@ impl ConfigCheck for DriveConfig {
                 MAX_PATH_LENGTH,
             )));
         }
-        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
+        if self.iops > Some(MAX_IOPS) {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "iops of block device".to_string(),
                 0,
@@ -254,6 +259,25 @@ impl ConfigCheck for DriveConfig {
             return Err(anyhow!(ConfigError::InvalidParam(
                 "media".to_string(),
                 "media should be \"disk\" or \"cdrom\"".to_string(),
+            )));
+        }
+
+        if self.l2_cache_size > Some(MAX_L2_CACHE_SIZE) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "l2-cache-size".to_string(),
+                0,
+                true,
+                MAX_L2_CACHE_SIZE,
+                true
+            )));
+        }
+        if self.refcount_cache_size > Some(MAX_REFTABLE_CACHE_SIZE) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "refcount-cache-size".to_string(),
+                0,
+                true,
+                MAX_REFTABLE_CACHE_SIZE,
+                true
             )));
         }
 

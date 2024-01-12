@@ -70,6 +70,8 @@ fn create_pid_file(path: &str) -> Result<()> {
 ///
 /// `DaemonFork` Error, the ret of `libc::fork()` is less than zero.
 fn fork() -> Result<()> {
+    // SAFETY: No input parameters in this system call.
+    // and the return value have been verified later.
     let ret = unsafe { libc::fork() };
 
     match ret.cmp(&0) {
@@ -91,6 +93,8 @@ fn fork() -> Result<()> {
 ///
 /// `DaemonSetsid` Error, the ret of `libc::setsid()` is -1
 fn set_sid() -> Result<()> {
+    // SAFETY: No input parameters in this system call.
+    // and the return value have been verified later.
     let ret = unsafe { libc::setsid() };
 
     if ret == -1 {
@@ -113,6 +117,8 @@ fn set_sid() -> Result<()> {
 /// `DaemonRedirectStdio` Error, the ret of `libc::open()`, `libc::dup2()`,
 /// `libc::close()`is -1
 fn redirect_stdio(fd: RawFd) -> Result<()> {
+    // SAFETY: the input parameter for systemctl are constant，and the return
+    // value have been verified later.
     unsafe {
         let devnull_fd = libc::open(b"/dev/null\0" as *const [u8; 10] as _, libc::O_RDWR);
 

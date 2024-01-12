@@ -13,11 +13,11 @@
 use std::mem;
 
 use super::malloc::GuestAllocator;
-use crate::libtest::TestState;
+use crate::libtest::{TestState, MACHINE_TYPE_ARG};
 use crate::utils::{swap_u16, swap_u32, swap_u64};
 use devices::legacy::FwCfgEntryType;
 #[cfg(target_arch = "aarch64")]
-use machine::standard_vm::aarch64::{LayoutEntryType, MEM_LAYOUT};
+use machine::aarch64::standard::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "aarch64")]
 pub const FW_CFG_BASE: u64 = MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0;
@@ -34,7 +34,7 @@ pub struct FwCfgDmaAccess {
 }
 
 pub fn bios_args(base_args: &mut Vec<&str>) {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     base_args.append(&mut args);
     args = "-drive file=/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw,if=pflash,unit=0,readonly=true"
         .split(' ')

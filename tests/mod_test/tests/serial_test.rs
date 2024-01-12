@@ -27,7 +27,7 @@ use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps, VIRTIO_CONFIG_S_NEEDS_RESET};
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::byte_code::ByteCode;
 
 const TIMEOUT_US: u64 = 15 * 1000 * 1000;
@@ -402,7 +402,7 @@ impl SerialTest {
 }
 
 fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> SerialTest {
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     let serial_pci_args = format!(
         "-device {},id=serial0,bus=pcie.0,addr={}.0",
         "virtio-serial-pci", pci_slot
@@ -460,13 +460,8 @@ fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> Ser
 }
 
 fn verify_output_data(test_state: Rc<RefCell<TestState>>, addr: u64, len: u32, test_data: &String) {
-    let mut data_buf: Vec<u8> = Vec::with_capacity(len.try_into().unwrap());
-    data_buf.append(
-        test_state
-            .borrow()
-            .memread(addr, len.try_into().unwrap())
-            .as_mut(),
-    );
+    let mut data_buf: Vec<u8> = Vec::with_capacity(len as usize);
+    data_buf.append(test_state.borrow().memread(addr, len as u64).as_mut());
     let data = String::from_utf8(data_buf).unwrap();
     assert_eq!(data, *test_data);
 }

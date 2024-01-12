@@ -96,16 +96,14 @@ impl ConfigCheck for InitrdConfig {
 }
 
 /// Struct `KernelParams` used to parse kernel cmdline to config.
-/// Contains a `Vec<Param>` and its `len()`.
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct KernelParams {
     pub params: Vec<Param>,
-    pub length: usize,
 }
 
 impl ConfigCheck for KernelParams {
     fn check(&self) -> Result<()> {
-        for param in self.params.clone() {
+        for param in self.params.iter() {
             check_arg_too_long(&param.value, "kernel params")?;
         }
 
@@ -118,37 +116,27 @@ impl KernelParams {
     fn from_str(kernel_cmdline: String) -> Self {
         let split = kernel_cmdline.split(' ');
         let vec = split.collect::<Vec<&str>>();
-        let mut params: Vec<Param> = Vec::new();
-        let mut length: usize = 0;
+        let mut params: Vec<Param> = Vec::with_capacity(vec.len());
         for item in vec {
             params.push(Param::from_str(item));
-            length += 1;
         }
-        KernelParams { params, length }
+        KernelParams { params }
     }
 
     /// Push new `Param` to `KernelParams`.
     pub fn push(&mut self, item: Param) {
         self.params.push(item);
-        self.length = self
-            .length
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("Kernel params length is too long: {}", self.length));
     }
 
     /// Move all the `Param` into `KernelParams`.
     pub fn append(&mut self, items: &mut Vec<Param>) {
-        self.length = self
-            .length
-            .checked_add(items.len())
-            .unwrap_or_else(|| panic!("Kernel params length is too long: {}", self.length));
         self.params.append(items);
     }
 
     /// Check `KernelParam` whether contains `item` or not.
     pub fn contains(&self, item: &str) -> bool {
-        for i in 0..self.length {
-            if self.params[i].param_type == item {
+        for param in self.params.iter() {
+            if param.param_type == item {
                 return true;
             }
         }
@@ -158,9 +146,9 @@ impl KernelParams {
 
 impl fmt::Display for KernelParams {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut vec: Vec<String> = Vec::with_capacity(self.length);
-        for i in 0..self.length {
-            vec.push(self.params[i].to_string());
+        let mut vec: Vec<String> = Vec::with_capacity(self.params.len());
+        for param in self.params.iter() {
+            vec.push(param.to_string());
         }
         write!(f, "{}", vec.join(" "))
     }
@@ -247,10 +235,10 @@ mod tests {
         let test_kernel = "reboot=k panic=1 pci=off nomodules 8250.nr_uarts=0";
         let mut test_kernel_param = KernelParams::from_str(test_kernel.to_string());
 
-        assert_eq!(test_kernel_param.length, 5);
+        assert_eq!(test_kernel_param.params.len(), 5);
 
         test_kernel_param.push(Param::from_str("maxcpus=8"));
-        assert_eq!(test_kernel_param.length, 6);
+        assert_eq!(test_kernel_param.params.len(), 6);
         assert_eq!(test_kernel_param.contains("maxcpus"), true);
         assert_eq!(test_kernel_param.contains("cpus"), false);
         assert_eq!(

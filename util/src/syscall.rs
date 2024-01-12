@@ -31,6 +31,10 @@ pub fn mbind(
     max_node: u64,
     flags: u32,
 ) -> Result<()> {
+    // SAFETY:
+    // 1. addr is managed by memory mapping, it can be guaranteed legal.
+    // 2. node_mask was created in function of set_host_memory_policy.
+    // 3. Upper limit of max_node is MAX_NODES.
     let res = unsafe {
         syscall(
             SYS_mbind,

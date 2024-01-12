@@ -25,7 +25,7 @@ use core::time;
 use devices::misc::scream::{ShmemHeader, ShmemStreamFmt, ShmemStreamHeader, SCREAM_MAGIC};
 use mod_test::{
     libdriver::{ivshmem::TestIvshmemDev, machine::TestStdMachine},
-    libtest::{test_init, TestState},
+    libtest::{test_init, TestState, MACHINE_TYPE_ARG},
     utils::get_rand_str,
 };
 use util::{num_ops::read_data_u32, offset_of};
@@ -60,7 +60,7 @@ fn set_up(
     record_path: String,
 ) -> (Rc<RefCell<TestIvshmemDev>>, Rc<RefCell<TestState>>) {
     let mut extra_args: Vec<&str> = Vec::new();
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
 
     extra_args.append(&mut args);
 

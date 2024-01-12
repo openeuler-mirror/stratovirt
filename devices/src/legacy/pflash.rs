@@ -39,7 +39,7 @@ pub struct PFlash {
     /// This is used to support x16 wide PFlash run in x8 mode.
     max_device_width: u32,
     /// If 0, the PFlash is read normally.
-    write_cycle: i32,
+    write_cycle: u32,
     /// PFlash is read only or not.
     read_only: bool,
     /// Command to control PFlash.
@@ -93,15 +93,12 @@ impl PFlash {
         }
         if let Some(fd) = backend.as_ref() {
             let len = fd.metadata().unwrap().len();
-            if len < size {
+            if len > size || len == 0 || (!read_only && len != size) {
                 bail!(
-                    "Mmap requires 0x{:X} bytes, given file provides 0x{:X} bytes",
-                    size,
-                    len
+                    "Invalid flash file: Region size 0x{size:X}, file size 0x{len:X}; read_only {read_only}"
                 );
             }
         }
-
         let num_devices: u32 = if device_width == 0 {
             1
         } else {
@@ -332,8 +329,9 @@ impl PFlash {
         let addr: u64 = mr
             .get_host_address()
             .with_context(|| "Failed to get host address.")?;
-        let ret = unsafe {
-            // Safe as addr and size are valid.
+        let ret =
+        // SAFETY: addr and size are valid.
+        unsafe {
             libc::msync(
                 addr as *mut libc::c_void,
                 size as libc::size_t,
@@ -358,8 +356,8 @@ impl PFlash {
             )));
         }
         let host_addr = mr.get_host_address().unwrap();
-        // Safe because host_addr of the region is local allocated and sanity has been checked.
         let src =
+            // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         data.as_mut()
             .write_all(src)
@@ -379,8 +377,8 @@ impl PFlash {
             )));
         }
         let host_addr = mr.get_host_address().unwrap();
-        // Safe because host_addr of the region is local allocated and sanity has been checked.
         let mut dst =
+            // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
         dst.write_all(data)
             .with_context(|| "Failed to write data to PFlash Rom")?;
@@ -458,7 +456,7 @@ impl PFlash {
                 return true;
             }
         }
-        self.write_cycle += 1;
+        self.write_cycle = self.write_cycle.wrapping_add(1);
         self.cmd = cmd;
         true
     }
@@ -524,8 +522,8 @@ impl PFlash {
                     error!("Failed to extract bits from u32 value");
                     return false;
                 };
+                self.write_cycle = self.write_cycle.wrapping_add(1);
                 self.counter = value;
-                self.write_cycle += 1;
             }
             0x60 => {
                 if (cmd == 0xd0) || (cmd == 0x01) {
@@ -590,7 +588,7 @@ impl PFlash {
                 self.status |= 0x80;
                 if self.counter == 0 {
                     let mask: u64 = !(self.write_blk_size as u64 - 1);
-                    self.write_cycle += 1;
+                    self.write_cycle = self.write_cycle.wrapping_add(1);
                     if !self.read_only {
                         if let Err(e) = self.update_content(offset & mask, self.write_blk_size) {
                             error!("Failed to update content for PFlash device: {:?}", e);
@@ -891,11 +889,16 @@ mod test {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sys_mem"),
             "sys_mem",
+            None,
         )
         .unwrap();
         #[cfg(target_arch = "x86_64")]
-        let sys_io =
-            AddressSpace::new(Region::init_container_region(1 << 16, "sys_io"), "sys_io").unwrap();
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sys_io"),
+            "sys_io",
+            None,
+        )
+        .unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
         SysBus::new(

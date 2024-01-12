@@ -82,6 +82,7 @@ impl RefcountBlock {
             return;
         };
         let new_table_bytes = new_size * self.entry_bytes;
+        // SAFETY: Upper limit of new_table_bytes is decided by disk file size.
         self.data.resize(new_table_bytes, 0);
         self.table_size = new_size;
         self.nb_clusters = new_size as u64;
@@ -990,6 +991,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
             // Extend the refcount table
             if new_reftable.len() <= refblock_idx {
+                // SAFETY: Upper limit of refblock_idx is decided by disk file size.
                 new_reftable.resize(refblock_idx + 1, 0);
                 // Need to reallocate clusters for new refcount table.
                 reftable_offset = 0;

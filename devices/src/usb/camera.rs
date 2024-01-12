@@ -1064,6 +1064,7 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
         + body.clone().iter().fold(0, |len, x| len + x.data.len()) as u16;
 
     let mut vec = header_struct.as_bytes().to_vec();
+    // SAFETY: bLength is 0xb + fmt_list.len().
     vec.resize(header_struct.bLength as usize, 0);
     buf.push(Arc::new(UsbDescOther { data: vec }));
     buf.append(&mut body);

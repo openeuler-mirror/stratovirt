@@ -190,6 +190,11 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
+        // Sanity check for len to avoid OOM. Given 1MB is enough.
+        if len > (1 << 20) {
+            bail!("Source vm_config size is too large");
+        }
+
         let mut data: Vec<u8> = Vec::new();
         data.resize_with(len as usize, Default::default);
         fd.read_exact(&mut data)?;
@@ -319,14 +324,24 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
+        // Sanity check for len to avoid OOM. Given 1MB is enough.
+        if len > (1 << 20) {
+            bail!("Source MemBlock config size is too large");
+        }
+
         let mut blocks = Vec::<MemBlock>::new();
         blocks.resize_with(len as usize / (size_of::<MemBlock>()), Default::default);
-        fd.read_exact(unsafe {
-            std::slice::from_raw_parts_mut(
-                blocks.as_ptr() as *mut MemBlock as *mut u8,
-                len as usize,
-            )
-        })?;
+        fd.read_exact(
+            // SAFETY:
+            // 1. The pointer of blocks can be guaranteed not null.
+            // 2. The range of len has been limited.
+            unsafe {
+                std::slice::from_raw_parts_mut(
+                    blocks.as_ptr() as *mut MemBlock as *mut u8,
+                    len as usize,
+                )
+            },
+        )?;
 
         if let Some(locked_memory) = &MIGRATION_MANAGER.vmm.read().unwrap().memory {
             for block in blocks.iter() {
@@ -357,9 +372,14 @@ impl MigrationManager {
     {
         let len = size_of::<MemBlock>() * blocks.len();
         Request::send_msg(fd, TransStatus::Memory, len as u64)?;
-        fd.write_all(unsafe {
-            std::slice::from_raw_parts(blocks.as_ptr() as *const MemBlock as *const u8, len)
-        })?;
+        fd.write_all(
+            // SAFETY:
+            // 1. The pointer of blocks can be guaranteed not null.
+            // 2. The len is constant.
+            unsafe {
+                std::slice::from_raw_parts(blocks.as_ptr() as *const MemBlock as *const u8, len)
+            },
+        )?;
 
         if let Some(locked_memory) = &MIGRATION_MANAGER.vmm.read().unwrap().memory {
             for block in blocks.iter() {

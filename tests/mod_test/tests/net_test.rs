@@ -28,7 +28,7 @@ use mod_test::libdriver::virtio::{
     VIRTIO_RING_F_EVENT_IDX, VRING_DESC_F_WRITE, VRING_DESC_SIZE,
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
-use mod_test::libtest::{test_init, TestState};
+use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use util::byte_code::ByteCode;
 use util::offset_of;
 
@@ -361,7 +361,7 @@ fn execute_cmd_checked(cmd: String) {
 fn create_tap(id: u8, mq: bool) {
     let br_name = "mst_net_qbr".to_string() + &id.to_string();
     let tap_name = "mst_net_qtap".to_string() + &id.to_string();
-    execute_cmd_checked("brctl addbr ".to_string() + &br_name);
+    execute_cmd_checked("ip link add name ".to_string() + &br_name + &" type bridge".to_string());
     if mq {
         execute_cmd_checked(
             "ip tuntap add ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
@@ -369,7 +369,9 @@ fn create_tap(id: u8, mq: bool) {
     } else {
         execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd_checked("brctl addif ".to_string() + &br_name + &" ".to_string() + &tap_name);
+    execute_cmd_checked(
+        "ip link set ".to_string() + &tap_name + &" master ".to_string() + &br_name,
+    );
     execute_cmd_checked("ip link set ".to_string() + &br_name + &" up".to_string());
     execute_cmd_checked("ip link set ".to_string() + &tap_name + &" up".to_string());
     execute_cmd_checked(
@@ -394,7 +396,7 @@ fn clear_tap(id: u8, mq: bool) {
     } else {
         execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + &" mode tap".to_string());
     }
-    execute_cmd_unchecked("brctl delbr ".to_string() + &br_name);
+    execute_cmd_unchecked("ip link delete ".to_string() + &br_name + &" type bridge".to_string());
 }
 
 #[allow(unused)]
@@ -413,7 +415,7 @@ pub fn create_net(
     let pci_fn: u8 = 0x0;
     let mut extra_args: Vec<&str> = Vec::new();
 
-    let mut args: Vec<&str> = "-machine virt".split(' ').collect();
+    let mut args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     extra_args.append(&mut args);
 
     let mut iothread_arg = "";
@@ -507,7 +509,7 @@ fn fill_rx_vq(
 ) {
     let size = vq.borrow().size;
     for _ in 0..size {
-        let addr = alloc.borrow_mut().alloc(MAX_PACKET_LEN).try_into().unwrap();
+        let addr = alloc.borrow_mut().alloc(MAX_PACKET_LEN);
         vq.borrow_mut()
             .add(test_state.clone(), addr, MAX_PACKET_LEN as u32, true);
     }
@@ -669,7 +671,7 @@ fn send_request(
     request: &[u8],
 ) {
     let length = request.len() as u64;
-    let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
+    let addr = alloc.borrow_mut().alloc(length);
 
     let k_bytes = 1024;
     let num_k = length / k_bytes;
@@ -865,9 +867,7 @@ fn virtio_net_ctrl_mq_test() {
         // The message: CtrlHdr, vq_pairs, ack.
         let addr = alloc
             .borrow_mut()
-            .alloc(size_of::<CtrlHdr>() as u64 + 2 + 1)
-            .try_into()
-            .unwrap();
+            .alloc(size_of::<CtrlHdr>() as u64 + 2 + 1);
 
         let mut cmd = VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET as u8;
         if test_type == 2 {
@@ -1071,11 +1071,7 @@ fn send_ctrl_vq_request(
     ack: u8,
 ) {
     let ctrl_vq = &vqs[2];
-    let addr = alloc
-        .borrow_mut()
-        .alloc(ctrl_data.len() as u64)
-        .try_into()
-        .unwrap();
+    let addr = alloc.borrow_mut().alloc(ctrl_data.len() as u64);
     test_state.borrow().memwrite(addr, &ctrl_data);
     let data_entries: Vec<TestVringDescEntry> = vec![
         TestVringDescEntry {
@@ -1666,11 +1662,7 @@ fn virtio_net_ctrl_abnormal_test() {
     let test_num = 2;
     for i in 0..test_num {
         let ctrl_vq = &vqs[2];
-        let addr = alloc
-            .borrow_mut()
-            .alloc(ctrl_data.len() as u64)
-            .try_into()
-            .unwrap();
+        let addr = alloc.borrow_mut().alloc(ctrl_data.len() as u64);
         test_state.borrow().memwrite(addr, &ctrl_data);
 
         // ctrl_rx_info.switch: u8
@@ -1757,7 +1749,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     let size = net.borrow().get_queue_size();
     assert_eq!(size, QUEUE_SIZE_NET);
     for _ in 0..size {
-        let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
+        let addr = alloc.borrow_mut().alloc(length);
         test_state.borrow().memwrite(addr, &request.as_bytes());
         vqs[1]
             .borrow_mut()
@@ -1837,7 +1829,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
 
         let request = get_arp_request(id);
         let length = request.as_bytes().len() as u64;
-        let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
+        let addr = alloc.borrow_mut().alloc(length);
         test_state.borrow().memwrite(addr, &request.as_bytes());
         vqs[1]
             .borrow_mut()
@@ -2095,7 +2087,7 @@ fn virtio_net_abnormal_rx_tx_test_3() {
 
     let request = get_arp_request(id);
     let length = request.as_bytes().len() as u64;
-    let addr = alloc.borrow_mut().alloc(length).try_into().unwrap();
+    let addr = alloc.borrow_mut().alloc(length);
     test_state.borrow().memwrite(addr, &request.as_bytes());
     vqs[1]
         .borrow_mut()

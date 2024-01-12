@@ -74,6 +74,7 @@ pub struct DemoGpu {
     pub surface: Option<DisplaySurface>,
     mouse: Option<DisplayMouse>,
 }
+// SAFETY: Demo device is only used for test.
 unsafe impl Send for DemoGpu {}
 
 impl DemoGpu {
@@ -154,6 +155,7 @@ impl DemoGpu {
                 let tmp_ptr = ptr as usize + 4 * j as usize;
                 let rand_factor = (i * j) as usize;
                 let len = UPDATE_FACTOR.len();
+                // SAFETY: Demo device is only used for test.
                 unsafe {
                     // byte reverse by ^.
                     *(tmp_ptr as *mut u8) ^= UPDATE_FACTOR[rand_factor % len];

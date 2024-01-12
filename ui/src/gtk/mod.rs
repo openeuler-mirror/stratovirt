@@ -17,6 +17,8 @@ use std::{
     cell::RefCell,
     cmp,
     collections::HashMap,
+    env, fs,
+    path::Path,
     ptr,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
@@ -37,7 +39,7 @@ use gtk::{
     },
     Application, ApplicationWindow, DrawingArea, HeaderBar, Label, RadioMenuItem,
 };
-use log::{debug, error};
+use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -47,15 +49,17 @@ use crate::{
         DisplayMouse, DisplaySurface, VmRunningStage, DEFAULT_SURFACE_HEIGHT,
         DEFAULT_SURFACE_WIDTH, DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
-    data::keycode::KEYSYM2KEYCODE,
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
+    keycode::KeyCode,
     pixman::{
         create_pixman_image, get_image_data, get_image_height, get_image_width, ref_pixman_image,
         unref_pixman_image,
     },
 };
 use machine_manager::config::{DisplayConfig, UiContext};
+use machine_manager::qmp::qmp_schema::GpuInfo;
 use util::pixman::{pixman_format_code_t, pixman_image_composite, pixman_op_t};
+use util::time::gettime;
 
 const CHANNEL_BOUND: usize = 1024;
 /// Width of default window.
@@ -97,13 +101,6 @@ pub enum ZoomOperate {
     ZoomIn,
     ZoomOut,
     BestFit,
-}
-
-#[derive(Default)]
-pub struct ClickState {
-    pub button_mask: u8,
-    pub last_x: f64,
-    pub last_y: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -230,12 +227,7 @@ impl GtkDisplay {
             free_scale: true,
         }));
         // Mapping ASCII to keycode.
-        let keysym2keycode: Rc<RefCell<HashMap<u16, u16>>> = Rc::new(RefCell::new(HashMap::new()));
-        let mut borrow_keysym2keycode = keysym2keycode.borrow_mut();
-        for &(k, v) in KEYSYM2KEYCODE.iter() {
-            borrow_keysym2keycode.insert(k, v);
-        }
-        drop(borrow_keysym2keycode);
+        let keysym2keycode = Rc::new(RefCell::new(KeyCode::keysym_to_qkeycode()));
         Self {
             gtk_menu,
             scale_mode,
@@ -360,10 +352,10 @@ pub struct GtkDisplayScreen {
     dev_name: String,
     show_menu: RadioMenuItem,
     draw_area: DrawingArea,
+    cursor_trsp: bool, // GTK own default cursor transparent or not
     source_surface: DisplaySurface,
     transfer_surface: Option<DisplaySurface>,
     cairo_image: Option<ImageSurface>,
-    click_state: ClickState,
     con: Weak<Mutex<DisplayConsole>>,
     dcl: Weak<Mutex<DisplayChangeListener>>,
     scale_mode: Rc<RefCell<ScaleMode>>,
@@ -410,11 +402,11 @@ impl GtkDisplayScreen {
             window,
             dev_name,
             draw_area: DrawingArea::default(),
+            cursor_trsp: false,
             show_menu: RadioMenuItem::default(),
             source_surface: surface,
             transfer_surface: None,
             cairo_image,
-            click_state: ClickState::default(),
             con,
             dcl,
             scale_mode,
@@ -443,7 +435,7 @@ impl GtkDisplayScreen {
     /// 2. There may be unfilled areas between the window and the image.
     /// Input: relative coordinates of window.
     /// Output: relative coordinates of images.
-    fn convert_coord(&mut self, x: f64, y: f64) -> Result<(f64, f64)> {
+    fn convert_coord(&mut self, mut x: f64, mut y: f64) -> Result<(f64, f64)> {
         let (surface_width, surface_height) = match &self.cairo_image {
             Some(image) => (image.width(), image.height()),
             None => bail!("No display image."),
@@ -462,10 +454,10 @@ impl GtkDisplayScreen {
             None => bail!("No display window."),
         };
 
-        if x.lt(&0.0) || x.gt(&window_width) || y.lt(&0.0) || y.gt(&window_height) {
-            debug!("x {} or y {} out of range, use last value.", x, y);
-            return Ok((self.click_state.last_x, self.click_state.last_y));
-        }
+        x = x.max(0.0);
+        x = x.min(window_width);
+        y = y.max(0.0);
+        y = y.min(window_height);
 
         // There may be unfilled areas between the window and the image.
         let (mut mx, mut my) = (0.0, 0.0);
@@ -477,8 +469,6 @@ impl GtkDisplayScreen {
         }
         let real_x = ((x - mx) / self.scale_x) * scale_factor;
         let real_y = ((y - my) / self.scale_y) * scale_factor;
-        self.click_state.last_x = real_x;
-        self.click_state.last_y = real_y;
 
         Ok((real_x, real_y))
     }
@@ -885,10 +875,11 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
 
     if borrowed_gs.source_surface.format == pixman_format_code_t::PIXMAN_x8r8g8b8 {
         let data = get_image_data(borrowed_gs.source_surface.image) as *mut u8;
+        borrowed_gs.cairo_image =
         // SAFETY:
         // 1. It can be sure that the ptr of data is not nullptr.
         // 2. The copy range will not exceed the image data.
-        borrowed_gs.cairo_image = unsafe {
+        unsafe {
             ImageSurface::create_for_data_unsafe(
                 data as *mut u8,
                 Format::Rgb24,
@@ -907,11 +898,12 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
             surface_stride,
         );
 
+        let data = get_image_data(transfer_image) as *mut u8;
+        borrowed_gs.cairo_image =
         // SAFETY:
         // 1. It can be sure that the ptr of data is not nullptr.
         // 2. The copy range will not exceed the image data.
-        let data = get_image_data(transfer_image) as *mut u8;
-        borrowed_gs.cairo_image = unsafe {
+        unsafe {
             ImageSurface::create_for_data_unsafe(
                 data as *mut u8,
                 Format::Rgb24,
@@ -956,6 +948,17 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         borrowed_gs.scale_x = window_width / surface_width as f64;
         borrowed_gs.scale_y = window_height / surface_height as f64;
     }
+
+    // Vm desktop manage its own cursor, gtk cursor need to be trsp firstly.
+    if !borrowed_gs.cursor_trsp {
+        if let Some(win) = borrowed_gs.draw_area.window() {
+            let dpy = borrowed_gs.window.display();
+            let gtk_cursor = gdk::Cursor::for_display(&dpy, gdk::CursorType::BlankCursor);
+            win.set_cursor(gtk_cursor.as_ref());
+        }
+        borrowed_gs.cursor_trsp = true;
+    }
+
     drop(borrowed_gs);
 
     if need_resize {
@@ -1034,4 +1037,54 @@ pub(crate) fn renew_image(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         .draw_area
         .queue_draw_area(0, 0, width as i32, height as i32);
     Ok(())
+}
+
+pub fn qmp_query_display_image() -> Result<GpuInfo> {
+    let mut gpu_info = GpuInfo::default();
+    let console_list = get_active_console();
+    for con in console_list {
+        let c = match con.upgrade() {
+            Some(c) => c,
+            None => continue,
+        };
+        let mut locked_con = c.lock().unwrap();
+        if !locked_con.active {
+            continue;
+        }
+        let dev_name = &locked_con.dev_name.clone();
+
+        if let Some(surface) = &mut locked_con.surface {
+            // SAFETY: The image is created within the function, it can be ensure
+            // that the data ptr is not nullptr and the image size matches the image data.
+            let cairo_image = unsafe {
+                ImageSurface::create_for_data_unsafe(
+                    surface.data() as *mut u8,
+                    Format::Rgb24,
+                    surface.width(),
+                    surface.height(),
+                    surface.stride(),
+                )
+            }?;
+            let mut file = create_file(&mut gpu_info, dev_name)?;
+            cairo_image.write_to_png(&mut file)?;
+        };
+    }
+    gpu_info.isSuccess = true;
+    Ok(gpu_info)
+}
+
+fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
+    let temp_dir = env::temp_dir().display().to_string();
+    let binding = temp_dir + "/stratovirt-images";
+    let path = Path::new(&binding);
+
+    if !path.exists() {
+        fs::create_dir(path)?;
+    }
+    let file_dir = path.display().to_string();
+    gpu_info.fileDir = file_dir.clone();
+    let nsec = gettime()?.1;
+    let file_name = file_dir + "/stratovirt-display-" + dev_name + "-" + &nsec.to_string() + ".png";
+    let file = fs::File::create(file_name)?;
+    Ok(file)
 }

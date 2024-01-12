@@ -662,10 +662,12 @@ impl DwordOrder for XhciEpCtx {}
 
 pub trait DwordOrder: Default + Copy + Send + Sync {
     fn as_dwords(&self) -> &[u32] {
+        // SAFETY: Tt can be guaranteed that self has been initialized.
         unsafe { from_raw_parts(self as *const Self as *const u32, size_of::<Self>() / 4) }
     }
 
     fn as_mut_dwords(&mut self) -> &mut [u32] {
+        // SAFETY: Tt can be guaranteed that self has been initialized.
         unsafe { from_raw_parts_mut(self as *mut Self as *mut u32, size_of::<Self>() / 4) }
     }
 }
