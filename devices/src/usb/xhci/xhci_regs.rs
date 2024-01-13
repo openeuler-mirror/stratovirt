@@ -680,7 +680,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     }
 }
 
-/// Build doorbeell region ops.
+/// Build doorbell region ops.
 pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("doorbell read addr {:x} offset {:x}", addr.0, offset);
