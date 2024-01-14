@@ -31,6 +31,7 @@ use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::clock::{get_current_time, ClockState};
+use crate::thread_pool::ThreadPool;
 use crate::UtilError;
 
 const READY_EVENT_MAX: usize = 256;
@@ -210,8 +211,18 @@ pub struct EventLoopContext {
     timers: Arc<Mutex<Vec<Box<Timer>>>>,
     /// The next timer id to be used.
     timer_next_id: AtomicU64,
+    /// The context for thread pool.
+    pub thread_pool: Arc<ThreadPool>,
     /// Record VM clock state.
     pub clock_state: Arc<Mutex<ClockState>>,
+}
+
+impl Drop for EventLoopContext {
+    fn drop(&mut self) {
+        self.thread_pool
+            .cancel()
+            .unwrap_or_else(|e| error!("Thread pool cancel error: {:?}", e));
+    }
 }
 
 // SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
@@ -232,6 +243,7 @@ impl EventLoopContext {
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
             timers: Arc::new(Mutex::new(Vec::new())),
             timer_next_id: AtomicU64::new(0),
+            thread_pool: Arc::new(ThreadPool::default()),
             clock_state: Arc::new(Mutex::new(ClockState::default())),
         };
         ctx.init_kick();
