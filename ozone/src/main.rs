@@ -21,40 +21,24 @@ mod syscall;
 
 pub use error::OzoneError;
 
+use std::io::Write;
+use std::process::{ExitCode, Termination};
+
 use anyhow::{Context, Result};
 
 use crate::args::create_args_parser;
 use crate::handler::OzoneHandler;
 
-pub trait ExitCode {
-    /// Returns the value to use as the exit status.
-    fn code(self) -> i32;
-}
-
-impl ExitCode for i32 {
-    fn code(self) -> i32 {
-        self
-    }
-}
-
-impl ExitCode for () {
-    fn code(self) -> i32 {
-        0
-    }
-}
-
-fn main() {
-    use std::io::Write;
-
-    ::std::process::exit(match run() {
-        Ok(ret) => ExitCode::code(ret),
+fn main() -> ExitCode {
+    match run() {
+        Ok(ret) => ret.report(),
         Err(ref e) => {
-            write!(&mut ::std::io::stderr(), "{}", format_args!("{:?}", e))
+            write!(&mut std::io::stderr(), "{}", format_args!("{:?}", e))
                 .expect("Error writing to stderr");
 
-            1
+            ExitCode::FAILURE
         }
-    });
+    }
 }
 
 fn run() -> Result<()> {
