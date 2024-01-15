@@ -36,6 +36,7 @@ rusb = { version = "0.9", optional = true }
 libusb1-sys = { version = "0.6.4", optional = true }
 cairo-rs = { version = "0.17.10", optional = true }
 trace = { path = "../trace" }
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []
