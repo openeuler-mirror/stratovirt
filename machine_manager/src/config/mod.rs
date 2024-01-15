@@ -41,8 +41,6 @@ mod ramfb;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
-#[cfg(feature = "scream")]
-pub mod scream;
 mod scsi;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
@@ -730,6 +728,25 @@ pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Resu
     arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
 
     Ok(())
+}
+
+/// Configure StratoVirt parameters in clap format.
+pub fn str_slip_to_clap(args: &str) -> Vec<String> {
+    let args_vecs = args.split([',', '=']).collect::<Vec<&str>>();
+    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len());
+    for (cnt, param) in args_vecs.iter().enumerate() {
+        if cnt % 2 == 1 {
+            itr.push(format!("--{}", param));
+        } else {
+            itr.push(param.to_string());
+        }
+    }
+    itr
+}
+
+pub fn valid_id(id: &str) -> Result<String> {
+    check_arg_too_long(id, "id")?;
+    Ok(id.to_string())
 }
 
 #[cfg(test)]

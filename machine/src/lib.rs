@@ -34,6 +34,8 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+#[cfg(feature = "scream")]
+use clap::Parser;
 use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
@@ -46,7 +48,7 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::PvPanicPci;
 #[cfg(feature = "scream")]
-use devices::misc::scream::Scream;
+use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::DemoDev;
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
@@ -76,7 +78,7 @@ use machine_manager::config::parse_usb_camera;
 #[cfg(feature = "usb_host")]
 use machine_manager::config::parse_usb_host;
 #[cfg(feature = "scream")]
-use machine_manager::config::scream::parse_scream;
+use machine_manager::config::str_slip_to_clap;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -1568,20 +1570,21 @@ pub trait MachineOps {
     /// * `cfg_args` - scream configuration.
     #[cfg(feature = "scream")]
     fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
+        let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let bdf = PciBdf {
+            bus: config.bus.clone(),
+            addr: config.addr,
+        };
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-
-        let dev_cfg =
-            parse_scream(cfg_args).with_context(|| "Failed to parse cmdline for ivshmem")?;
 
         let mem_cfg = vm_config
             .object
             .mem_object
-            .remove(&dev_cfg.memdev)
+            .remove(&config.memdev)
             .with_context(|| {
                 format!(
                     "Object for memory-backend-ram {} config not found",
-                    dev_cfg.memdev
+                    config.memdev
                 )
             })?;
 
@@ -1589,7 +1592,7 @@ pub trait MachineOps {
             bail!("Object for share config is not on");
         }
 
-        let scream = Scream::new(mem_cfg.size, &dev_cfg);
+        let scream = Scream::new(mem_cfg.size, config);
         scream
             .realize(devfn, parent_bus)
             .with_context(|| "Failed to realize scream device")
