@@ -12,6 +12,7 @@
 
 mod libaio;
 mod raw;
+mod threads;
 mod uring;
 
 pub use raw::*;
@@ -32,8 +33,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
 use crate::num_ops::{round_down, round_up};
+use crate::thread_pool::ThreadPool;
 use crate::unix::host_page_size;
 use libaio::LibaioContext;
+use threads::ThreadsAioContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
@@ -44,6 +47,8 @@ const AIO_OFF: &str = "off";
 const AIO_NATIVE: &str = "native";
 /// Io-uring aio type.
 const AIO_IOURING: &str = "io_uring";
+/// Aio implemented by thread pool.
+const AIO_THREADS: &str = "threads";
 /// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
@@ -56,6 +61,8 @@ pub enum AioEngine {
     Native = 1,
     #[serde(alias = "iouring")]
     IoUring = 2,
+    #[serde(alias = "threads")]
+    Threads = 3,
 }
 
 impl FromStr for AioEngine {
@@ -66,6 +73,7 @@ impl FromStr for AioEngine {
             AIO_OFF => Ok(AioEngine::Off),
             AIO_NATIVE => Ok(AioEngine::Native),
             AIO_IOURING => Ok(AioEngine::IoUring),
+            AIO_THREADS => Ok(AioEngine::Threads),
             _ => Err(()),
         }
     }
@@ -122,6 +130,8 @@ pub fn get_iov_size(iovecs: &[Iovec]) -> u64 {
 trait AioContext<T: Clone> {
     /// Submit IO requests to the OS, the nr submitted is returned.
     fn submit(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
+    /// Submit Io requests to the thread pool, the nr submitted is returned.
+    fn submit_threads_pool(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
     /// Get the IO events of the requests submitted earlier.
     fn get_events(&mut self) -> &[AioEvent];
 }
@@ -203,7 +213,6 @@ pub struct Aio<T: Clone + 'static> {
 
 pub fn aio_probe(engine: AioEngine) -> Result<()> {
     match engine {
-        AioEngine::Off => {}
         AioEngine::Native => {
             let ctx = LibaioContext::probe(1)?;
             // SAFETY: if no err, ctx is valid.
@@ -212,18 +221,39 @@ pub fn aio_probe(engine: AioEngine) -> Result<()> {
         AioEngine::IoUring => {
             IoUringContext::probe(1)?;
         }
+        _ => {}
     }
     Ok(())
 }
 
 impl<T: Clone + 'static> Aio<T> {
-    pub fn new(func: Arc<AioCompleteFunc<T>>, engine: AioEngine) -> Result<Self> {
+    pub fn new(
+        func: Arc<AioCompleteFunc<T>>,
+        engine: AioEngine,
+        thread_pool: Option<Arc<ThreadPool>>,
+    ) -> Result<Self> {
         let max_events: usize = 128;
         let fd = EventFd::new(libc::EFD_NONBLOCK)?;
-        let ctx: Option<Box<dyn AioContext<T>>> = match engine {
-            AioEngine::Off => None,
-            AioEngine::Native => Some(Box::new(LibaioContext::new(max_events as u32, &fd)?)),
-            AioEngine::IoUring => Some(Box::new(IoUringContext::new(max_events as u32, &fd)?)),
+        let ctx: Option<Box<dyn AioContext<T>>> = if let Some(pool) = thread_pool {
+            let threads_aio_ctx = ThreadsAioContext::new(max_events as u32, &fd, pool);
+            match engine {
+                AioEngine::Native => Some(Box::new(LibaioContext::new(
+                    max_events as u32,
+                    threads_aio_ctx,
+                    &fd,
+                )?)),
+                AioEngine::IoUring => Some(Box::new(IoUringContext::new(
+                    max_events as u32,
+                    threads_aio_ctx,
+                    &fd,
+                )?)),
+                AioEngine::Threads => Some(Box::new(threads_aio_ctx)),
+                _ => bail!("Aio type {:?} does not support thread pools", engine),
+            }
+        } else if engine == AioEngine::Off {
+            None
+        } else {
+            bail!("Aio type {:?} is lack of thread pool context", engine);
         };
 
         Ok(Aio {
@@ -821,6 +851,7 @@ mod tests {
         let mut aio = Aio::new(
             Arc::new(|_: &AioCb<i32>, _: i64| -> Result<()> { Ok(()) }),
             AioEngine::Off,
+            None,
         )
         .unwrap();
         aio.submit_request(aiocb).unwrap();

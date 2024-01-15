@@ -784,6 +784,7 @@ mod test {
         let aio = Aio::new(
             Arc::new(SyncAioInfo::complete_func),
             util::aio::AioEngine::Off,
+            None,
         )
         .unwrap();
         let conf = BlockProperty {
