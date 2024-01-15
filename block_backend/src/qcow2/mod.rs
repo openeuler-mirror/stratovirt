@@ -134,7 +134,7 @@ impl SyncAioInfo {
 
     pub fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
         Ok(Self {
-            aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off)?,
+            aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?,
             fd,
             prop,
         })
@@ -1912,6 +1912,7 @@ mod test {
             let aio = Aio::new(
                 Arc::new(SyncAioInfo::complete_func),
                 util::aio::AioEngine::Off,
+                None,
             )
             .unwrap();
             let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
@@ -1986,6 +1987,7 @@ mod test {
         let aio = Aio::new(
             Arc::new(SyncAioInfo::complete_func),
             util::aio::AioEngine::Off,
+            None,
         )
         .unwrap();
         let (req_align, buf_align) = get_file_alignment(&image.file, true);

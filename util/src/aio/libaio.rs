@@ -17,6 +17,7 @@ use anyhow::bail;
 use kvm_bindings::__IncompleteArrayField;
 use vmm_sys_util::eventfd::EventFd;
 
+use super::threads::ThreadsAioContext;
 use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 
 const IOCB_FLAG_RESFD: u32 = 1;
@@ -69,6 +70,7 @@ pub(crate) enum IoContext {}
 
 pub(crate) struct LibaioContext {
     ctx: *mut IoContext,
+    _threads_aio_ctx: ThreadsAioContext,
     resfd: RawFd,
     events: Vec<AioEvent>,
 }
@@ -109,10 +111,15 @@ impl LibaioContext {
         Ok(ctx)
     }
 
-    pub fn new(max_size: u32, eventfd: &EventFd) -> Result<Self> {
+    pub fn new(
+        max_size: u32,
+        threads_aio_ctx: ThreadsAioContext,
+        eventfd: &EventFd,
+    ) -> Result<Self> {
         let ctx = Self::probe(max_size)?;
         Ok(LibaioContext {
             ctx,
+            _threads_aio_ctx: threads_aio_ctx,
             resfd: eventfd.as_raw_fd(),
             events: Vec::with_capacity(max_size as usize),
         })
@@ -165,6 +172,10 @@ impl<T: Clone> AioContext<T> for LibaioContext {
             bail!("Failed to submit aio, return {}.", ret);
         }
         Ok(0)
+    }
+
+    fn submit_threads_pool(&mut self, _iocbp: &[*const AioCb<T>]) -> Result<usize> {
+        todo!()
     }
 
     fn get_events(&mut self) -> &[AioEvent] {
