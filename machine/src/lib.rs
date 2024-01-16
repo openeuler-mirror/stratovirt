@@ -34,7 +34,6 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-#[cfg(feature = "scream")]
 use clap::Parser;
 use log::warn;
 #[cfg(feature = "windows_emu_pid")]
@@ -77,15 +76,14 @@ use machine_manager::config::parse_pvpanic;
 use machine_manager::config::parse_usb_camera;
 #[cfg(feature = "usb_host")]
 use machine_manager::config::parse_usb_host;
-#[cfg(feature = "scream")]
-use machine_manager::config::str_slip_to_clap;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
     parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
-    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, BootSource, DriveFile,
-    Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes,
-    PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
+    BootSource, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
+    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::config::{
     parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
@@ -104,8 +102,8 @@ use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
-    RngState,
+    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
+    BlockState, Rng, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
@@ -665,23 +663,37 @@ pub trait MachineOps {
     }
 
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_balloon(vm_config, cfg_args)?;
+        if vm_config.dev_name.get("balloon").is_some() {
+            bail!("Only one balloon device is supported for each vm.");
+        }
+        let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        vm_config.dev_name.insert("balloon".to_string(), 1);
+
         let sys_mem = self.get_sys_mem();
-        let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
+        let balloon = Arc::new(Mutex::new(Balloon::new(config.clone(), sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         match parse_device_type(cfg_args)?.as_str() {
             "virtio-balloon-device" => {
+                if config.addr.is_some() || config.bus.is_some() || config.multifunction.is_some() {
+                    bail!("virtio balloon device config is error!");
+                }
                 let device = VirtioMmioDevice::new(sys_mem, balloon);
                 self.realize_virtio_mmio_device(device)?;
             }
             _ => {
-                let name = device_cfg.id;
-                let bdf = get_pci_bdf(cfg_args)?;
-                let multi_func = get_multi_function(cfg_args)?;
+                if config.addr.is_none() || config.bus.is_none() {
+                    bail!("virtio balloon pci config is error!");
+                }
+                let bdf = PciBdf {
+                    bus: config.bus.unwrap(),
+                    addr: config.addr.unwrap(),
+                };
+                let multi_func = config.multifunction.unwrap_or_default();
                 let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
                 let sys_mem = self.get_sys_mem().clone();
-                let virtio_pci_device =
-                    VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus, multi_func);
+                let virtio_pci_device = VirtioPciDevice::new(
+                    config.id, devfn, sys_mem, balloon, parent_bus, multi_func,
+                );
                 virtio_pci_device
                     .realize()
                     .with_context(|| "Failed to add virtio pci balloon device")?;
