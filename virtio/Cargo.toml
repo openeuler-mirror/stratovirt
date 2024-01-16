@@ -26,6 +26,7 @@ block_backend = {path = "../block_backend"}
 chardev_backend = {path = "../chardev_backend" }
 ui = { path = "../ui", features = ["console"], optional = true }
 trace = {path = "../trace"}
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []

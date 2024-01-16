@@ -18,7 +18,6 @@ pub mod error;
 #[cfg(feature = "vnc")]
 pub mod vnc;
 
-mod balloon;
 mod boot_source;
 mod chardev;
 #[cfg(feature = "demo_device")]
@@ -48,7 +47,6 @@ mod tls_creds;
 mod usb;
 mod vfio;
 
-pub use balloon::*;
 pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
@@ -616,6 +614,14 @@ impl FromStr for ExBool {
 impl From<ExBool> for bool {
     fn from(item: ExBool) -> Self {
         item.inner
+    }
+}
+
+pub fn parse_bool(s: &str) -> Result<bool> {
+    match s {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(anyhow!("Unknow bool value {s}")),
     }
 }
 

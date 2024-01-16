@@ -1877,6 +1877,7 @@ dependencies = [
  "block_backend",
  "byteorder",
  "chardev_backend",
+ "clap",
  "devices",
  "libc",
  "log",
