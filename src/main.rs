@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::io::Write;
+use std::process::{ExitCode, Termination};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -57,33 +58,16 @@ enum MainError {
     },
 }
 
-trait ExitCode {
-    /// Returns the value to use as the exit status.
-    fn code(self) -> i32;
-}
-
-impl ExitCode for i32 {
-    fn code(self) -> i32 {
-        self
-    }
-}
-
-impl ExitCode for () {
-    fn code(self) -> i32 {
-        0
-    }
-}
-
-fn main() {
-    ::std::process::exit(match run() {
-        Ok(ret) => ExitCode::code(ret),
+fn main() -> ExitCode {
+    match run() {
+        Ok(ret) => ret.report(),
         Err(ref e) => {
-            write!(&mut ::std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
+            write!(&mut std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
                 .expect("Error writing to stderr");
 
-            1
+            ExitCode::FAILURE
         }
-    });
+    }
 }
 
 fn run() -> Result<()> {
