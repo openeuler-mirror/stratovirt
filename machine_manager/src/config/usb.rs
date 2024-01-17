@@ -13,15 +13,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::error::ConfigError;
-#[cfg(feature = "usb_camera")]
-use super::get_cameradev_by_id;
 #[cfg(feature = "usb_host")]
 use super::UnsignedInteger;
 use crate::config::{
     check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, ScsiDevConfig, VmConfig,
 };
-#[cfg(feature = "usb_camera")]
-use crate::config::{CamBackendType, CameraDevConfig};
 use util::aio::AioEngine;
 
 #[cfg(feature = "usb_host")]
@@ -158,83 +154,11 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     Ok(dev)
 }
 
-#[cfg(feature = "usb_camera")]
-pub fn parse_usb_camera(vm_config: &mut VmConfig, conf: &str) -> Result<UsbCameraConfig> {
-    let mut cmd_parser = CmdParser::new("usb-camera");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("cameradev")
-        .push("iothread");
-    cmd_parser.parse(conf)?;
-
-    let mut dev = UsbCameraConfig::new();
-    let drive = cmd_parser
-        .get_value::<String>("cameradev")
-        .with_context(|| "`cameradev` is missing for usb-camera")?;
-    let cameradev = get_cameradev_by_id(vm_config, drive.clone().unwrap()).with_context(|| {
-        format!(
-            "no cameradev found with id {:?} for usb-camera",
-            drive.unwrap()
-        )
-    })?;
-
-    dev.id = cmd_parser.get_value::<String>("id")?;
-    dev.backend = cameradev.backend;
-    dev.path = cameradev.path.clone();
-    dev.drive = cameradev;
-    dev.iothread = cmd_parser.get_value::<String>("iothread")?;
-
-    dev.check()?;
-    Ok(dev)
-}
-
 pub fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
     check_arg_too_long(&id.unwrap(), "id")?;
 
     Ok(())
-}
-
-#[cfg(feature = "usb_camera")]
-#[derive(Clone, Debug)]
-pub struct UsbCameraConfig {
-    pub id: Option<String>,
-    pub backend: CamBackendType,
-    pub path: Option<String>,
-    pub iothread: Option<String>,
-    pub drive: CameraDevConfig,
-}
-
-#[cfg(feature = "usb_camera")]
-impl UsbCameraConfig {
-    pub fn new() -> Self {
-        UsbCameraConfig {
-            id: None,
-            backend: CamBackendType::Demo,
-            path: None,
-            iothread: None,
-            drive: CameraDevConfig::new(),
-        }
-    }
-}
-
-#[cfg(feature = "usb_camera")]
-impl Default for UsbCameraConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(feature = "usb_camera")]
-impl ConfigCheck for UsbCameraConfig {
-    fn check(&self) -> Result<()> {
-        check_id(self.id.clone(), "usb-camera")?;
-        if self.iothread.is_some() {
-            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug)]

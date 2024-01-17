@@ -25,7 +25,8 @@ use anyhow::{bail, Context, Result};
 use self::demo::DemoCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
-use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
+use crate::usb::camera::UsbCameraConfig;
+use machine_manager::config::{CamBackendType, CameraDevConfig};
 use util::aio::Iovec;
 
 /// Frame interval in 100ns units.
@@ -143,21 +144,20 @@ pub trait CameraBackend: Send + Sync {
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
 
-pub fn create_cam_backend(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraBackend>>> {
-    let cam: Arc<Mutex<dyn CameraBackend>> = match config.backend {
+pub fn create_cam_backend(
+    config: UsbCameraConfig,
+    cameradev: CameraDevConfig,
+) -> Result<Arc<Mutex<dyn CameraBackend>>> {
+    let cam: Arc<Mutex<dyn CameraBackend>> = match cameradev.backend {
         #[cfg(feature = "usb_camera_v4l2")]
         CamBackendType::V4l2 => Arc::new(Mutex::new(V4l2CameraBackend::new(
-            config.drive.id.clone().unwrap(),
-            config.drive.path.clone().with_context(|| {
-                ConfigError::FieldIsMissing("path".to_string(), "V4L2".to_string())
-            })?,
+            cameradev.id,
+            cameradev.path,
             config.iothread,
         )?)),
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
-            config.id.clone().unwrap(),
-            config.path.with_context(|| {
-                ConfigError::FieldIsMissing("path".to_string(), "Demo".to_string())
-            })?,
+            config.id,
+            cameradev.path,
         )?)),
     };
 

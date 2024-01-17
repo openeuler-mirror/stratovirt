@@ -55,7 +55,7 @@ use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
-use devices::usb::camera::UsbCamera;
+use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::UsbHost;
 use devices::usb::{
@@ -66,14 +66,14 @@ use devices::usb::{
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::{kvm::KvmHypervisor, HypervisorOps};
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
-#[cfg(feature = "usb_camera")]
-use machine_manager::config::parse_usb_camera;
 #[cfg(feature = "usb_host")]
 use machine_manager::config::parse_usb_host;
 use machine_manager::config::{
@@ -1722,8 +1722,16 @@ pub trait MachineOps {
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
-                let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
-                let camera = UsbCamera::new(device_cfg)?;
+                let config = UsbCameraConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let cameradev = get_cameradev_by_id(vm_config, config.cameradev.clone())
+                    .with_context(|| {
+                        format!(
+                            "no cameradev found with id {:?} for usb-camera",
+                            config.cameradev
+                        )
+                    })?;
+
+                let camera = UsbCamera::new(config, cameradev)?;
                 camera
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?

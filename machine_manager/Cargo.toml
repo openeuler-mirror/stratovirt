@@ -22,6 +22,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 trace = { path = "../trace" }
 util = { path = "../util" }
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []
