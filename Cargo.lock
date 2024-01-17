@@ -963,6 +963,7 @@ name = "machine_manager"
 version = "2.3.0"
 dependencies = [
  "anyhow",
+ "clap",
  "hex",
  "libc",
  "log",

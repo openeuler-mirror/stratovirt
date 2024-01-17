@@ -86,6 +86,7 @@ pub use vnc::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -753,6 +754,15 @@ pub fn str_slip_to_clap(args: &str) -> Vec<String> {
 pub fn valid_id(id: &str) -> Result<String> {
     check_arg_too_long(id, "id")?;
     Ok(id.to_string())
+}
+
+pub fn existed_path(path: &str) -> Result<String> {
+    let filepath = path.to_string();
+    if !Path::new(path).exists() {
+        bail!(ConfigError::FileNotExist(filepath));
+    }
+
+    Ok(filepath)
 }
 
 #[cfg(test)]

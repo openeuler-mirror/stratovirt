@@ -10,22 +10,25 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use super::error::ConfigError;
 use crate::{
-    config::{check_arg_nonexist, check_id, CmdParser, ConfigCheck, VmConfig},
+    config::{existed_path, str_slip_to_clap, valid_id, VmConfig},
     qmp::qmp_schema,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[command(name = "camera device")]
 pub struct CameraDevConfig {
-    pub id: Option<String>,
-    pub path: Option<String>,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, value_parser = existed_path)]
+    pub path: String,
+    #[arg(long)]
     pub backend: CamBackendType,
 }
 
@@ -49,41 +52,17 @@ impl FromStr for CamBackendType {
     }
 }
 
-impl CameraDevConfig {
-    pub fn new() -> CameraDevConfig {
-        CameraDevConfig {
-            id: None,
-            path: None,
-            backend: CamBackendType::Demo,
-        }
-    }
-}
-
-impl Default for CameraDevConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl VmConfig {
     pub fn add_camera_backend(&mut self, camera_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("cameradev");
-        cmd_parser.push("").push("id").push("path");
-        cmd_parser.get_parameters(camera_config)?;
+        let cfg = format!("cameradev,backend={}", camera_config);
+        let config = CameraDevConfig::try_parse_from(str_slip_to_clap(&cfg))?;
 
-        let mut camera_backend = CameraDevConfig::new();
-        camera_backend.backend = cmd_parser.get_value::<CamBackendType>("")?.unwrap();
-        camera_backend.id = cmd_parser.get_value::<String>("id")?;
-        camera_backend.path = cmd_parser.get_value::<String>("path")?;
-
-        camera_backend.check()?;
-
-        self.add_cameradev_with_config(camera_backend)
+        self.add_cameradev_with_config(config)
     }
 
     fn camera_backend_repeated(&self, id: &str, path: &str, backend: CamBackendType) -> bool {
         for (key, cam) in self.camera_backend.iter() {
-            if key != id && cam.backend == backend && cam.path == Some(path.to_string()) {
+            if key != id && cam.backend == backend && cam.path == *path {
                 return true;
             }
         }
@@ -92,27 +71,17 @@ impl VmConfig {
     }
 
     pub fn add_cameradev_with_config(&mut self, conf: CameraDevConfig) -> Result<()> {
-        let cameradev_id = conf
-            .id
-            .clone()
-            .with_context(|| "no id configured for cameradev")?;
-        let cameradev_path = conf
-            .path
-            .clone()
-            .with_context(|| "no path configured for cameradev")?;
-        let cameradev_backend = conf.backend;
-
-        let cam = self.camera_backend.get(&cameradev_id);
+        let cam = self.camera_backend.get(&conf.id);
 
         if cam.is_some() {
-            bail!("cameradev with id {:?} has already existed", cameradev_id);
+            bail!("cameradev with id {:?} has already existed", conf.id);
         }
 
-        if self.camera_backend_repeated(&cameradev_id, &cameradev_path, cameradev_backend) {
+        if self.camera_backend_repeated(&conf.id, &conf.path, conf.backend) {
             bail!("another cameradev has the same backend device");
         }
 
-        self.camera_backend.insert(cameradev_id, conf);
+        self.camera_backend.insert(conf.id.clone(), conf);
 
         Ok(())
     }
@@ -127,29 +96,11 @@ impl VmConfig {
     }
 }
 
-impl ConfigCheck for CameraDevConfig {
-    fn check(&self) -> Result<()> {
-        // Note: backend has already been checked during args parsing.
-        check_id(self.id.clone(), "cameradev")?;
-        check_camera_path(self.path.clone())
-    }
-}
-
-fn check_camera_path(path: Option<String>) -> Result<()> {
-    check_arg_nonexist(path.clone(), "path", "cameradev")?;
-
-    let path = path.unwrap();
-    if !Path::new(&path).exists() {
-        bail!(ConfigError::FileNotExist(path));
-    }
-
-    Ok(())
-}
-
 pub fn get_cameradev_config(args: qmp_schema::CameraDevAddArgument) -> Result<CameraDevConfig> {
+    let path = args.path.with_context(|| "cameradev config path is null")?;
     let config = CameraDevConfig {
-        id: Some(args.id),
-        path: args.path,
+        id: args.id,
+        path,
         backend: CamBackendType::from_str(&args.driver)?,
     };
 
