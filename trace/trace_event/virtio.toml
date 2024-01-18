@@ -87,3 +87,69 @@ name = "virtio_blk_write_config"
 args = "offset: u64, data: &[u8]"
 message = "offset {}, data {:?}"
 enabled = true
+
+[[events]]
+name = "virtio_gpu_update_cursor"
+args = "scanout: u32, x: u32, y: u32, res: u32, cmd: &str"
+message = "scanout {}, x {}, y {}, resource {}, type {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_get_edid"
+args = "scanout: u32"
+message = "scanout {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_create_2d"
+args = "res: u32, fmt: u32, w: u32, h: u32"
+message = "resource: {}, format {}, width {}, height {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_unref"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_xfer_toh_2d"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_flush"
+args = "res: u32, w: u32, h: u32, x: u32, y: u32"
+message = "resource: {}, width: {}, height: {}, x: {}, y: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_set_scanout"
+args = "res: u32, scanout: u32, w: u32, h: u32, x: u32, y: u32"
+message = "resource: {}, scanout: {}, width: {}, height: {}, x: {}, y: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_attach_backing"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_detach_backing"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_init_config_features"
+args = "features: u64"
+message = "features is {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_console_hw_update"
+args = "con: usize, w: i32, h: i32"
+message = "console {} receive hw update request, update size {} {}."
+enabled = true
