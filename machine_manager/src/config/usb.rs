@@ -13,15 +13,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::error::ConfigError;
-#[cfg(feature = "usb_host")]
-use super::UnsignedInteger;
 use crate::config::{
     check_arg_nonexist, check_arg_too_long, CmdParser, ConfigCheck, ScsiDevConfig, VmConfig,
 };
 use util::aio::AioEngine;
-
-#[cfg(feature = "usb_host")]
-const USBHOST_ADDR_MAX: u8 = 127;
 
 /// XHCI controller configuration.
 #[derive(Debug)]
@@ -229,80 +224,6 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.scsi_cfg.l2_cache_size = drive_arg.l2_cache_size;
     dev.scsi_cfg.refcount_cache_size = drive_arg.refcount_cache_size;
     dev.media = drive_arg.media.clone();
-
-    dev.check()?;
-    Ok(dev)
-}
-
-#[derive(Clone, Debug, Default)]
-#[cfg(feature = "usb_host")]
-pub struct UsbHostConfig {
-    /// USB Host device id.
-    pub id: Option<String>,
-    /// The bus number of the USB Host device.
-    pub hostbus: u8,
-    /// The addr number of the USB Host device.
-    pub hostaddr: u8,
-    /// The physical port number of the USB host device.
-    pub hostport: Option<String>,
-    /// The vendor id of the USB Host device.
-    pub vendorid: u16,
-    /// The product id of the USB Host device.
-    pub productid: u16,
-    pub iso_urb_frames: u32,
-    pub iso_urb_count: u32,
-}
-
-#[cfg(feature = "usb_host")]
-impl UsbHostConfig {
-    fn check_range(&self) -> Result<()> {
-        if self.hostaddr > USBHOST_ADDR_MAX {
-            bail!("USB Host hostaddr out of range");
-        }
-        Ok(())
-    }
-}
-
-#[cfg(feature = "usb_host")]
-impl ConfigCheck for UsbHostConfig {
-    fn check(&self) -> Result<()> {
-        check_id(self.id.clone(), "usb-host")?;
-        self.check_range()
-    }
-}
-
-#[cfg(feature = "usb_host")]
-pub fn parse_usb_host(cfg_args: &str) -> Result<UsbHostConfig> {
-    let mut cmd_parser = CmdParser::new("usb-host");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("hostbus")
-        .push("hostaddr")
-        .push("hostport")
-        .push("vendorid")
-        .push("productid")
-        .push("isobsize")
-        .push("isobufs");
-
-    cmd_parser.parse(cfg_args)?;
-
-    let dev = UsbHostConfig {
-        id: cmd_parser.get_value::<String>("id")?,
-        hostbus: cmd_parser.get_value::<u8>("hostbus")?.unwrap_or(0),
-        hostaddr: cmd_parser.get_value::<u8>("hostaddr")?.unwrap_or(0),
-        hostport: cmd_parser.get_value::<String>("hostport")?,
-        vendorid: cmd_parser
-            .get_value::<UnsignedInteger>("vendorid")?
-            .unwrap_or(UnsignedInteger(0))
-            .0 as u16,
-        productid: cmd_parser
-            .get_value::<UnsignedInteger>("productid")?
-            .unwrap_or(UnsignedInteger(0))
-            .0 as u16,
-        iso_urb_frames: cmd_parser.get_value::<u32>("isobsize")?.unwrap_or(32),
-        iso_urb_count: cmd_parser.get_value::<u32>("isobufs")?.unwrap_or(4),
-    };
 
     dev.check()?;
     Ok(dev)
