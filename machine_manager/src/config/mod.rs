@@ -98,7 +98,7 @@ use trace::set_state_by_pattern;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
-    num_ops::str_to_usize,
+    num_ops::str_to_num,
     test_helper::is_test_enabled,
     AsAny,
 };
@@ -665,8 +665,8 @@ impl FromStr for UnsignedInteger {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let value = str_to_usize(s.to_string())
-            .map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
+        let value =
+            str_to_num::<usize>(s).map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
         Ok(UnsignedInteger(value))
     }
 }
