@@ -57,7 +57,7 @@ use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 #[cfg(feature = "usb_host")]
-use devices::usb::usbhost::UsbHost;
+use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::{
     keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
     UsbDevice,
@@ -74,8 +74,6 @@ use machine_manager::config::parse_demo_dev;
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
-#[cfg(feature = "usb_host")]
-use machine_manager::config::parse_usb_host;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -1745,8 +1743,8 @@ pub trait MachineOps {
             }
             #[cfg(feature = "usb_host")]
             "usb-host" => {
-                let device_cfg = parse_usb_host(cfg_args)?;
-                let usbhost = UsbHost::new(device_cfg)?;
+                let config = UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let usbhost = UsbHost::new(config)?;
                 usbhost
                     .realize()
                     .with_context(|| "Failed to realize usb host device")?
