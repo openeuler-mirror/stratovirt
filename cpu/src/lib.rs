@@ -172,6 +172,9 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn check_extension(&self, cap: Cap) -> bool;
 
     fn get_msr_index_list(&self) -> Vec<u32>;
+
+    #[cfg(target_arch = "aarch64")]
+    fn init_pmu(&self) -> Result<()>;
 }
 
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.

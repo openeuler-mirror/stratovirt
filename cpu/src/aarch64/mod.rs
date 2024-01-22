@@ -16,20 +16,15 @@ mod regs;
 
 pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 
-use std::{
-    mem::forget,
-    os::unix::prelude::{AsRawFd, FromRawFd},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use kvm_bindings::{
-    kvm_device_attr, kvm_mp_state as MpState, kvm_regs as Regs, kvm_vcpu_events as VcpuEvents,
-    kvm_vcpu_init as VcpuInit, RegList, KVM_ARM_VCPU_PMU_V3_CTRL, KVM_ARM_VCPU_PMU_V3_INIT,
-    KVM_ARM_VCPU_PMU_V3_IRQ, KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE,
+    kvm_mp_state as MpState, kvm_regs as Regs, kvm_vcpu_events as VcpuEvents,
+    kvm_vcpu_init as VcpuInit, RegList, KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE,
     KVM_MP_STATE_STOPPED as MP_STATE_STOPPED,
 };
-use kvm_ioctls::{DeviceFd, VcpuFd};
+use kvm_ioctls::VcpuFd;
 
 use self::caps::CpregListEntry;
 use self::core_regs::{get_core_regs, set_core_regs};
@@ -290,43 +285,6 @@ impl ArmCPUState {
     }
 }
 
-impl CPU {
-    /// Init PMU for ARM CPU
-    pub fn init_pmu(&self) -> Result<()> {
-        let pmu_attr = kvm_device_attr {
-            group: KVM_ARM_VCPU_PMU_V3_CTRL,
-            attr: KVM_ARM_VCPU_PMU_V3_INIT as u64,
-            addr: 0,
-            flags: 0,
-        };
-        // SAFETY: The fd can be guaranteed to be legal during creation.
-        let vcpu_device = unsafe { DeviceFd::from_raw_fd(self.fd.as_raw_fd()) };
-        vcpu_device
-            .has_device_attr(&pmu_attr)
-            .with_context(|| "Kernel does not support PMU for vCPU")?;
-        // Set IRQ 23, PPI 7 for PMU.
-        let irq = PMU_INTR + PPI_BASE;
-        let pmu_irq_attr = kvm_device_attr {
-            group: KVM_ARM_VCPU_PMU_V3_CTRL,
-            attr: KVM_ARM_VCPU_PMU_V3_IRQ as u64,
-            addr: &irq as *const u32 as u64,
-            flags: 0,
-        };
-
-        vcpu_device
-            .set_device_attr(&pmu_irq_attr)
-            .with_context(|| "Failed to set IRQ for PMU")?;
-        // Init PMU after setting IRQ.
-        vcpu_device
-            .set_device_attr(&pmu_attr)
-            .with_context(|| "Failed to enable PMU for vCPU")?;
-        // forget `vcpu_device` to avoid fd close on exit, as DeviceFd is backed by File.
-        forget(vcpu_device);
-
-        Ok(())
-    }
-}
-
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
@@ -369,7 +327,8 @@ impl StateTransfer for CPU {
         self.fd.vcpu_init(&cpu_state.kvi)?;
 
         if cpu_state.features.pmu {
-            self.init_pmu()
+            self.hypervisor_cpu
+                .init_pmu()
                 .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
         }
         Ok(())

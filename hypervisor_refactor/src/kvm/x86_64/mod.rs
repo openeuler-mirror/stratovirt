@@ -75,4 +75,8 @@ impl KvmCpu {
         let kvm = Kvm::new().unwrap();
         kvm.get_msr_index_list().unwrap().as_slice().to_vec()
     }
+
+    pub fn arch_init_pmu(&self) -> Result<()> {
+        Ok(())
+    }
 }

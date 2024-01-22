@@ -29,7 +29,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-use kvm_ioctls::{Cap, Kvm, VmFd};
+
+use kvm_ioctls::{Cap, Kvm, VcpuFd, VmFd};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use self::listener::KvmMemoryListener;
@@ -217,8 +218,9 @@ impl HypervisorOps for KvmHypervisor {
     fn create_hypervisor_cpu(
         &self,
         _vcpu_id: u8,
+        vcpu_fd: Arc<VcpuFd>,
     ) -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>> {
-        Ok(Arc::new(KvmCpu::new()))
+        Ok(Arc::new(KvmCpu::new(vcpu_fd)))
     }
 }
 
@@ -297,11 +299,13 @@ impl MigrateOps for KvmHypervisor {
     }
 }
 
-pub struct KvmCpu {}
+pub struct KvmCpu {
+    fd: Arc<VcpuFd>,
+}
 
 impl KvmCpu {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(vcpu_fd: Arc<VcpuFd>) -> Self {
+        Self { fd: vcpu_fd }
     }
 }
 
@@ -317,5 +321,9 @@ impl CPUHypervisorOps for KvmCpu {
 
     fn get_msr_index_list(&self) -> Vec<u32> {
         self.arch_get_msr_index_list()
+    }
+
+    fn init_pmu(&self) -> Result<()> {
+        self.arch_init_pmu()
     }
 }
