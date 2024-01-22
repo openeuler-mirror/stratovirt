@@ -12,13 +12,8 @@
 
 use std::sync::Arc;
 
-use kvm_bindings::{
-    KVM_REG_ARM_COPROC_MASK, KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_U32,
-    KVM_REG_SIZE_U64,
-};
-use kvm_ioctls::{Cap, VcpuFd};
+use kvm_ioctls::Cap;
 
-use super::core_regs::Result;
 use crate::CPUHypervisorOps;
 use machine_manager::config::{CpuConfig, PmuConfig};
 
@@ -68,54 +63,4 @@ impl From<&CpuConfig> for ArmCPUFeatures {
 pub struct CpregListEntry {
     pub reg_id: u64,
     pub value: u128,
-}
-
-impl CpregListEntry {
-    fn cpreg_tuples_entry(&self) -> bool {
-        (self.reg_id & KVM_REG_ARM_COPROC_MASK as u64) == (KVM_REG_ARM_CORE as u64)
-    }
-
-    fn normal_cpreg_entry(&self) -> bool {
-        if self.cpreg_tuples_entry() {
-            return false;
-        }
-
-        ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32)
-            || ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64)
-    }
-
-    /// Validate cpreg_list's tuples entry and normal entry.
-    pub fn validate(&self) -> bool {
-        if self.cpreg_tuples_entry() {
-            return true;
-        }
-
-        self.normal_cpreg_entry()
-    }
-
-    /// Get Cpreg value from Kvm.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn get_cpreg(&mut self, vcpu_fd: &VcpuFd) -> Result<()> {
-        if self.normal_cpreg_entry() {
-            self.value = vcpu_fd.get_one_reg(self.reg_id)?;
-        }
-
-        Ok(())
-    }
-
-    /// Set Cpreg value to Kvm.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn set_cpreg(&self, vcpu_fd: &VcpuFd) -> Result<()> {
-        if self.normal_cpreg_entry() {
-            vcpu_fd.set_one_reg(self.reg_id, self.value)?;
-        }
-
-        Ok(())
-    }
 }

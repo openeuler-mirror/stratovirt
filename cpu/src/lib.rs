@@ -36,6 +36,8 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::Arm64CoreRegs;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUCaps as CPUCaps;
@@ -46,17 +48,24 @@ pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUTopology as CPUTopology;
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmRegsIndex as RegsIndex;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::CpregListEntry;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
 pub use error::CpuError;
-
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUState as ArchCPU;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUTopology as CPUTopology;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::X86RegsIndex as RegsIndex;
 
 use std::cell::RefCell;
 use std::sync::atomic::{fence, AtomicBool, Ordering};
@@ -77,8 +86,6 @@ use machine_manager::machine::{HypervisorType, MachineInterface};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
-#[cfg(target_arch = "x86_64")]
-use x86_64::caps::X86CPUCaps as CPUCaps;
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
@@ -173,8 +180,29 @@ pub trait CPUHypervisorOps: Send + Sync {
 
     fn get_msr_index_list(&self) -> Vec<u32>;
 
-    #[cfg(target_arch = "aarch64")]
     fn init_pmu(&self) -> Result<()>;
+
+    fn vcpu_init(&self) -> Result<()>;
+
+    fn set_boot_config(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        boot_config: &CPUBootConfig,
+        #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
+    ) -> Result<()>;
+
+    fn get_one_reg(&self, reg_id: u64) -> Result<u128>;
+
+    fn get_regs(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        regs_index: RegsIndex,
+        caps: &CPUCaps,
+    ) -> Result<()>;
+
+    fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
+
+    fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()>;
 }
 
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
@@ -185,7 +213,7 @@ pub struct CPU {
     /// The file descriptor of this kvm-based VCPU.
     fd: Arc<VcpuFd>,
     /// Architecture special CPU property.
-    arch_cpu: Arc<Mutex<ArchCPU>>,
+    pub arch_cpu: Arc<Mutex<ArchCPU>>,
     /// LifeCycle state of kvm-based VCPU.
     state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
     /// The thread handler of this virtual CPU.
@@ -195,7 +223,7 @@ pub struct CPU {
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The capability of VCPU.
-    caps: CPUCaps,
+    pub caps: CPUCaps,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
     /// Sync the pause state of vCPU in kvm and userspace.
@@ -298,11 +326,9 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        self.arch_cpu
-            .lock()
-            .unwrap()
+        self.hypervisor_cpu
             .set_boot_config(
-                &self.fd,
+                self.arch_cpu.clone(),
                 boot,
                 #[cfg(target_arch = "aarch64")]
                 config,
@@ -321,11 +347,8 @@ impl CPUInterface for CPU {
 
     fn resume(&self) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
-        self.arch()
-            .lock()
-            .unwrap()
-            .set_virtual_timer_cnt(self.fd())?;
-
+        self.hypervisor_cpu
+            .set_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
         let (cpu_state_locked, cvar) = &*self.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
         if *cpu_state == CpuLifecycleState::Running {
@@ -433,10 +456,8 @@ impl CPUInterface for CPU {
         }
 
         #[cfg(target_arch = "aarch64")]
-        self.arch()
-            .lock()
-            .unwrap()
-            .get_virtual_timer_cnt(self.fd())?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount, &self.caps)?;
 
         Ok(())
     }
@@ -633,11 +654,11 @@ impl CPUThreadWorker {
 
     fn run_on_local_thread_vcpu<F>(func: F) -> Result<()>
     where
-        F: FnOnce(&CPU),
+        F: FnOnce(Arc<CPU>),
     {
         Self::LOCAL_THREAD_VCPU.with(|thread_vcpu| {
             if let Some(local_thread_vcpu) = thread_vcpu.borrow().as_ref() {
-                func(&local_thread_vcpu.thread_cpu);
+                func(local_thread_vcpu.thread_cpu.clone());
                 Ok(())
             } else {
                 Err(anyhow!(CpuError::VcpuLocalThreadNotPresent))
@@ -659,11 +680,8 @@ impl CPUThreadWorker {
                 }
                 VCPU_RESET_SIGNAL => {
                     let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        if let Err(e) = vcpu.arch_cpu.lock().unwrap().reset_vcpu(
-                            &vcpu.fd,
-                            #[cfg(target_arch = "x86_64")]
-                            &vcpu.caps,
-                        ) {
+                        let cpu = vcpu.clone();
+                        if let Err(e) = vcpu.hypervisor_cpu().reset_vcpu(cpu) {
                             error!("Failed to reset vcpu state: {:?}", e)
                         }
                     });
@@ -721,16 +739,11 @@ impl CPUThreadWorker {
 
         // The vcpu thread is going to run,
         // reset its running environment.
+        let cpu = self.thread_cpu.clone();
         #[cfg(not(test))]
         self.thread_cpu
-            .arch_cpu
-            .lock()
-            .unwrap()
-            .reset_vcpu(
-                &self.thread_cpu.fd,
-                #[cfg(target_arch = "x86_64")]
-                &self.thread_cpu.caps,
-            )
+            .hypervisor_cpu
+            .reset_vcpu(cpu)
             .with_context(|| "Failed to reset for cpu register state")?;
 
         // Wait for all vcpu to complete the running
