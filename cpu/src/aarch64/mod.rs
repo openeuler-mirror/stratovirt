@@ -24,9 +24,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use kvm_bindings::{
-    kvm_device_attr, kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList,
-    KVM_ARM_VCPU_PMU_V3_CTRL, KVM_ARM_VCPU_PMU_V3_INIT, KVM_ARM_VCPU_PMU_V3_IRQ,
-    KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_STOPPED,
+    kvm_device_attr, kvm_mp_state as MpState, kvm_regs as Regs, kvm_vcpu_events as VcpuEvents,
+    kvm_vcpu_init as VcpuInit, RegList, KVM_ARM_VCPU_PMU_V3_CTRL, KVM_ARM_VCPU_PMU_V3_INIT,
+    KVM_ARM_VCPU_PMU_V3_IRQ, KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE,
+    KVM_MP_STATE_STOPPED as MP_STATE_STOPPED,
 };
 use kvm_ioctls::{DeviceFd, VcpuFd};
 
@@ -99,13 +100,13 @@ pub struct ArmCPUState {
     /// for scheduling purposes.
     mpidr: u64,
     /// Used to pass vcpu target and supported features to kvm.
-    kvi: kvm_vcpu_init,
+    kvi: VcpuInit,
     /// Vcpu core registers.
-    core_regs: kvm_regs,
+    core_regs: Regs,
     /// Vcpu cpu events register.
-    cpu_events: kvm_vcpu_events,
+    cpu_events: VcpuEvents,
     /// Vcpu mpstate register.
-    mp_state: kvm_mp_state,
+    mp_state: MpState,
     /// The length of Cpreg.
     cpreg_len: usize,
     /// The list of Cpreg.
@@ -123,11 +124,11 @@ impl ArmCPUState {
     ///
     /// * `vcpu_id` - ID of this `CPU`.
     pub fn new(vcpu_id: u32) -> Self {
-        let mp_state = kvm_mp_state {
+        let mp_state = MpState {
             mp_state: if vcpu_id == 0 {
-                KVM_MP_STATE_RUNNABLE
+                MP_STATE_RUNNABLE
             } else {
-                KVM_MP_STATE_STOPPED
+                MP_STATE_STOPPED
             },
         };
 
@@ -237,12 +238,12 @@ impl ArmCPUState {
     }
 
     /// Get core_regs value.
-    pub fn core_regs(&self) -> kvm_regs {
+    pub fn core_regs(&self) -> Regs {
         self.core_regs
     }
 
     /// Get kvm_vcpu_init.
-    pub fn kvi(&self) -> kvm_vcpu_init {
+    pub fn kvi(&self) -> VcpuInit {
         self.kvi
     }
 
@@ -333,8 +334,8 @@ impl StateTransfer for CPU {
         cpu_state_locked.core_regs = get_core_regs(&self.fd)?;
         if self.caps.mp_state {
             let mut mp_state = self.fd.get_mp_state()?;
-            if mp_state.mp_state != KVM_MP_STATE_STOPPED {
-                mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+            if mp_state.mp_state != MP_STATE_STOPPED {
+                mp_state.mp_state = MP_STATE_RUNNABLE;
             }
             cpu_state_locked.mp_state = mp_state;
         }

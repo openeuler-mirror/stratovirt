@@ -18,10 +18,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use kvm_bindings::{
-    kvm_cpuid_entry2, kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry,
-    kvm_regs, kvm_segment, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, CpuId, Msrs,
-    KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE,
-    KVM_MP_STATE_UNINITIALIZED,
+    kvm_cpuid_entry2 as CpuidEntry2, kvm_debugregs as DebugRegs, kvm_fpu as Fpu,
+    kvm_lapic_state as LapicState, kvm_mp_state as MpState, kvm_msr_entry as MsrEntry,
+    kvm_regs as Regs, kvm_segment as Segment, kvm_sregs as Sregs, kvm_vcpu_events as VcpuEvents,
+    kvm_xcrs as Xcrs, kvm_xsave as Xsave, CpuId, Msrs,
+    KVM_CPUID_FLAG_SIGNIFCANT_INDEX as CPUID_FLAG_SIGNIFICANT_INDEX,
+    KVM_MAX_CPUID_ENTRIES as MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE,
+    KVM_MP_STATE_UNINITIALIZED as MP_STATE_UNINITIALIZED,
 };
 use kvm_ioctls::{Kvm, VcpuFd};
 
@@ -73,8 +76,8 @@ pub struct X86CPUBootConfig {
     /// zero page address, as the second parameter of __startup_64
     /// arch/x86/kernel/head_64.S:86
     pub zero_page: u64,
-    pub code_segment: kvm_segment,
-    pub data_segment: kvm_segment,
+    pub code_segment: Segment,
+    pub data_segment: Segment,
     pub gdt_base: u64,
     pub gdt_size: u16,
     pub idt_base: u64,
@@ -115,17 +118,17 @@ pub struct X86CPUState {
     nr_dies: u32,
     nr_sockets: u32,
     apic_id: u32,
-    regs: kvm_regs,
-    sregs: kvm_sregs,
-    fpu: kvm_fpu,
-    mp_state: kvm_mp_state,
-    lapic: kvm_lapic_state,
+    regs: Regs,
+    sregs: Sregs,
+    fpu: Fpu,
+    mp_state: MpState,
+    lapic: LapicState,
     msr_len: usize,
-    msr_list: [kvm_msr_entry; 256],
-    cpu_events: kvm_vcpu_events,
-    xsave: kvm_xsave,
-    xcrs: kvm_xcrs,
-    debugregs: kvm_debugregs,
+    msr_list: [MsrEntry; 256],
+    cpu_events: VcpuEvents,
+    xsave: Xsave,
+    xcrs: Xcrs,
+    debugregs: DebugRegs,
 }
 
 impl X86CPUState {
@@ -136,11 +139,11 @@ impl X86CPUState {
     /// * `vcpu_id` - ID of this `CPU`.
     /// * `max_vcpus` - Number of vcpus.
     pub fn new(vcpu_id: u32, max_vcpus: u32) -> Self {
-        let mp_state = kvm_mp_state {
+        let mp_state = MpState {
             mp_state: if vcpu_id == 0 {
-                KVM_MP_STATE_RUNNABLE
+                MP_STATE_RUNNABLE
             } else {
-                KVM_MP_STATE_UNINITIALIZED
+                MP_STATE_UNINITIALIZED
             },
         };
         X86CPUState {
@@ -266,7 +269,7 @@ impl X86CPUState {
             .get_lapic()
             .with_context(|| format!("Failed to get lapic for CPU {}/KVM", self.apic_id))?;
 
-        // SAFETY: The member regs in struct kvm_lapic_state is a u8 array with 1024 entries,
+        // SAFETY: The member regs in struct LapicState is a u8 array with 1024 entries,
         // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
         // Safe because all value in this unsafe block is certain.
         unsafe {
@@ -286,7 +289,7 @@ impl X86CPUState {
     }
 
     fn setup_regs(&mut self, boot_config: &X86CPUBootConfig) {
-        self.regs = kvm_regs {
+        self.regs = Regs {
             rflags: 0x0002, // Means processor has been initialized
             rip: boot_config.boot_ip,
             rsp: boot_config.boot_sp,
@@ -368,7 +371,7 @@ impl X86CPUState {
         // arch/x86/include/asm/fpu/types.h
         const MXCSR_DEFAULT: u32 = 0x1f80;
 
-        self.fpu = kvm_fpu {
+        self.fpu = Fpu {
             fcw: 0x37f,
             mxcsr: MXCSR_DEFAULT,
             ..Default::default()
@@ -384,7 +387,7 @@ impl X86CPUState {
                 _ => 0u64,
             };
 
-            self.msr_list[index] = kvm_msr_entry {
+            self.msr_list[index] = MsrEntry {
                 index: *msr,
                 data,
                 ..Default::default()
@@ -411,7 +414,7 @@ impl X86CPUState {
             }
         }
         for index in 0..4 {
-            let entry = kvm_cpuid_entry2 {
+            let entry = CpuidEntry2 {
                 function: 0x1f,
                 index,
                 ..Default::default()
@@ -430,7 +433,7 @@ impl X86CPUState {
             _ => bail!("setup_cpuid: Open /dev/kvm failed"),
         };
         let mut cpuid = sys_fd
-            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+            .get_supported_cpuid(CPUID_FLAG_SIGNIFICANT_INDEX)
             .with_context(|| {
                 format!("Failed to get supported cpuid for CPU {}/KVM", self.apic_id)
             })?;
@@ -517,7 +520,7 @@ impl X86CPUState {
 
                     entry.edx = self.apic_id;
                     entry.ecx = entry.index & 0xff;
-                    entry.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+                    entry.flags = CPUID_FLAG_SIGNIFICANT_INDEX;
 
                     match entry.index {
                         0 => {
@@ -612,7 +615,7 @@ impl MigrationHook for CPU {}
 mod test {
     use super::*;
     use hypervisor::kvm::{KVMFds, KVM_FDS};
-    use kvm_bindings::kvm_segment;
+    use kvm_bindings::Segment;
     use std::sync::Arc;
 
     #[test]
@@ -623,7 +626,7 @@ mod test {
         }
         KVM_FDS.store(Arc::new(kvm_fds));
 
-        let code_seg = kvm_segment {
+        let code_seg = Segment {
             base: 0,
             limit: 1048575,
             selector: 16,
@@ -638,7 +641,7 @@ mod test {
             unusable: 0,
             padding: 0,
         };
-        let data_seg = kvm_segment {
+        let data_seg = Segment {
             base: 0,
             limit: 1048575,
             selector: 24,
