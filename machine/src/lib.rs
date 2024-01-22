@@ -418,17 +418,19 @@ pub trait MachineOps {
     where
         Self: Sized,
     {
-        let vcpu_fd = KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .create_vcpu(vcpu_id as u64)
-            .with_context(|| "Create vcpu failed")?;
+        let vcpu_fd = Arc::new(
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .create_vcpu(vcpu_id as u64)
+                .with_context(|| "Create vcpu failed")?,
+        );
 
         let locked_hypervisor = hypervisor.lock().unwrap();
         let hypervisor_cpu: Arc<dyn CPUHypervisorOps> =
-            locked_hypervisor.create_hypervisor_cpu(vcpu_id)?;
+            locked_hypervisor.create_hypervisor_cpu(vcpu_id, vcpu_fd.clone())?;
 
         #[cfg(target_arch = "aarch64")]
         let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
@@ -437,7 +439,7 @@ pub trait MachineOps {
 
         let cpu = Arc::new(CPU::new(
             hypervisor_cpu,
-            Arc::new(vcpu_fd),
+            vcpu_fd,
             vcpu_id,
             Arc::new(Mutex::new(arch_cpu)),
             vm.clone(),
@@ -510,7 +512,7 @@ pub trait MachineOps {
         let features = vcpu_cfg.unwrap_or_default();
         if features.pmu {
             for cpu in self.machine_base().cpus.iter() {
-                cpu.init_pmu()?;
+                cpu.hypervisor_cpu.init_pmu()?;
             }
         }
         Ok(())
