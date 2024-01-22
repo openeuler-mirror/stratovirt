@@ -33,3 +33,57 @@ name = "virtio_serial_disconnected_port"
 args = ""
 message = "virtio-serial port is none or disconnected."
 enabled = true
+
+[[events]]
+name = "virtio_rng_write_req_data"
+args = "size: u32"
+message = "size {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_process_queue_suppress_notify"
+args = "len: u16"
+message = "len {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_complete_request"
+args = "status: u8"
+message = "status {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_complete_one_request"
+args = "index: u16, len: u32"
+message = "index {}, len {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_execute"
+args = "request_type: u32, len: usize, offset: usize"
+message = "request type {}, iovecs len {}, offset {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_handle_discard_write_zeroes_req"
+args = "opcode: &dyn fmt::Debug, flags: u32, offset: usize, nbytes: u64"
+message = "opcode {:?}, flags {}, offset {}, nbytes {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_merge_req_queue"
+args = "can_merge: bool, merged_reqs: u16, merged_iovs: usize, merged_bytes: u64"
+message = "can_merge {}, merged_reqs {}, merged_iovs {}, merged_bytes {}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_read_config"
+args = "offset: u64, data: &[u8]"
+message = "offset {}, data {:?}"
+enabled = true
+
+[[events]]
+name = "virtio_blk_write_config"
+args = "offset: u64, data: &[u8]"
+message = "offset {}, data {:?}"
+enabled = true

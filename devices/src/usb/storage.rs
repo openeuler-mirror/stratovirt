@@ -17,7 +17,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 
 use super::descriptor::{
@@ -371,7 +371,7 @@ impl UsbStorage {
                 let mut cbw_buf = [0_u8; CBW_SIZE as usize];
                 packet.transfer_packet(&mut cbw_buf, CBW_SIZE as usize);
                 self.state.cbw.convert(&cbw_buf);
-                debug!("Storage cbw {:?}", self.state.cbw);
+                trace::usb_storage_handle_token_out(&self.state.cbw);
 
                 if self.state.cbw.sig != CBW_SIGNATURE {
                     bail!("Bad signature {:x}", self.state.cbw.sig);
@@ -426,7 +426,7 @@ impl UsbStorage {
                 let mut csw_buf = [0_u8; CSW_SIZE as usize];
                 self.state.csw.tag = self.state.cbw.tag;
                 self.state.csw.convert(&mut csw_buf);
-                debug!("Storage csw {:?}", self.state.csw);
+                trace::usb_storage_handle_token_in(&self.state.csw);
                 packet.transfer_packet(&mut csw_buf, CSW_SIZE as usize);
 
                 // Reset UsbStorageState.
@@ -460,10 +460,10 @@ impl UsbStorage {
         }
 
         self.state.iovec_len = iovec_len;
-        debug!("Storage: iovec_len {}.", iovec_len);
         self.handle_scsi_request(packet)?;
         packet.actual_length = iovec_len;
         self.state.mode = UsbMsdMode::Csw;
+        trace::usb_storage_handle_data_inout_packet(iovec_len);
 
         Ok(())
     }
@@ -504,6 +504,7 @@ impl UsbStorage {
         let csw_h = &sreq_h.lock().unwrap().upper_req;
         let csw = csw_h.as_ref().as_any().downcast_ref::<UsbMsdCsw>().unwrap();
         self.state.csw = *csw;
+        trace::usb_storage_handle_scsi_request(csw);
 
         Ok(())
     }
@@ -556,7 +557,7 @@ impl UsbDevice for UsbStorage {
         {
             Ok(handled) => {
                 if handled {
-                    debug!("Storage control handled by descriptor, return directly.");
+                    trace::usb_storage_handle_control();
                     return;
                 }
                 self.handle_control_packet(&mut locked_packet, device_req)
@@ -570,9 +571,10 @@ impl UsbDevice for UsbStorage {
 
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
         let mut locked_packet = packet.lock().unwrap();
-        debug!(
-            "Storage device handle_data endpoint {}, mode {:?}",
-            locked_packet.ep_number, self.state.mode
+        trace::usb_storage_handle_data(
+            locked_packet.ep_number,
+            locked_packet.pid,
+            &self.state.mode,
         );
 
         let result = match locked_packet.pid as u8 {

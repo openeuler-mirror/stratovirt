@@ -127,6 +127,7 @@ impl PL031 {
             if let Err(e) = evt_fd.write(1) {
                 error!("pl031: failed to write interrupt eventfd ({:?}).", e);
             }
+            trace::pl031_inject_interrupt();
             return;
         }
         error!("pl031: failed to get interrupt event fd.");
@@ -170,6 +171,7 @@ impl SysBusDevOps for PL031 {
             RTC_MIS => value = self.state.risr & self.state.imsr,
             _ => {}
         }
+        trace::pl031_read(offset, value);
 
         write_data_u32(data, value)
     }
@@ -177,6 +179,7 @@ impl SysBusDevOps for PL031 {
     /// Write data to registers by guest.
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         let value = LittleEndian::read_u32(data);
+        trace::pl031_write(offset, value);
 
         match offset {
             RTC_MR => {
