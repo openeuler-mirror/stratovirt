@@ -1029,23 +1029,32 @@ fn blk_iops() {
     }
 }
 
-/// Block device sends I/O request, configured as 'aio=native'.
+/// Block device sends I/O request, configured as 'aio=[off|threads|io_uring|native]'.
 /// TestStep:
-///   1. Init block device, configured as 'aio=native'.
+///   1. Init block device, configured with different aio type.
 ///   2. Do the I/O request.
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
 #[test]
-fn blk_aio_native() {
-    for image_type in ImageType::IMAGE_TYPE {
+fn blk_with_different_aio() {
+    const BLOCK_DRIVER_CFG: [(ImageType, &str, AioEngine); 6] = [
+        (ImageType::Raw, "off", AioEngine::Off),
+        (ImageType::Qcow2, "off", AioEngine::Off),
+        (ImageType::Raw, "off", AioEngine::Threads),
+        (ImageType::Qcow2, "off", AioEngine::Threads),
+        (ImageType::Raw, "on", AioEngine::Native),
+        (ImageType::Raw, "on", AioEngine::IoUring),
+    ];
+
+    for (image_type, direct, aio_engine) in BLOCK_DRIVER_CFG {
         println!("Image type: {:?}", image_type);
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1, &image_type));
         let device_args = Rc::new(String::from(""));
-        let drive_args = if aio_probe(AioEngine::Native).is_ok() {
-            Rc::new(String::from(",direct=on,aio=native"))
+        let drive_args = if aio_probe(aio_engine).is_ok() {
+            Rc::new(format!(",direct={},aio={}", direct, aio_engine.to_string()))
         } else {
-            Rc::new(String::from(",direct=false"))
+            continue;
         };
         let other_args = Rc::new(String::from(""));
         let (blk, test_state, alloc) = create_blk(

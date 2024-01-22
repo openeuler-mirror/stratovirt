@@ -79,6 +79,17 @@ impl FromStr for AioEngine {
     }
 }
 
+impl ToString for AioEngine {
+    fn to_string(&self) -> String {
+        match *self {
+            AioEngine::Off => "off".to_string(),
+            AioEngine::Native => "native".to_string(),
+            AioEngine::IoUring => "io_uring".to_string(),
+            AioEngine::Threads => "threads".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WriteZeroesState {
     Off,
