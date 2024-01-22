@@ -18,7 +18,7 @@ use kvm_bindings::*;
 use kvm_ioctls::DeviceFd;
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr};
 
-use crate::kvm::KvmHypervisor;
+use crate::kvm::{KvmCpu, KvmHypervisor};
 
 ioctl_iow_nr!(KVM_GET_DEVICE_ATTR, KVMIO, 0xe2, kvm_device_attr);
 
@@ -67,5 +67,11 @@ impl KvmDevice {
 impl KvmHypervisor {
     pub fn arch_init(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+impl KvmCpu {
+    pub fn arch_get_msr_index_list(&self) -> Vec<u32> {
+        Vec::new()
     }
 }

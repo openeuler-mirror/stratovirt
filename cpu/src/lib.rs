@@ -50,6 +50,7 @@ pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
 pub use error::CpuError;
+
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
@@ -64,7 +65,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use kvm_ioctls::{VcpuExit, VcpuFd};
+use kvm_ioctls::{Cap, VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
 use nix::unistd::gettid;
@@ -72,7 +73,7 @@ use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
-use machine_manager::machine::MachineInterface;
+use machine_manager::machine::{HypervisorType, MachineInterface};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
@@ -165,6 +166,14 @@ pub trait CPUInterface {
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
 
+pub trait CPUHypervisorOps: Send + Sync {
+    fn get_hypervisor_type(&self) -> HypervisorType;
+
+    fn check_extension(&self, cap: Cap) -> bool;
+
+    fn get_msr_index_list(&self) -> Vec<u32>;
+}
+
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
@@ -188,6 +197,8 @@ pub struct CPU {
     boot_state: Arc<Mutex<ArchCPU>>,
     /// Sync the pause state of vCPU in kvm and userspace.
     pause_signal: Arc<AtomicBool>,
+    /// Interact between the vCPU and hypervisor.
+    pub hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
 }
 
 impl CPU {
@@ -200,6 +211,7 @@ impl CPU {
     /// * `arch_cpu` - Architecture special `CPU` property.
     /// * `vm` - The virtual machine this `CPU` gets attached to.
     pub fn new(
+        hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
         vcpu_fd: Arc<VcpuFd>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
@@ -213,9 +225,10 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
-            caps: CPUCaps::init_capabilities(),
+            caps: CPUCaps::init_capabilities(hypervisor_cpu.clone()),
             boot_state: Arc::new(Mutex::new(ArchCPU::default())),
             pause_signal: Arc::new(AtomicBool::new(false)),
+            hypervisor_cpu,
         }
     }
 
@@ -258,6 +271,11 @@ impl CPU {
     /// Set thread id for `CPU`.
     fn set_tid(&self) {
         *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
+    }
+
+    /// Get the hypervisor of this `CPU`.
+    pub fn hypervisor_cpu(&self) -> &Arc<dyn CPUHypervisorOps> {
+        &self.hypervisor_cpu
     }
 }
 
@@ -333,9 +351,11 @@ impl CPUInterface for CPU {
         }
 
         let local_cpu = cpu.clone();
+        let hypervisor_cpu = cpu.hypervisor_cpu().clone();
+        let hyp_type = hypervisor_cpu.get_hypervisor_type();
         let cpu_thread_worker = CPUThreadWorker::new(cpu);
         let handle = thread::Builder::new()
-            .name(format!("CPU {}/KVM", local_cpu.id))
+            .name(format!("CPU {}/{:?}", local_cpu.id, hyp_type))
             .spawn(move || {
                 if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
                     error!(
@@ -344,7 +364,13 @@ impl CPUInterface for CPU {
                     );
                 }
             })
-            .with_context(|| format!("Failed to create thread for CPU {}/KVM", local_cpu.id()))?;
+            .with_context(|| {
+                format!(
+                    "Failed to create thread for CPU {}/{:?}",
+                    local_cpu.id(),
+                    hyp_type
+                )
+            })?;
         local_cpu.set_task(Some(handle));
         Ok(())
     }

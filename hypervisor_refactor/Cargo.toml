@@ -14,6 +14,7 @@ libc = "0.2"
 log = "0.4"
 vmm-sys-util = "0.11.1"
 address_space = { path = "../address_space" }
+cpu = { path = "../cpu" }
 devices = { path = "../devices" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }

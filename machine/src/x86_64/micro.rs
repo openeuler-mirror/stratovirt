@@ -179,8 +179,10 @@ impl MachineOps for LightMachine {
             None
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             vm_config.machine_config.nr_cpus,
             vm_config.machine_config.max_cpus,
             &topology,

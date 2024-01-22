@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-use kvm_ioctls::{Kvm, VmFd};
+use kvm_ioctls::{Cap, Kvm, VmFd};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use self::listener::KvmMemoryListener;
@@ -37,12 +37,16 @@ use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
 use crate::HypervisorError;
 use address_space::{AddressSpace, Listener};
+use cpu::CPUHypervisorOps;
 #[cfg(target_arch = "aarch64")]
 use devices::{
     GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
 };
 use interrupt::IrqRouteTable;
-use machine_manager::config::{MachineType, VmConfig};
+use machine_manager::{
+    config::{MachineType, VmConfig},
+    machine::HypervisorType,
+};
 #[cfg(target_arch = "aarch64")]
 use migration::{
     snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
@@ -202,6 +206,13 @@ impl HypervisorOps for KvmHypervisor {
 
         Ok(())
     }
+
+    fn create_hypervisor_cpu(
+        &self,
+        _vcpu_id: u8,
+    ) -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>> {
+        Ok(Arc::new(KvmCpu::new()))
+    }
 }
 
 impl MigrateOps for KvmHypervisor {
@@ -276,5 +287,28 @@ impl MigrateOps for KvmHypervisor {
         }
 
         Ok(())
+    }
+}
+
+pub struct KvmCpu {}
+
+impl KvmCpu {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl CPUHypervisorOps for KvmCpu {
+    fn get_hypervisor_type(&self) -> HypervisorType {
+        HypervisorType::Kvm
+    }
+
+    fn check_extension(&self, cap: Cap) -> bool {
+        let kvm = Kvm::new().unwrap();
+        kvm.check_extension(cap)
+    }
+
+    fn get_msr_index_list(&self) -> Vec<u32> {
+        self.arch_get_msr_index_list()
     }
 }

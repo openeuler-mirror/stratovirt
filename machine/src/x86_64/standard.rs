@@ -347,9 +347,11 @@ impl StdMachineOps for StdMachine {
             let boot_cfg = locked_controller.get_boot_config();
             let topology = locked_controller.get_topology_config();
 
+            let hypervisor = clone_vm.lock().unwrap().base.hypervisor.clone();
             let vcpu = <StdMachine as MachineOps>::create_vcpu(
                 vcpu_id,
                 clone_vm,
+                hypervisor,
                 self.base.cpu_topo.max_cpus,
             )?;
             vcpu.realize(boot_cfg, topology).with_context(|| {
@@ -546,8 +548,11 @@ impl MachineOps for StdMachine {
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
+
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             nr_cpus,
             max_cpus,
             &topology,
