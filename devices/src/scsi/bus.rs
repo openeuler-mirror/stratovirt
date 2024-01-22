@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, info};
+use log::info;
 
 use crate::ScsiDisk::{
     ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
@@ -399,17 +399,14 @@ impl ScsiBus {
         for (id, device) in self.devices.iter() {
             let (target_id, lun_id) = id;
             if *target_id == target {
-                debug!(
-                    "Target request, target {}, requested lun {}, found lun {}",
-                    target_id, lun, lun_id
-                );
+                trace::scsi_bus_get_device(*target_id, lun, *lun_id);
                 return Some((*device).clone());
             }
         }
 
         // No lun found in requested target. It seems there is no such target requested in
         // CDB's LUNS bytes.
-        debug!("Can't find scsi device target {} lun {}", target, lun);
+        trace::scsi_bus_get_no_device(target, lun);
         None
     }
 }
@@ -665,7 +662,7 @@ impl ScsiRequest {
     }
 
     pub fn emulate_execute(mut self) -> Result<Arc<Mutex<ScsiRequest>>> {
-        debug!("emulate scsi command is {:#x}", self.cmd.op);
+        trace::scsi_emulate_execute(self.cmd.op);
         let mut not_supported_flag = false;
         let mut sense = None;
         let mut status = GOOD;
@@ -686,14 +683,11 @@ impl ScsiRequest {
             }
             Err(ref e) => {
                 if not_supported_flag {
-                    debug!("emulation scsi command {:#x} is not supported", self.cmd.op);
+                    trace::scsi_emulate_execute_error(self.cmd.op, &"not supported");
                     status = CHECK_CONDITION;
                     sense = Some(SCSI_SENSE_INVALID_OPCODE);
                 } else {
-                    debug!(
-                        "Error in processing scsi command {:#x}, err is {:?}",
-                        self.cmd.op, e
-                    );
+                    trace::scsi_emulate_execute_error(self.cmd.op, e);
                     status = CHECK_CONDITION;
                     sense = Some(SCSI_SENSE_INVALID_FIELD);
                 }
@@ -728,14 +722,7 @@ fn outbuf_to_iov(command: u8, outbuf: &[u8], iovec: &[Iovec]) -> Result<()> {
             return Ok(());
         }
 
-        debug!(
-            "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}",
-            command,
-            outbuf.len(),
-            iov.iov_len,
-            idx,
-            iovec.len()
-        );
+        trace::scsi_outbuf_to_iov(command, outbuf.len(), iov.iov_len, idx, iovec.len());
 
         start += write_buf_mem(&outbuf[start..], iov.iov_len, iov.iov_base)
             .with_context(|| "Failed to write buf for scsi command result iov")?;
@@ -1173,13 +1160,12 @@ fn scsi_command_emulate_mode_sense(
     let block_size = dev_lock.block_size;
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
 
-    debug!(
-        "MODE SENSE page_code {:x}, page_control {:x}, subpage {:x}, dbd bit {:x}, Allocation length {}",
+    trace::scsi_emulate_mode_sense(
         page_code,
         page_control,
         cmd.buf[3],
         cmd.buf[1] & 0x8,
-        cmd.buf[4]
+        cmd.buf[4],
     );
 
     // Device specific paramteter field for direct access block devices:

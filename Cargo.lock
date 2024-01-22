@@ -354,6 +354,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "v4l2-sys-mit",
