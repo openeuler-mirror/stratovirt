@@ -20,7 +20,7 @@ use crate::thread_pool::ThreadPool;
 pub struct ThreadsAioContext {
     _pool: Arc<ThreadPool>,
     _events: Vec<AioEvent>,
-    _complete_list: Arc<Mutex<Vec<AioEvent>>>,
+    pub complete_list: Arc<Mutex<Vec<AioEvent>>>,
     _notify_event: Arc<Mutex<EventFd>>,
 }
 
@@ -28,7 +28,7 @@ impl ThreadsAioContext {
     pub fn new(max_size: u32, eventfd: &EventFd, thread_pool: Arc<ThreadPool>) -> Self {
         Self {
             _pool: thread_pool,
-            _complete_list: Arc::new(Mutex::new(Vec::new())),
+            complete_list: Arc::new(Mutex::new(Vec::new())),
             _notify_event: Arc::new(Mutex::new((*eventfd).try_clone().unwrap())),
             _events: Vec::with_capacity(max_size as usize),
         }
