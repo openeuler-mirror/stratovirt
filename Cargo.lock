@@ -741,6 +741,7 @@ version = "2.3.0"
 dependencies = [
  "address_space",
  "anyhow",
+ "cpu",
  "devices",
  "kvm-bindings",
  "kvm-ioctls",

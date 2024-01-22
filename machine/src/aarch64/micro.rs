@@ -172,9 +172,11 @@ impl MachineOps for LightMachine {
             (None, None)
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         // vCPUs init,and apply CPU features (for aarch64)
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             vm_config.machine_config.nr_cpus,
             &topology,
             &boot_config,

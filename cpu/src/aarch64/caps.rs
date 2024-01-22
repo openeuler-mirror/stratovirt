@@ -10,13 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
 use kvm_bindings::{
     KVM_REG_ARM_COPROC_MASK, KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_U32,
     KVM_REG_SIZE_U64,
 };
-use kvm_ioctls::{Cap, Kvm, VcpuFd};
+use kvm_ioctls::{Cap, VcpuFd};
 
 use super::core_regs::Result;
+use crate::CPUHypervisorOps;
 use machine_manager::config::{CpuConfig, PmuConfig};
 
 // Capabilities for ARM cpu.
@@ -32,16 +35,14 @@ pub struct ArmCPUCaps {
 
 impl ArmCPUCaps {
     /// Initialize ArmCPUCaps instance.
-    pub fn init_capabilities() -> Self {
-        let kvm = Kvm::new().unwrap();
-
+    pub fn init_capabilities(hypervisor_cpu: Arc<dyn CPUHypervisorOps>) -> Self {
         ArmCPUCaps {
-            irq_chip: kvm.check_extension(Cap::Irqchip),
-            ioevent_fd: kvm.check_extension(Cap::Ioeventfd),
-            irq_fd: kvm.check_extension(Cap::Irqfd),
-            user_mem: kvm.check_extension(Cap::UserMemory),
-            psci02: kvm.check_extension(Cap::ArmPsci02),
-            mp_state: kvm.check_extension(Cap::MpState),
+            irq_chip: hypervisor_cpu.check_extension(Cap::Irqchip),
+            ioevent_fd: hypervisor_cpu.check_extension(Cap::Ioeventfd),
+            irq_fd: hypervisor_cpu.check_extension(Cap::Irqfd),
+            user_mem: hypervisor_cpu.check_extension(Cap::UserMemory),
+            psci02: hypervisor_cpu.check_extension(Cap::ArmPsci02),
+            mp_state: hypervisor_cpu.check_extension(Cap::MpState),
         }
     }
 }

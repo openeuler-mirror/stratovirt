@@ -23,6 +23,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use address_space::AddressSpace;
+use cpu::CPUHypervisorOps;
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, InterruptController};
 use machine_manager::config::VmConfig;
@@ -48,4 +49,7 @@ pub trait HypervisorOps: Send + Sync + Any {
 
     #[cfg(target_arch = "x86_64")]
     fn create_interrupt_controller(&mut self, vm_config: &VmConfig) -> Result<()>;
+
+    fn create_hypervisor_cpu(&self, vcpu_id: u8)
+        -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>>;
 }

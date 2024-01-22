@@ -14,9 +14,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use kvm_bindings::*;
+use kvm_ioctls::Kvm;
 
 use crate::kvm::listener::KvmIoListener;
-use crate::kvm::KvmHypervisor;
+use crate::kvm::{KvmCpu, KvmHypervisor};
 use crate::HypervisorError;
 use address_space::Listener;
 
@@ -46,5 +47,12 @@ impl KvmHypervisor {
 
     pub fn create_io_listener(&self) -> Arc<Mutex<dyn Listener>> {
         Arc::new(Mutex::new(KvmIoListener::new(self.vm_fd.clone())))
+    }
+}
+
+impl KvmCpu {
+    pub fn arch_get_msr_index_list(&self) -> Vec<u32> {
+        let kvm = Kvm::new().unwrap();
+        kvm.get_msr_index_list().unwrap().as_slice().to_vec()
     }
 }

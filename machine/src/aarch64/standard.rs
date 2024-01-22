@@ -574,8 +574,10 @@ impl MachineOps for StdMachine {
             None
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             nr_cpus,
             &CPUTopology::new(),
             &boot_config,
