@@ -212,8 +212,8 @@ impl StdMachine {
             if cpu_index == 0 {
                 fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
             }
-            cpu.fd()
-                .vcpu_init(&cpu.arch().lock().unwrap().kvi())
+            cpu.hypervisor_cpu()
+                .vcpu_init()
                 .with_context(|| "Failed to init vcpu fd")?;
         }
 

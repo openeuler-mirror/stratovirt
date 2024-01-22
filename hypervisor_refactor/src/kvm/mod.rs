@@ -19,6 +19,8 @@ mod interrupt;
 mod listener;
 
 #[cfg(target_arch = "aarch64")]
+pub use self::aarch64::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv2::KvmGICv2;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
@@ -29,7 +31,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-
 use kvm_ioctls::{Cap, Kvm, VcpuFd, VmFd};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
@@ -38,7 +39,9 @@ use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
 use crate::HypervisorError;
 use address_space::{AddressSpace, Listener};
-use cpu::CPUHypervisorOps;
+#[cfg(target_arch = "aarch64")]
+use cpu::CPUFeatures;
+use cpu::{ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, RegsIndex, CPU};
 #[cfg(target_arch = "aarch64")]
 use devices::{
     GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
@@ -220,7 +223,11 @@ impl HypervisorOps for KvmHypervisor {
         _vcpu_id: u8,
         vcpu_fd: Arc<VcpuFd>,
     ) -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>> {
-        Ok(Arc::new(KvmCpu::new(vcpu_fd)))
+        Ok(Arc::new(KvmCpu::new(
+            #[cfg(target_arch = "aarch64")]
+            self.vm_fd.clone(),
+            vcpu_fd,
+        )))
     }
 }
 
@@ -300,12 +307,26 @@ impl MigrateOps for KvmHypervisor {
 }
 
 pub struct KvmCpu {
+    #[cfg(target_arch = "aarch64")]
+    vm_fd: Option<Arc<VmFd>>,
     fd: Arc<VcpuFd>,
+    #[cfg(target_arch = "aarch64")]
+    /// Used to pass vcpu target and supported features to kvm.
+    pub kvi: Mutex<kvm_vcpu_init>,
 }
 
 impl KvmCpu {
-    pub fn new(vcpu_fd: Arc<VcpuFd>) -> Self {
-        Self { fd: vcpu_fd }
+    pub fn new(
+        #[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>,
+        vcpu_fd: Arc<VcpuFd>,
+    ) -> Self {
+        Self {
+            #[cfg(target_arch = "aarch64")]
+            vm_fd,
+            fd: vcpu_fd,
+            #[cfg(target_arch = "aarch64")]
+            kvi: Mutex::new(kvm_vcpu_init::default()),
+        }
     }
 }
 
@@ -325,5 +346,44 @@ impl CPUHypervisorOps for KvmCpu {
 
     fn init_pmu(&self) -> Result<()> {
         self.arch_init_pmu()
+    }
+
+    fn vcpu_init(&self) -> Result<()> {
+        self.arch_vcpu_init()
+    }
+
+    fn set_boot_config(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        boot_config: &CPUBootConfig,
+        #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
+    ) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        return self.arch_set_boot_config(arch_cpu, boot_config, vcpu_config);
+        #[cfg(target_arch = "x86_64")]
+        return self.arch_set_boot_config(arch_cpu, boot_config);
+    }
+
+    fn get_one_reg(&self, reg_id: u64) -> Result<u128> {
+        self.arch_get_one_reg(reg_id)
+    }
+
+    fn get_regs(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        regs_index: RegsIndex,
+        caps: &CPUCaps,
+    ) -> Result<()> {
+        self.arch_get_regs(arch_cpu, regs_index, caps)
+    }
+
+    fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()> {
+        self.arch_set_regs(arch_cpu, regs_index)
+    }
+
+    fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+        self.arch_reset_vcpu(cpu)?;
+
+        Ok(())
     }
 }
