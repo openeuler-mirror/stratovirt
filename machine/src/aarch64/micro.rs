@@ -19,7 +19,6 @@ use crate::{LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
 use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
-use hypervisor::kvm::*;
 use hypervisor_refactor::kvm::aarch64::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};

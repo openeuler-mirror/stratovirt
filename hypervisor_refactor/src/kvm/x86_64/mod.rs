@@ -15,11 +15,31 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use kvm_bindings::*;
 use kvm_ioctls::Kvm;
+use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use crate::kvm::listener::KvmIoListener;
 use crate::kvm::{KvmCpu, KvmHypervisor};
 use crate::HypervisorError;
 use address_space::Listener;
+
+// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
+ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
+ioctl_iow_nr!(KVM_SET_CPUID2, KVMIO, 0x90, kvm_cpuid2);
+ioctl_iow_nr!(KVM_SET_MP_STATE, KVMIO, 0x99, kvm_mp_state);
+ioctl_iow_nr!(KVM_SET_SREGS, KVMIO, 0x84, kvm_sregs);
+ioctl_iow_nr!(KVM_SET_REGS, KVMIO, 0x82, kvm_regs);
+ioctl_iow_nr!(KVM_SET_XSAVE, KVMIO, 0xa5, kvm_xsave);
+ioctl_iow_nr!(KVM_SET_XCRS, KVMIO, 0xa7, kvm_xcrs);
+ioctl_iow_nr!(KVM_SET_DEBUGREGS, KVMIO, 0xa2, kvm_debugregs);
+ioctl_iow_nr!(KVM_SET_LAPIC, KVMIO, 0x8f, kvm_lapic_state);
+ioctl_iow_nr!(KVM_SET_MSRS, KVMIO, 0x89, kvm_msrs);
+ioctl_iow_nr!(KVM_SET_VCPU_EVENTS, KVMIO, 0xa0, kvm_vcpu_events);
+ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
+ioctl_ior_nr!(KVM_GET_XSAVE, KVMIO, 0xa4, kvm_xsave);
+ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
+ioctl_ior_nr!(KVM_GET_DEBUGREGS, KVMIO, 0xa1, kvm_debugregs);
+ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
+ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
 
 impl KvmHypervisor {
     pub fn arch_init(&self) -> Result<()> {

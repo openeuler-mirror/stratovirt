@@ -41,6 +41,8 @@ use devices::legacy::{
 };
 use devices::pci::{PciDevOps, PciHost};
 use hypervisor::kvm::*;
+use hypervisor_refactor::kvm::x86_64::*;
+use hypervisor_refactor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
