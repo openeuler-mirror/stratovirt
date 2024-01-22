@@ -28,8 +28,6 @@ use acpi::{
 use address_space::GuestAddress;
 use chardev_backend::chardev::{Chardev, InputReceiver};
 use hypervisor::kvm::KVM_FDS;
-#[cfg(target_arch = "aarch64")]
-use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
 use migration::{
     snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
@@ -138,7 +136,6 @@ impl Serial {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
     ) -> Result<()> {
         self.chardev
             .lock()
@@ -157,11 +154,6 @@ impl Serial {
             dev.clone(),
             SERIAL_SNAPSHOT_ID,
         );
-        #[cfg(target_arch = "aarch64")]
-        bs.lock().unwrap().kernel_cmdline.push(Param {
-            param_type: "earlycon".to_string(),
-            value: format!("uart,mmio,0x{:08x}", region_base),
-        });
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
