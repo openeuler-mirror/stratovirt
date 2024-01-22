@@ -1696,7 +1696,6 @@ impl MigrationHook for Net {}
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
     pub use super::*;
 
     #[test]

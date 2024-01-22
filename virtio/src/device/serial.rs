@@ -941,7 +941,6 @@ impl ChardevNotifyDevice for SerialPort {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
     pub use super::*;
 
     use machine_manager::config::PciBdf;
