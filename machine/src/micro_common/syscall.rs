@@ -14,7 +14,6 @@
 use crate::aarch64::micro::{arch_ioctl_allow_list, arch_syscall_whitelist};
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::micro::{arch_ioctl_allow_list, arch_syscall_whitelist};
-use hypervisor::kvm::*;
 use hypervisor_refactor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETQUEUE, TUNSETVNETHDRSZ};

@@ -23,9 +23,7 @@ use kvm_bindings::*;
 use kvm_ioctls::{Kvm, VmFd};
 use log::error;
 use once_cell::sync::Lazy;
-use vmm_sys_util::{
-    eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
-};
+use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use interrupt::{IrqRoute, IrqRouteEntry, IrqRouteTable};
 
@@ -35,56 +33,7 @@ pub const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
 ioctl_iow_nr!(KVM_IRQFD, KVMIO, 0x76, kvm_irqfd);
-ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
-ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
-ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
-#[cfg(target_arch = "x86_64")]
-ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_CPUID2, KVMIO, 0x90, kvm_cpuid2);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_MP_STATE, KVMIO, 0x99, kvm_mp_state);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_SREGS, KVMIO, 0x84, kvm_sregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_REGS, KVMIO, 0x82, kvm_regs);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_XSAVE, KVMIO, 0xa5, kvm_xsave);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_XCRS, KVMIO, 0xa7, kvm_xcrs);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_DEBUGREGS, KVMIO, 0xa2, kvm_debugregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_LAPIC, KVMIO, 0x8f, kvm_lapic_state);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_MSRS, KVMIO, 0x89, kvm_msrs);
-#[cfg(target_arch = "x86_64")]
-ioctl_iow_nr!(KVM_SET_VCPU_EVENTS, KVMIO, 0xa0, kvm_vcpu_events);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
-ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
 ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
-ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
-ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_XSAVE, KVMIO, 0xa4, kvm_xsave);
-ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_DEBUGREGS, KVMIO, 0xa1, kvm_debugregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
-#[cfg(target_arch = "x86_64")]
-ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
-#[cfg(target_arch = "aarch64")]
-ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_ARM_VCPU_INIT, KVMIO, 0xae, kvm_vcpu_init);
 ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 
 #[allow(clippy::upper_case_acronyms)]

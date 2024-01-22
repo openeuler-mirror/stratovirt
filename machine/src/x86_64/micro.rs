@@ -22,6 +22,8 @@ use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
 use devices::legacy::FwCfgOps;
 use hypervisor::kvm::*;
+use hypervisor_refactor::kvm::x86_64::*;
+use hypervisor_refactor::kvm::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::seccomp::{BpfRule, SeccompCmpOpt};

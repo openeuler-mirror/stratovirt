@@ -30,7 +30,7 @@ use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
 use kvm_ioctls::{Cap, Kvm, VmFd};
-use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
+use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
@@ -62,6 +62,13 @@ pub const KVM_IOEVENTFD: u32 = 0x4040_ae79;
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
 ioctl_iowr_nr!(KVM_CREATE_DEVICE, KVMIO, 0xe0, kvm_create_device);
+ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
+ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
+ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
+ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
+ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
+ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
+ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]

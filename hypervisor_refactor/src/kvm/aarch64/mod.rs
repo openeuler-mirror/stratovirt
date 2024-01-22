@@ -16,11 +16,15 @@ pub mod gicv3;
 use anyhow::{Context, Result};
 use kvm_bindings::*;
 use kvm_ioctls::DeviceFd;
-use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr};
+use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use crate::kvm::{KvmCpu, KvmHypervisor};
 
 ioctl_iow_nr!(KVM_GET_DEVICE_ATTR, KVMIO, 0xe2, kvm_device_attr);
+ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
+ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
+ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
+ioctl_iow_nr!(KVM_ARM_VCPU_INIT, KVMIO, 0xae, kvm_vcpu_init);
 
 /// A wrapper for kvm_based device check and access.
 pub struct KvmDevice;
