@@ -74,7 +74,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use kvm_ioctls::{Cap, VcpuFd};
+use kvm_ioctls::Cap;
 use log::{error, info, warn};
 use nix::unistd::gettid;
 use vmm_sys_util::signal::Killable;
@@ -212,8 +212,6 @@ pub trait CPUHypervisorOps: Send + Sync {
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
     pub id: u8,
-    /// The file descriptor of this kvm-based VCPU.
-    fd: Arc<VcpuFd>,
     /// Architecture special CPU property.
     pub arch_cpu: Arc<Mutex<ArchCPU>>,
     /// LifeCycle state of kvm-based VCPU.
@@ -245,14 +243,12 @@ impl CPU {
     /// * `vm` - The virtual machine this `CPU` gets attached to.
     pub fn new(
         hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
-        vcpu_fd: Arc<VcpuFd>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
     ) -> Self {
         CPU {
             id,
-            fd: vcpu_fd,
             arch_cpu,
             state: Arc::new((Mutex::new(CpuLifecycleState::Created), Condvar::new())),
             task: Arc::new(Mutex::new(None)),
@@ -272,11 +268,6 @@ impl CPU {
     /// Get this `CPU`'s ID.
     pub fn id(&self) -> u8 {
         self.id
-    }
-
-    /// Get this `CPU`'s file descriptor.
-    pub fn fd(&self) -> &Arc<VcpuFd> {
-        &self.fd
     }
 
     /// Get this `CPU`'s state.

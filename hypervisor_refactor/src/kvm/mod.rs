@@ -234,9 +234,14 @@ impl HypervisorOps for KvmHypervisor {
 
     fn create_hypervisor_cpu(
         &self,
-        _vcpu_id: u8,
-        vcpu_fd: Arc<VcpuFd>,
+        vcpu_id: u8,
     ) -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>> {
+        let vcpu_fd = self
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_vcpu(vcpu_id as u64)
+            .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
             #[cfg(target_arch = "aarch64")]
             self.vm_fd.clone(),
@@ -330,14 +335,11 @@ pub struct KvmCpu {
 }
 
 impl KvmCpu {
-    pub fn new(
-        #[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>,
-        vcpu_fd: Arc<VcpuFd>,
-    ) -> Self {
+    pub fn new(#[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>, vcpu_fd: VcpuFd) -> Self {
         Self {
             #[cfg(target_arch = "aarch64")]
             vm_fd,
-            fd: vcpu_fd,
+            fd: Arc::new(vcpu_fd),
             #[cfg(target_arch = "aarch64")]
             kvi: Mutex::new(kvm_vcpu_init::default()),
         }
@@ -606,7 +608,6 @@ mod test {
 
     #[cfg(target_arch = "x86_64")]
     use cpu::{ArchCPU, CPUBootConfig, CPUCaps};
-    use hypervisor::kvm::KVM_FDS;
     use machine_manager::machine::{
         MachineAddressInterface, MachineInterface, MachineLifecycle, VmState,
     };
@@ -733,22 +734,14 @@ mod test {
         // you need to create a irq_chip for VM before creating the VCPU.
         let vm_fd = kvm_hyp.vm_fd.as_ref().unwrap();
         vm_fd.create_irq_chip().unwrap();
-        let vcpu_fd = Arc::new(
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .create_vcpu(0)
-                .unwrap(),
-        );
+        let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
-            vcpu_fd.clone(),
+            vcpu_fd,
         ));
         let x86_cpu = Arc::new(Mutex::new(ArchCPU::new(0, 1)));
-        let cpu = CPU::new(hypervisor_cpu.clone(), vcpu_fd, 0, x86_cpu, vm.clone());
+        let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm.clone());
         // test `set_boot_config` function
         assert!(hypervisor_cpu
             .set_boot_config(cpu.arch().clone(), &cpu_config)
@@ -797,25 +790,16 @@ mod test {
             return;
         }
 
-        let vcpu_fd = Arc::new(
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .create_vcpu(0)
-                .unwrap(),
-        );
+        let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
-            vcpu_fd.clone(),
+            vcpu_fd,
         ));
 
         let vm = Arc::new(Mutex::new(TestVm::new()));
         let cpu = CPU::new(
             hypervisor_cpu.clone(),
-            vcpu_fd.clone(),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
             vm.clone(),
