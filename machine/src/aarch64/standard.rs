@@ -214,7 +214,7 @@ impl StdMachine {
             }
             cpu.hypervisor_cpu()
                 .vcpu_init()
-                .with_context(|| "Failed to init vcpu fd")?;
+                .with_context(|| "Failed to init vcpu")?;
         }
 
         locked_vm
@@ -316,7 +316,7 @@ impl StdMachine {
                 self.pause();
             }
 
-            let value = match vcpu.fd().get_one_reg(addr) {
+            let value = match vcpu.hypervisor_cpu.get_one_reg(addr) {
                 Ok(value) => Some(value),
                 _ => None,
             };
