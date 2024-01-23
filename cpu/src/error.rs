@@ -20,23 +20,23 @@ pub enum CpuError {
         source: vmm_sys_util::errno::Error,
     },
 
-    #[error("Failed to create kvm vcpu: {0}!")]
+    #[error("Failed to create vcpu: {0}!")]
     CreateVcpu(String),
-    #[error("Failed to configure kvm vcpu: {0}!")]
+    #[error("Failed to configure vcpu: {0}!")]
     RealizeVcpu(String),
-    #[error("Failed to starting kvm vcpu: {0}!")]
+    #[error("Failed to starting vcpu: {0}!")]
     StartVcpu(String),
-    #[error("Failed to stopping kvm vcpu: {0}!")]
+    #[error("Failed to stopping vcpu: {0}!")]
     StopVcpu(String),
-    #[error("Failed to kick kvm vcpu: {0}!")]
+    #[error("Failed to kick vcpu: {0}!")]
     KickVcpu(String),
-    #[error("Failed to destroy kvm vcpu: {0}!")]
+    #[error("Failed to destroy vcpu: {0}!")]
     DestroyVcpu(String),
-    #[error("CPU {0}/KVM halted!")]
+    #[error("CPU {0} halted!")]
     VcpuHltEvent(u8),
-    #[error("CPU {0}/KVM received an unexpected exit reason: {1}!")]
+    #[error("CPU {0} received an unexpected exit reason: {1}!")]
     VcpuExitReason(u8, String),
-    #[error("CPU {0}/KVM received an unhandled kvm exit event: error {1}!")]
+    #[error("CPU {0} received an unhandled exit event: error {1}!")]
     UnhandledHypervisorExit(u8, i32),
     #[error("Vcpu not present in local thread.")]
     VcpuLocalThreadNotPresent,

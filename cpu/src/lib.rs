@@ -134,7 +134,7 @@ pub trait CPUInterface {
         #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
     ) -> Result<()>;
 
-    /// Start `CPU` thread and run virtual CPU in kvm.
+    /// Start `CPU` thread and run virtual CPU in hypervisor.
     ///
     /// # Arguments
     ///
@@ -145,7 +145,7 @@ pub trait CPUInterface {
     where
         Self: std::marker::Sized;
 
-    /// Kick `CPU` to exit kvm emulation.
+    /// Kick `CPU` to exit hypervisor emulation.
     fn kick(&self) -> Result<()>;
 
     /// Make `CPU` lifecycle from `Running` to `Paused`.
@@ -207,14 +207,14 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn kick(&self) -> Result<()>;
 }
 
-/// `CPU` is a wrapper around creating and using a kvm-based VCPU.
+/// `CPU` is a wrapper around creating and using a hypervisor-based VCPU.
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
     pub id: u8,
     /// Architecture special CPU property.
     pub arch_cpu: Arc<Mutex<ArchCPU>>,
-    /// LifeCycle state of kvm-based VCPU.
+    /// LifeCycle state of hypervisor-based VCPU.
     pub state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
     /// The thread handler of this virtual CPU.
     task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
@@ -226,7 +226,7 @@ pub struct CPU {
     pub caps: CPUCaps,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
-    /// Sync the pause state of vCPU in kvm and userspace.
+    /// Sync the pause state of vCPU in hypervisor and userspace.
     pause_signal: Arc<AtomicBool>,
     /// Interact between the vCPU and hypervisor.
     pub hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
@@ -443,7 +443,7 @@ impl CPUInterface for CPU {
             }
         }
 
-        // It shall wait for the vCPU pause state from kvm exits.
+        // It shall wait for the vCPU pause state from hypervisor exits.
         loop {
             if self.pause_signal.load(Ordering::SeqCst) {
                 break;
@@ -560,7 +560,7 @@ impl CPUThreadWorker {
         })
     }
 
-    /// Judge whether the kvm vcpu is ready to emulate.
+    /// Judge whether the hypervisor vcpu is ready to emulate.
     pub fn ready_for_running(&self) -> Result<bool> {
         let mut flag = 0_u32;
         let (cpu_state_locked, cvar) = &*self.thread_cpu.state;
