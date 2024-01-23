@@ -37,7 +37,7 @@ pub enum CpuError {
     #[error("CPU {0}/KVM received an unexpected exit reason: {1}!")]
     VcpuExitReason(u8, String),
     #[error("CPU {0}/KVM received an unhandled kvm exit event: error {1}!")]
-    UnhandledKvmExit(u8, i32),
+    UnhandledHypervisorExit(u8, i32),
     #[error("Vcpu not present in local thread.")]
     VcpuLocalThreadNotPresent,
     #[error("No Machine Interface saved in CPU")]

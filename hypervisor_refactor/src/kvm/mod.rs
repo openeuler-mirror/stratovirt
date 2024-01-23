@@ -26,22 +26,35 @@ pub use aarch64::gicv2::KvmGICv2;
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{fence, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-use kvm_ioctls::{Cap, Kvm, VcpuFd, VmFd};
-use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
+use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd, VmFd};
+use libc::{c_int, c_void, siginfo_t};
+use log::{error, info};
+use vmm_sys_util::{
+    ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+    signal::register_signal_handler,
+};
 
 use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
 use crate::HypervisorError;
 use address_space::{AddressSpace, Listener};
+#[cfg(feature = "boot_time")]
+use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
-use cpu::{ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, RegsIndex, CPU};
+use cpu::{
+    ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
+    CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
+};
 #[cfg(target_arch = "aarch64")]
 use devices::{
     GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
@@ -57,6 +70,7 @@ use migration::{
     MigrationManager,
 };
 use migration::{MigrateMemSlot, MigrateOps};
+use util::test_helper::is_test_enabled;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -328,6 +342,138 @@ impl KvmCpu {
             kvi: Mutex::new(kvm_vcpu_init::default()),
         }
     }
+
+    /// Init signal for `CPU` event.
+    fn init_signals(&self) -> Result<()> {
+        extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
+            match signum {
+                VCPU_TASK_SIGNAL => {
+                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                        vcpu.hypervisor_cpu().kick().unwrap();
+                        // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
+                        vcpu.pause_signal().store(true, Ordering::SeqCst);
+                        fence(Ordering::Release)
+                    });
+                }
+                VCPU_RESET_SIGNAL => {
+                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                        if let Err(e) = vcpu.hypervisor_cpu().reset_vcpu(vcpu.clone()) {
+                            error!("Failed to reset vcpu state: {:?}", e)
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
+            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
+        register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
+            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
+
+        Ok(())
+    }
+
+    fn kvm_vcpu_exec(&self, cpu: Arc<CPU>) -> Result<bool> {
+        let vm = cpu
+            .vm()
+            .upgrade()
+            .with_context(|| CpuError::NoMachineInterface)?;
+
+        match self.fd.run() {
+            Ok(run) => match run {
+                #[cfg(target_arch = "x86_64")]
+                VcpuExit::IoIn(addr, data) => {
+                    vm.lock().unwrap().pio_in(u64::from(addr), data);
+                }
+                #[cfg(target_arch = "x86_64")]
+                VcpuExit::IoOut(addr, data) => {
+                    #[cfg(feature = "boot_time")]
+                    capture_boot_signal(addr as u64, data);
+
+                    vm.lock().unwrap().pio_out(u64::from(addr), data);
+                }
+                VcpuExit::MmioRead(addr, data) => {
+                    vm.lock().unwrap().mmio_read(addr, data);
+                }
+                VcpuExit::MmioWrite(addr, data) => {
+                    #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+                    capture_boot_signal(addr, data);
+
+                    vm.lock().unwrap().mmio_write(addr, data);
+                }
+                #[cfg(target_arch = "x86_64")]
+                VcpuExit::Hlt => {
+                    info!("Vcpu{} received KVM_EXIT_HLT signal", cpu.id);
+                    return Err(anyhow!(CpuError::VcpuHltEvent(cpu.id)));
+                }
+                #[cfg(target_arch = "x86_64")]
+                VcpuExit::Shutdown => {
+                    info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", cpu.id);
+                    cpu.guest_shutdown()?;
+
+                    return Ok(false);
+                }
+                #[cfg(target_arch = "aarch64")]
+                VcpuExit::SystemEvent(event, flags) => {
+                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
+                        info!(
+                            "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
+                            cpu.id()
+                        );
+                        cpu.guest_shutdown()
+                            .with_context(|| "Some error occurred in guest shutdown")?;
+                        return Ok(true);
+                    } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
+                        info!("Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal", cpu.id());
+                        cpu.guest_reset()
+                            .with_context(|| "Some error occurred in guest reset")?;
+                        return Ok(true);
+                    } else {
+                        error!(
+                            "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
+                            cpu.id(),
+                            event,
+                            flags
+                        );
+                    }
+                    return Ok(false);
+                }
+                VcpuExit::FailEntry(reason, cpuid) => {
+                    info!(
+                        "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
+                        cpuid, reason
+                    );
+                    return Ok(false);
+                }
+                VcpuExit::InternalError => {
+                    info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", cpu.id());
+                    return Ok(false);
+                }
+                r => {
+                    return Err(anyhow!(CpuError::VcpuExitReason(
+                        cpu.id(),
+                        format!("{:?}", r)
+                    )));
+                }
+            },
+            Err(ref e) => {
+                match e.errno() {
+                    libc::EAGAIN => {}
+                    libc::EINTR => {
+                        self.fd.set_kvm_immediate_exit(0);
+                    }
+                    _ => {
+                        return Err(anyhow!(CpuError::UnhandledHypervisorExit(
+                            cpu.id(),
+                            e.errno()
+                        )));
+                    }
+                };
+            }
+        }
+        Ok(true)
+    }
 }
 
 impl CPUHypervisorOps for KvmCpu {
@@ -385,5 +531,354 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_reset_vcpu(cpu)?;
 
         Ok(())
+    }
+
+    fn vcpu_exec(
+        &self,
+        cpu_thread_worker: CPUThreadWorker,
+        thread_barrier: Arc<Barrier>,
+    ) -> Result<()> {
+        cpu_thread_worker.init_local_thread_vcpu();
+        if let Err(e) = self.init_signals() {
+            error!(
+                "Failed to init cpu{} signal:{:?}",
+                cpu_thread_worker.thread_cpu.id, e
+            );
+        }
+
+        cpu_thread_worker.thread_cpu.set_tid();
+
+        #[cfg(not(test))]
+        self.reset_vcpu(cpu_thread_worker.thread_cpu.clone())?;
+
+        // Wait for all vcpu to complete the running
+        // environment initialization.
+        thread_barrier.wait();
+
+        info!("vcpu{} start running", cpu_thread_worker.thread_cpu.id);
+        while let Ok(true) = cpu_thread_worker.ready_for_running() {
+            #[cfg(not(test))]
+            {
+                if is_test_enabled() {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                if !self
+                    .kvm_vcpu_exec(cpu_thread_worker.thread_cpu.clone())
+                    .with_context(|| {
+                        format!(
+                            "VCPU {}/KVM emulate error!",
+                            cpu_thread_worker.thread_cpu.id()
+                        )
+                    })?
+                {
+                    break;
+                }
+            }
+            #[cfg(test)]
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        // The vcpu thread is about to exit, marking the state
+        // of the CPU state as Stopped.
+        let (cpu_state, cvar) = &*cpu_thread_worker.thread_cpu.state;
+        *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        cvar.notify_one();
+
+        Ok(())
+    }
+
+    fn kick(&self) -> Result<()> {
+        self.fd.set_kvm_immediate_exit(1);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[cfg(target_arch = "x86_64")]
+    use kvm_bindings::kvm_segment;
+
+    #[cfg(target_arch = "x86_64")]
+    use cpu::{ArchCPU, CPUBootConfig, CPUCaps};
+    use hypervisor::kvm::KVM_FDS;
+    use machine_manager::machine::{
+        MachineAddressInterface, MachineInterface, MachineLifecycle, VmState,
+    };
+
+    use super::*;
+
+    struct TestVm {
+        #[cfg(target_arch = "x86_64")]
+        pio_in: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        #[cfg(target_arch = "x86_64")]
+        pio_out: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_read: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_write: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    }
+
+    impl TestVm {
+        fn new() -> Self {
+            TestVm {
+                #[cfg(target_arch = "x86_64")]
+                pio_in: Arc::new(Mutex::new(Vec::new())),
+                #[cfg(target_arch = "x86_64")]
+                pio_out: Arc::new(Mutex::new(Vec::new())),
+                mmio_read: Arc::new(Mutex::new(Vec::new())),
+                mmio_write: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl MachineLifecycle for TestVm {
+        fn notify_lifecycle(&self, _old: VmState, _new: VmState) -> bool {
+            true
+        }
+    }
+
+    impl MachineAddressInterface for TestVm {
+        #[cfg(target_arch = "x86_64")]
+        fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+            self.pio_in.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
+            self.pio_out.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+            #[cfg(target_arch = "aarch64")]
+            {
+                data[3] = 0x0;
+                data[2] = 0x0;
+                data[1] = 0x5;
+                data[0] = 0x6;
+            }
+            self.mmio_read.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+            self.mmio_write.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+    }
+
+    impl MachineInterface for TestVm {}
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_x86_64_kvm_cpu() {
+        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        if kvm_hyp.vm_fd.is_none() {
+            return;
+        }
+
+        let vm = Arc::new(Mutex::new(TestVm::new()));
+
+        let code_seg = kvm_segment {
+            base: 0,
+            limit: 1048575,
+            selector: 16,
+            type_: 11,
+            present: 1,
+            dpl: 0,
+            db: 0,
+            s: 1,
+            l: 1,
+            g: 1,
+            avl: 0,
+            unusable: 0,
+            padding: 0,
+        };
+        let data_seg = kvm_segment {
+            base: 0,
+            limit: 1048575,
+            selector: 24,
+            type_: 3,
+            present: 1,
+            dpl: 0,
+            db: 1,
+            s: 1,
+            l: 0,
+            g: 1,
+            avl: 0,
+            unusable: 0,
+            padding: 0,
+        };
+        let cpu_config = CPUBootConfig {
+            prot64_mode: true,
+            boot_ip: 0,
+            boot_sp: 0,
+            boot_selector: 0,
+            zero_page: 0x0000_7000,
+            code_segment: code_seg,
+            data_segment: data_seg,
+            gdt_base: 0x500u64,
+            gdt_size: 16,
+            idt_base: 0x520u64,
+            idt_size: 8,
+            pml4_start: 0x0000_9000,
+        };
+
+        // For `get_lapic` in realize function to work,
+        // you need to create a irq_chip for VM before creating the VCPU.
+        let vm_fd = kvm_hyp.vm_fd.as_ref().unwrap();
+        vm_fd.create_irq_chip().unwrap();
+        let vcpu_fd = Arc::new(
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .create_vcpu(0)
+                .unwrap(),
+        );
+        let hypervisor_cpu = Arc::new(KvmCpu::new(
+            #[cfg(target_arch = "aarch64")]
+            kvm_hyp.vm_fd.clone(),
+            vcpu_fd.clone(),
+        ));
+        let x86_cpu = Arc::new(Mutex::new(ArchCPU::new(0, 1)));
+        let cpu = CPU::new(hypervisor_cpu.clone(), vcpu_fd, 0, x86_cpu, vm.clone());
+        // test `set_boot_config` function
+        assert!(hypervisor_cpu
+            .set_boot_config(cpu.arch().clone(), &cpu_config)
+            .is_ok());
+
+        // test setup special registers
+        let cpu_caps = CPUCaps::init_capabilities(hypervisor_cpu.clone());
+        assert!(hypervisor_cpu.reset_vcpu(Arc::new(cpu)).is_ok());
+        let x86_sregs = hypervisor_cpu.fd.get_sregs().unwrap();
+        assert_eq!(x86_sregs.cs, code_seg);
+        assert_eq!(x86_sregs.ds, data_seg);
+        assert_eq!(x86_sregs.es, data_seg);
+        assert_eq!(x86_sregs.fs, data_seg);
+        assert_eq!(x86_sregs.gs, data_seg);
+        assert_eq!(x86_sregs.ss, data_seg);
+        assert_eq!(x86_sregs.gdt.base, cpu_config.gdt_base);
+        assert_eq!(x86_sregs.gdt.limit, cpu_config.gdt_size);
+        assert_eq!(x86_sregs.idt.base, cpu_config.idt_base);
+        assert_eq!(x86_sregs.idt.limit, cpu_config.idt_size);
+        assert_eq!(x86_sregs.cr0 & 0x1, 1);
+        assert_eq!((x86_sregs.cr0 & 0x8000_0000) >> 31, 1);
+        assert_eq!(x86_sregs.cr3, cpu_config.pml4_start);
+        assert_eq!((x86_sregs.cr4 & 0x20) >> 5, 1);
+        assert_eq!((x86_sregs.efer & 0x700) >> 8, 5);
+
+        // test setup_regs function
+        let x86_regs = hypervisor_cpu.fd.get_regs().unwrap();
+        assert_eq!(x86_regs.rflags, 0x0002);
+        assert_eq!(x86_regs.rip, 0);
+        assert_eq!(x86_regs.rsp, 0);
+        assert_eq!(x86_regs.rbp, 0);
+        assert_eq!(x86_regs.rsi, 0x0000_7000);
+
+        // test setup_fpu function
+        if !cpu_caps.has_xsave {
+            let x86_fpu = hypervisor_cpu.fd.get_fpu().unwrap();
+            assert_eq!(x86_fpu.fcw, 0x37f);
+        }
+    }
+
+    #[test]
+    #[allow(unused)]
+    fn test_cpu_lifecycle_with_kvm() {
+        let kvm_hyp = KvmHypervisor::new(None).unwrap_or(KvmHypervisor::default());
+        if kvm_hyp.vm_fd.is_none() {
+            return;
+        }
+
+        let vcpu_fd = Arc::new(
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .create_vcpu(0)
+                .unwrap(),
+        );
+        let hypervisor_cpu = Arc::new(KvmCpu::new(
+            #[cfg(target_arch = "aarch64")]
+            kvm_hyp.vm_fd.clone(),
+            vcpu_fd.clone(),
+        ));
+
+        let vm = Arc::new(Mutex::new(TestVm::new()));
+        let cpu = CPU::new(
+            hypervisor_cpu.clone(),
+            vcpu_fd.clone(),
+            0,
+            Arc::new(Mutex::new(ArchCPU::default())),
+            vm.clone(),
+        );
+        let (cpu_state, _) = &*cpu.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
+        drop(cpu_state);
+
+        let cpus_thread_barrier = Arc::new(Barrier::new(2));
+        let cpu_thread_barrier = cpus_thread_barrier.clone();
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut kvi = kvm_bindings::kvm_vcpu_init::default();
+            kvm_hyp
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .get_preferred_target(&mut kvi)
+                .unwrap();
+            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
+            *hypervisor_cpu.kvi.lock().unwrap() = kvi;
+            hypervisor_cpu.vcpu_init().unwrap();
+        }
+
+        // Test cpu life cycle as:
+        // Created -> Paused -> Running -> Paused -> Running -> Destroy
+        let cpu_arc = Arc::new(cpu);
+        CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
+
+        // Wait for CPU thread init signal hook
+        std::thread::sleep(Duration::from_millis(50));
+        cpus_thread_barrier.wait();
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
+        drop(cpu_state);
+
+        assert!(cpu_arc.pause().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+
+        assert!(cpu_arc.destroy().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Stopped);
+        drop(cpu_state);
     }
 }
