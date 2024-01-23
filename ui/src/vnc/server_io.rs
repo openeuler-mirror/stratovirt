@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use log::{error, info};
+use log::error;
 use vmm_sys_util::epoll::EventSet;
 
 use crate::{
@@ -487,7 +487,8 @@ pub fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<()> {
-    info!("New Connection: {:?}", stream);
+    trace::vnc_client_connect(&stream);
+
     stream
         .set_nonblocking(true)
         .expect("set nonblocking failed");

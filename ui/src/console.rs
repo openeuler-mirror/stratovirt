@@ -368,6 +368,7 @@ fn display_refresh() {
             interval = dcl_interval
         }
     }
+    trace::console_dpy_refresh(&interval);
 
     let mut locked_state = DISPLAY_STATE.lock().unwrap();
     locked_state.interval = interval;
@@ -530,6 +531,13 @@ pub fn graphic_hardware_ui_info(
     height: u32,
 ) -> Result<()> {
     let mut locked_con = con.lock().unwrap();
+    trace::console_dpy_ui_info(
+        &locked_con.dev_name,
+        &width,
+        &height,
+        &locked_con.ui_info.last_width,
+        &locked_con.ui_info.last_height,
+    );
     if locked_con.ui_info.last_width == width && locked_con.ui_info.last_height == height {
         return Ok(());
     }
@@ -719,6 +727,8 @@ pub fn console_close(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<()
 /// Select the default display device.
 /// If con_id is none, then do nothing.
 pub fn console_select(con_id: Option<usize>) -> Result<()> {
+    trace::console_select(&con_id);
+
     let mut locked_consoles = CONSOLES.lock().unwrap();
     if locked_consoles.activate_id == con_id {
         return Ok(());

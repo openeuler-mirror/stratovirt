@@ -49,7 +49,7 @@ pub enum AuthState {
 }
 
 /// Authentication and encryption method.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum SubAuthState {
     /// Send plain Message + no auth.
     VncAuthVencryptPlain = 256,
@@ -118,6 +118,7 @@ impl ClientIoHandler {
     pub fn get_mechname_length(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        trace::vnc_client_get_mechname_length(&len);
         if !(MECHNAME_MIN_LEN..MECHNAME_MAX_LEN).contains(&len) {
             return Err(anyhow!(VncError::AuthFailed(
                 "get_mechname_length".to_string(),
@@ -147,6 +148,7 @@ impl ClientIoHandler {
     pub fn get_sasl_mechname(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let mech_name = String::from_utf8_lossy(&buf).to_string();
+        trace::vnc_client_get_mechname(&mech_name);
 
         let mut security = self.server.security_type.borrow_mut();
         let mech_list: Vec<&str> = security.saslconfig.mech_list.split(',').collect();
@@ -174,6 +176,7 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let len = u32::from_be_bytes(buf);
+        trace::vnc_client_get_authmessage_length(&len);
 
         if len > SASL_DATA_MAX_LEN {
             return Err(anyhow!(VncError::AuthFailed(
@@ -191,7 +194,6 @@ impl ClientIoHandler {
 
     /// Receive the authentication information from client and return the result.
     fn client_sasl_auth(&mut self) -> Result<()> {
-        info!("Sasl Authentication");
         let buf = self.read_incoming_msg();
 
         let mut client_data = buf.to_vec();
@@ -234,6 +236,8 @@ impl ClientIoHandler {
                 )
             },
         };
+
+        trace::vnc_client_sasl_auth(&err, &serverout_len);
 
         if err != SASL_OK && err != SASL_CONTINUE {
             // SAFETY: sasl_dispose() is C function. All parameters passed of the
@@ -439,6 +443,7 @@ impl ClientIoHandler {
         }
         // SAFETY: It can be ensure that the pointer of mechlist is not null.
         let mech_list = unsafe { CStr::from_ptr(mechlist as *const c_char) };
+        trace::vnc_server_send_mech_list(&mech_list);
         security.saslconfig.mech_list = String::from(mech_list.to_str()?);
         let mut buf = Vec::new();
         let len = security.saslconfig.mech_list.len();

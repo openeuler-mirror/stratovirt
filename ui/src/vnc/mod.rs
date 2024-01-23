@@ -107,7 +107,14 @@ impl DisplayChangeListenerOperations for VncInterface {
 
         let guest_width: i32 = get_image_width(locked_vnc_surface.guest_image);
         let guest_height: i32 = get_image_height(locked_vnc_surface.guest_image);
+        trace::vnc_dpy_switch(
+            &guest_width,
+            &guest_height,
+            &surface.width(),
+            &surface.height(),
+        );
         if !need_resize {
+            trace::vnc_dpy_pageflip(&guest_width, &guest_height, &surface.format);
             set_area_dirty(
                 &mut locked_vnc_surface.guest_dirty_bitmap,
                 0,
@@ -120,6 +127,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             return Ok(());
         }
         drop(locked_vnc_surface);
+
         update_server_surface(&server)?;
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
@@ -177,6 +185,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             }
         }
         dcl.lock().unwrap().update_interval = update_interval;
+        trace::vnc_dpy_refresh(&dirty_num, &update_interval);
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
@@ -189,6 +198,8 @@ impl DisplayChangeListenerOperations for VncInterface {
         if VNC_SERVERS.lock().unwrap().is_empty() {
             return Ok(());
         }
+
+        trace::vnc_dpy_image_update(&x, &y, &w, &h);
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
         let g_w = get_image_width(locked_vnc_surface.guest_image);
@@ -213,6 +224,7 @@ impl DisplayChangeListenerOperations for VncInterface {
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let width = cursor.width as u64;
         let height = cursor.height as u64;
+        trace::vnc_dpy_cursor_update(&width, &height);
         let bpl = round_up_div(width, BIT_PER_BYTE as u64);
         // Set the bit for mask.
         let bit_mask: u8 = 0x80;
