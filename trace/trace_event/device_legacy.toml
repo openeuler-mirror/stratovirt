@@ -99,3 +99,81 @@ name = "serial_receive"
 args = "len: usize"
 message = "data length {}"
 enabled = true
+
+[[events]]
+name = "pflash_device_id"
+args = "id: u32"
+message = "read device ID: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_device_info"
+args = "offset: u64"
+message = "read device information offset: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_io_read"
+args = "offset: u64, size: u32, value: u32, cmd: u8, wcycle: u32"
+message = "offset: 0x{:X}, size: {}, value: 0x{:X}, cmd: 0x{:X}, wcycle: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_io_write"
+args = "offset: u64, size: u8, value: u32, wcycle: u32"
+message = "offset: 0x{:X}, size: {}, value: 0x{:X}, wcycle: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_manufacturer_id"
+args = "id: u32"
+message = "read manufacturer ID: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_mode_read_array"
+args = ""
+message = "read array mode"
+enabled = true
+
+[[events]]
+name = "pflash_read_data"
+args = "offset: u64, len: usize, value: &[u8]"
+message = "data offset: 0x{:X}, length: {}, value: 0x{:X?}"
+enabled = true
+
+[[events]]
+name = "pflash_read_status"
+args = "status: u32"
+message = "status: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_read_unknown_state"
+args = "cmd: u8"
+message = "unknown command state: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_write"
+args = "str: String, cmd: u8"
+message = "{}, cmd: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_write_block"
+args = "value: u32"
+message = "block write: bytes: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_write_block_erase"
+args = "offset: u64, len: u32"
+message = "block erase offset: 0x{:X}, bytes: 0x{:X}"
+enabled = true
+
+[[events]]
+name = "pflash_write_data"
+args = "offset: u64, size: usize, value: &[u8], counter: u32"
+message = "data offset: 0x{:X}, size: {}, value: 0x{:X?}, counter: 0x{:X}"
+enabled = true
