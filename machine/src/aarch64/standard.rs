@@ -768,6 +768,8 @@ impl AcpiBuilder for StdMachine {
         let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
         gtdt.set_table_len(96);
 
+        // Counter control block physical address
+        gtdt.set_field(36, 0xFFFF_FFFF_FFFF_FFFF_u64);
         // Secure EL1 interrupt
         gtdt.set_field(48, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ + INTERRUPT_PPIS_COUNT);
         // Secure EL1 flags
@@ -787,6 +789,8 @@ impl AcpiBuilder for StdMachine {
         gtdt.set_field(72, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ + INTERRUPT_PPIS_COUNT);
         // Non secure EL2 flags
         gtdt.set_field(76, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+        // Counter read block physical address
+        gtdt.set_field(80, 0xFFFF_FFFF_FFFF_FFFF_u64);
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
