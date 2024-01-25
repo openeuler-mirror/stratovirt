@@ -146,6 +146,7 @@ fn check_gtdt(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "GTDT");
     assert_eq!(LittleEndian::read_u32(&data[4..]), GTDT_TABLE_DATA_LENGTH); // Check length
 
+    assert_eq!(LittleEndian::read_u64(&data[36..]), 0xFFFF_FFFF_FFFF_FFFF); // Counter control block physical address
     assert_eq!(LittleEndian::read_u32(&data[48..]), 29); // Secure EL1 interrupt
     assert_eq!(LittleEndian::read_u32(&data[52..]), 0); // Secure EL1 flags
     assert_eq!(LittleEndian::read_u32(&data[56..]), 30); // Non secure EL1 interrupt
@@ -154,6 +155,7 @@ fn check_gtdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[68..]), 0); // Virtual timer flags
     assert_eq!(LittleEndian::read_u32(&data[72..]), 26); // Non secure EL2 interrupt
     assert_eq!(LittleEndian::read_u32(&data[76..]), 0); // Non secure EL2 flags
+    assert_eq!(LittleEndian::read_u64(&data[80..]), 0xFFFF_FFFF_FFFF_FFFF); // Counter base block physical address
 }
 
 fn check_dbg2(data: &[u8]) {
