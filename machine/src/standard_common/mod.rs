@@ -602,8 +602,8 @@ pub(crate) trait AcpiBuilder {
         fadt.set_field(91, 4);
         #[cfg(target_arch = "aarch64")]
         {
-            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
-            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            // FADT flag: enable HW_REDUCED_ACPI and LOW_POWER_S0_IDLE_CAPABLE bit on aarch64 plantform.
+            fadt.set_field(112, 1 << 21 | 1 << 20 | 1 << 10 | 1 << 8);
             // ARM Boot Architecture Flags
             fadt.set_field(129, 0x3_u16);
         }
