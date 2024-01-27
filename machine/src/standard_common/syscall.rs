@@ -246,7 +246,6 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32);
-    let bpf_rule = arch_ioctl_allow_list(bpf_rule);
 
     #[cfg(feature = "usb_camera_v4l2")]
     let bpf_rule = bpf_rule
@@ -264,7 +263,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32);
 
-    bpf_rule
+    arch_ioctl_allow_list(bpf_rule)
 }
 
 fn madvise_rule() -> BpfRule {
