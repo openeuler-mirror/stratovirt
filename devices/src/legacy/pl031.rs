@@ -211,13 +211,13 @@ impl AmlBuilder for PL031 {
 }
 
 impl StateTransfer for PL031 {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = self.state;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         self.state = *PL031State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL031"))?;
 

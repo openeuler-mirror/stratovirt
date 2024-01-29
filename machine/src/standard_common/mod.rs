@@ -12,8 +12,6 @@
 
 pub mod syscall;
 
-pub use anyhow::Result;
-
 #[cfg(target_arch = "aarch64")]
 pub use crate::aarch64::standard::StdMachine;
 pub use crate::error::MachineError;
@@ -29,7 +27,7 @@ use std::string::String;
 use std::sync::{Arc, Mutex};
 use std::u64;
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;

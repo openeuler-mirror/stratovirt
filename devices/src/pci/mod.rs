@@ -22,8 +22,6 @@ mod bus;
 mod host;
 mod root_port;
 
-pub use anyhow::{bail, Result};
-
 pub use bus::PciBus;
 pub use config::{PciConfig, INTERRUPT_PIN};
 pub use error::PciError;
@@ -37,6 +35,7 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::{

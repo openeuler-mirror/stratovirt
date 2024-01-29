@@ -21,8 +21,6 @@ pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
-pub use anyhow::Result;
-
 pub use error::MigrationError;
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
@@ -32,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
+use anyhow::Result;
 use log::error;
 
 use machine_manager::qmp::{qmp_response::Response, qmp_schema};

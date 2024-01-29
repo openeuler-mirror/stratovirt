@@ -1057,7 +1057,7 @@ impl EventLoopManager for StdMachine {
         *vmstate == VmState::Shutdown
     }
 
-    fn loop_cleanup(&self) -> util::Result<()> {
+    fn loop_cleanup(&self) -> Result<()> {
         set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }

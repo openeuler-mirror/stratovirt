@@ -428,7 +428,7 @@ impl AmlBuilder for Serial {
 }
 
 impl StateTransfer for Serial {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = self.state;
         let (rbr_state, _) = self.rbr.as_slices();
         state.rbr_len = rbr_state.len();
@@ -437,7 +437,7 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let serial_state = *SerialState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("SERIAL"))?;
         let mut rbr = VecDeque::<u8>::default();

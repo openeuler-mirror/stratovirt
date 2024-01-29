@@ -819,20 +819,20 @@ impl PciDevOps for VfioPciDevice {
         &mut self.base
     }
 
-    fn realize(mut self) -> devices::pci::Result<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
-        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Failed to reset vfio device"
         })?;
 
-        devices::pci::Result::with_context(self.get_pci_config(), || {
+        Result::with_context(self.get_pci_config(), || {
             "Failed to get vfio device pci config space"
         })?;
-        devices::pci::Result::with_context(self.pci_config_reset(), || {
+        Result::with_context(self.pci_config_reset(), || {
             "Failed to reset vfio device pci config space"
         })?;
-        devices::pci::Result::with_context(
+        Result::with_context(
             init_multifunction(
                 self.multi_func,
                 &mut self.base.config.config,
@@ -855,15 +855,14 @@ impl PciDevOps for VfioPciDevice {
             self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
-        self.msix_info = Some(devices::pci::Result::with_context(
-            self.get_msix_info(),
-            || "Failed to get MSI-X info",
-        )?);
-        self.vfio_bars = Arc::new(Mutex::new(devices::pci::Result::with_context(
+        self.msix_info = Some(Result::with_context(self.get_msix_info(), || {
+            "Failed to get MSI-X info"
+        })?);
+        self.vfio_bars = Arc::new(Mutex::new(Result::with_context(
             self.bar_region_info(),
             || "Failed to get bar region info",
         )?));
-        devices::pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
+        Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -883,7 +882,7 @@ impl PciDevOps for VfioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> devices::pci::Result<()> {
+    fn unrealize(&mut self) -> Result<()> {
         if let Err(e) = VfioPciDevice::unrealize(self) {
             error!("{:?}", e);
             bail!("Failed to unrealize vfio-pci.");
@@ -1001,8 +1000,8 @@ impl PciDevOps for VfioPciDevice {
         }
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> devices::pci::Result<()> {
-        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Fail to reset vfio dev"
         })
     }

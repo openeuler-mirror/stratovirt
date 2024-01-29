@@ -29,8 +29,6 @@
 mod aarch64;
 mod error;
 
-pub use anyhow::Result;
-
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::{
     GICConfig as ICGICConfig, GICDevice, GICVersion, GICv2, GICv2Access,
@@ -41,6 +39,7 @@ pub use error::InterruptError;
 
 use std::sync::Arc;
 
+use anyhow::Result;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::pci::MsiVector;

@@ -30,10 +30,7 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::interrupt_controller::error::InterruptError;
 use machine_manager::machine::{MachineLifecycle, VmState};
-use util::{
-    device_tree::{self, FdtBuilder},
-    Result as UtilResult,
-};
+use util::device_tree::{self, FdtBuilder};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 pub const GIC_IRQ_INTERNAL: u32 = 32;
@@ -85,7 +82,7 @@ pub trait GICDevice: MachineLifecycle {
     /// # Arguments
     ///
     /// * `fdt` - Device tree presented by bytes.
-    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()>;
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> Result<()>;
 
     /// Get GIC redistributor number.
     fn get_redist_count(&self) -> u8 {
@@ -134,7 +131,7 @@ impl InterruptController {
 }
 
 impl device_tree::CompileFDT for InterruptController {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         self.gic.generate_fdt(fdt)?;
         Ok(())
     }

@@ -224,7 +224,7 @@ impl VhostUserMemInfo {
         None
     }
 
-    fn add_mem_range(&self, fr: &FlatRange) -> address_space::Result<()> {
+    fn add_mem_range(&self, fr: &FlatRange) -> Result<()> {
         if fr.owner.region_type() != address_space::RegionType::Ram {
             return Ok(());
         }
@@ -271,7 +271,7 @@ impl VhostUserMemInfo {
         Ok(())
     }
 
-    fn delete_mem_range(&self, fr: &FlatRange) -> address_space::Result<()> {
+    fn delete_mem_range(&self, fr: &FlatRange) -> Result<()> {
         if fr.owner.region_type() != address_space::RegionType::Ram {
             return Ok(());
         }
