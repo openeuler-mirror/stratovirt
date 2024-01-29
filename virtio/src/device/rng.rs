@@ -326,7 +326,7 @@ impl VirtioDevice for Rng {
 }
 
 impl StateTransfer for Rng {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = RngState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
@@ -334,7 +334,7 @@ impl StateTransfer for Rng {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let state = RngState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("RNG"))?;
         self.base.device_features = state.device_features;

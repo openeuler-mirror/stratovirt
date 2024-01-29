@@ -518,7 +518,7 @@ impl StateTransfer for CPU {
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         let cpu_state = *X86CPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 

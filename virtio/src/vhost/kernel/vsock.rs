@@ -336,8 +336,8 @@ impl VirtioDevice for Vsock {
 }
 
 impl StateTransfer for Vsock {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        migration::Result::with_context(self.backend.as_ref().unwrap().set_running(false), || {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        Result::with_context(self.backend.as_ref().unwrap().set_running(false), || {
             "Failed to set vsock backend stopping"
         })?;
 
@@ -351,17 +351,17 @@ impl StateTransfer for Vsock {
             broken: self.base.broken.load(Ordering::SeqCst),
         };
 
-        migration::Result::with_context(self.backend.as_ref().unwrap().set_running(true), || {
+        Result::with_context(self.backend.as_ref().unwrap().set_running(true), || {
             "Failed to set vsock backend running"
         })?;
-        migration::Result::with_context(self.transport_reset(), || {
+        Result::with_context(self.transport_reset(), || {
             "Failed to send vsock transport reset event"
         })?;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let state = VsockState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("VSOCK"))?;
         self.base.device_features = state.device_features;
@@ -379,8 +379,8 @@ impl StateTransfer for Vsock {
 
 impl MigrationHook for Vsock {
     #[cfg(target_arch = "aarch64")]
-    fn resume(&mut self) -> migration::Result<()> {
-        migration::Result::with_context(self.transport_reset(), || {
+    fn resume(&mut self) -> Result<()> {
+        Result::with_context(self.transport_reset(), || {
             "Failed to resume virtio vsock device"
         })?;
 

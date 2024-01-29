@@ -19,8 +19,6 @@ pub mod x86_64;
 
 mod micro_common;
 
-pub use anyhow::Result;
-
 pub use crate::error::MachineError;
 pub use micro_common::LightMachine;
 pub use standard_common::StdMachine;
@@ -35,7 +33,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Context, Result};
 use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
@@ -93,7 +91,6 @@ use machine_manager::config::{
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{MachineInterface, VmState};
 use migration::{MigrateOps, MigrationManager};
-use standard_common::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::file::{clear_file, lock_file, unlock_file};
@@ -825,7 +822,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
     }
 
@@ -1323,7 +1320,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> StdResult<(u8, Weak<Mutex<PciBus>>)> {
+    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
         let pci_bus = PciBus::find_bus_by_name(&bus, &bdf.bus);

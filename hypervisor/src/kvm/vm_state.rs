@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use kvm_bindings::{kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_IRQCHIP_IOAPIC};
 use kvm_ioctls::VmFd;
 
@@ -45,7 +45,7 @@ pub struct KvmDeviceState {
 }
 
 impl StateTransfer for KvmDevice {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let vm_fd = self.vm_fd.clone();
 
         // save pit
@@ -72,7 +72,7 @@ impl StateTransfer for KvmDevice {
         .to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         let vm_fd = self.vm_fd.clone();
 
         let kvm_state = KvmDeviceState::from_bytes(state)

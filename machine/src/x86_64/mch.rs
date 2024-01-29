@@ -22,7 +22,7 @@ use devices::pci::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
-    le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
+    le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{Device, DeviceBase};
 use util::num_ops::ranges_overlap;
@@ -139,7 +139,7 @@ impl PciDevOps for Mch {
         &mut self.base
     }
 
-    fn realize(mut self) -> PciResult<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 

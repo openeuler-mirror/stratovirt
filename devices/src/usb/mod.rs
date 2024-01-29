@@ -26,14 +26,12 @@ pub mod xhci;
 
 mod descriptor;
 
-pub use anyhow::Result;
-
 pub use error::UsbError;
 
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use log::{debug, error};
 
 use self::descriptor::USB_MAX_INTERFACES;

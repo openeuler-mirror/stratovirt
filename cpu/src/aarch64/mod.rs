@@ -187,7 +187,7 @@ impl ArmCPUState {
 }
 
 impl StateTransfer for CPU {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         self.hypervisor_cpu
             .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs, &self.caps)?;
 
@@ -210,7 +210,7 @@ impl StateTransfer for CPU {
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 

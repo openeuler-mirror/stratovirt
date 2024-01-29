@@ -262,13 +262,13 @@ pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
     /// Function that helps to generate memory nodes.
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
     /// Function that helps to generate the chosen node.
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
 }
 
 impl CompileFDTHelper for LightMachine {
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
         let mem_size = self.base.sys_mem.memory_end_address().raw_value()
             - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
@@ -279,7 +279,7 @@ impl CompileFDTHelper for LightMachine {
         fdt.end_node(memory_node_dep)
     }
 
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let node = "chosen";
         let boot_source = self.base.boot_source.lock().unwrap();
 
@@ -303,7 +303,7 @@ impl CompileFDTHelper for LightMachine {
 }
 
 impl device_tree::CompileFDT for LightMachine {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let node_dep = fdt.begin_node("")?;
         self.base.generate_fdt_node(fdt)?;
         self.generate_memory_node(fdt)?;

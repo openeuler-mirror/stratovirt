@@ -12,12 +12,12 @@
 
 pub mod error;
 
-pub use anyhow::{bail, Context, Result};
 pub use error::SysBusError;
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};

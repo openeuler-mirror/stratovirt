@@ -1243,7 +1243,7 @@ impl EventLoopManager for StdMachine {
         *vmstate == VmState::Shutdown
     }
 
-    fn loop_cleanup(&self) -> util::Result<()> {
+    fn loop_cleanup(&self) -> Result<()> {
         set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
@@ -1256,15 +1256,15 @@ impl EventLoopManager for StdMachine {
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
     /// Function that helps to generate memory nodes.
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
     /// Function that helps to generate pci node in device-tree.
-    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
     /// Function that helps to generate the chosen node.
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
 }
 
 impl CompileFDTHelper for StdMachine {
-    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_pci_host_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
         let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1;
         let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20;
@@ -1333,7 +1333,7 @@ impl CompileFDTHelper for StdMachine {
         fdt.end_node(pci_node_dep)
     }
 
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         if self.base.numa_nodes.is_none() {
             let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
             let mem_size = self.base.sys_mem.memory_end_address().raw_value()
@@ -1363,7 +1363,7 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let node = "chosen";
 
         let boot_source = self.base.boot_source.lock().unwrap();
@@ -1388,7 +1388,7 @@ impl CompileFDTHelper for StdMachine {
 }
 
 impl device_tree::CompileFDT for StdMachine {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let node_dep = fdt.begin_node("")?;
         self.base.generate_fdt_node(fdt)?;
         self.generate_memory_node(fdt)?;

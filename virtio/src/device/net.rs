@@ -1642,7 +1642,7 @@ impl VirtioDevice for Net {
 unsafe impl Sync for Net {}
 
 impl StateTransfer for Net {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioNetState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
@@ -1652,7 +1652,7 @@ impl StateTransfer for Net {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let s_len = std::mem::size_of::<VirtioNetState>();
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);

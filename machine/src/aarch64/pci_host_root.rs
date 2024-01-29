@@ -12,12 +12,14 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::Result;
+
 use devices::pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
-    le_write_u16, PciBus, PciDevBase, PciDevOps, Result as PciResult,
+    le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{Device, DeviceBase};
 
@@ -60,7 +62,7 @@ impl PciDevOps for PciHostRoot {
         &mut self.base
     }
 
-    fn realize(mut self) -> PciResult<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 

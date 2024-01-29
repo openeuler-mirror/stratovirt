@@ -306,7 +306,7 @@ impl VirtioDevice for Serial {
 }
 
 impl StateTransfer for Serial {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioSerialState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
@@ -315,7 +315,7 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let state = VirtioSerialState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
         self.base.device_features = state.device_features;
