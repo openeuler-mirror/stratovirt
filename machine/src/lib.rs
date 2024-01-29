@@ -260,6 +260,29 @@ impl MachineBase {
     }
 }
 
+macro_rules! create_device_add_matches {
+    ( $command:expr; $controller: expr;
+        $(($($driver_name:tt)|+, $function_name:tt, $($arg:tt),*)),*;
+        $(#[cfg(feature = $feature: tt)]
+        ($driver_name1:tt, $function_name1:tt, $($arg1:tt),*)),*
+    ) => {
+        match $command {
+            $(
+                $($driver_name)|+ => {
+                    $controller.$function_name($($arg),*)?;
+                },
+            )*
+            $(
+                #[cfg(feature = $feature)]
+                $driver_name1 => {
+                    $controller.$function_name1($($arg1),*)?;
+                },
+            )*
+            _ => bail!("Unsupported device: {:?}", $command),
+        }
+    };
+}
+
 pub trait MachineOps {
     fn machine_base(&self) -> &MachineBase;
 
@@ -1749,91 +1772,38 @@ pub trait MachineOps {
             let id = parse_device_id(cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
-            match dev.0.as_str() {
-                "virtio-blk-device" => {
-                    self.add_virtio_mmio_block(vm_config, cfg_args)?;
-                }
-                "virtio-blk-pci" => {
-                    self.add_virtio_pci_blk(vm_config, cfg_args, false)?;
-                }
-                "virtio-scsi-pci" => {
-                    self.add_virtio_pci_scsi(vm_config, cfg_args, false)?;
-                }
-                "scsi-hd" => {
-                    self.add_scsi_device(vm_config, cfg_args)?;
-                }
-                "scsi-cd" => {
-                    self.add_scsi_device(vm_config, cfg_args)?;
-                }
-                "virtio-net-device" => {
-                    self.add_virtio_mmio_net(vm_config, cfg_args)?;
-                }
-                "virtio-net-pci" => {
-                    self.add_virtio_pci_net(vm_config, cfg_args, false)?;
-                }
-                "pcie-root-port" => {
-                    self.add_pci_root_port(cfg_args)?;
-                }
-                "vhost-vsock-pci" | "vhost-vsock-device" => {
-                    self.add_virtio_vsock(cfg_args)?;
-                }
-                "virtio-balloon-device" | "virtio-balloon-pci" => {
-                    self.add_virtio_balloon(vm_config, cfg_args)?;
-                }
-                "virtio-serial-device" | "virtio-serial-pci" => {
-                    self.add_virtio_serial(vm_config, cfg_args)?;
-                }
-                "virtconsole" => {
-                    self.add_virtio_serial_port(vm_config, cfg_args, true)?;
-                }
-                "virtserialport" => {
-                    self.add_virtio_serial_port(vm_config, cfg_args, false)?;
-                }
-                "virtio-rng-device" | "virtio-rng-pci" => {
-                    self.add_virtio_rng(vm_config, cfg_args)?;
-                }
-                "vfio-pci" => {
-                    self.add_vfio_device(cfg_args, false)?;
-                }
-                "vhost-user-blk-device" => {
-                    self.add_vhost_user_blk_device(vm_config, cfg_args)?;
-                }
-                "vhost-user-blk-pci" => {
-                    self.add_vhost_user_blk_pci(vm_config, cfg_args, false)?;
-                }
-                "vhost-user-fs-pci" | "vhost-user-fs-device" => {
-                    self.add_virtio_fs(vm_config, cfg_args)?;
-                }
-                "nec-usb-xhci" => {
-                    self.add_usb_xhci(cfg_args)?;
-                }
-                "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-storage" | "usb-host" => {
-                    self.add_usb_device(vm_config, cfg_args)?;
-                }
+
+            create_device_add_matches!(
+                dev.0.as_str(); self;
+                ("virtio-blk-device", add_virtio_mmio_block, vm_config, cfg_args),
+                ("virtio-blk-pci", add_virtio_pci_blk, vm_config, cfg_args, false),
+                ("virtio-scsi-pci", add_virtio_pci_scsi, vm_config, cfg_args, false),
+                ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
+                ("virtio-net-device", add_virtio_mmio_net, vm_config, cfg_args),
+                ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
+                ("pcie-root-port", add_pci_root_port, cfg_args),
+                ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
+                ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
+                ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
+                ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args, true),
+                ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
+                ("vfio-pci", add_vfio_device, cfg_args, false),
+                ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
+                ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
+                ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
+                ("nec-usb-xhci", add_usb_xhci, cfg_args),
+                ("usb-kbd" | "usb-storage" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
                 #[cfg(feature = "virtio_gpu")]
-                "virtio-gpu-pci" => {
-                    self.add_virtio_pci_gpu(cfg_args)?;
-                }
+                ("virtio-gpu-pci", add_virtio_pci_gpu, cfg_args),
                 #[cfg(feature = "ramfb")]
-                "ramfb" => {
-                    self.add_ramfb(cfg_args)?;
-                }
+                ("ramfb", add_ramfb, cfg_args),
                 #[cfg(feature = "demo_device")]
-                "pcie-demo-dev" => {
-                    self.add_demo_dev(vm_config, cfg_args)?;
-                }
+                ("pcie-demo-dev", add_demo_dev, vm_config, cfg_args),
                 #[cfg(feature = "scream")]
-                "ivshmem-scream" => {
-                    self.add_ivshmem_scream(vm_config, cfg_args)?;
-                }
+                ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args),
                 #[cfg(feature = "pvpanic")]
-                "pvpanic" => {
-                    self.add_pvpanic(cfg_args)?;
-                }
-                _ => {
-                    bail!("Unsupported device: {:?}", dev.0.as_str());
-                }
-            }
+                ("pvpanic", add_pvpanic, cfg_args)
+            );
         }
 
         Ok(())
