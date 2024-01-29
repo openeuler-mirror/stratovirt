@@ -1141,7 +1141,7 @@ impl DeviceInterface for StdMachine {
             }
             "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
-                if let Err(e) = self.add_usb_device(driver, &mut vm_config_clone, &cfg_args) {
+                if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
                     locked_vmconfig.del_device_by_id(args.id);
                     return Response::create_error_response(

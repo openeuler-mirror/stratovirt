@@ -79,8 +79,8 @@ use machine_manager::config::parse_usb_host;
 use machine_manager::config::scream::parse_scream;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
+    parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
+    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
     parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, BootSource, DriveFile,
     Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes,
     PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
@@ -542,31 +542,35 @@ pub trait MachineOps {
         let device_cfg = parse_vsock(cfg_args)?;
         let sys_mem = self.get_sys_mem().clone();
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
-        if cfg_args.contains("vhost-vsock-device") {
-            let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
-            MigrationManager::register_device_instance(
-                VirtioMmioState::descriptor(),
-                self.realize_virtio_mmio_device(device)
-                    .with_context(|| MachineError::RlzVirtioMmioErr)?,
-                &device_cfg.id,
-            );
-        } else {
-            let bdf = get_pci_bdf(cfg_args)?;
-            let multi_func = get_multi_function(cfg_args)?;
-            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let mut virtio_pci_device = VirtioPciDevice::new(
-                device_cfg.id.clone(),
-                devfn,
-                sys_mem,
-                vsock.clone(),
-                parent_bus,
-                multi_func,
-            );
-            virtio_pci_device.enable_need_irqfd();
-            virtio_pci_device
-                .realize()
-                .with_context(|| "Failed to add virtio pci vsock device")?;
+        match parse_device_type(cfg_args)?.as_str() {
+            "vhost-vsock-device" => {
+                let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
+                MigrationManager::register_device_instance(
+                    VirtioMmioState::descriptor(),
+                    self.realize_virtio_mmio_device(device)
+                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                    &device_cfg.id,
+                );
+            }
+            _ => {
+                let bdf = get_pci_bdf(cfg_args)?;
+                let multi_func = get_multi_function(cfg_args)?;
+                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+                let mut virtio_pci_device = VirtioPciDevice::new(
+                    device_cfg.id.clone(),
+                    devfn,
+                    sys_mem,
+                    vsock.clone(),
+                    parent_bus,
+                    multi_func,
+                );
+                virtio_pci_device.enable_need_irqfd();
+                virtio_pci_device
+                    .realize()
+                    .with_context(|| "Failed to add virtio pci vsock device")?;
+            }
         }
+
         MigrationManager::register_device_instance(
             VhostKern::VsockState::descriptor(),
             vsock,
@@ -640,20 +644,23 @@ pub trait MachineOps {
         let sys_mem = self.get_sys_mem();
         let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
         Balloon::object_init(balloon.clone());
-        if cfg_args.contains("virtio-balloon-device") {
-            let device = VirtioMmioDevice::new(sys_mem, balloon);
-            self.realize_virtio_mmio_device(device)?;
-        } else {
-            let name = device_cfg.id;
-            let bdf = get_pci_bdf(cfg_args)?;
-            let multi_func = get_multi_function(cfg_args)?;
-            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let sys_mem = self.get_sys_mem().clone();
-            let virtio_pci_device =
-                VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus, multi_func);
-            virtio_pci_device
-                .realize()
-                .with_context(|| "Failed to add virtio pci balloon device")?;
+        match parse_device_type(cfg_args)?.as_str() {
+            "virtio-balloon-device" => {
+                let device = VirtioMmioDevice::new(sys_mem, balloon);
+                self.realize_virtio_mmio_device(device)?;
+            }
+            _ => {
+                let name = device_cfg.id;
+                let bdf = get_pci_bdf(cfg_args)?;
+                let multi_func = get_multi_function(cfg_args)?;
+                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+                let sys_mem = self.get_sys_mem().clone();
+                let virtio_pci_device =
+                    VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus, multi_func);
+                virtio_pci_device
+                    .realize()
+                    .with_context(|| "Failed to add virtio pci balloon device")?;
+            }
         }
 
         Ok(())
@@ -670,29 +677,32 @@ pub trait MachineOps {
         let sys_mem = self.get_sys_mem().clone();
         let serial = Arc::new(Mutex::new(Serial::new(serial_cfg.clone())));
 
-        if serial_cfg.pci_bdf.is_none() {
-            let device = VirtioMmioDevice::new(&sys_mem, serial.clone());
-            MigrationManager::register_device_instance(
-                VirtioMmioState::descriptor(),
-                self.realize_virtio_mmio_device(device)
-                    .with_context(|| MachineError::RlzVirtioMmioErr)?,
-                &serial_cfg.id,
-            );
-        } else {
-            let bdf = serial_cfg.pci_bdf.unwrap();
-            let multi_func = serial_cfg.multifunction;
-            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let virtio_pci_device = VirtioPciDevice::new(
-                serial_cfg.id.clone(),
-                devfn,
-                sys_mem,
-                serial.clone(),
-                parent_bus,
-                multi_func,
-            );
-            virtio_pci_device
-                .realize()
-                .with_context(|| "Failed to add virtio pci serial device")?;
+        match parse_device_type(cfg_args)?.as_str() {
+            "virtio-serial-device" => {
+                let device = VirtioMmioDevice::new(&sys_mem, serial.clone());
+                MigrationManager::register_device_instance(
+                    VirtioMmioState::descriptor(),
+                    self.realize_virtio_mmio_device(device)
+                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                    &serial_cfg.id,
+                );
+            }
+            _ => {
+                let bdf = serial_cfg.pci_bdf.unwrap();
+                let multi_func = serial_cfg.multifunction;
+                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+                let virtio_pci_device = VirtioPciDevice::new(
+                    serial_cfg.id.clone(),
+                    devfn,
+                    sys_mem,
+                    serial.clone(),
+                    parent_bus,
+                    multi_func,
+                );
+                virtio_pci_device
+                    .realize()
+                    .with_context(|| "Failed to add virtio pci serial device")?;
+            }
         }
 
         MigrationManager::register_device_instance(
@@ -797,27 +807,32 @@ pub trait MachineOps {
         let device_cfg = parse_rng_dev(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
         let rng_dev = Arc::new(Mutex::new(Rng::new(device_cfg.clone())));
-        if cfg_args.contains("virtio-rng-device") {
-            let device = VirtioMmioDevice::new(sys_mem, rng_dev.clone());
-            self.realize_virtio_mmio_device(device)
-                .with_context(|| "Failed to add virtio mmio rng device")?;
-        } else {
-            let bdf = get_pci_bdf(cfg_args)?;
-            let multi_func = get_multi_function(cfg_args)?;
-            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let sys_mem = self.get_sys_mem().clone();
-            let vitio_pci_device = VirtioPciDevice::new(
-                device_cfg.id.clone(),
-                devfn,
-                sys_mem,
-                rng_dev.clone(),
-                parent_bus,
-                multi_func,
-            );
-            vitio_pci_device
-                .realize()
-                .with_context(|| "Failed to add pci rng device")?;
+
+        match parse_device_type(cfg_args)?.as_str() {
+            "virtio-rng-device" => {
+                let device = VirtioMmioDevice::new(sys_mem, rng_dev.clone());
+                self.realize_virtio_mmio_device(device)
+                    .with_context(|| "Failed to add virtio mmio rng device")?;
+            }
+            _ => {
+                let bdf = get_pci_bdf(cfg_args)?;
+                let multi_func = get_multi_function(cfg_args)?;
+                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+                let sys_mem = self.get_sys_mem().clone();
+                let vitio_pci_device = VirtioPciDevice::new(
+                    device_cfg.id.clone(),
+                    devfn,
+                    sys_mem,
+                    rng_dev.clone(),
+                    parent_bus,
+                    multi_func,
+                );
+                vitio_pci_device
+                    .realize()
+                    .with_context(|| "Failed to add pci rng device")?;
+            }
         }
+
         MigrationManager::register_device_instance(RngState::descriptor(), rng_dev, &device_cfg.id);
         Ok(())
     }
@@ -841,25 +856,26 @@ pub trait MachineOps {
             bail!("When configuring the vhost-user-fs-device or vhost-user-fs-pci device, the memory must be shared.");
         }
 
-        if cfg_args.contains("vhost-user-fs-device") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
-            let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
-            self.realize_virtio_mmio_device(virtio_mmio_device)
-                .with_context(|| "Failed to add vhost user fs device")?;
-        } else if cfg_args.contains("vhost-user-fs-pci") {
-            let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
-            let bdf = get_pci_bdf(cfg_args)?;
-            let multi_func = get_multi_function(cfg_args)?;
-            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        match parse_device_type(cfg_args)?.as_str() {
+            "vhost-user-fs-device" => {
+                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
+                let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
+                self.realize_virtio_mmio_device(virtio_mmio_device)
+                    .with_context(|| "Failed to add vhost user fs device")?;
+            }
+            _ => {
+                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
+                let bdf = get_pci_bdf(cfg_args)?;
+                let multi_func = get_multi_function(cfg_args)?;
+                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
-            let mut vitio_pci_device =
-                VirtioPciDevice::new(id_clone, devfn, sys_mem, device, parent_bus, multi_func);
-            vitio_pci_device.enable_need_irqfd();
-            vitio_pci_device
-                .realize()
-                .with_context(|| "Failed to add pci fs device")?;
-        } else {
-            bail!("error device type");
+                let mut vitio_pci_device =
+                    VirtioPciDevice::new(id_clone, devfn, sys_mem, device, parent_bus, multi_func);
+                vitio_pci_device.enable_need_irqfd();
+                vitio_pci_device
+                    .realize()
+                    .with_context(|| "Failed to add pci fs device")?;
+            }
         }
 
         Ok(())
@@ -1103,13 +1119,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_scsi_device(
-        &mut self,
-        vm_config: &mut VmConfig,
-        cfg_args: &str,
-        scsi_type: u32,
-    ) -> Result<()> {
+    fn add_scsi_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_scsi_device(vm_config, cfg_args)?;
+        let scsi_type = match parse_device_type(cfg_args)?.as_str() {
+            "scsi-hd" => SCSI_TYPE_DISK,
+            _ => SCSI_TYPE_ROM,
+        };
         if let Some(bootindex) = device_cfg.boot_index {
             self.check_bootindex(bootindex)
                 .with_context(|| "Failed to add scsi device for invalid bootindex")?;
@@ -1654,13 +1669,8 @@ pub trait MachineOps {
     ///
     /// * `driver` - USB device class.
     /// * `cfg_args` - USB device Configuration.
-    fn add_usb_device(
-        &mut self,
-        driver: &str,
-        vm_config: &mut VmConfig,
-        cfg_args: &str,
-    ) -> Result<()> {
-        let usb_device = match driver {
+    fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let usb_device = match parse_device_type(cfg_args)?.as_str() {
             "usb-kbd" => {
                 let device_cfg = parse_usb_keyboard(cfg_args)?;
                 // SAFETY: id is already checked not none in parse_usb_keyboard().
@@ -1750,10 +1760,10 @@ pub trait MachineOps {
                     self.add_virtio_pci_scsi(vm_config, cfg_args, false)?;
                 }
                 "scsi-hd" => {
-                    self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_DISK)?;
+                    self.add_scsi_device(vm_config, cfg_args)?;
                 }
                 "scsi-cd" => {
-                    self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_ROM)?;
+                    self.add_scsi_device(vm_config, cfg_args)?;
                 }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(vm_config, cfg_args)?;
@@ -1798,7 +1808,7 @@ pub trait MachineOps {
                     self.add_usb_xhci(cfg_args)?;
                 }
                 "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-storage" | "usb-host" => {
-                    self.add_usb_device(&dev.0, vm_config, cfg_args)?;
+                    self.add_usb_device(vm_config, cfg_args)?;
                 }
                 #[cfg(feature = "virtio_gpu")]
                 "virtio-gpu-pci" => {
