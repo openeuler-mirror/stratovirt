@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use regex::Regex;
 
 use super::{CmdParser, VmConfig};
@@ -117,13 +117,8 @@ impl VmConfig {
     }
 
     pub fn add_device(&mut self, device_config: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("device");
-        cmd_params.push("");
-
-        cmd_params.get_parameters(device_config)?;
-        if let Some(device_type) = cmd_params.get_value::<String>("")? {
-            self.devices.push((device_type, device_config.to_string()));
-        }
+        let device_type = parse_device_type(device_config)?;
+        self.devices.push((device_type, device_config.to_string()));
 
         Ok(())
     }
@@ -139,6 +134,15 @@ impl VmConfig {
             }
         }
     }
+}
+
+pub fn parse_device_type(device_config: &str) -> Result<String> {
+    let mut cmd_params = CmdParser::new("device");
+    cmd_params.push("");
+    cmd_params.get_parameters(device_config)?;
+    cmd_params
+        .get_value::<String>("")?
+        .with_context(|| "Missing driver field.")
 }
 
 pub fn parse_device_id(device_config: &str) -> Result<String> {
