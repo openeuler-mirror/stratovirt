@@ -266,28 +266,29 @@ impl CompileFDTHelper for MachineBase {
         fdt.set_property_string("method", "hvc")?;
         fdt.end_node(psci_node_dep)?;
 
+        let mut pflash_cnt = 0;
         for dev in self.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
-                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::Rtc => {
-                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::VirtioMmio => {
-                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
                 }
                 SysBusDevType::FwCfg => {
-                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 SysBusDevType::Flash => {
-                    // SAFETY: Legacy devices guarantee is not empty.
-                    generate_flash_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
+                    // Two pflash devices are created, but only one pflash node is required in the fdt table.
+                    // Thereforce, the second pflash device needs to be skipped.
+                    if pflash_cnt == 0 {
+                        generate_flash_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
+                        pflash_cnt += 1;
+                    }
                 }
                 _ => (),
             }
