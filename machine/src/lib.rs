@@ -744,12 +744,7 @@ pub trait MachineOps {
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
     /// * `is_console` - Whether this virtio serial port is a console port.
-    fn add_virtio_serial_port(
-        &mut self,
-        vm_config: &mut VmConfig,
-        cfg_args: &str,
-        is_console: bool,
-    ) -> Result<()> {
+    fn add_virtio_serial_port(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let serial_cfg = vm_config
             .virtio_serial
             .as_ref()
@@ -793,6 +788,7 @@ pub trait MachineOps {
         let mut virtio_dev_h = virtio_dev.lock().unwrap();
         let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
 
+        let is_console = matches!(parse_device_type(cfg_args)?.as_str(), "virtconsole");
         let free_port0 = find_port_by_nr(&serial.ports, 0).is_none();
         // Note: port 0 is reserved for a virtconsole.
         let free_nr = get_max_nr(&serial.ports) + 1;
@@ -1785,7 +1781,7 @@ pub trait MachineOps {
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
-                ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args, true),
+                ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
