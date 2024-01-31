@@ -37,7 +37,7 @@ use crate::{
         DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
     },
     error::VncError,
-    keycode::KeyCode,
+    keycode::{DpyMod, KeyCode},
     pixman::{
         bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
         get_image_width, ref_pixman_image, unref_pixman_image,
@@ -304,7 +304,7 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         .expect("Set noblocking for vnc socket failed");
 
     // Mapping ASCII to keycode.
-    let keysym2keycode = KeyCode::keysym_to_qkeycode();
+    let keysym2keycode = KeyCode::keysym_to_qkeycode(DpyMod::Vnc);
 
     let vnc_opts = Arc::new(VncInterface::default());
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));
