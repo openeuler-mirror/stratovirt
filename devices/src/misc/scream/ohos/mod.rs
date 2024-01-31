@@ -10,5 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod ohaudio;
+
 mod ohaudio_bindings;
 mod ohaudio_rapi;
