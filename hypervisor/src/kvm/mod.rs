@@ -34,11 +34,14 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+#[cfg(not(test))]
+use anyhow::anyhow;
+use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-use kvm_ioctls::DeviceFd;
-use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd, VmFd};
+#[cfg(not(test))]
+use kvm_ioctls::VcpuExit;
+use kvm_ioctls::{Cap, DeviceFd, Kvm, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info};
 use vmm_sys_util::{
@@ -55,8 +58,10 @@ use address_space::{AddressSpace, Listener};
 use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
+#[cfg(not(test))]
+use cpu::CpuError;
 use cpu::{
-    ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
+    ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker,
     CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
@@ -70,6 +75,7 @@ use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
 use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
+#[cfg(not(test))]
 use util::test_helper::is_test_enabled;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
@@ -403,6 +409,7 @@ impl KvmCpu {
         Ok(())
     }
 
+    #[cfg(not(test))]
     fn kvm_vcpu_exec(&self, cpu: Arc<CPU>) -> Result<bool> {
         let vm = cpu
             .vm()
