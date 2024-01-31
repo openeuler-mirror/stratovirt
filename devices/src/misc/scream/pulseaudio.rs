@@ -22,9 +22,7 @@ use pulse::{
     time::MicroSeconds,
 };
 
-use super::{
-    AudioInterface, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
-};
+use super::{AudioInterface, AUDIO_SAMPLE_RATE_44KHZ};
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData, TARGET_LATENCY_MS};
 
 const MAX_LATENCY_MS: u32 = 100;
@@ -164,11 +162,7 @@ impl PulseStreamData {
         // If audio format changed, reconfigure
         self.stream_fmt = recv_data.fmt;
         self.ss.channels = recv_data.fmt.channels;
-        self.ss.rate = if recv_data.fmt.rate >= WINDOWS_SAMPLE_BASE_RATE {
-            AUDIO_SAMPLE_RATE_44KHZ
-        } else {
-            AUDIO_SAMPLE_RATE_48KHZ
-        } * (recv_data.fmt.rate % WINDOWS_SAMPLE_BASE_RATE) as u32;
+        self.ss.rate = recv_data.fmt.get_rate();
 
         match recv_data.fmt.size {
             16 => self.ss.format = Format::S16le,
@@ -257,11 +251,11 @@ impl AudioInterface for PulseStreamData {
         }
     }
 
-    fn receive(&mut self, recv_data: &StreamData) -> bool {
+    fn receive(&mut self, recv_data: &StreamData) -> i32 {
         self.check_fmt_update(recv_data);
 
         if self.simple.is_none() {
-            return false;
+            return 0;
         }
 
         // SAFETY: audio_base is the shared memory. It already verifies the validity
@@ -276,10 +270,10 @@ impl AudioInterface for PulseStreamData {
         if let Err(e) = self.simple.as_ref().unwrap().read(data) {
             error!("PulseAudio read data failed: {:?}", e);
             self.ss.rate = 0;
-            return false;
+            return 0;
         }
 
-        true
+        1
     }
 
     fn destroy(&mut self) {
@@ -301,10 +295,11 @@ impl AudioInterface for PulseStreamData {
 mod tests {
     use pulse::{channelmap::Position, sample::Format};
 
-    use super::{
-        PulseStreamData, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ, WINDOWS_SAMPLE_BASE_RATE,
+    use super::PulseStreamData;
+    use crate::misc::scream::{
+        ScreamDirection, StreamData, AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ,
+        WINDOWS_SAMPLE_BASE_RATE,
     };
-    use crate::misc::scream::{ScreamDirection, StreamData};
 
     #[test]
     fn test_channel_map_transfer() {
