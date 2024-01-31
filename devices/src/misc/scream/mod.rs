@@ -38,6 +38,8 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::scream::{ScreamConfig, ScreamInterface};
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 
@@ -154,12 +156,12 @@ impl Default for ShmemStreamFmt {
 
 impl ShmemStreamFmt {
     pub fn get_rate(&self) -> u32 {
-        let ret = if self.rate >= WINDOWS_SAMPLE_BASE_RATE {
+        let sample_rate = if self.rate >= WINDOWS_SAMPLE_BASE_RATE {
             AUDIO_SAMPLE_RATE_44KHZ
         } else {
             AUDIO_SAMPLE_RATE_48KHZ
         };
-        ret * (self.rate % WINDOWS_SAMPLE_BASE_RATE) as u32
+        sample_rate * (self.rate % WINDOWS_SAMPLE_BASE_RATE) as u32
     }
 }
 
@@ -316,9 +318,9 @@ impl StreamData {
                 return;
             }
 
-            let ret = locked_interface.receive(self);
-            if ret > 0 {
-                self.chunk_idx = (self.chunk_idx + ret as u16) % capt.max_chunks;
+            let recv_chunks_cnt = locked_interface.receive(self);
+            if recv_chunks_cnt > 0 {
+                self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
 
                 // Make sure chunk_idx write does not bypass audio chunk write.
                 fence(Ordering::SeqCst);
@@ -356,6 +358,8 @@ impl Scream {
             ScreamInterface::Alsa => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
             #[cfg(feature = "scream_pulseaudio")]
             ScreamInterface::PulseAudio => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            ScreamInterface::OhAudio => Arc::new(Mutex::new(OhAudio::init(dir))),
             ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
                 self.playback.clone(),
