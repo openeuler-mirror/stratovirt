@@ -12,7 +12,18 @@
 
 use std::collections::HashMap;
 
+pub enum DpyMod {
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    Ohui,
+    #[cfg(feature = "gtk")]
+    Gtk,
+    #[cfg(feature = "vnc")]
+    Vnc,
+}
+
+#[allow(unused)]
 #[derive(Clone, Copy, Debug)]
+// Some of KeyCodes are not used on OHOS.
 pub enum KeyCode {
     Escape,
     Key1,
@@ -368,10 +379,16 @@ impl KeyCode {
         }
     }
 
-    pub fn keysym_to_qkeycode() -> HashMap<u16, u16> {
+    pub fn keysym_to_qkeycode(mode: DpyMod) -> HashMap<u16, u16> {
         let mut keysym2qkeycode: HashMap<u16, u16> = HashMap::new();
+        let keycodes = match mode {
+            #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+            DpyMod::Ohui => KEY_CODE_OH.as_ref(),
+            #[cfg(any(feature = "gtk", feature = "vnc"))]
+            _ => KEY_CODE_ASCLL.as_ref(),
+        };
         // Mapping ASCII to keycode.
-        for &(keycode, keysym) in KEY_CODE_ASCLL.iter() {
+        for &(keycode, keysym) in keycodes.iter() {
             let qkeycode = keycode.to_key_num();
             keysym2qkeycode.insert(keysym, qkeycode);
         }
@@ -379,6 +396,116 @@ impl KeyCode {
     }
 }
 
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+const KEY_CODE_OH: [(KeyCode, u16); 105] = [
+    (KeyCode::Key0, 0x07D0),
+    (KeyCode::Key1, 0x07D1),
+    (KeyCode::Key2, 0x07D2),
+    (KeyCode::Key3, 0x07D3),
+    (KeyCode::Key4, 0x07D4),
+    (KeyCode::Key5, 0x07D5),
+    (KeyCode::Key6, 0x07D6),
+    (KeyCode::Key7, 0x07D7),
+    (KeyCode::Key8, 0x07D8),
+    (KeyCode::Key9, 0x07D9),
+    (KeyCode::Minus, 0x0809),
+    (KeyCode::Equal, 0x080A),
+    (KeyCode::BackSpace, 0x0807),
+    (KeyCode::Tab, 0x0801),
+    (KeyCode::Keya, 0x07E1),
+    (KeyCode::Keyb, 0x07E2),
+    (KeyCode::Keyc, 0x07E3),
+    (KeyCode::Keyd, 0x07E4),
+    (KeyCode::Keye, 0x07E5),
+    (KeyCode::Keyf, 0x07E6),
+    (KeyCode::Keyg, 0x07E7),
+    (KeyCode::Keyh, 0x07E8),
+    (KeyCode::Keyi, 0x07E9),
+    (KeyCode::Keyj, 0x07EA),
+    (KeyCode::Keyk, 0x07EB),
+    (KeyCode::Keyl, 0x07EC),
+    (KeyCode::Keym, 0x07ED),
+    (KeyCode::Keyn, 0x07EE),
+    (KeyCode::Keyo, 0x07EF),
+    (KeyCode::Keyp, 0x07F0),
+    (KeyCode::Keyq, 0x07F1),
+    (KeyCode::Keyr, 0x07F2),
+    (KeyCode::Keys, 0x07F3),
+    (KeyCode::Keyt, 0x07F4),
+    (KeyCode::Keyu, 0x07F5),
+    (KeyCode::Keyv, 0x07F6),
+    (KeyCode::Keyw, 0x07F7),
+    (KeyCode::Keyx, 0x07F8),
+    (KeyCode::Keyy, 0x07F9),
+    (KeyCode::Keyz, 0x07FA),
+    (KeyCode::Space, 0x0802),
+    (KeyCode::Comma, 0x07FB),
+    (KeyCode::Slash, 0x0810),
+    (KeyCode::Down, 0x07DD),
+    (KeyCode::Left, 0x07DE),
+    (KeyCode::End, 0x0822),
+    (KeyCode::Escape, 0x0816),
+    (KeyCode::Period, 0x07FC),
+    (KeyCode::Up, 0x07DC),
+    (KeyCode::Apostrophe, 0x080F),
+    (KeyCode::Semicolon, 0x080E),
+    (KeyCode::BackSlash, 0x080D),
+    (KeyCode::Braceleft, 0x080B),
+    (KeyCode::Braceright, 0x080C),
+    (KeyCode::AltR, 0x07FE),
+    (KeyCode::Return, 0x0806),
+    (KeyCode::Grave, 0x0808),
+    (KeyCode::Home, 0x0821),
+    (KeyCode::SysReq, 0x081F),
+    (KeyCode::Right, 0x07DF),
+    (KeyCode::Menu, 0x09A2),
+    (KeyCode::Prior, 0x0814),
+    (KeyCode::Insert, 0x0823),
+    (KeyCode::NumLock, 0x0836),
+    (KeyCode::Next, 0x0815),
+    (KeyCode::KPAdd, 0x0844),
+    (KeyCode::KPMultiply, 0x0842),
+    (KeyCode::KPEnter, 0x0847),
+    (KeyCode::Pause, 0x0820),
+    (KeyCode::ScrollLock, 0x081B),
+    (KeyCode::SuperL, 0x081C),
+    (KeyCode::SuperR, 0x081D),
+    (KeyCode::KPDecimal, 0x0845),
+    (KeyCode::KPSubtract, 0x0843),
+    (KeyCode::KPDivide, 0x0841),
+    (KeyCode::KP0, 0x0837),
+    (KeyCode::KP1, 0x0838),
+    (KeyCode::KP2, 0x0839),
+    (KeyCode::KP3, 0x083A),
+    (KeyCode::KP4, 0x083B),
+    (KeyCode::KP5, 0x083C),
+    (KeyCode::KP6, 0x083D),
+    (KeyCode::KP7, 0x083E),
+    (KeyCode::KP8, 0x083F),
+    (KeyCode::KP9, 0x0840),
+    (KeyCode::KPEqual, 0x0848),
+    (KeyCode::F1, 0x082A),
+    (KeyCode::F2, 0x082B),
+    (KeyCode::F3, 0x082C),
+    (KeyCode::F4, 0x082D),
+    (KeyCode::F5, 0x082E),
+    (KeyCode::F6, 0x082F),
+    (KeyCode::F7, 0x0830),
+    (KeyCode::F8, 0x0831),
+    (KeyCode::F9, 0x0832),
+    (KeyCode::F10, 0x0833),
+    (KeyCode::F11, 0x0834),
+    (KeyCode::F12, 0x0835),
+    (KeyCode::ShiftL, 0x7FF),
+    (KeyCode::ShiftR, 0x0800),
+    (KeyCode::ControlL, 0x0818),
+    (KeyCode::ControlR, 0x0819),
+    (KeyCode::CapsLock, 0x081A),
+    (KeyCode::AltL, 0x07FD),
+    (KeyCode::Delete, 0x0817),
+];
+
+#[cfg(any(feature = "gtk", feature = "vnc"))]
 const KEY_CODE_ASCLL: [(KeyCode, u16); 173] = [
     (KeyCode::Space, 0x0020),
     (KeyCode::Exclam, 0x0021),

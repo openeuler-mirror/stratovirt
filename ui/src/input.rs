@@ -422,6 +422,13 @@ pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
         .keyboard_state_update(keycode, down)
 }
 
+pub fn keyboard_update(down: bool, keycode: u16) -> Result<()> {
+    let mut locked_input = INPUTS.lock().unwrap();
+    locked_input
+        .keyboard_state
+        .keyboard_state_update(keycode, down)
+}
+
 /// Release all pressed key.
 pub fn release_all_key() -> Result<()> {
     let mut locked_input = INPUTS.lock().unwrap();
@@ -481,7 +488,7 @@ mod tests {
     use anyhow::bail;
 
     #[cfg(feature = "keycode")]
-    use crate::keycode::KeyCode;
+    use crate::keycode::{DpyMod, KeyCode};
     static TEST_INPUT: Lazy<Arc<Mutex<TestInput>>> =
         Lazy::new(|| Arc::new(Mutex::new(TestInput::default())));
 
@@ -612,7 +619,7 @@ mod tests {
         test_input.register_input();
         let test_kdb = test_input.kbd.clone();
 
-        let keysym2qkeycode = KeyCode::keysym_to_qkeycode();
+        let keysym2qkeycode = KeyCode::keysym_to_qkeycode(DpyMod::Gtk);
         // ["0", "a", "space"]
         let keysym_lists: Vec<u16> = vec![0x0030, 0x0061, 0x0020];
         let keycode_lists: Vec<u16> = keysym_lists
