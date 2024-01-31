@@ -25,7 +25,7 @@ use log::{debug, error, warn};
 
 use super::{
     AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData, AUDIO_SAMPLE_RATE_44KHZ,
-    AUDIO_SAMPLE_RATE_48KHZ, TARGET_LATENCY_MS, WINDOWS_SAMPLE_BASE_RATE,
+    TARGET_LATENCY_MS,
 };
 
 const MAX_CHANNELS: u8 = 8;
@@ -106,11 +106,7 @@ impl AlsaStreamData {
 
         // If audio format changed, reconfigure.
         self.stream_fmt = recv_data.fmt;
-        self.rate = if recv_data.fmt.rate >= WINDOWS_SAMPLE_BASE_RATE {
-            AUDIO_SAMPLE_RATE_44KHZ
-        } else {
-            AUDIO_SAMPLE_RATE_48KHZ
-        } * (recv_data.fmt.rate % WINDOWS_SAMPLE_BASE_RATE) as u32;
+        self.rate = recv_data.fmt.get_rate();
 
         match recv_data.fmt.size {
             16 => {
@@ -210,10 +206,10 @@ impl AudioInterface for AlsaStreamData {
         }
     }
 
-    fn receive(&mut self, recv_data: &StreamData) -> bool {
+    fn receive(&mut self, recv_data: &StreamData) -> i32 {
         if !self.check_fmt_update(recv_data) {
             self.destroy();
-            return false;
+            return 0;
         }
 
         let mut frames = 0;
@@ -266,7 +262,7 @@ impl AudioInterface for AlsaStreamData {
                 }
             }
         }
-        true
+        1
     }
 
     fn destroy(&mut self) {

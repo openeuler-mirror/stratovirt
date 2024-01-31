@@ -175,7 +175,7 @@ pub struct OhAudioRendererCallbacks {
     /// This function pointer will point to the callback function that
     /// is used to write audio data
     pub oh_audio_renderer_on_write_data: ::std::option::Option<
-        unsafe extern "C" fn(
+        extern "C" fn(
             renderer: *mut OhAudioRenderer,
             userData: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
@@ -196,7 +196,7 @@ pub struct OhAudioCapturerCallbacks {
     /// This function pointer will point to the callback function that
     /// is used to read audio data.
     pub oh_audio_capturer_on_read_data: ::std::option::Option<
-        unsafe extern "C" fn(
+        extern "C" fn(
             capturer: *mut OhAudioCapturer,
             userData: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
