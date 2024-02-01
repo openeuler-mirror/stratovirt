@@ -263,7 +263,7 @@ impl MachineBase {
 macro_rules! create_device_add_matches {
     ( $command:expr; $controller: expr;
         $(($($driver_name:tt)|+, $function_name:tt, $($arg:tt),*)),*;
-        $(#[cfg(feature = $feature: tt)]
+        $(#[cfg($($features: tt)*)]
         ($driver_name1:tt, $function_name1:tt, $($arg1:tt),*)),*
     ) => {
         match $command {
@@ -273,7 +273,7 @@ macro_rules! create_device_add_matches {
                 },
             )*
             $(
-                #[cfg(feature = $feature)]
+                #[cfg($($features)*)]
                 $driver_name1 => {
                     $controller.$function_name1($($arg1),*)?;
                 },
