@@ -12,19 +12,24 @@
 
 mod gicv2;
 mod gicv3;
-#[allow(dead_code)]
 mod state;
 
-pub use gicv2::{GICv2, GICv2Config};
-pub use gicv3::{GICv3, GICv3Config};
+pub use gicv2::GICv2;
+pub use gicv2::GICv2Access;
+pub use gicv2::GICv2Config;
+pub use gicv3::GICv3;
+pub use gicv3::GICv3Access;
+pub use gicv3::GICv3Config;
+pub use gicv3::GICv3ItsAccess;
+pub use gicv3::GicRedistRegion;
+pub use state::{GICv3ItsState, GICv3State};
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use kvm_ioctls::DeviceFd;
 
 use crate::interrupt_controller::error::InterruptError;
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use machine_manager::machine::{MachineLifecycle, VmState};
 use util::{
     device_tree::{self, FdtBuilder},
     Result as UtilResult,
@@ -41,49 +46,6 @@ pub enum GICVersion {
     GICv3,
 }
 
-/// A wrapper for kvm_based device check and access.
-pub struct KvmDevice;
-
-impl KvmDevice {
-    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr: 0,
-            flags: 0,
-        };
-        fd.has_device_attr(&attr)
-            .with_context(|| "Failed to check device attributes for GIC.")?;
-        Ok(())
-    }
-
-    fn kvm_device_access(
-        fd: &DeviceFd,
-        group: u32,
-        attr: u64,
-        addr: u64,
-        write: bool,
-    ) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr,
-            flags: 0,
-        };
-
-        if write {
-            fd.set_device_attr(&attr)
-                .with_context(|| "Failed to set device attributes for GIC.")?;
-        } else {
-            let mut attr = attr;
-            fd.get_device_attr(&mut attr)
-                .with_context(|| "Failed to get device attributes for GIC.")?;
-        };
-
-        Ok(())
-    }
-}
-
 pub struct GICConfig {
     /// Config GIC version
     pub version: Option<GICVersion>,
@@ -98,7 +60,7 @@ pub struct GICConfig {
 }
 
 impl GICConfig {
-    fn check_sanity(&self) -> Result<()> {
+    pub fn check_sanity(&self) -> Result<()> {
         if self.max_irq <= GIC_IRQ_INTERNAL {
             return Err(anyhow!(InterruptError::InvalidConfig(
                 "GIC irq numbers need above 32".to_string()
@@ -110,19 +72,7 @@ impl GICConfig {
 
 /// A wrapper for `GIC` must perform the function.
 pub trait GICDevice: MachineLifecycle {
-    /// Constructs a kvm_based `GIC` device.
-    ///
-    /// # Arguments
-    ///
-    /// * `vm` - File descriptor for vmfd.
-    /// * `gic_conf` - Configuration for `GIC`.
-    fn create_device(
-        gic_conf: &GICConfig,
-    ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>>
-    where
-        Self: Sized;
-
-    /// Realize function for kvm_based `GIC` device.
+    /// Realize function for hypervisor_based `GIC` device.
     fn realize(&self) -> Result<()>;
 
     /// Reset 'GIC'
@@ -143,29 +93,22 @@ pub trait GICDevice: MachineLifecycle {
     }
 }
 
-/// A wrapper around creating and using a kvm-based interrupt controller.
+#[derive(Clone)]
+/// A wrapper around creating and using a hypervisor-based interrupt controller.
 pub struct InterruptController {
     gic: Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>,
 }
 
 impl InterruptController {
-    /// Constructs a new kvm_based `InterruptController`.
+    /// Constructs a new hypervisor_based `InterruptController`.
     ///
     /// # Arguments
     ///
     /// * `gic_conf` - Configuration for `GIC`.
-    pub fn new(gic_conf: &GICConfig) -> Result<InterruptController> {
-        gic_conf.check_sanity()?;
-        let gic = match &gic_conf.version {
-            Some(GICVersion::GICv3) => GICv3::create_device(gic_conf),
-            Some(GICVersion::GICv2) => GICv2::create_device(gic_conf),
-            // Try v3 first if no version specified.
-            None => GICv3::create_device(gic_conf).or_else(|_| GICv2::create_device(gic_conf)),
-        };
-        let intc = InterruptController {
-            gic: gic.with_context(|| "Failed to realize GIC")?,
-        };
-        Ok(intc)
+    pub fn new(
+        gic: Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>,
+    ) -> InterruptController {
+        InterruptController { gic }
     }
 
     pub fn realize(&self) -> Result<()> {
@@ -182,8 +125,7 @@ impl InterruptController {
 
     /// Change `InterruptController` lifecycle state to `Stopped`.
     pub fn stop(&self) {
-        self.gic
-            .notify_lifecycle(KvmVmState::Running, KvmVmState::Paused);
+        self.gic.notify_lifecycle(VmState::Running, VmState::Paused);
     }
 
     pub fn get_redist_count(&self) -> u8 {

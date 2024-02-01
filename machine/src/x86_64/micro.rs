@@ -14,14 +14,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::vm_state;
 use crate::{
     micro_common::syscall::syscall_whitelist, LightMachine, MachineBase, MachineError, MachineOps,
 };
 use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
 use devices::legacy::FwCfgOps;
-use hypervisor::kvm::KVM_FDS;
+use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
@@ -85,13 +84,14 @@ impl MachineOps for LightMachine {
     }
 
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .create_irq_chip()
-            .with_context(|| MachineError::CrtIrqchipErr)
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        locked_hypervisor.create_interrupt_controller()?;
+
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+
+        Ok(())
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
@@ -157,9 +157,11 @@ impl MachineOps for LightMachine {
         ));
         trace::cpu_topo(&topology);
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_io, &locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
-            &locked_vm.base.sys_io,
             &locked_vm.base.sys_mem,
             vm_config.machine_config.nr_cpus,
         )?;
@@ -167,7 +169,6 @@ impl MachineOps for LightMachine {
         let migrate_info = locked_vm.get_migrate_info();
 
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
-        locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
         // Add mmio devices
         locked_vm
@@ -182,8 +183,10 @@ impl MachineOps for LightMachine {
             None
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             vm_config.machine_config.nr_cpus,
             vm_config.machine_config.max_cpus,
             &topology,
@@ -191,10 +194,9 @@ impl MachineOps for LightMachine {
         )?);
 
         MigrationManager::register_vm_instance(vm.clone());
-        MigrationManager::register_kvm_instance(
-            vm_state::KvmDeviceState::descriptor(),
-            Arc::new(vm_state::KvmDevice {}),
-        );
+        let migration_hyp = locked_vm.base.migration_hypervisor.clone();
+        migration_hyp.lock().unwrap().register_instance()?;
+        MigrationManager::register_migration_instance(migration_hyp);
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }

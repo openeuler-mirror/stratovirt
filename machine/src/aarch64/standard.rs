@@ -16,8 +16,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
-use kvm_bindings::{KVM_ARM_IRQ_TYPE_SHIFT, KVM_ARM_IRQ_TYPE_SPI};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -47,9 +46,10 @@ use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
-use devices::pci::{InterruptHandler, PciDevOps, PciHost, PciIntxState};
+use devices::pci::{PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::SysBusDevType;
-use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX};
+use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
+use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::parse_ramfb;
@@ -62,8 +62,8 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    KvmVmState, MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface,
+    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
+    MigrateInterface, VmState,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
@@ -211,9 +211,9 @@ impl StdMachine {
             if cpu_index == 0 {
                 fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
             }
-            cpu.fd()
-                .vcpu_init(&cpu.arch().lock().unwrap().kvi())
-                .with_context(|| "Failed to init vcpu fd")?;
+            cpu.hypervisor_cpu()
+                .vcpu_init()
+                .with_context(|| "Failed to init vcpu")?;
         }
 
         locked_vm
@@ -315,7 +315,7 @@ impl StdMachine {
                 self.pause();
             }
 
-            let value = match vcpu.fd().get_one_reg(addr) {
+            let value = match vcpu.hypervisor_cpu.get_one_reg(addr) {
                 Ok(value) => Some(value),
                 _ => None,
             };
@@ -444,33 +444,28 @@ impl MachineOps for StdMachine {
             v2: None,
             v3: Some(v3),
         };
-        let irq_chip = InterruptController::new(&intc_conf)?;
-        self.base.irq_chip = Some(Arc::new(irq_chip));
+
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
         self.base.irq_chip.as_ref().unwrap().realize()?;
-        KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .init_irq_route_table();
-        KVM_FDS.load().commit_irq_routing()?;
 
         let root_bus = &self.pci_host.lock().unwrap().root_bus;
-        let irq_handler = Box::new(move |gsi: u32, level: bool| -> Result<()> {
-            // The handler is only used to send PCI INTx interrupt.
-            // PCI INTx interrupt is belong to SPI interrupt type.
-            let irq = gsi + GIC_IRQ_INTERNAL;
-            let irqtype = KVM_ARM_IRQ_TYPE_SPI;
-            let kvm_irq = irqtype << KVM_ARM_IRQ_TYPE_SHIFT | irq;
-
-            KVM_FDS.load().set_irq_line(kvm_irq, level)
-        }) as InterruptHandler;
-
-        let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
-            IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
-            irq_handler,
-        ))));
-        root_bus.lock().unwrap().intx_state = irq_state;
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        let line_irq_manager = irq_manager.line_irq_manager;
+        if let Some(line_irq_manager) = line_irq_manager.clone() {
+            let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
+                IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
+                line_irq_manager.clone(),
+            ))));
+            root_bus.lock().unwrap().intx_state = irq_state;
+        } else {
+            return Err(anyhow!(
+                "Failed to create intx state: legacy irq manager is none."
+            ));
+        }
+        self.base.sysbus.irq_manager = line_irq_manager;
 
         Ok(())
     }
@@ -547,6 +542,9 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to register resume event")?;
 
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.base.sys_mem,
@@ -574,8 +572,10 @@ impl MachineOps for StdMachine {
             None
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             nr_cpus,
             &CPUTopology::new(),
             &boot_config,
@@ -641,6 +641,7 @@ impl MachineOps for StdMachine {
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
+        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
@@ -941,7 +942,7 @@ impl AcpiBuilder for StdMachine {
         for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().res.irq as u32;
+                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as u32;
                 break;
             }
         }
@@ -1134,7 +1135,7 @@ impl AcpiBuilder for StdMachine {
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -1143,7 +1144,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
             return false;
         }
         event!(Resume);
@@ -1156,7 +1157,7 @@ impl MachineLifecycle for StdMachine {
             *state
         };
 
-        if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
             warn!("Failed to destroy guest, destroy continue.");
             if self.shutdown_req.write(1).is_err() {
                 error!("Failed to send shutdown request.")
@@ -1195,7 +1196,7 @@ impl MachineLifecycle for StdMachine {
         true
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
             &self.base.cpus,
             &self.base.irq_chip,
@@ -1239,7 +1240,7 @@ impl MachineTestInterface for StdMachine {}
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {
         let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == KvmVmState::Shutdown
+        *vmstate == VmState::Shutdown
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {

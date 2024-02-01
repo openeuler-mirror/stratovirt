@@ -725,7 +725,8 @@ impl Region {
     }
 
     /// Get the ioeventfds within this Region,
-    /// these fds will be register to `KVM` and used for guest notifier.
+    /// these fds will be register to `Hypervisor` supporting
+    /// ioeventfd and used for guest notifier.
     pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         self.io_evtfds.lock().unwrap().to_vec()
     }

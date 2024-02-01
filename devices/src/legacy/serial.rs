@@ -27,7 +27,6 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use chardev_backend::chardev::{Chardev, InputReceiver};
-use hypervisor::kvm::KVM_FDS;
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
 use migration::{
     snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
@@ -179,13 +178,7 @@ impl Serial {
 
         self.state.iir = iir;
         if iir != UART_IIR_NO_INT {
-            if let Some(evt) = self.interrupt_evt() {
-                if let Err(e) = evt.write(1) {
-                    error!("serial: failed to write interrupt eventfd ({:?}).", e);
-                }
-                return;
-            }
-            error!("serial: failed to update iir.");
+            self.inject_interrupt();
         }
         trace::serial_update_iir(self.state.iir);
     }
@@ -397,16 +390,11 @@ impl SysBusDevOps for Serial {
         }
     }
 
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> Result<i32> {
-        let mut irq: i32 = -1;
-        if let Some(e) = self.interrupt_evt() {
-            irq = UART_IRQ;
-            KVM_FDS.load().register_irqfd(&e, irq as u32)?;
-        }
-        Ok(irq)
+    fn get_irq(&self, _sysbus: &mut SysBus) -> Result<i32> {
+        Ok(UART_IRQ)
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

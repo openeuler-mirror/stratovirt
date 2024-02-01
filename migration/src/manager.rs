@@ -24,6 +24,7 @@ use once_cell::sync::Lazy;
 use crate::general::translate_id;
 use crate::migration::DirtyBitmap;
 use crate::protocol::{DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer};
+use crate::MigrateOps;
 use machine_manager::config::VmConfig;
 use machine_manager::machine::MachineLifecycle;
 use util::byte_code::ByteCode;
@@ -177,6 +178,8 @@ pub struct Vmm {
     #[cfg(target_arch = "x86_64")]
     /// Trait to represent kvm device.
     pub kvm: Option<Arc<dyn MigrationHook + Send + Sync>>,
+    /// The vector of the object implementing MigrateOps trait.
+    pub mgt_object: Option<Arc<Mutex<dyn MigrateOps>>>,
 }
 
 /// Limit of migration.
@@ -357,6 +360,16 @@ impl MigrationManager {
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.gic_group.insert(translate_id(id), gic);
+    }
+
+    /// Register migration instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `mgt_object` - object with MigrateOps trait.
+    pub fn register_migration_instance(mgt_object: Arc<Mutex<dyn MigrateOps + 'static>>) {
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.mgt_object = Some(mgt_object);
     }
 
     /// Unregister transport instance from vmm.

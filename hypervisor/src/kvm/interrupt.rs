@@ -10,11 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
+use std::mem::{align_of, size_of};
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
 use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
-use kvm_ioctls::{Cap, Kvm};
+use kvm_ioctls::{Cap, Kvm, VmFd};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
+use devices::pci::MsiVector;
 use util::bitmap::Bitmap;
 
 pub(crate) type IrqRoute = kvm_bindings::kvm_irq_routing;
@@ -192,53 +196,65 @@ impl IrqRouteTable {
         Ok(())
     }
 
-    /// Get `IrqRouteEntry` by given gsi number.
-    /// A gsi number may have several entries. If no gsi number in table, is will
-    /// return an empty vector.
-    pub fn get_irq_route_entry(&self, gsi: u32) -> Vec<IrqRouteEntry> {
-        let mut entries = Vec::new();
-        for entry in self.irq_routes.iter() {
-            if gsi == entry.gsi {
-                entries.push(*entry);
+    /// Sets the gsi routing table entries. It will overwrite previously set entries.
+    pub fn commit_irq_routing(&self, vm_fd: &Arc<VmFd>) -> Result<()> {
+        let routes = self.irq_routes.clone();
+
+        let layout = std::alloc::Layout::from_size_align(
+            size_of::<IrqRoute>() + routes.len() * size_of::<IrqRouteEntry>(),
+            std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
+        )?;
+
+        // SAFETY: data in `routes` is reliable.
+        unsafe {
+            let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
+            if irq_routing.is_null() {
+                bail!("Failed to alloc irq routing");
             }
+            (*irq_routing).nr = routes.len() as u32;
+            (*irq_routing).flags = 0;
+            let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
+            entries.copy_from_slice(&routes);
+
+            let ret = vm_fd
+                .set_gsi_routing(&*irq_routing)
+                .with_context(|| "Failed to set gsi routing");
+
+            std::alloc::dealloc(irq_routing as *mut u8, layout);
+            ret
         }
-
-        entries
     }
-}
-
-/// Basic data for msi vector.
-#[derive(Copy, Clone, Default)]
-pub struct MsiVector {
-    pub msg_addr_lo: u32,
-    pub msg_addr_hi: u32,
-    pub msg_data: u32,
-    pub masked: bool,
-    #[cfg(target_arch = "aarch64")]
-    pub dev_id: u32,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::KVMFds;
-    use super::get_maximum_gsi_cnt;
+    use std::sync::{Arc, Mutex};
+
+    use super::{get_maximum_gsi_cnt, IrqRouteTable};
+    use crate::kvm::{KVMInterruptManager, KvmHypervisor};
 
     #[test]
     fn test_get_maximum_gsi_cnt() {
-        let kvm_fds = KVMFds::new();
-        if kvm_fds.vm_fd.is_none() {
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        if kvm_hyp.vm_fd.is_none() {
             return;
         }
-        assert!(get_maximum_gsi_cnt(kvm_fds.fd.as_ref().unwrap()) > 0);
+        assert!(get_maximum_gsi_cnt(kvm_hyp.fd.as_ref().unwrap()) > 0);
     }
 
     #[test]
     fn test_alloc_and_release_gsi() {
-        let kvm_fds = KVMFds::new();
-        if kvm_fds.vm_fd.is_none() {
+        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        if kvm_hyp.vm_fd.is_none() {
             return;
         }
-        let mut irq_route_table = kvm_fds.irq_route_table.lock().unwrap();
+        let irq_route_table = Mutex::new(IrqRouteTable::new(&kvm_hyp.fd.as_ref().unwrap()));
+        let irq_manager = Arc::new(KVMInterruptManager::new(
+            true,
+            kvm_hyp.vm_fd.clone().unwrap(),
+            irq_route_table,
+        ));
+        let mut irq_route_table = irq_manager.irq_route_table.lock().unwrap();
         irq_route_table.init_irq_route_table();
 
         #[cfg(target_arch = "x86_64")]

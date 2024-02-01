@@ -276,11 +276,10 @@ impl PciDevOps for XhciPciDevice {
 
         let intrs_num = self.xhci.lock().unwrap().intrs.len() as u32;
         init_msix(
+            &mut self.base,
             0_usize,
             intrs_num,
-            &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.base.id,
             Some(&self.mem_region),
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;

@@ -54,8 +54,8 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle, MigrateInterface,
+    DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
+    MachineLifecycle, MigrateInterface, VmState,
 };
 use machine_manager::qmp::{
     qmp_channel::QmpChannel, qmp_response::Response, qmp_schema, qmp_schema::UpdateRegionArgument,
@@ -433,7 +433,7 @@ impl LightMachine {
 
 impl MachineLifecycle for LightMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -442,7 +442,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
             return false;
         }
 
@@ -456,7 +456,7 @@ impl MachineLifecycle for LightMachine {
             *state
         };
 
-        if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
             return false;
         }
 
@@ -476,7 +476,7 @@ impl MachineLifecycle for LightMachine {
         self.destroy()
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
             &self.base.cpus,
             #[cfg(target_arch = "aarch64")]
@@ -522,12 +522,12 @@ impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
         let vmstate = self.get_vm_state().deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
-            KvmVmState::Running => qmp_schema::StatusInfo {
+            VmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: true,
                 status: qmp_schema::RunState::running,
             },
-            KvmVmState::Paused => qmp_schema::StatusInfo {
+            VmState::Paused => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: false,
                 status: qmp_schema::RunState::paused,
@@ -942,7 +942,7 @@ impl MachineExternalInterface for LightMachine {}
 impl EventLoopManager for LightMachine {
     fn loop_should_exit(&self) -> bool {
         let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == KvmVmState::Shutdown
+        *vmstate == VmState::Shutdown
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {

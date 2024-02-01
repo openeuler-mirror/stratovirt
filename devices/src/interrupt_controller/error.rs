@@ -16,6 +16,4 @@ use thiserror::Error;
 pub enum InterruptError {
     #[error("Invalid GIC config: {0}")]
     InvalidConfig(String),
-    #[error("Failed to create KVM device: {0:#?}.")]
-    CreateKvmDevice(kvm_ioctls::Error),
 }

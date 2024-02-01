@@ -29,7 +29,7 @@ pub use config::{PciConfig, INTERRUPT_PIN};
 pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
-pub use msix::init_msix;
+pub use msix::{init_msix, MsiVector};
 pub use root_port::RootPort;
 
 use std::{
@@ -39,7 +39,10 @@ use std::{
 
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::{
+    pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC},
+    MsiIrqManager,
+};
 use crate::{Device, DeviceBase};
 use util::AsAny;
 
@@ -260,6 +263,10 @@ pub trait PciDevOps: Device + Send + AsAny {
     }
 
     fn get_intx_state(&self) -> Option<Arc<Mutex<PciIntxState>>> {
+        None
+    }
+
+    fn get_msi_irq_manager(&self) -> Option<Arc<dyn MsiIrqManager>> {
         None
     }
 }

@@ -15,14 +15,14 @@ use std::mem::size_of;
 use anyhow::Context;
 use libc::c_uint;
 
-use super::gicv3::{GICv3, GICv3Access, GICv3Its};
+use super::gicv3::{GICv3, GICv3Its};
 use super::GIC_IRQ_INTERNAL;
 use crate::interrupt_controller::Result;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
-/// Register data length can be get by `get_device_attr/set_device_attr` in kvm once.
+/// Register data length can be get in hypervisor once.
 const REGISTER_SIZE: u64 = size_of::<c_uint>() as u64;
 
 /// Distributor registers, as offsets from the distributor base address

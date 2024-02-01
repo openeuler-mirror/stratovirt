@@ -10,13 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use kvm_bindings::{
-    KVM_REG_ARM_COPROC_MASK, KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_U32,
-    KVM_REG_SIZE_U64,
-};
-use kvm_ioctls::{Cap, Kvm, VcpuFd};
+use std::sync::Arc;
 
-use super::core_regs::Result;
+use kvm_ioctls::Cap;
+
+use crate::CPUHypervisorOps;
 use machine_manager::config::{CpuConfig, PmuConfig};
 
 // Capabilities for ARM cpu.
@@ -32,16 +30,14 @@ pub struct ArmCPUCaps {
 
 impl ArmCPUCaps {
     /// Initialize ArmCPUCaps instance.
-    pub fn init_capabilities() -> Self {
-        let kvm = Kvm::new().unwrap();
-
+    pub fn init_capabilities(hypervisor_cpu: Arc<dyn CPUHypervisorOps>) -> Self {
         ArmCPUCaps {
-            irq_chip: kvm.check_extension(Cap::Irqchip),
-            ioevent_fd: kvm.check_extension(Cap::Ioeventfd),
-            irq_fd: kvm.check_extension(Cap::Irqfd),
-            user_mem: kvm.check_extension(Cap::UserMemory),
-            psci02: kvm.check_extension(Cap::ArmPsci02),
-            mp_state: kvm.check_extension(Cap::MpState),
+            irq_chip: hypervisor_cpu.check_extension(Cap::Irqchip),
+            ioevent_fd: hypervisor_cpu.check_extension(Cap::Ioeventfd),
+            irq_fd: hypervisor_cpu.check_extension(Cap::Irqfd),
+            user_mem: hypervisor_cpu.check_extension(Cap::UserMemory),
+            psci02: hypervisor_cpu.check_extension(Cap::ArmPsci02),
+            mp_state: hypervisor_cpu.check_extension(Cap::MpState),
         }
     }
 }
@@ -67,54 +63,4 @@ impl From<&CpuConfig> for ArmCPUFeatures {
 pub struct CpregListEntry {
     pub reg_id: u64,
     pub value: u128,
-}
-
-impl CpregListEntry {
-    fn cpreg_tuples_entry(&self) -> bool {
-        (self.reg_id & KVM_REG_ARM_COPROC_MASK as u64) == (KVM_REG_ARM_CORE as u64)
-    }
-
-    fn normal_cpreg_entry(&self) -> bool {
-        if self.cpreg_tuples_entry() {
-            return false;
-        }
-
-        ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32)
-            || ((self.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64)
-    }
-
-    /// Validate cpreg_list's tuples entry and normal entry.
-    pub fn validate(&self) -> bool {
-        if self.cpreg_tuples_entry() {
-            return true;
-        }
-
-        self.normal_cpreg_entry()
-    }
-
-    /// Get Cpreg value from Kvm.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn get_cpreg(&mut self, vcpu_fd: &VcpuFd) -> Result<()> {
-        if self.normal_cpreg_entry() {
-            self.value = vcpu_fd.get_one_reg(self.reg_id)?;
-        }
-
-        Ok(())
-    }
-
-    /// Set Cpreg value to Kvm.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn set_cpreg(&self, vcpu_fd: &VcpuFd) -> Result<()> {
-        if self.normal_cpreg_entry() {
-            vcpu_fd.set_one_reg(self.reg_id, self.value)?;
-        }
-
-        Ok(())
-    }
 }

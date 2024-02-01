@@ -18,10 +18,8 @@ use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError}
 use crate::{LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
-use devices::{
-    legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX,
-};
-use hypervisor::kvm::*;
+use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
+use hypervisor::kvm::aarch64::*;
 use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::{
@@ -102,9 +100,15 @@ impl MachineOps for LightMachine {
             v3: Some(v3),
             v2: Some(v2),
         };
-        let irq_chip = InterruptController::new(&intc_conf)?;
-        self.base.irq_chip = Some(Arc::new(irq_chip));
-        self.base.irq_chip.as_ref().unwrap().realize()
+
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
+        self.base.irq_chip.as_ref().unwrap().realize()?;
+
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
@@ -147,6 +151,9 @@ impl MachineOps for LightMachine {
         ));
         trace::cpu_topo(&topology);
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.base.sys_mem,
@@ -167,9 +174,11 @@ impl MachineOps for LightMachine {
             (None, None)
         };
 
+        let hypervisor = locked_vm.base.hypervisor.clone();
         // vCPUs init,and apply CPU features (for aarch64)
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             vm_config.machine_config.nr_cpus,
             &topology,
             &boot_config,
@@ -205,6 +214,7 @@ impl MachineOps for LightMachine {
         }
 
         MigrationManager::register_vm_instance(vm.clone());
+        MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }

@@ -24,7 +24,7 @@ use super::mch::Mch;
 use crate::error::MachineError;
 use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{vm_state, MachineBase, MachineOps};
+use crate::{MachineBase, MachineOps};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
@@ -40,6 +40,7 @@ use devices::legacy::{
     SERIAL_ADDR,
 };
 use devices::pci::{PciDevOps, PciHost};
+use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
@@ -49,8 +50,8 @@ use machine_manager::config::{
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    KvmVmState, MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface,
+    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
+    MigrateInterface, VmState,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
@@ -347,9 +348,11 @@ impl StdMachineOps for StdMachine {
             let boot_cfg = locked_controller.get_boot_config();
             let topology = locked_controller.get_topology_config();
 
+            let hypervisor = clone_vm.lock().unwrap().base.hypervisor.clone();
             let vcpu = <StdMachine as MachineOps>::create_vcpu(
                 vcpu_id,
                 clone_vm,
+                hypervisor,
                 self.base.cpu_topo.max_cpus,
             )?;
             vcpu.realize(boot_cfg, topology).with_context(|| {
@@ -431,20 +434,16 @@ impl MachineOps for StdMachine {
     }
 
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .create_irq_chip()
-            .with_context(|| MachineError::CrtIrqchipErr)?;
-        KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .init_irq_route_table();
-        KVM_FDS.load().commit_irq_routing()
+        let hypervisor = self.get_hypervisor();
+        let mut locked_hypervisor = hypervisor.lock().unwrap();
+        locked_hypervisor.create_interrupt_controller()?;
+
+        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let irq_manager = locked_hypervisor.create_irq_manager()?;
+        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+
+        Ok(())
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
@@ -525,15 +524,16 @@ impl MachineOps for StdMachine {
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
+        locked_hypervisor.init_machine(&locked_vm.base.sys_io, &locked_vm.base.sys_mem)?;
+        drop(locked_hypervisor);
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
-            &locked_vm.base.sys_io,
             &locked_vm.base.sys_mem,
             nr_cpus,
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
-        locked_vm.arch_init(MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0)?;
 
         locked_vm
             .init_pci_host()
@@ -556,8 +556,11 @@ impl MachineOps for StdMachine {
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
+
+        let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
+            hypervisor,
             nr_cpus,
             max_cpus,
             &topology,
@@ -609,10 +612,9 @@ impl MachineOps for StdMachine {
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
-        MigrationManager::register_kvm_instance(
-            vm_state::KvmDeviceState::descriptor(),
-            Arc::new(vm_state::KvmDevice {}),
-        );
+        let migration_hyp = locked_vm.base.migration_hypervisor.clone();
+        migration_hyp.lock().unwrap().register_instance()?;
+        MigrationManager::register_migration_instance(migration_hyp);
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
@@ -969,7 +971,7 @@ impl AcpiBuilder for StdMachine {
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -978,7 +980,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
             return false;
         }
         event!(Resume);
@@ -991,7 +993,7 @@ impl MachineLifecycle for StdMachine {
             *state
         };
 
-        if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
+        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
             return false;
         }
 
@@ -1009,7 +1011,7 @@ impl MachineLifecycle for StdMachine {
         true
     }
 
-    fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
         if let Err(e) = self.vm_state_transfer(
             &self.base.cpus,
             &mut self.base.vm_state.0.lock().unwrap(),
@@ -1052,7 +1054,7 @@ impl MachineTestInterface for StdMachine {}
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {
         let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == KvmVmState::Shutdown
+        *vmstate == VmState::Shutdown
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {

@@ -18,8 +18,6 @@ pub mod standard_common;
 pub mod x86_64;
 
 mod micro_common;
-#[cfg(target_arch = "x86_64")]
-mod vm_state;
 
 pub use anyhow::Result;
 
@@ -42,14 +40,10 @@ use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
-#[cfg(target_arch = "x86_64")]
-use address_space::KvmIoListener;
-use address_space::{
-    create_backend_mem, create_default_mem, AddressSpace, GuestAddress, KvmMemoryListener, Region,
-};
+use address_space::{create_backend_mem, create_default_mem, AddressSpace, GuestAddress, Region};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
+use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::PvPanicPci;
@@ -72,7 +66,7 @@ use devices::usb::{
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
-use hypervisor::kvm::KVM_FDS;
+use hypervisor::{kvm::KvmHypervisor, HypervisorOps};
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
@@ -97,8 +91,8 @@ use machine_manager::config::{
     parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{KvmVmState, MachineInterface};
-use migration::MigrationManager;
+use machine_manager::machine::{MachineInterface, VmState};
+use migration::{MigrateOps, MigrationManager};
 use standard_common::Result as StdResult;
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -107,7 +101,7 @@ use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
-use vfio::{VfioDevice, VfioPciDevice};
+use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 use virtio::{
@@ -135,7 +129,7 @@ pub struct MachineBase {
     /// System bus.
     sysbus: SysBus,
     /// VM running state.
-    vm_state: Arc<(Mutex<KvmVmState>, Condvar)>,
+    vm_state: Arc<(Mutex<VmState>, Condvar)>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// All configuration information of virtual machine.
@@ -148,6 +142,10 @@ pub struct MachineBase {
     fwcfg_dev: Option<Arc<Mutex<dyn FwCfgOps>>>,
     /// machine all backend memory region tree
     machine_ram: Arc<Region>,
+    /// machine hypervisor.
+    hypervisor: Arc<Mutex<dyn HypervisorOps>>,
+    /// migrate hypervisor.
+    migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
 }
 
 impl MachineBase {
@@ -191,6 +189,8 @@ impl MachineBase {
             mmio_region,
         );
 
+        let hypervisor = Arc::new(Mutex::new(KvmHypervisor::new()?));
+
         Ok(MachineBase {
             cpu_topo,
             cpus: Vec::new(),
@@ -200,13 +200,15 @@ impl MachineBase {
             #[cfg(target_arch = "x86_64")]
             sys_io,
             sysbus,
-            vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
+            vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
             fwcfg_dev: None,
             machine_ram,
+            hypervisor: hypervisor.clone(),
+            migration_hypervisor: hypervisor,
         })
     }
 
@@ -371,28 +373,13 @@ pub trait MachineOps {
     fn init_memory(
         &self,
         mem_config: &MachineMemConfig,
-        #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         nr_cpus: u8,
     ) -> Result<()> {
-        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time. The system
-        // call registers some notifier functions in the KVM, which are frequently triggered when
-        // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
-        // needs to be invoked first.
         let migrate_info = self.get_migrate_info();
         if migrate_info.0 != MigrateMode::File {
             self.create_machine_ram(mem_config, nr_cpus)?;
         }
-
-        sys_mem
-            .register_listener(Arc::new(Mutex::new(KvmMemoryListener::new(
-                KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-            ))))
-            .with_context(|| "Failed to register KVM listener for memory space.")?;
-        #[cfg(target_arch = "x86_64")]
-        sys_io
-            .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
-            .with_context(|| "Failed to register KVM listener for I/O address space.")?;
 
         if migrate_info.0 != MigrateMode::File {
             self.init_machine_ram(sys_mem, mem_config.mem_size)?;
@@ -420,25 +407,23 @@ pub trait MachineOps {
     fn create_vcpu(
         vcpu_id: u8,
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
+        hypervisor: Arc<Mutex<dyn HypervisorOps>>,
         #[cfg(target_arch = "x86_64")] max_cpus: u8,
     ) -> Result<Arc<CPU>>
     where
         Self: Sized,
     {
-        let vcpu_fd = KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .create_vcpu(vcpu_id as u64)
-            .with_context(|| "Create vcpu failed")?;
+        let locked_hypervisor = hypervisor.lock().unwrap();
+        let hypervisor_cpu: Arc<dyn CPUHypervisorOps> =
+            locked_hypervisor.create_hypervisor_cpu(vcpu_id)?;
+
         #[cfg(target_arch = "aarch64")]
         let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
         #[cfg(target_arch = "x86_64")]
         let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(max_cpus));
 
         let cpu = Arc::new(CPU::new(
-            Arc::new(vcpu_fd),
+            hypervisor_cpu,
             vcpu_id,
             Arc::new(Mutex::new(arch_cpu)),
             vm.clone(),
@@ -456,6 +441,7 @@ pub trait MachineOps {
     /// * `boot_cfg` - Boot message generated by reading boot source to guest memory.
     fn init_vcpu(
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
+        hypervisor: Arc<Mutex<dyn HypervisorOps>>,
         nr_cpus: u8,
         #[cfg(target_arch = "x86_64")] max_cpus: u8,
         topology: &CPUTopology,
@@ -471,6 +457,7 @@ pub trait MachineOps {
             let cpu = Self::create_vcpu(
                 vcpu_id,
                 vm.clone(),
+                hypervisor.clone(),
                 #[cfg(target_arch = "x86_64")]
                 max_cpus,
             )?;
@@ -499,31 +486,6 @@ pub trait MachineOps {
         Ok(cpus)
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn arch_init(&self, identity_addr: u64) -> Result<()> {
-        use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-
-        vm_fd
-            .set_identity_map_address(identity_addr)
-            .with_context(|| MachineError::SetIdentityMapAddr)?;
-
-        // Page table takes 1 page, TSS takes the following 3 pages.
-        vm_fd
-            .set_tss_address((identity_addr + 0x1000) as usize)
-            .with_context(|| MachineError::SetTssErr)?;
-
-        let pit_config = kvm_pit_config {
-            flags: KVM_PIT_SPEAKER_DUMMY,
-            pad: Default::default(),
-        };
-        vm_fd
-            .create_pit2(pit_config)
-            .with_context(|| MachineError::CrtPitErr)
-    }
-
     /// Must be called after the CPUs have been realized and GIC has been created.
     ///
     /// # Arguments
@@ -534,7 +496,7 @@ pub trait MachineOps {
         let features = vcpu_cfg.unwrap_or_default();
         if features.pmu {
             for cpu in self.machine_base().cpus.iter() {
-                cpu.init_pmu()?;
+                cpu.hypervisor_cpu.init_pmu()?;
             }
         }
         Ok(())
@@ -640,7 +602,7 @@ pub trait MachineOps {
         self.machine_base().vm_config.clone()
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+    fn get_vm_state(&self) -> &Arc<(Mutex<VmState>, Condvar)> {
         &self.machine_base().vm_state
     }
 
@@ -650,6 +612,10 @@ pub trait MachineOps {
 
     fn get_numa_nodes(&self) -> &Option<NumaNodes> {
         &self.machine_base().numa_nodes
+    }
+
+    fn get_hypervisor(&self) -> Arc<Mutex<dyn HypervisorOps>> {
+        self.machine_base().hypervisor.clone()
     }
 
     /// Get migration mode and path from VM config. There are four modes in total:
@@ -1327,6 +1293,10 @@ pub trait MachineOps {
     }
 
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
+        let hypervisor = self.get_hypervisor();
+        let locked_hypervisor = hypervisor.lock().unwrap();
+        *KVM_DEVICE_FD.lock().unwrap() = locked_hypervisor.create_vfio_device();
+
         let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let bdf = get_pci_bdf(cfg_args)?;
         let multifunc = get_multi_function(cfg_args)?;
@@ -1941,7 +1911,7 @@ pub trait MachineOps {
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
         let vm_state = self.get_vm_state().deref().0.lock().unwrap();
-        if *vm_state == KvmVmState::Running && !drive_file.locked {
+        if *vm_state == VmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
                 VmConfig::remove_drive_file(&mut drive_files, path)?;
                 return Err(e);
@@ -2011,8 +1981,8 @@ pub trait MachineOps {
     ///
     /// * `paused` - After started, paused all vcpu or not.
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         if !paused {
             EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
@@ -2029,9 +1999,9 @@ pub trait MachineOps {
         }
 
         if paused {
-            *vm_state = KvmVmState::Paused;
+            *vm_state = VmState::Paused;
         } else {
-            *vm_state = KvmVmState::Running;
+            *vm_state = VmState::Running;
         }
         cpus_thread_barrier.wait();
 
@@ -2043,12 +2013,12 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
+    /// * `vm_state` - Vm state.
     fn vm_pause(
         &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut KvmVmState,
+        vm_state: &mut VmState,
     ) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().disable_clock();
 
@@ -2065,7 +2035,7 @@ pub trait MachineOps {
         // SAFETY: ARM architecture must have interrupt controllers in user mode.
         irq_chip.as_ref().unwrap().stop();
 
-        *vm_state = KvmVmState::Paused;
+        *vm_state = VmState::Paused;
 
         Ok(())
     }
@@ -2075,8 +2045,8 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().enable_clock();
 
         self.active_drive_files()?;
@@ -2088,7 +2058,7 @@ pub trait MachineOps {
             }
         }
 
-        *vm_state = KvmVmState::Running;
+        *vm_state = VmState::Running;
 
         Ok(())
     }
@@ -2098,14 +2068,14 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
-    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    /// * `vm_state` - Vm state.
+    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
         }
 
-        *vm_state = KvmVmState::Shutdown;
+        *vm_state = VmState::Shutdown;
 
         Ok(())
     }
@@ -2115,18 +2085,18 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm kvm vm state.
+    /// * `vm_state` - Vm state.
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
     fn vm_state_transfer(
         &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut KvmVmState,
-        old_state: KvmVmState,
-        new_state: KvmVmState,
+        vm_state: &mut VmState,
+        old_state: VmState,
+        new_state: VmState,
     ) -> Result<()> {
-        use KvmVmState::*;
+        use VmState::*;
 
         if *vm_state != old_state {
             bail!("Vm lifecycle error: state check failed.");

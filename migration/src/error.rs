@@ -21,11 +21,6 @@ pub enum MigrationError {
         #[from]
         source: util::error::UtilError,
     },
-    #[error("HypervisorError")]
-    Hypervisor {
-        #[from]
-        source: hypervisor::error::HypervisorError,
-    },
     #[error("Io")]
     Io {
         #[from]

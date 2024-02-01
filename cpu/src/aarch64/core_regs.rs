@@ -16,15 +16,8 @@ use kvm_bindings::{
     kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64, KVM_REG_ARM_CORE,
     KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
 };
-use kvm_ioctls::VcpuFd;
-use vmm_sys_util::errno;
 
 use util::offset_of;
-
-pub type Result<T> = std::result::Result<T, errno::Error>;
-
-const KVM_NR_REGS: u64 = 31;
-const KVM_NR_FP_REGS: u64 = 32;
 
 /// AArch64 cpu core register.
 /// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/kvm.h#L50
@@ -125,88 +118,4 @@ impl From<Arm64CoreRegs> for u64 {
             | u64::from(KVM_REG_ARM_CORE)
             | (reg_offset / size_of::<u32>()) as u64
     }
-}
-
-/// Returns the vcpu's current `core_register`.
-///
-/// The register state is gotten from `KVM_GET_ONE_REG` api in KVM.
-///
-/// # Arguments
-///
-/// * `vcpu_fd` - the VcpuFd in KVM mod.
-pub fn get_core_regs(vcpu_fd: &VcpuFd) -> Result<kvm_regs> {
-    let mut core_regs = kvm_regs::default();
-
-    core_regs.regs.sp = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
-    core_regs.sp_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
-    core_regs.regs.pstate = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
-    core_regs.regs.pc = vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
-    core_regs.elr_el1 = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
-
-    for i in 0..KVM_NR_REGS as usize {
-        core_regs.regs.regs[i] =
-            vcpu_fd.get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
-    }
-
-    for i in 0..KVM_NR_SPSR as usize {
-        core_regs.spsr[i] = vcpu_fd.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
-    }
-
-    for i in 0..KVM_NR_FP_REGS as usize {
-        core_regs.fp_regs.vregs[i] =
-            vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
-    }
-
-    core_regs.fp_regs.fpsr = vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
-    core_regs.fp_regs.fpcr = vcpu_fd.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
-
-    Ok(core_regs)
-}
-
-/// Sets the vcpu's current "core_register"
-///
-/// The register state is gotten from `KVM_SET_ONE_REG` api in KVM.
-///
-/// # Arguments
-///
-/// * `vcpu_fd` - the VcpuFd in KVM mod.
-/// * `core_regs` - kvm_regs state to be written.
-pub fn set_core_regs(vcpu_fd: &VcpuFd, core_regs: kvm_regs) -> Result<()> {
-    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
-    vcpu_fd.set_one_reg(
-        Arm64CoreRegs::UserPTRegPState.into(),
-        core_regs.regs.pstate as u128,
-    )?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
-    vcpu_fd.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
-
-    for i in 0..KVM_NR_REGS as usize {
-        vcpu_fd.set_one_reg(
-            Arm64CoreRegs::UserPTRegRegs(i).into(),
-            core_regs.regs.regs[i] as u128,
-        )?;
-    }
-
-    for i in 0..KVM_NR_SPSR as usize {
-        vcpu_fd.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
-    }
-
-    for i in 0..KVM_NR_FP_REGS as usize {
-        vcpu_fd.set_one_reg(
-            Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
-            core_regs.fp_regs.vregs[i],
-        )?;
-    }
-
-    vcpu_fd.set_one_reg(
-        Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
-        core_regs.fp_regs.fpsr as u128,
-    )?;
-    vcpu_fd.set_one_reg(
-        Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
-        core_regs.fp_regs.fpcr as u128,
-    )?;
-
-    Ok(())
 }

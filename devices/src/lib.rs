@@ -19,6 +19,7 @@
 pub mod acpi;
 #[cfg(feature = "usb_camera")]
 pub mod camera_backend;
+pub mod interrupt_controller;
 pub mod legacy;
 pub mod misc;
 pub mod pci;
@@ -28,13 +29,12 @@ pub mod sysbus;
 pub mod usb;
 
 #[cfg(target_arch = "aarch64")]
-mod interrupt_controller;
-
-#[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
-    ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, InterruptError as IntCtrlErrs,
-    GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
+    GICDevice, GICVersion, GICv2, GICv2Access, GICv3, GICv3Access, GICv3ItsAccess, GICv3ItsState,
+    GICv3State, GicRedistRegion, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController,
+    InterruptError as IntCtrlErrs, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
 };
+pub use interrupt_controller::{IrqManager, IrqState, LineIrqManager, MsiIrqManager, TriggerMode};
 pub use legacy::error::LegacyError as LegacyErrs;
 pub use scsi::bus as ScsiBus;
 pub use scsi::disk as ScsiDisk;

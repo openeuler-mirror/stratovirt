@@ -17,7 +17,7 @@
 //! ## Design
 //!
 //! This module offers support for:
-//! 1. Create kvm-based interrupt controller.
+//! 1. Create hypervisor-based interrupt controller.
 //! 2. Manager lifecycle for `GIC`.
 //!
 //! ## Platform Support
@@ -25,15 +25,141 @@
 //! - `aarch64`
 
 #[allow(clippy::upper_case_acronyms)]
+#[cfg(target_arch = "aarch64")]
 mod aarch64;
 mod error;
 
 pub use anyhow::Result;
 
-pub use aarch64::GICConfig as ICGICConfig;
-pub use aarch64::GICv2Config as ICGICv2Config;
-pub use aarch64::GICv3Config as ICGICv3Config;
-pub use aarch64::InterruptController;
-pub use aarch64::GIC_IRQ_INTERNAL;
-pub use aarch64::GIC_IRQ_MAX;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::{
+    GICConfig as ICGICConfig, GICDevice, GICVersion, GICv2, GICv2Access,
+    GICv2Config as ICGICv2Config, GICv3, GICv3Access, GICv3Config as ICGICv3Config, GICv3ItsAccess,
+    GICv3ItsState, GICv3State, GicRedistRegion, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
+};
 pub use error::InterruptError;
+
+use std::sync::Arc;
+
+use vmm_sys_util::eventfd::EventFd;
+
+use super::pci::MsiVector;
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum TriggerMode {
+    Level,
+    #[default]
+    Edge,
+}
+
+pub trait LineIrqManager: Send + Sync {
+    fn irqfd_enable(&self) -> bool;
+
+    fn register_irqfd(
+        &self,
+        _irq_fd: Arc<EventFd>,
+        _irq: u32,
+        _trigger_mode: TriggerMode,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn unregister_irqfd(&self, _irq_fd: Arc<EventFd>, _irq: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_irq_line(&self, _irq: u32, _level: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn write_irqfd(&self, _irq_fd: Arc<EventFd>) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub trait MsiIrqManager: Send + Sync {
+    fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
+        Ok(0)
+    }
+
+    fn release_irq(&self, _irq: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn register_irqfd(&self, _irq_fd: Arc<EventFd>, _irq: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn unregister_irqfd(&self, _irq_fd: Arc<EventFd>, _irq: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn trigger(
+        &self,
+        _irq_fd: Option<Arc<EventFd>>,
+        _vector: MsiVector,
+        _dev_id: u32,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_route_table(&self, _gsi: u32, _vector: MsiVector) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct IrqManager {
+    pub line_irq_manager: Option<Arc<dyn LineIrqManager>>,
+    pub msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
+}
+
+#[derive(Default, Clone)]
+pub struct IrqState {
+    pub irq: u32,
+    irq_fd: Option<Arc<EventFd>>,
+    irq_handler: Option<Arc<dyn LineIrqManager>>,
+    trigger_mode: TriggerMode,
+}
+
+impl IrqState {
+    pub fn new(
+        irq: u32,
+        irq_fd: Option<Arc<EventFd>>,
+        irq_handler: Option<Arc<dyn LineIrqManager>>,
+        trigger_mode: TriggerMode,
+    ) -> Self {
+        IrqState {
+            irq,
+            irq_fd,
+            irq_handler,
+            trigger_mode,
+        }
+    }
+
+    pub fn register_irq(&mut self) -> Result<()> {
+        let irq_handler = self.irq_handler.as_ref().unwrap();
+        if !irq_handler.irqfd_enable() {
+            self.irq_fd = None;
+            return Ok(());
+        }
+
+        if let Some(irqfd) = self.irq_fd.clone() {
+            irq_handler.register_irqfd(irqfd, self.irq, self.trigger_mode.clone())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn trigger_irq(&self) -> Result<()> {
+        let irq_handler = self.irq_handler.as_ref().unwrap();
+        if let Some(irq_fd) = &self.irq_fd {
+            return irq_handler.write_irqfd(irq_fd.clone());
+        }
+        if self.trigger_mode == TriggerMode::Edge {
+            irq_handler.set_irq_line(self.irq, true)?;
+            irq_handler.set_irq_line(self.irq, false)
+        } else {
+            irq_handler.set_irq_line(self.irq, true)
+        }
+    }
+}

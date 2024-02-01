@@ -95,10 +95,7 @@ pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
 pub use error::AddressSpaceError;
 pub use host_mmap::{create_backend_mem, create_default_mem, FileBackend, HostMemMapping};
-#[cfg(target_arch = "x86_64")]
-pub use listener::KvmIoListener;
-pub use listener::KvmMemoryListener;
-pub use listener::{Listener, ListenerReqType};
+pub use listener::{Listener, ListenerReqType, MemSlot};
 pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
 
 /// Read data from Region to argument `data`,
