@@ -86,14 +86,18 @@ use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
-#[cfg(not(target_env = "musl"))]
+#[cfg(target_env = "gnu")]
 pub const VCPU_TASK_SIGNAL: i32 = 34;
 #[cfg(target_env = "musl")]
 pub const VCPU_TASK_SIGNAL: i32 = 35;
-#[cfg(not(target_env = "musl"))]
+#[cfg(target_env = "ohos")]
+pub const VCPU_TASK_SIGNAL: i32 = 40;
+#[cfg(target_env = "gnu")]
 pub const VCPU_RESET_SIGNAL: i32 = 35;
 #[cfg(target_env = "musl")]
 pub const VCPU_RESET_SIGNAL: i32 = 36;
+#[cfg(target_env = "ohos")]
+pub const VCPU_RESET_SIGNAL: i32 = 41;
 
 /// Watch `0x3ff` IO port to record the magic value trapped from guest kernel.
 #[cfg(all(target_arch = "x86_64", feature = "boot_time"))]
