@@ -66,6 +66,18 @@ List of optional features:
 $ cargo build --workspace --bins --release --features "scream_alsa"
 ```
 
+## 5. Compiling of OpenHarmony OS version
+
+Stratovirt now can run on OpenHarmony OS(OHOS). Stratovirt, OHOS version, is compiled on x64, and relies on RUST cross compilation toolchain and SDK offered by OHOS.
+
+Before compiling, specify OHOS SDK path in environment variable OHOS_SDK. Some crates needed by StratoVirt now are not support OHOS platform, adapting is essential.
+
+Here is a command demo:
+
+```
+RUSTFLAGS="-C link-arg=--target=aarch64-linux-ohos -C linker={OHOS_SDK}/llvm/bin/clang" cargo build --target aarch64-linux-ohos --features {FEATURES}"
+```
+
 # Build static StratoVirt in containers
 
 ## 1. Check docker environment
