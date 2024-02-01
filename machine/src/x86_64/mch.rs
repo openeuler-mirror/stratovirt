@@ -24,7 +24,7 @@ use devices::pci::{
     },
     le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
@@ -51,7 +51,7 @@ pub struct Mch {
 
 impl Mch {
     pub fn new(
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         mmconfig_region: Region,
         mmconfig_ops: RegionOps,
     ) -> Self {

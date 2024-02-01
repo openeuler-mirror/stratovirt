@@ -94,7 +94,6 @@ struct RootPortState {
 pub struct RootPort {
     base: PciDevBase,
     port_num: u8,
-    sec_bus: Arc<Mutex<PciBus>>,
     #[cfg(target_arch = "x86_64")]
     io_region: Region,
     mem_region: Region,
@@ -110,26 +109,27 @@ impl RootPort {
     ///
     /// * `cfg` - Root port config.
     /// * `parent_bus` - Weak reference to the parent bus.
-    pub fn new(cfg: RootPortConfig, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(cfg: RootPortConfig, parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
         let devfn = cfg.addr.0 << 3 | cfg.addr.1;
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16, "RootPortIo");
         let mem_region = Region::init_container_region(u64::max_value(), "RootPortMem");
-        let sec_bus = Arc::new(Mutex::new(PciBus::new(
+        let child_bus = Arc::new(Mutex::new(PciBus::new(
             cfg.id.clone(),
             #[cfg(target_arch = "x86_64")]
             io_region.clone(),
             mem_region.clone(),
         )));
+        let mut dev_base = DeviceBase::new(cfg.id, true, Some(parent_bus));
+        dev_base.child = Some(child_bus);
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id, true, Some(parent_bus)),
+                base: dev_base,
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
             },
             port_num: cfg.port,
-            sec_bus,
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
@@ -222,7 +222,8 @@ impl RootPort {
         // Store device in a temp vector and unlock the bus.
         // If the device unrealize called when the bus is locked, a deadlock occurs.
         // This is because the device unrealize also requires the bus lock.
-        let devices = self.sec_bus.lock().unwrap().child_devices().clone();
+        let bus = self.child_bus().unwrap();
+        let devices = bus.lock().unwrap().child_devices();
         for dev in devices.values() {
             PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
             if let Err(e) = pci_dev.unrealize() {
@@ -234,7 +235,7 @@ impl RootPort {
             // Send QMP event for successful hot unplugging.
             send_device_deleted_msg(&locked_dev.name());
         }
-        self.sec_bus.lock().unwrap().bus_base_mut().children.clear();
+        bus.lock().unwrap().bus_base_mut().children.clear();
     }
 
     fn register_region(&mut self) {
@@ -398,37 +399,30 @@ impl PciDevOps for RootPort {
             self.base.devfn,
         )?;
 
-        let bus = parent_bus.upgrade().unwrap();
-        MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+        let arc_parent_bus = parent_bus.upgrade().unwrap();
+        MUT_PCI_BUS!(arc_parent_bus, locked_parent_bus, parent_pci_bus);
+        let child_bus = self.child_bus().unwrap();
+        MUT_PCI_BUS!(child_bus, locked_child_bus, child_pci_bus);
         #[cfg(target_arch = "x86_64")]
-        pci_bus
+        parent_pci_bus
             .io_region
-            .add_subregion(self.sec_bus.lock().unwrap().io_region.clone(), 0)
+            .add_subregion(child_pci_bus.io_region.clone(), 0)
             .with_context(|| "Failed to register subregion in I/O space.")?;
-        pci_bus
+        parent_pci_bus
             .mem_region
-            .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
+            .add_subregion(child_pci_bus.mem_region.clone(), 0)
             .with_context(|| "Failed to register subregion in memory space.")?;
+        drop(locked_child_bus);
 
         let name = self.name();
         let root_port = Arc::new(Mutex::new(self));
-        #[allow(unused_mut)]
-        let mut locked_root_port = root_port.lock().unwrap();
-        locked_root_port.sec_bus.lock().unwrap().base.parent =
-            Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
-        locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
+        let locked_root_port = root_port.lock().unwrap();
+        let child_bus = locked_root_port.child_bus().unwrap();
+        MUT_PCI_BUS!(child_bus, locked_child_bus, child_pci_bus);
+        child_pci_bus.base.parent = Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
+        child_pci_bus.hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
-        let pci_device = pci_bus.child_dev(locked_root_port.base.devfn as u64);
-        if pci_device.is_none() {
-            pci_bus.child_buses.push(locked_root_port.sec_bus.clone());
-            pci_bus.attach_child(locked_root_port.base.devfn as u64, root_port.clone())?;
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                locked_root_port.base.devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        parent_pci_bus.attach_child(locked_root_port.base.devfn as u64, root_port.clone())?;
         // Need to drop locked_root_port in order to register root_port instance.
         drop(locked_root_port);
         MigrationManager::register_device_instance(RootPortState::descriptor(), root_port, &name);
@@ -515,11 +509,11 @@ impl PciDevOps for RootPort {
     /// Only set slot status to on, and no other device reset actions are implemented.
     fn reset(&mut self, reset_child_device: bool) -> Result<()> {
         if reset_child_device {
-            self.sec_bus
-                .lock()
-                .unwrap()
+            let child_bus = self.child_bus().unwrap();
+            MUT_PCI_BUS!(child_bus, locked_child_bus, child_pci_bus);
+            child_pci_bus
                 .reset()
-                .with_context(|| "Fail to reset sec_bus in root port")?;
+                .with_context(|| "Fail to reset child_bus in root port")?;
         } else {
             let cap_offset = self.base.config.pci_express_cap_offset;
             le_write_u16(
@@ -657,7 +651,8 @@ impl HotplugOps for RootPort {
         PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
         let devfn = pci_dev.pci_base().devfn as u64;
         pci_dev.unrealize()?;
-        self.sec_bus.lock().unwrap().detach_child(devfn)?;
+        let child_bus = self.child_bus().unwrap();
+        child_bus.lock().unwrap().detach_child(devfn)?;
         Ok(())
     }
 }
@@ -708,7 +703,7 @@ mod tests {
     #[test]
     fn test_read_config() {
         let pci_host = create_pci_host();
-        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().child_bus().unwrap());
         let root_port_config = RootPortConfig {
             addr: (1, 0),
             id: "pcie.1".to_string(),
@@ -727,7 +722,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let pci_host = create_pci_host();
-        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().child_bus().unwrap());
         let root_port_config = RootPortConfig {
             addr: (1, 0),
             id: "pcie.1".to_string(),

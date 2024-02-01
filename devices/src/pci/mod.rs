@@ -420,7 +420,7 @@ mod tests {
     }
 
     impl TestPciDevice {
-        pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+        pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
             Self {
                 base: PciDevBase {
                     base: DeviceBase::new(name.to_string(), false, Some(parent_bus)),
@@ -529,12 +529,12 @@ mod tests {
             None,
         )
         .unwrap();
-        let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
             Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
-        )));
+        ))) as Arc<Mutex<dyn Bus>>;
 
         let dev = TestPciDevice::new("PCI device", 0, Arc::downgrade(&parent_bus));
         assert_eq!(dev.set_dev_id(1, 2), 258);

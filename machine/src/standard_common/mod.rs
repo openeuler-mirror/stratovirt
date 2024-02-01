@@ -55,6 +55,7 @@ use devices::legacy::FwCfgOps;
 use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::{PciBus, PciHost};
+use devices::Device;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
@@ -1276,7 +1277,9 @@ impl DeviceInterface for StdMachine {
 
         // It's safe to call get_pci_host().unwrap() because it has been checked before.
         let locked_pci_host = self.get_pci_host().unwrap().lock().unwrap();
-        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &args.id) {
+        if let Some((bus, dev)) =
+            PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), &args.id)
+        {
             match handle_plug(&bus, &dev) {
                 Ok(()) => Response::create_empty_response(),
                 Err(e) => {
@@ -1313,7 +1316,9 @@ impl DeviceInterface for StdMachine {
         };
 
         let locked_pci_host = pci_host.lock().unwrap();
-        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
+        if let Some((bus, dev)) =
+            PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), &device_id)
+        {
             return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();

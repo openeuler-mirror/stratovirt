@@ -46,7 +46,7 @@ use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     PciBus, PciDevBase, PciDevOps, PciError,
 };
-use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -325,7 +325,7 @@ impl VirtioPciDevice {
         devfn: u8,
         sys_mem: Arc<AddressSpace>,
         device: Arc<Mutex<dyn VirtioDevice>>,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         multi_func: bool,
         need_irqfd: bool,
     ) -> Self {
@@ -1458,7 +1458,7 @@ mod tests {
             0,
             sys_mem,
             virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
+            Arc::downgrade(&(parent_bus.clone() as Arc<Mutex<dyn Bus>>)),
             multi_func,
             false,
         );
