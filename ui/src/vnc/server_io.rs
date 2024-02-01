@@ -21,24 +21,32 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
-use anyhow::{anyhow, Result};
+#[cfg(feature = "vnc_auth")]
+use anyhow::anyhow;
+use anyhow::Result;
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
 use crate::{
     console::{DisplayChangeListener, DisplayMouse},
-    error::VncError,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
         get_image_width, pixman_image_linebuf_create, pixman_image_linebuf_fill,
         unref_pixman_image,
     },
     vnc::{
-        auth_sasl::{AuthState, SaslAuth, SaslConfig, SubAuthState},
-        auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
         client_io::{vnc_flush, vnc_write, ClientIoHandler, ClientState, IoChannel, RectInfo},
         round_up_div, update_server_surface, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
         VNC_BITMAP_WIDTH, VNC_SERVERS,
+    },
+};
+#[cfg(feature = "vnc_auth")]
+use crate::{
+    error::VncError,
+    vnc::{
+        auth_sasl::{SaslAuth, SaslConfig, SubAuthState},
+        auth_vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
+        AuthState,
     },
 };
 use machine_manager::{
@@ -60,6 +68,7 @@ pub struct VncServer {
     /// Client io handler.
     pub client_handlers: Arc<Mutex<HashMap<String, Arc<ClientState>>>>,
     /// Security Type for connection.
+    #[cfg(feature = "vnc_auth")]
     pub security_type: Rc<RefCell<SecurityType>>,
     /// Mapping ASCII to keycode.
     pub keysym2keycode: HashMap<u16, u16>,
@@ -93,6 +102,7 @@ impl VncServer {
     ) -> Self {
         VncServer {
             client_handlers: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "vnc_auth")]
             security_type: Rc::new(RefCell::new(SecurityType::default())),
             keysym2keycode,
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
@@ -174,6 +184,7 @@ impl ImageInfo {
 }
 
 /// Security type for connection and transport.
+#[cfg(feature = "vnc_auth")]
 pub struct SecurityType {
     /// Configuration for tls connection.
     pub tlscreds: Option<TlsCreds>,
@@ -189,6 +200,7 @@ pub struct SecurityType {
     pub subauth: SubAuthState,
 }
 
+#[cfg(feature = "vnc_auth")]
 impl Default for SecurityType {
     fn default() -> Self {
         SecurityType {
@@ -202,6 +214,7 @@ impl Default for SecurityType {
     }
 }
 
+#[cfg(feature = "vnc_auth")]
 impl SecurityType {
     // Set security config.
     fn set_security_config(&mut self, vnc_cfg: &VncConfig, object: &ObjectConfig) -> Result<()> {
@@ -522,18 +535,21 @@ pub fn handle_connection(
 ///
 /// * `vnc_cfg` - configure of vnc.
 /// * `object` - configure of sasl and tls.
+#[allow(unused_variables)]
 pub fn make_server_config(
     server: &Arc<VncServer>,
     vnc_cfg: &VncConfig,
     object: &ObjectConfig,
 ) -> Result<()> {
-    // Set security config.
-    server
-        .security_type
-        .borrow_mut()
-        .set_security_config(vnc_cfg, object)?;
-    // Set auth type.
-    server.security_type.borrow_mut().set_auth()?;
-
+    #[cfg(feature = "vnc_auth")]
+    {
+        // Set security config.
+        server
+            .security_type
+            .borrow_mut()
+            .set_security_config(vnc_cfg, object)?;
+        // Set auth type.
+        server.security_type.borrow_mut().set_auth()?;
+    }
     Ok(())
 }

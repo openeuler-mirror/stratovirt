@@ -10,7 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "vnc_auth")]
 pub mod auth_sasl;
+#[cfg(feature = "vnc_auth")]
 pub mod auth_vencrypt;
 pub mod client_io;
 pub mod encoding;
@@ -85,6 +87,16 @@ pub const fn round_up_div(n: u64, d: u64) -> u64 {
 
 pub const fn round_up(n: u64, d: u64) -> u64 {
     round_up_div(n, d) * d
+}
+
+/// Authentication type
+#[derive(Clone, Copy)]
+pub enum AuthState {
+    Invalid = 0,
+    No = 1,
+    Vnc = 2,
+    Vencrypt = 19,
+    Sasl = 20,
 }
 
 #[derive(Default)]

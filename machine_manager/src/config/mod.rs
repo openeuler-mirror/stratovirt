@@ -39,11 +39,13 @@ mod pvpanic_pci;
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 mod ramfb;
 mod rng;
+#[cfg(feature = "vnc_auth")]
 mod sasl_auth;
 #[cfg(feature = "scream")]
 pub mod scream;
 mod scsi;
 mod smbios;
+#[cfg(feature = "vnc_auth")]
 mod tls_creds;
 mod usb;
 mod vfio;
@@ -74,9 +76,11 @@ pub use pvpanic_pci::*;
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 pub use ramfb::*;
 pub use rng::*;
+#[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
 pub use scsi::*;
 pub use smbios::*;
+#[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
@@ -119,7 +123,9 @@ pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
 pub struct ObjectConfig {
     pub rng_object: HashMap<String, RngObjConfig>,
     pub mem_object: HashMap<String, MemZoneConfig>,
+    #[cfg(feature = "vnc_auth")]
     pub tls_object: HashMap<String, TlsCredObjConfig>,
+    #[cfg(feature = "vnc_auth")]
     pub sasl_object: HashMap<String, SaslAuthObjConfig>,
 }
 
@@ -236,9 +242,11 @@ impl VmConfig {
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
                 self.add_mem_zone(object_args, device_type)?;
             }
+            #[cfg(feature = "vnc_auth")]
             "tls-creds-x509" => {
                 self.add_tlscred(object_args)?;
             }
+            #[cfg(feature = "vnc_auth")]
             "authz-simple" => {
                 self.add_saslauth(object_args)?;
             }
