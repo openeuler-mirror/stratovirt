@@ -35,7 +35,7 @@ use crate::{
     VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, FileBackend, GuestAddress};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration_derive::ByteCode;
@@ -1646,6 +1646,8 @@ pub struct Gpu {
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
+    /// bar0 file backend which is set by ohui server
+    bar0_fb: Option<FileBackend>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1659,6 +1661,18 @@ impl Gpu {
             cfg,
             ..Default::default()
         }
+    }
+
+    pub fn set_bar0_fb(&mut self, fb: Option<FileBackend>) {
+        if !self.cfg.enable_bar0 {
+            self.bar0_fb = None;
+            return;
+        }
+        self.bar0_fb = fb;
+    }
+
+    pub fn get_bar0_fb(&self) -> Option<FileBackend> {
+        self.bar0_fb.as_ref().cloned()
     }
 
     fn build_device_config_space(&mut self) {

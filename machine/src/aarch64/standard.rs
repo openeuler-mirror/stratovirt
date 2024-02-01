@@ -34,6 +34,8 @@ use acpi::{
     ARCH_GIC_MAINT_IRQ, ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
     ROOT_COMPLEX_ENTRY_SIZE,
 };
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use address_space::FileBackend;
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 
@@ -69,6 +71,8 @@ use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use ui::ohui_srv::{ohui_init, OhUiServer};
 #[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
@@ -149,6 +153,9 @@ pub struct StdMachine {
     dtb_vec: Vec<u8>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// OHUI server
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    ohui_server: Option<Arc<OhUiServer>>,
 }
 
 impl StdMachine {
@@ -196,6 +203,8 @@ impl StdMachine {
             ),
             dtb_vec: Vec::new(),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+            ohui_server: None,
         })
     }
 
@@ -326,6 +335,17 @@ impl StdMachine {
             return value;
         }
         None
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn add_ohui_server(&mut self, vm_config: &VmConfig) -> Result<()> {
+        if let Some(dpy) = vm_config.display.as_ref() {
+            if !dpy.ohui_config.ohui {
+                return Ok(());
+            }
+            self.ohui_server = Some(Arc::new(OhUiServer::new(dpy.get_ui_path())?));
+        }
+        Ok(())
     }
 }
 
@@ -524,6 +544,17 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn update_ohui_srv(&mut self, passthru: bool) {
+        self.ohui_server.as_ref().unwrap().set_passthru(passthru);
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn get_ohui_fb(&self) -> Option<FileBackend> {
+        let server = self.ohui_server.as_ref()?;
+        server.get_ohui_fb()
+    }
+
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
@@ -586,6 +617,9 @@ impl MachineOps for StdMachine {
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
 
         locked_vm.cpu_post_init(&cpu_config)?;
+
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        locked_vm.add_ohui_server(vm_config)?;
 
         locked_vm
             .add_devices(vm_config)
@@ -678,8 +712,9 @@ impl MachineOps for StdMachine {
     #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
-        #[cfg(feature = "gtk")]
+        #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
         match vm_config.display {
+            #[cfg(feature = "gtk")]
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
@@ -690,6 +725,12 @@ impl MachineOps for StdMachine {
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;
+            }
+            // OHUI server init.
+            #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+            Some(ref ds_cfg) if ds_cfg.ohui_config.ohui => {
+                ohui_init(self.ohui_server.as_ref().unwrap().clone(), ds_cfg)
+                    .with_context(|| "Failed to init OH UI server!")?;
             }
             _ => {}
         };

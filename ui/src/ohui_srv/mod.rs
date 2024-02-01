@@ -486,7 +486,7 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
         notifiers,
         srv.iothread.get_or_init(|| None).as_ref(),
         &mut evts,
-    )?
+    )
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {

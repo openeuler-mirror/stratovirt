@@ -39,6 +39,8 @@ use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use address_space::FileBackend;
 use address_space::{create_backend_mem, create_default_mem, AddressSpace, GuestAddress, Region};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -99,6 +101,8 @@ use util::{
 use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
     BlockState, Rng, RngState,
@@ -1355,12 +1359,29 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn update_ohui_srv(&mut self, _passthru: bool) {}
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn get_ohui_fb(&self) -> Option<FileBackend> {
+        None
+    }
+
     #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_gpu(cfg_args)?;
         let device = Arc::new(Mutex::new(Gpu::new(device_cfg.clone())));
+
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        if device.lock().unwrap().device_quirk() == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0)
+            && self.get_ohui_fb().is_some()
+        {
+            self.update_ohui_srv(true);
+            device.lock().unwrap().set_bar0_fb(self.get_ohui_fb());
+        }
+
         self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)?;
         Ok(())
     }

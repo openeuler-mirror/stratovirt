@@ -18,12 +18,12 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
-use machine_manager::config::M;
+use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioDeviceQuirk,
-    VirtioInterrupt, VirtioInterruptType,
+    virtio_has_feature, Gpu, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice,
+    VirtioDeviceQuirk, VirtioInterrupt, VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
@@ -128,17 +128,18 @@ const COMMON_Q_USEDHI_REG: u64 = 0x34;
 ///   1: select feature bits 32 to 63.
 const MAX_FEATURES_SELECT_NUM: u32 = 2;
 
-/// The bar0 size of enable_bar0 features
-const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
+fn init_gpu_bar0(dev: &Arc<Mutex<dyn VirtioDevice>>, config: &mut PciConfig) -> Result<()> {
+    let locked_dev = dev.lock().unwrap();
+    let gpu = locked_dev.as_any().downcast_ref::<Gpu>().unwrap();
+    let fb = gpu.get_bar0_fb();
 
-fn init_gpu_bar0(config: &mut PciConfig) -> Result<()> {
     let host_mmap = Arc::new(HostMemMapping::new(
         GuestAddress(0),
         None,
         VIRTIO_GPU_ENABLE_BAR0_SIZE,
-        None,
+        fb,
         false,
-        false,
+        true,
         false,
     )?);
 
@@ -1110,7 +1111,7 @@ impl PciDevOps for VirtioPciDevice {
         self.assign_interrupt_cb();
 
         if device_quirk == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0) {
-            init_gpu_bar0(&mut self.base.config)?;
+            init_gpu_bar0(&self.device, &mut self.base.config)?;
         }
 
         self.device
