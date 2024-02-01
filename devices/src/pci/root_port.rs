@@ -663,7 +663,7 @@ impl StateTransfer for RootPort {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 

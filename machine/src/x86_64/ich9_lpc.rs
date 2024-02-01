@@ -26,9 +26,7 @@ use devices::pci::config::{
     PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::{
-    le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps, Result as PciResult,
-};
+use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
 use devices::{Device, DeviceBase};
 use util::byte_code::ByteCode;
 use util::num_ops::ranges_overlap;
@@ -249,7 +247,7 @@ impl PciDevOps for LPCBridge {
         &mut self.base
     }
 
-    fn realize(mut self) -> PciResult<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 

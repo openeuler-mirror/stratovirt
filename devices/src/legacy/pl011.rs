@@ -413,11 +413,11 @@ impl SysBusDevOps for PL011 {
 }
 
 impl StateTransfer for PL011 {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         self.state = *PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 

@@ -40,8 +40,6 @@ pub mod unix;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
 
-pub use anyhow::Result;
-
 pub use error::UtilError;
 
 use std::{any::Any, sync::Mutex};

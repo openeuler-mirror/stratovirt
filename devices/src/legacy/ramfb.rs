@@ -15,13 +15,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use drm_fourcc::DrmFourcc;
 use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
-use crate::legacy::Result;
-use crate::sysbus::{Result as SysBusResult, SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
@@ -274,7 +273,7 @@ impl SysBusDevOps for Ramfb {
         false
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
+    fn reset(&mut self) -> Result<()> {
         self.ramfb_state.reset_ramfb_state();
         Ok(())
     }

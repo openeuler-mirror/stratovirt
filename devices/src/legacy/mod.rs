@@ -39,8 +39,6 @@ mod ramfb;
 mod rtc;
 mod serial;
 
-pub use anyhow::Result;
-
 #[cfg(target_arch = "x86_64")]
 pub use self::rtc::{RTC, RTC_PORT_INDEX};
 pub use error::LegacyError;

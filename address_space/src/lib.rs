@@ -89,8 +89,6 @@ mod listener;
 mod region;
 mod state;
 
-pub use anyhow::Result;
-
 pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
 pub use error::AddressSpaceError;

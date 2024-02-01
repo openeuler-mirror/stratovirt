@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
 use log::error;
 
-use super::{GICConfig, GICDevice, UtilResult};
+use super::{GICConfig, GICDevice};
 use crate::interrupt_controller::InterruptError;
 use address_space::AddressSpace;
 use machine_manager::machine::{MachineLifecycle, VmState};
@@ -155,7 +155,7 @@ impl GICDevice for GICv2 {
         Ok(())
     }
 
-    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let gic_reg = vec![
             self.dist_guest_region.base,
             self.dist_guest_region.size,

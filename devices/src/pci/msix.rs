@@ -468,7 +468,7 @@ impl Msix {
 }
 
 impl StateTransfer for Msix {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = MsixState::default();
 
         for (idx, table_byte) in self.table.iter().enumerate() {
@@ -485,7 +485,7 @@ impl StateTransfer for Msix {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let msix_state = *MsixState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("MSIX_DEVICE"))?;
 
@@ -507,7 +507,7 @@ impl StateTransfer for Msix {
 }
 
 impl MigrationHook for Msix {
-    fn resume(&mut self) -> migration::Result<()> {
+    fn resume(&mut self) -> Result<()> {
         if self.enabled && !self.func_masked {
             for vector in 0..self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
                 if self.is_vector_masked(vector) {

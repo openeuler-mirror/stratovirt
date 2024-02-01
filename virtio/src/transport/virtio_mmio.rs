@@ -536,14 +536,14 @@ impl acpi::AmlBuilder for VirtioMmioDevice {
 }
 
 impl StateTransfer for VirtioMmioDevice {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioMmioState {
             virtio_base: self.device.lock().unwrap().virtio_base().get_state(),
         };
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let s_len = std::mem::size_of::<VirtioMmioState>();
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);
@@ -567,7 +567,7 @@ impl StateTransfer for VirtioMmioDevice {
 }
 
 impl MigrationHook for VirtioMmioDevice {
-    fn resume(&mut self) -> migration::Result<()> {
+    fn resume(&mut self) -> Result<()> {
         let mut locked_dev = self.device.lock().unwrap();
         if !locked_dev.device_activated() {
             return Ok(());

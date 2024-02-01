@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::Result;
+
 use crate::MachineBase;
 use cpu::PMU_INTR;
 use devices::sysbus::{SysBusDevType, SysRes};
@@ -20,7 +22,7 @@ use util::device_tree::{self, FdtBuilder};
 /// # Arguments
 ///
 /// * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
+fn generate_pmu_node(fdt: &mut FdtBuilder) -> Result<()> {
     let node = "pmu";
     let pmu_node_dep = fdt.begin_node(node)?;
     fdt.set_property_string("compatible", "arm,armv8-pmuv3")?;
@@ -42,7 +44,7 @@ fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
 ///
 /// * `dev_info` - Device resource info of serial device.
 /// * `fdt` - Flatted device-tree blob where serial node will be filled into.
-fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
+fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
     let node = format!("pl011@{:x}", res.region_base);
     let serial_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl011\0arm,primecell")?;
@@ -69,7 +71,7 @@ fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Resu
 ///
 /// * `dev_info` - Device resource info of RTC device.
 /// * `fdt` - Flatted device-tree blob where RTC node will be filled into.
-fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
+fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
     let node = format!("pl031@{:x}", res.region_base);
     let rtc_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
@@ -93,7 +95,7 @@ fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<
 ///
 /// * `dev_info` - Device resource info of Virtio-Mmio device.
 /// * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
+fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
     let node = format!("virtio_mmio@{:x}", res.region_base);
     let virtio_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "virtio,mmio")?;
@@ -116,7 +118,7 @@ fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Res
 ///
 /// * `dev_info` - Device resource info of fw-cfg device.
 /// * `fdt` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
+fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
     let node = format!("fw-cfg@{:x}", res.region_base);
     let fwcfg_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "qemu,fw-cfg-mmio")?;
@@ -130,7 +132,7 @@ fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Resul
 ///
 /// * `dev_info` - Device resource info of fw-cfg device.
 /// * `flash` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_flash_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
+fn generate_flash_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
     let flash_base = res.region_base;
     let flash_size = res.region_size;
     let node = format!("flash@{:x}", flash_base);
@@ -148,15 +150,15 @@ fn generate_flash_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Resul
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> Result<()>;
     /// Function that helps to generate Virtio-mmio devices' nodes.
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
     /// Function that helps to generate numa node distances.
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
 }
 
 impl CompileFDTHelper for MachineBase {
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let node = "cpus";
 
         let cpus_node_dep = fdt.begin_node(node)?;
@@ -234,7 +236,7 @@ impl CompileFDTHelper for MachineBase {
         Ok(())
     }
 
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         // timer
         let mut cells: Vec<u32> = Vec::new();
         for &irq in [13, 14, 11, 10].iter() {
@@ -297,7 +299,7 @@ impl CompileFDTHelper for MachineBase {
         Ok(())
     }
 
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         if self.numa_nodes.is_none() {
             return Ok(());
         }
@@ -330,7 +332,7 @@ impl CompileFDTHelper for MachineBase {
 }
 
 impl device_tree::CompileFDT for MachineBase {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
         fdt.set_property_string("compatible", "linux,dummy-virt")?;
         fdt.set_property_u32("#address-cells", 0x2)?;
         fdt.set_property_u32("#size-cells", 0x2)?;

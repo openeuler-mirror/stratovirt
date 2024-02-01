@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use log::{error, info};
 
-use super::{GICConfig, GICDevice, UtilResult};
+use super::{GICConfig, GICDevice};
 use crate::interrupt_controller::error::InterruptError;
 use machine_manager::machine::{MachineLifecycle, VmState};
 use migration::StateTransfer;
@@ -272,7 +272,7 @@ impl GICDevice for GICv3 {
         Ok(())
     }
 
-    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> Result<()> {
         let redist_count = self.redist_regions.len() as u32;
         let mut gic_reg = vec![self.dist_base, self.dist_size];
 
