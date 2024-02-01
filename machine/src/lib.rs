@@ -743,7 +743,6 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
-    /// * `is_console` - Whether this virtio serial port is a console port.
     fn add_virtio_serial_port(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let serial_cfg = vm_config
             .virtio_serial
