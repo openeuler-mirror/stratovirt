@@ -49,8 +49,9 @@ pub const KEYCODE_RET: u16 = 38;
 const KEYCODE_SHIFT: u16 = 42;
 const KEYCODE_SHIFT_R: u16 = 54;
 const KEYCODE_ALT: u16 = 56;
-const KEYCODE_CAPS_LOCK: u16 = 58;
-const KEYCODE_NUM_LOCK: u16 = 69;
+pub const KEYCODE_CAPS_LOCK: u16 = 58;
+pub const KEYCODE_NUM_LOCK: u16 = 69;
+pub const KEYCODE_SCR_LOCK: u16 = 70;
 const KEYCODE_CTRL_R: u16 = 157;
 const KEYCODE_ALT_R: u16 = 184;
 const KEYPAD_1: u16 = 0xffb0;
@@ -60,8 +61,8 @@ const KEYPAD_DECIMAL: u16 = 0xffae;
 const KEYCODE_KP_7: u16 = 0x47;
 const KEYCODE_KP_DECIMAL: u16 = 0x53;
 // Led (HID)
-const NUM_LOCK_LED: u8 = 0x1;
-const CAPS_LOCK_LED: u8 = 0x2;
+pub const NUM_LOCK_LED: u8 = 0x1;
+pub const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
 
 static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
@@ -383,6 +384,11 @@ pub fn key_event(keycode: u16, down: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn trigger_key(keycode: u16) -> Result<()> {
+    key_event(keycode, true)?;
+    key_event(keycode, false)
+}
+
 /// A complete mouse click event.
 pub fn press_mouse(button: u32) -> Result<()> {
     input_button(button, true)?;
@@ -403,14 +409,14 @@ pub fn update_key_state(down: bool, keysym: i32, keycode: u16) -> Result<()> {
         let shift = locked_input
             .keyboard_state
             .keyboard_modifier_get(KeyboardModifier::KeyModShift);
-        let in_upper = get_kbd_led_state(CAPS_LOCK_LED);
+        let in_upper = check_kbd_led_state(CAPS_LOCK_LED);
         if (shift && upper == in_upper) || (!shift && upper != in_upper) {
             debug!("Correct caps lock {} inside {}", upper, in_upper);
             locked_input.press_key(KEYCODE_CAPS_LOCK)?;
         }
     } else if down && in_keypad {
         let numlock = keysym_is_num_lock(keysym);
-        let in_numlock = get_kbd_led_state(NUM_LOCK_LED);
+        let in_numlock = check_kbd_led_state(NUM_LOCK_LED);
         if in_numlock != numlock {
             debug!("Correct num lock {} inside {}", numlock, in_numlock);
             locked_input.press_key(KEYCODE_NUM_LOCK)?;
@@ -447,8 +453,12 @@ pub fn release_all_key() -> Result<()> {
     Ok(())
 }
 
-pub fn get_kbd_led_state(state: u8) -> bool {
+pub fn check_kbd_led_state(state: u8) -> bool {
     LED_STATE.lock().unwrap().kbd_led & state == state
+}
+
+pub fn get_kbd_led_state() -> u8 {
+    LED_STATE.lock().unwrap().kbd_led
 }
 
 pub fn set_kbd_led_state(state: u8) {

@@ -21,6 +21,9 @@ pub const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
 
 pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
+/// The bar0 size of enable_bar0 features
+pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
+
 #[derive(Clone, Debug)]
 pub struct GpuDevConfig {
     pub id: String,

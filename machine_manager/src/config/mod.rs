@@ -12,7 +12,7 @@
 
 #[cfg(feature = "usb_camera")]
 pub mod camera;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub mod display;
 pub mod error;
 #[cfg(feature = "vnc")]
@@ -54,7 +54,7 @@ pub use chardev::*;
 #[cfg(feature = "demo_device")]
 pub use demo_dev::*;
 pub use devices::*;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
@@ -147,7 +147,7 @@ pub struct VmConfig {
     pub incoming: Option<Incoming>,
     #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
-    #[cfg(feature = "gtk")]
+    #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
     pub display: Option<DisplayConfig>,
     #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
