@@ -48,9 +48,11 @@ use devices::legacy::{
 };
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
-use devices::pci::{PciDevOps, PciHost, PciIntxState};
+use devices::pci::{PciBus, PciDevOps, PciHost, PciIntxState};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
-use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, SYS_BUS_DEVICE};
+use devices::{
+    convert_bus_mut, Device, ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, MUT_PCI_BUS, SYS_BUS_DEVICE,
+};
 use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
@@ -318,7 +320,7 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> Result<()> {
-        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().child_bus().unwrap());
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1,
@@ -432,16 +434,17 @@ impl MachineOps for StdMachine {
         self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
         self.base.irq_chip.as_ref().unwrap().realize()?;
 
-        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let root_bus = &self.pci_host.lock().unwrap().child_bus().unwrap();
+        MUT_PCI_BUS!(root_bus, locked_bus, root_pci_bus);
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        root_pci_bus.msi_irq_manager = irq_manager.msi_irq_manager;
         let line_irq_manager = irq_manager.line_irq_manager;
         if let Some(line_irq_manager) = line_irq_manager.clone() {
             let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
                 IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
                 line_irq_manager.clone(),
             ))));
-            root_bus.lock().unwrap().intx_state = irq_state;
+            root_pci_bus.intx_state = irq_state;
         } else {
             return Err(anyhow!(
                 "Failed to create intx state: legacy irq manager is none."

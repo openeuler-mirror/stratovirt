@@ -37,7 +37,7 @@ use log::{error, warn};
 use self::alsa::AlsaStreamData;
 use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
-use crate::pci::{PciBus, PciDevOps};
+use crate::{pci::PciDevOps, Bus};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
@@ -534,7 +534,7 @@ impl Scream {
         Ok(())
     }
 
-    pub fn realize(&mut self, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
+    pub fn realize(&mut self, parent_bus: Weak<Mutex<dyn Bus>>) -> Result<()> {
         let host_mmap = Arc::new(HostMemMapping::new(
             GuestAddress(0),
             None,

@@ -20,7 +20,7 @@ use crate::pci::{bus::PciBus, to_pcidevops, PCI_PIN_NUM, PCI_SLOT_MAX};
 #[cfg(target_arch = "x86_64")]
 use crate::pci::{le_read_u32, le_write_u32};
 use crate::sysbus::{SysBusDevBase, SysBusDevOps};
-use crate::{Bus, Device, DeviceBase, PCI_BUS_DEVICE};
+use crate::{Device, DeviceBase, PCI_BUS_DEVICE};
 use acpi::{
     AmlActiveLevel, AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable,
     AmlCreateDWordField, AmlDWord, AmlDWordDesc, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlElse,
@@ -54,7 +54,6 @@ const ECAM_OFFSET_MASK: u64 = 0xfff;
 #[derive(Clone)]
 pub struct PciHost {
     base: SysBusDevBase,
-    pub root_bus: Arc<Mutex<PciBus>>,
     #[cfg(target_arch = "x86_64")]
     config_addr: u32,
     pcie_ecam_range: (u64, u64),
@@ -96,9 +95,10 @@ impl PciHost {
             io_region,
             mem_region,
         );
+        let mut base = SysBusDevBase::default();
+        base.base.child = Some(Arc::new(Mutex::new(root_bus)));
         PciHost {
-            base: SysBusDevBase::default(),
-            root_bus: Arc::new(Mutex::new(root_bus)),
+            base,
             #[cfg(target_arch = "x86_64")]
             config_addr: 0,
             pcie_ecam_range,
@@ -112,15 +112,20 @@ impl PciHost {
     }
 
     pub fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn Device>>> {
-        let locked_root_bus = self.root_bus.lock().unwrap();
+        let root_bus = self.child_bus().unwrap();
+        let locked_root_bus = root_bus.lock().unwrap();
         if bus_num == 0 {
             let dev = locked_root_bus.child_dev(devfn as u64)?;
             return Some(dev.clone());
         }
-        for bus in &locked_root_bus.child_buses {
-            if let Some(b) = PciBus::find_bus_by_num(bus, bus_num) {
-                let dev = b.lock().unwrap().child_dev(devfn as u64)?.clone();
-                return Some(dev);
+
+        for dev in locked_root_bus.child_devices().values() {
+            let child_bus = dev.lock().unwrap().child_bus();
+            if let Some(bus) = child_bus {
+                if let Some(b) = PciBus::find_bus_by_num(&bus, bus_num) {
+                    let dev = b.lock().unwrap().child_dev(devfn as u64)?.clone();
+                    return Some(dev);
+                }
             }
         }
         None
@@ -277,7 +282,8 @@ impl SysBusDevOps for PciHost {
     }
 
     fn reset(&mut self) -> Result<()> {
-        for dev in self.root_bus.lock().unwrap().child_devices().values() {
+        let root_bus = self.child_bus().unwrap();
+        for dev in root_bus.lock().unwrap().child_devices().values() {
             PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
             pci_dev
                 .reset(true)
@@ -579,7 +585,7 @@ pub mod tests {
         register_pcidevops_type::<RootPort>().unwrap();
 
         let pci_host = create_pci_host();
-        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().child_bus().unwrap());
         let pio_addr_ops = PciHost::build_pio_addr_ops(pci_host.clone());
         let pio_data_ops = PciHost::build_pio_data_ops(pci_host.clone());
         let root_port_config = RootPortConfig {
@@ -665,7 +671,8 @@ pub mod tests {
         register_pcidevops_type::<RootPort>().unwrap();
 
         let pci_host = create_pci_host();
-        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
+        let weak_root_bus = Arc::downgrade(&root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(pci_host.clone());
 
         let root_port_config = RootPortConfig {
@@ -673,7 +680,7 @@ pub mod tests {
             id: "pcie.1".to_string(),
             ..Default::default()
         };
-        let mut root_port = RootPort::new(root_port_config, root_bus.clone());
+        let mut root_port = RootPort::new(root_port_config, weak_root_bus.clone());
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[1]);
         root_port.realize().unwrap();
         let root_port_config = RootPortConfig {
@@ -681,11 +688,11 @@ pub mod tests {
             id: "pcie.2".to_string(),
             ..Default::default()
         };
-        let mut root_port = RootPort::new(root_port_config, root_bus.clone());
+        let mut root_port = RootPort::new(root_port_config, weak_root_bus);
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[2]);
         root_port.realize().unwrap();
 
-        let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
+        let bus = PciBus::find_bus_by_name(&root_bus, "pcie.2").unwrap();
         let pci_dev = TestPciDevice::new("PCI device", 8, Arc::downgrade(&bus));
         pci_dev.realize().unwrap();
 

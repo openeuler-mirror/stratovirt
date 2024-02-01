@@ -22,7 +22,7 @@ use crate::pci::config::{
     PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
-use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use util::gen_base_func;
 
@@ -45,7 +45,7 @@ impl Ivshmem {
     pub fn new(
         name: String,
         devfn: u8,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         ram_mem_region: Region,
     ) -> Self {
         Self {

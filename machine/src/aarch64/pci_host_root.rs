@@ -18,8 +18,8 @@ use devices::pci::config::{
     PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
     REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
 use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
@@ -30,7 +30,7 @@ pub struct PciHostRoot {
 }
 
 impl PciHostRoot {
-    pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new("PCI Host Root".to_string(), false, Some(parent_bus)),

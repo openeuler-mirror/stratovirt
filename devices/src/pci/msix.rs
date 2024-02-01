@@ -637,13 +637,13 @@ mod tests {
     use super::*;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
     use crate::pci::host::tests::create_pci_host;
-    use crate::DeviceBase;
+    use crate::{Device, DeviceBase};
 
     #[test]
     fn test_init_msix() {
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
@@ -748,7 +748,7 @@ mod tests {
     fn test_write_config() {
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),

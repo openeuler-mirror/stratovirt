@@ -36,7 +36,8 @@ use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
-use devices::pci::{PciDevOps, PciHost};
+use devices::pci::{PciBus, PciDevOps, PciHost};
+use devices::{convert_bus_mut, Device, MUT_PCI_BUS};
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
@@ -179,7 +180,7 @@ impl StdMachine {
     }
 
     fn init_ich9_lpc(&self, vm: Arc<RwLock<StdMachine>>) -> Result<()> {
-        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().child_bus().unwrap());
         let ich = ich9_lpc::LPCBridge::new(
             root_bus,
             self.base.sys_io.clone(),
@@ -235,7 +236,7 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> Result<()> {
-        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().child_bus().unwrap());
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1,
@@ -394,9 +395,10 @@ impl MachineOps for StdMachine {
         let mut locked_hypervisor = hypervisor.lock().unwrap();
         locked_hypervisor.create_interrupt_controller()?;
 
-        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let child_bus = self.pci_host.lock().unwrap().child_bus().unwrap();
+        MUT_PCI_BUS!(child_bus, locked_bus, pci_bus);
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        pci_bus.msi_irq_manager = irq_manager.msi_irq_manager;
         self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
 
         Ok(())

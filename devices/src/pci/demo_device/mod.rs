@@ -33,13 +33,8 @@ pub mod dpy_device;
 pub mod gpu_device;
 pub mod kbd_pointer_device;
 
-use std::{
-    sync::Mutex,
-    sync::{
-        atomic::{AtomicU16, Ordering},
-        Arc, Weak,
-    },
-};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use clap::Parser;
@@ -54,7 +49,7 @@ use crate::pci::demo_device::{
     kbd_pointer_device::DemoKbdMouse,
 };
 use crate::pci::{init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
-use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
 use util::gen_base_func;
@@ -95,7 +90,7 @@ impl DemoDev {
         cfg: DemoDevConfig,
         devfn: u8,
         sys_mem: Arc<AddressSpace>,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
         let device_type = cfg.device_type.clone().unwrap_or_default();

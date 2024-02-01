@@ -34,7 +34,7 @@ use crate::pci::config::{
 };
 use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
 use crate::usb::UsbDevice;
-use crate::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
@@ -108,7 +108,7 @@ impl XhciPciDevice {
     pub fn new(
         config: &XhciConfig,
         devfn: u8,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         mem_space: &Arc<AddressSpace>,
     ) -> Self {
         Self {

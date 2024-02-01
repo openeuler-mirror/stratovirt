@@ -43,7 +43,7 @@ use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
     pci_ext_cap_next, pci_ext_cap_ver, MsiVector, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{convert_bus_ref, Device, DeviceBase, PCI_BUS};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
@@ -125,7 +125,7 @@ impl VfioPciDevice {
         vfio_device: Arc<Mutex<VfioDevice>>,
         devfn: u8,
         name: String,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         multi_func: bool,
         mem_as: Arc<AddressSpace>,
     ) -> Self {

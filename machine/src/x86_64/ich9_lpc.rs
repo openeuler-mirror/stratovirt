@@ -26,8 +26,8 @@ use devices::pci::config::{
     PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, le_write_u32, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
@@ -57,7 +57,7 @@ pub struct LPCBridge {
 
 impl LPCBridge {
     pub fn new(
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         sys_io: Arc<AddressSpace>,
         reset_req: Arc<EventFd>,
         shutdown_req: Arc<EventFd>,
