@@ -14,12 +14,12 @@ pub mod config;
 #[cfg(feature = "demo_device")]
 pub mod demo_device;
 pub mod error;
+pub mod host;
 pub mod hotplug;
 pub mod intx;
 pub mod msix;
 
 mod bus;
-mod host;
 mod root_port;
 
 pub use bus::PciBus;
