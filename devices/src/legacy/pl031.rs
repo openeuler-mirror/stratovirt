@@ -15,7 +15,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
@@ -121,16 +120,6 @@ impl PL031 {
     fn get_current_value(&self) -> u32 {
         (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
     }
-
-    fn inject_interrupt(&self) {
-        if let Some(evt_fd) = self.interrupt_evt() {
-            if let Err(e) = evt_fd.write(1) {
-                error!("pl031: failed to write interrupt eventfd ({:?}).", e);
-            }
-            return;
-        }
-        error!("pl031: failed to get interrupt event fd.");
-    }
 }
 
 impl Device for PL031 {
@@ -170,6 +159,7 @@ impl SysBusDevOps for PL031 {
             RTC_MIS => value = self.state.risr & self.state.imsr,
             _ => {}
         }
+        trace::pl031_read(offset, value);
 
         write_data_u32(data, value)
     }
@@ -177,6 +167,7 @@ impl SysBusDevOps for PL031 {
     /// Write data to registers by guest.
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         let value = LittleEndian::read_u32(data);
+        trace::pl031_write(offset, value);
 
         match offset {
             RTC_MR => {
@@ -195,10 +186,12 @@ impl SysBusDevOps for PL031 {
             RTC_IMSC => {
                 self.state.imsr = value & 1;
                 self.inject_interrupt();
+                trace::pl031_inject_interrupt();
             }
             RTC_ICR => {
                 self.state.risr = 0;
                 self.inject_interrupt();
+                trace::pl031_inject_interrupt();
             }
             _ => {}
         }
@@ -206,7 +199,7 @@ impl SysBusDevOps for PL031 {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }
@@ -218,13 +211,13 @@ impl AmlBuilder for PL031 {
 }
 
 impl StateTransfer for PL031 {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = self.state;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         self.state = *PL031State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL031"))?;
 

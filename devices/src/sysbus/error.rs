@@ -19,11 +19,6 @@ pub enum SysBusError {
         #[from]
         source: address_space::error::AddressSpaceError,
     },
-    #[error("Hypervisor")]
-    Hypervisor {
-        #[from]
-        source: hypervisor::error::HypervisorError,
-    },
     #[error("KvmIoctl")]
     KvmIoctl {
         #[from]

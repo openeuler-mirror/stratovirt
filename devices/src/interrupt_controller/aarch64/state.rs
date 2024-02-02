@@ -12,17 +12,16 @@
 
 use std::mem::size_of;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use libc::c_uint;
 
-use super::gicv3::{GICv3, GICv3Access, GICv3Its};
+use super::gicv3::{GICv3, GICv3Its};
 use super::GIC_IRQ_INTERNAL;
-use crate::interrupt_controller::Result;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
-/// Register data length can be get by `get_device_attr/set_device_attr` in kvm once.
+/// Register data length can be get in hypervisor once.
 const REGISTER_SIZE: u64 = size_of::<c_uint>() as u64;
 
 /// Distributor registers, as offsets from the distributor base address
@@ -611,7 +610,7 @@ pub struct GICv3State {
 }
 
 impl StateTransfer for GICv3 {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         use migration::MigrationError;
 
         let mut state = GICv3State::default();
@@ -650,7 +649,7 @@ impl StateTransfer for GICv3 {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         use migration::error::MigrationError;
 
         let state = GICv3State::from_bytes(state).unwrap();
@@ -710,7 +709,7 @@ pub struct GICv3ItsState {
 }
 
 impl StateTransfer for GICv3Its {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         use migration::MigrationError;
 
         let mut state = GICv3ItsState::default();
@@ -732,7 +731,7 @@ impl StateTransfer for GICv3Its {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         use migration::MigrationError;
 
         let mut its_state = *GICv3ItsState::from_bytes(state)

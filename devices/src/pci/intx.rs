@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::Result;
 use log::error;
 
+use crate::interrupt_controller::LineIrqManager;
 use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_INTR_BASE, PCI_PIN_NUM};
 use util::test_helper::{is_test_enabled, trigger_intx};
 
@@ -27,11 +28,11 @@ pub struct PciIntxState {
     /// INTx IRQ numbers to be asserted of every INTx virtual interrupt line.
     pub irq_count: [i8; PCI_PIN_NUM as usize],
     /// Handler of asserting the INTx IRQ.
-    pub irq_handler: InterruptHandler,
+    pub irq_handler: Arc<dyn LineIrqManager>,
 }
 
 impl PciIntxState {
-    pub fn new(gsi_base: u32, irq_handler: InterruptHandler) -> Self {
+    pub fn new(gsi_base: u32, irq_handler: Arc<dyn LineIrqManager>) -> Self {
         Self {
             gsi_base,
             irq_count: [0; PCI_PIN_NUM as usize],
@@ -100,7 +101,8 @@ impl Intx {
                 return;
             }
 
-            if let Err(e) = (locked_intx_state.irq_handler)(irq, level) {
+            let irq_handler = &locked_intx_state.irq_handler;
+            if let Err(e) = irq_handler.set_irq_line(irq, level) {
                 error!(
                     "Failed to set irq {} level {} of device {}: {}.",
                     irq, level, self.device_name, e

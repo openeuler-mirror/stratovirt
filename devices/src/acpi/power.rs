@@ -206,11 +206,11 @@ impl PowerDev {
 }
 
 impl StateTransfer for PowerDev {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         self.state.as_mut_bytes().copy_from_slice(state);
         Ok(())
     }
@@ -221,7 +221,7 @@ impl StateTransfer for PowerDev {
 }
 
 impl MigrationHook for PowerDev {
-    fn resume(&mut self) -> migration::Result<()> {
+    fn resume(&mut self) -> Result<()> {
         self.send_power_event(AcpiEvent::AcadSt);
         self.send_power_event(AcpiEvent::BatterySt);
         Ok(())
@@ -260,7 +260,7 @@ impl SysBusDevOps for PowerDev {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
@@ -169,11 +169,13 @@ impl XhciTransfer {
 
         self.status = usb_packet_status_to_trb_code(self.packet.lock().unwrap().status)?;
         if self.status == TRBCCode::Success {
+            trace::usb_xhci_xfer_success(&self.packet.lock().unwrap().actual_length);
             self.submit_transfer()?;
             self.ep_ring.refresh_dequeue_ptr()?;
             return Ok(());
         }
 
+        trace::usb_xhci_xfer_error(&self.packet.lock().unwrap().status);
         self.report_transfer_error()?;
 
         if self.ep_type == EpType::IsoIn || self.ep_type == EpType::IsoOut {
@@ -208,7 +210,10 @@ impl XhciTransfer {
                 }
                 TRBType::TrStatus => {}
                 _ => {
-                    debug!("Ignore the TRB, unhandled trb type {:?}", trb.get_type());
+                    trace::usb_xhci_unimplemented(&format!(
+                        "Ignore the TRB, unhandled trb type {:?}",
+                        trb.get_type()
+                    ));
                 }
             }
             if (trb.control & TRB_TR_IOC == TRB_TR_IOC)
@@ -762,6 +767,7 @@ impl XhciDevice {
     }
 
     pub fn run(&mut self) {
+        trace::usb_xhci_run();
         self.oper.unset_usb_status_flag(USB_STS_HCH);
         self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
     }
@@ -797,6 +803,7 @@ impl XhciDevice {
     }
 
     pub fn stop(&mut self) {
+        trace::usb_xhci_stop();
         self.oper.set_usb_status_flag(USB_STS_HCH);
         self.oper.cmd_ring_ctrl &= !(CMD_RING_CTRL_CRR as u64);
     }
@@ -811,7 +818,7 @@ impl XhciDevice {
     }
 
     pub fn reset(&mut self) {
-        info!("xhci reset");
+        trace::usb_xhci_reset();
         self.oper.reset();
         for i in 0..self.slots.len() as u32 {
             if let Err(e) = self.disable_slot(i + 1) {
@@ -837,6 +844,7 @@ impl XhciDevice {
     /// Reset xhci port.
     pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<UsbPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
+        trace::usb_xhci_port_reset(&locked_port.port_id, &warm_reset);
         let usb_dev = locked_port.dev.as_ref();
         if usb_dev.is_none() {
             // No device, no need to reset.
@@ -852,6 +860,7 @@ impl XhciDevice {
         match speed {
             USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
                 locked_port.set_port_link_state(PLS_U0);
+                trace::usb_xhci_port_link(&locked_port.port_id, &PLS_U0);
                 locked_port.portsc |= PORTSC_PED;
             }
             _ => {
@@ -870,6 +879,7 @@ impl XhciDevice {
         if locked_port.portsc & flag == flag {
             return Ok(());
         }
+        trace::usb_xhci_port_notify(&locked_port.port_id, &flag);
         locked_port.portsc |= flag;
         if !self.running() {
             return Ok(());
@@ -906,10 +916,7 @@ impl XhciDevice {
             }
         }
         locked_port.set_port_link_state(pls);
-        debug!(
-            "xhci port update portsc {:x} pls {:x}",
-            locked_port.portsc, pls
-        );
+        trace::usb_xhci_port_link(&locked_port.port_id, &pls);
         drop(locked_port);
         self.oper.set_usb_status_flag(USB_STS_PCD);
         self.port_notify(port, PORTSC_CSC)?;
@@ -1035,7 +1042,7 @@ impl XhciDevice {
                     self.intrs[0].lock().unwrap().send_event(&event)?;
                 }
                 None => {
-                    debug!("No TRB in the cmd ring.");
+                    trace::usb_xhci_unimplemented(&"No TRB in the cmd ring.".to_string());
                     break;
                 }
             }
@@ -1044,11 +1051,13 @@ impl XhciDevice {
     }
 
     fn enable_slot(&mut self, slot_id: u32) -> TRBCCode {
+        trace::usb_xhci_enable_slot(&slot_id);
         self.slots[(slot_id - 1) as usize].enabled = true;
         TRBCCode::Success
     }
 
     fn disable_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
+        trace::usb_xhci_disable_slot(&slot_id);
         for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
             self.disable_endpoint(slot_id, i)?;
         }
@@ -1105,6 +1114,7 @@ impl XhciDevice {
             error!("Failed to found usb port");
             return Ok(TRBCCode::TrbError);
         };
+        trace::usb_xhci_address_device(&slot_id, &usb_port.lock().unwrap().port_id);
         if usb_port.lock().unwrap().dev.is_none() {
             error!("No device found in usb port.");
             return Ok(TRBCCode::UsbTransactionError);
@@ -1178,6 +1188,7 @@ impl XhciDevice {
             Vec::new(),
             None,
         )));
+        trace::usb_handle_control(&locked_dev.usb_device_base().base.id, &device_req);
         locked_dev.handle_control(&p, &device_req);
     }
 
@@ -1189,6 +1200,7 @@ impl XhciDevice {
     }
 
     fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        trace::usb_xhci_configure_endpoint(&slot_id);
         let slot_state =
             self.slots[(slot_id - 1) as usize].get_slot_state_in_context(&self.mem_space)?;
         if trb.control & TRB_CR_DC == TRB_CR_DC {
@@ -1273,6 +1285,7 @@ impl XhciDevice {
     }
 
     fn evaluate_context(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        trace::usb_xhci_evaluate_context(&slot_id);
         if !self.slots[(slot_id - 1) as usize].slot_state_is_valid(&self.mem_space)? {
             error!("Invalid slot state, slot id {}", slot_id);
             return Ok(TRBCCode::ContextStateError);
@@ -1347,6 +1360,7 @@ impl XhciDevice {
     }
 
     fn reset_device(&mut self, slot_id: u32) -> Result<TRBCCode> {
+        trace::usb_xhci_reset_device(&slot_id);
         let mut slot_ctx = XhciSlotCtx::default();
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         dma_read_u32(
@@ -1379,6 +1393,7 @@ impl XhciDevice {
         input_ctx: DmaAddr,
         output_ctx: DmaAddr,
     ) -> Result<TRBCCode> {
+        trace::usb_xhci_enable_endpoint(&slot_id, &ep_id);
         let entry_offset = (ep_id - 1) as u64 * EP_INPUT_CTX_ENTRY_SIZE;
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
@@ -1411,9 +1426,10 @@ impl XhciDevice {
     }
 
     fn disable_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
+        trace::usb_xhci_disable_endpoint(&slot_id, &ep_id);
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if !epctx.enabled {
-            debug!("Endpoint already disabled");
+            trace::usb_xhci_unimplemented(&"Endpoint already disabled".to_string());
             return Ok(TRBCCode::Success);
         }
         self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)?;
@@ -1426,6 +1442,7 @@ impl XhciDevice {
     }
 
     fn stop_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
+        trace::usb_xhci_stop_endpoint(&slot_id, &ep_id);
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&ep_id) {
             error!("Invalid endpoint id");
             return Ok(TRBCCode::TrbError);
@@ -1449,13 +1466,17 @@ impl XhciDevice {
             return Ok(TRBCCode::ContextStateError);
         }
         if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
-            debug!("endpoint stop when xfers running!");
+            trace::usb_xhci_unimplemented(&format!(
+                "Endpoint stop when xfers running, slot_id {} epid {}",
+                slot_id, ep_id
+            ));
         }
         self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].set_state(EP_STOPPED)?;
         Ok(TRBCCode::Success)
     }
 
     fn reset_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
+        trace::usb_xhci_reset_endpoint(&slot_id, &ep_id);
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&ep_id) {
             error!("Invalid endpoint id {}", ep_id);
             return Ok(TRBCCode::TrbError);
@@ -1499,6 +1520,7 @@ impl XhciDevice {
         epid: u32,
         trb: &XhciTRB,
     ) -> Result<TRBCCode> {
+        trace::usb_xhci_set_tr_dequeue(&slotid, &epid, &trb.parameter);
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&epid) {
             error!("Invalid endpoint id {}", epid);
             return Ok(TRBCCode::TrbError);
@@ -1542,12 +1564,7 @@ impl XhciDevice {
             return Ok(());
         }
 
-        debug!(
-            "kick_endpoint slotid {} epid {} dequeue {:x}",
-            slot_id,
-            ep_id,
-            epctx.ring.get_dequeue_ptr(),
-        );
+        trace::usb_xhci_ep_kick(&slot_id, &ep_id, &epctx.ring.get_dequeue_ptr());
         if self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
             .retry
             .is_some()
@@ -1571,11 +1588,11 @@ impl XhciDevice {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             let td = match epctx.ring.fetch_td()? {
                 Some(td) => {
-                    debug!(
+                    trace::usb_xhci_unimplemented(&format!(
                         "fetch transfer trb {:?} ring dequeue {:?}",
                         td,
                         epctx.ring.get_dequeue_ptr(),
-                    );
+                    ));
                     td
                 }
                 None => {
@@ -1592,7 +1609,7 @@ impl XhciDevice {
                             error!("Failed to send event: {:?}", e);
                         }
                     }
-                    debug!("No TD in the transfer ring.");
+                    trace::usb_xhci_unimplemented(&"No TD in the transfer ring.".to_string());
                     break;
                 }
             };
@@ -1692,7 +1709,7 @@ impl XhciDevice {
         if !locked_xfer.iso_xfer
             && locked_xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak
         {
-            debug!("USB packet status is NAK");
+            trace::usb_xhci_unimplemented(&"USB packet status is NAK".to_string());
             // NAK need to retry again.
             return Ok(false);
         }
@@ -1729,6 +1746,7 @@ impl XhciDevice {
 
     /// Control Transfer, TRBs include Setup, Data(option), Status.
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        trace::usb_xhci_xfer_start(&xfer.slotid, &xfer.epid);
         if let Err(e) = self.check_ctrl_transfer(xfer) {
             error!("Failed to check control transfer {:?}", e);
             xfer.status = TRBCCode::TrbError;
@@ -1836,6 +1854,7 @@ impl XhciDevice {
     }
 
     fn do_data_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        trace::usb_xhci_xfer_start(&xfer.slotid, &xfer.epid);
         let epctx = &self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
         match epctx.ep_type {
             EpType::IntrOut | EpType::IntrIn => {
@@ -1934,15 +1953,18 @@ impl XhciDevice {
     /// Update packet status and then submit transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if xfer.packet.lock().unwrap().is_async {
+            trace::usb_xhci_xfer_async();
             xfer.running_retry = false;
             xfer.running_async = true;
             return Ok(());
         }
         if xfer.packet.lock().unwrap().status == UsbPacketStatus::Nak {
+            trace::usb_xhci_xfer_nak();
             xfer.complete = false;
             xfer.running_retry = true;
             return Ok(());
         } else {
+            trace::usb_xhci_xfer_retry();
             xfer.complete = true;
             xfer.running_retry = false;
         }
@@ -1952,7 +1974,7 @@ impl XhciDevice {
 
     /// Flush transfer in endpoint in some case such as stop endpoint.
     fn flush_ep_transfer(&mut self, slotid: u32, epid: u32, report: TRBCCode) -> Result<u32> {
-        debug!("flush_ep_transfer slotid {} epid {}", slotid, epid);
+        trace::usb_xhci_flush_ep_transfer(&slotid, &epid);
         let mut cnt = 0;
         let mut report = report;
         while let Some(xfer) = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
@@ -2011,10 +2033,10 @@ impl XhciDevice {
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
-            debug!(
+            trace::usb_xhci_unimplemented(&format!(
                 "Invalid slot id or ep id, maybe device not activated, {:?}",
                 e
-            );
+            ));
             return Ok(());
         }
         self.kick_endpoint(slot_id, ep_id as u32)?;

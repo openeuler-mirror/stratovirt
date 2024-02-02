@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -176,14 +175,6 @@ impl Ged {
             .fetch_or(evt as u32, Ordering::SeqCst);
         self.inject_interrupt();
     }
-
-    fn inject_interrupt(&self) {
-        if let Some(evt_fd) = self.interrupt_evt() {
-            evt_fd
-                .write(1)
-                .unwrap_or_else(|e| error!("ged: failed to write interrupt eventfd ({:?}).", e));
-        }
-    }
 }
 
 impl Device for Ged {
@@ -219,7 +210,7 @@ impl SysBusDevOps for Ged {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }

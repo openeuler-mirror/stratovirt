@@ -21,18 +21,32 @@ pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
-pub use anyhow::Result;
-
 pub use error::MigrationError;
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
+use anyhow::Result;
 use log::error;
 
 use machine_manager::qmp::{qmp_response::Response, qmp_schema};
+
+#[derive(Default, Copy, Clone)]
+pub struct MigrateMemSlot {
+    /// number of a memory slot.
+    pub slot: u32,
+    /// Guest address.
+    pub guest_phys_addr: u64,
+    /// Host address.
+    pub userspace_addr: u64,
+    /// Size of memory.
+    /// size = 0 represents no-region use this slot.
+    pub memory_size: u64,
+}
 
 /// Start to snapshot VM.
 ///
@@ -164,4 +178,16 @@ pub fn cancel_migrate() -> Response {
     }
 
     Response::create_empty_response()
+}
+
+pub trait MigrateOps: Send + Sync {
+    fn get_mem_slots(&self) -> Arc<Mutex<HashMap<u32, MigrateMemSlot>>>;
+
+    fn get_dirty_log(&self, _slot: u32, _mem_size: u64) -> Result<Vec<u64>>;
+
+    fn start_dirty_log(&self) -> Result<()>;
+
+    fn stop_dirty_log(&self) -> Result<()>;
+
+    fn register_instance(&self) -> Result<()>;
 }

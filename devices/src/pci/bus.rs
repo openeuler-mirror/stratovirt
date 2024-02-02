@@ -22,6 +22,7 @@ use super::{
     hotplug::HotplugOps,
     PciDevOps, PciIntxState,
 };
+use crate::MsiIrqManager;
 use address_space::Region;
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
@@ -45,6 +46,7 @@ pub struct PciBus {
     pub hotplug_controller: Option<Weak<Mutex<dyn HotplugOps>>>,
     /// Interrupt info related to INTx.
     pub intx_state: Option<Arc<Mutex<PciIntxState>>>,
+    pub msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
 }
 
 impl PciBus {
@@ -70,6 +72,7 @@ impl PciBus {
             mem_region,
             hotplug_controller: None,
             intx_state: None,
+            msi_irq_manager: None,
         }
     }
 
@@ -250,6 +253,17 @@ impl PciBus {
 
     pub fn update_dev_id(&self, devfn: u8, dev_id: &Arc<AtomicU16>) {
         dev_id.store(self.generate_dev_id(devfn), Ordering::Release);
+    }
+
+    pub fn get_msi_irq_manager(&self) -> Option<Arc<dyn MsiIrqManager>> {
+        match &self.parent_bridge {
+            Some(parent_bridge) => {
+                let parent_bridge = parent_bridge.upgrade().unwrap();
+                let locked_parent_bridge = parent_bridge.lock().unwrap();
+                locked_parent_bridge.get_msi_irq_manager()
+            }
+            None => self.msi_irq_manager.clone(),
+        }
     }
 }
 

@@ -412,7 +412,7 @@ impl VmConfig {
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for VmConfig {
-    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::Result<()> {
+    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> Result<()> {
         Ok(())
     }
 }

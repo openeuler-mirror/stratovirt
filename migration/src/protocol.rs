@@ -786,11 +786,11 @@ pub mod tests {
     }
 
     impl StateTransfer for DeviceV1 {
-        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+        fn get_state_vec(&self) -> Result<Vec<u8>> {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
             self.state = *DeviceV1State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -801,11 +801,11 @@ pub mod tests {
     }
 
     impl StateTransfer for DeviceV2 {
-        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+        fn get_state_vec(&self) -> Result<Vec<u8>> {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
             self.state = *DeviceV2State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -830,11 +830,11 @@ pub mod tests {
     }
 
     impl StateTransfer for DeviceV3 {
-        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+        fn get_state_vec(&self) -> Result<Vec<u8>> {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
             self.state = *DeviceV3State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -859,11 +859,11 @@ pub mod tests {
     }
 
     impl StateTransfer for DeviceV4 {
-        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+        fn get_state_vec(&self) -> Result<Vec<u8>> {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
             self.state = *DeviceV4State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -882,11 +882,11 @@ pub mod tests {
     }
 
     impl StateTransfer for DeviceV5 {
-        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+        fn get_state_vec(&self) -> Result<Vec<u8>> {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
             self.state = *DeviceV5State::from_bytes(state).unwrap();
             Ok(())
         }

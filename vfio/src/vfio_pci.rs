@@ -43,8 +43,7 @@ use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
     pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{Device, DeviceBase};
-use hypervisor::kvm::{MsiVector, KVM_FDS};
+use devices::{pci::MsiVector, Device, DeviceBase};
 use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
 
@@ -461,11 +460,20 @@ impl VfioPciDevice {
             offset,
             MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
         )?;
+
+        let msi_irq_manager = if let Some(pci_bus) = self.base.parent_bus.upgrade() {
+            let locked_pci_bus = pci_bus.lock().unwrap();
+            locked_pci_bus.get_msi_irq_manager()
+        } else {
+            None
+        };
+
         let msix = Arc::new(Mutex::new(Msix::new(
             table_size,
             table_size / 128,
             cap_offset as u16,
             self.dev_id.clone(),
+            msi_irq_manager,
         )));
         self.base.config.msix = Some(msix.clone());
 
@@ -490,6 +498,7 @@ impl VfioPciDevice {
         let parent_bus = self.base.parent_bus.clone();
         let dev_id = self.dev_id.clone();
         let devfn = self.base.devfn;
+        let cloned_msix = msix.clone();
         let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
@@ -517,47 +526,24 @@ impl VfioPciDevice {
                 let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
                 gsi_route.irq_fd = Some(Arc::new(irq_fd));
             }
+            let irq_fd = gsi_route.irq_fd.clone();
+            let msi_irq_manager = &cloned_msix.lock().unwrap().msi_irq_manager;
+            let irq_manager = msi_irq_manager.as_ref().unwrap();
             if gsi_route.gsi == -1 {
-                gsi_route.gsi = match KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .allocate_gsi()
-                {
+                gsi_route.gsi = match irq_manager.allocate_irq(msix_vector) {
                     Ok(g) => g as i32,
                     Err(e) => {
-                        error!("Failed to allocate gsi, error is {:?}", e);
+                        error!("Failed to init msix vector {:?}, error is {:?}", vector, e);
                         return true;
                     }
                 };
 
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .add_msi_route(gsi_route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {:?}", e));
-                KVM_FDS
-                    .load()
-                    .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("{:?}", e));
-                KVM_FDS
-                    .load()
-                    .register_irqfd(gsi_route.irq_fd.as_ref().unwrap(), gsi_route.gsi as u32)
+                irq_manager
+                    .register_irqfd(irq_fd.unwrap(), gsi_route.gsi as u32)
                     .unwrap_or_else(|e| error!("{:?}", e));
             } else {
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .update_msi_route(gsi_route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {:?}", e));
-                KVM_FDS
-                    .load()
-                    .commit_irq_routing()
+                irq_manager
+                    .update_route_table(gsi_route.gsi as u32, msix_vector)
                     .unwrap_or_else(|e| error!("{:?}", e));
             }
 
@@ -765,22 +751,21 @@ impl VfioPciDevice {
 
     fn vfio_unregister_all_irqfd(&mut self) -> Result<()> {
         let routes = self.gsi_msi_routes.lock().unwrap();
+        let msix = self.base.config.msix.as_ref().unwrap();
+        let irq_ctrl = &msix.lock().unwrap().msi_irq_manager;
         for route in routes.iter() {
             if let Some(fd) = route.irq_fd.as_ref() {
-                KVM_FDS
-                    .load()
-                    .unregister_irqfd(fd.as_ref(), route.gsi as u32)?;
+                irq_ctrl
+                    .as_ref()
+                    .unwrap()
+                    .unregister_irqfd(fd.clone(), route.gsi as u32)?;
 
                 // No need to release gsi.
                 if route.gsi == -1 {
                     continue;
                 }
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .release_gsi(route.gsi as u32)?;
+
+                irq_ctrl.as_ref().unwrap().release_irq(route.gsi as u32)?;
             }
         }
         Ok(())
@@ -834,20 +819,20 @@ impl PciDevOps for VfioPciDevice {
         &mut self.base
     }
 
-    fn realize(mut self) -> devices::pci::Result<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
-        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Failed to reset vfio device"
         })?;
 
-        devices::pci::Result::with_context(self.get_pci_config(), || {
+        Result::with_context(self.get_pci_config(), || {
             "Failed to get vfio device pci config space"
         })?;
-        devices::pci::Result::with_context(self.pci_config_reset(), || {
+        Result::with_context(self.pci_config_reset(), || {
             "Failed to reset vfio device pci config space"
         })?;
-        devices::pci::Result::with_context(
+        Result::with_context(
             init_multifunction(
                 self.multi_func,
                 &mut self.base.config.config,
@@ -870,15 +855,14 @@ impl PciDevOps for VfioPciDevice {
             self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
-        self.msix_info = Some(devices::pci::Result::with_context(
-            self.get_msix_info(),
-            || "Failed to get MSI-X info",
-        )?);
-        self.vfio_bars = Arc::new(Mutex::new(devices::pci::Result::with_context(
+        self.msix_info = Some(Result::with_context(self.get_msix_info(), || {
+            "Failed to get MSI-X info"
+        })?);
+        self.vfio_bars = Arc::new(Mutex::new(Result::with_context(
             self.bar_region_info(),
             || "Failed to get bar region info",
         )?));
-        devices::pci::Result::with_context(self.register_bars(), || "Failed to register bars")?;
+        Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -898,7 +882,7 @@ impl PciDevOps for VfioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> devices::pci::Result<()> {
+    fn unrealize(&mut self) -> Result<()> {
         if let Err(e) = VfioPciDevice::unrealize(self) {
             error!("{:?}", e);
             bail!("Failed to unrealize vfio-pci.");
@@ -1016,8 +1000,8 @@ impl PciDevOps for VfioPciDevice {
         }
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> devices::pci::Result<()> {
-        devices::pci::Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
             "Fail to reset vfio dev"
         })
     }

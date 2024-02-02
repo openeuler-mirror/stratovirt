@@ -15,7 +15,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, error, warn};
+use log::{error, warn};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -227,6 +227,14 @@ impl PFlash {
     }
 
     fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
+        if is_illegal_cmd {
+            warn!(
+                "Unimplemented PFlash cmd sequence (write cycle: 0x{:X}, cmd: 0x{:X})",
+                self.write_cycle, self.cmd
+            );
+        }
+
+        trace::pflash_mode_read_array();
         self.rom
             .as_ref()
             .unwrap()
@@ -234,13 +242,6 @@ impl PFlash {
             .with_context(|| "Failed to set to read array mode.")?;
         self.write_cycle = 0;
         self.cmd = 0x00;
-
-        if is_illegal_cmd {
-            warn!(
-                "Unimplemented PFlash cmd sequence (write cycle: 0x{:X}, cmd: 0x{:X})",
-                self.write_cycle, self.cmd
-            );
-        }
 
         Ok(())
     }
@@ -252,10 +253,16 @@ impl PFlash {
 
         // Mask off upper bits, the rest (ident[2] and ident[3]) is not emulated.
         let mut resp: u32 = match index & 0xFF {
-            0 => self.ident[0],
-            1 => self.ident[1],
+            0 => {
+                trace::pflash_manufacturer_id(self.ident[0]);
+                self.ident[0]
+            }
+            1 => {
+                trace::pflash_device_id(self.ident[1]);
+                self.ident[1]
+            }
             _ => {
-                debug!("Device ID 2 and 3 are not supported");
+                trace::pflash_device_info(index);
                 return Ok(0);
             }
         };
@@ -362,11 +369,18 @@ impl PFlash {
         data.as_mut()
             .write_all(src)
             .with_context(|| "Failed to read data from PFlash Rom")?;
+        trace::pflash_read_data(offset, data.len(), &data[..std::cmp::min(4, data.len())]);
 
         Ok(())
     }
 
     fn write_data(&mut self, data: &[u8], offset: u64) -> Result<()> {
+        trace::pflash_write_data(
+            offset,
+            data.len(),
+            &data[..std::cmp::min(4, data.len())],
+            self.counter,
+        );
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
         if offset + data.len() as u64 > mr.size() {
@@ -390,6 +404,7 @@ impl PFlash {
         match cmd {
             // cmd 0xf0 is for AMD PFlash.
             0x00 | 0xf0 | 0xff => {
+                trace::pflash_write("read array mode".to_string(), cmd);
                 if let Err(e) = self.set_read_array_mode(false) {
                     error!(
                         "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {:?}",
@@ -400,10 +415,11 @@ impl PFlash {
                 return true;
             }
             0x10 | 0x40 => {
-                debug!("PFlash write: Single Byte Program");
+                trace::pflash_write("single byte program (0)".to_string(), cmd);
             }
             0x20 => {
                 let offset_mask = offset & !(self.block_len as u64 - 1);
+                trace::pflash_write_block_erase(offset, self.block_len);
                 if !self.read_only {
                     let all_one = vec![0xff_u8; self.block_len as usize];
                     if let Err(e) = self.write_data(all_one.as_slice(), offset_mask) {
@@ -421,6 +437,7 @@ impl PFlash {
                 self.status |= 0x80;
             }
             0x50 => {
+                trace::pflash_write("clear status bits".to_string(), cmd);
                 self.status = 0x0;
                 if let Err(e) = self.set_read_array_mode(false) {
                     error!(
@@ -432,17 +449,23 @@ impl PFlash {
                 return true;
             }
             0x60 => {
-                debug!("PFlash write: Block unlock");
+                trace::pflash_write("block unlock".to_string(), cmd);
             }
-            0x70 | 0x90 => {
-                // 0x70: Status Register, 0x90: Read Device ID.
+            0x70 => {
+                trace::pflash_write("read status register".to_string(), cmd);
+                self.cmd = cmd;
+                return true;
+            }
+            0x90 => {
+                trace::pflash_write("read device information".to_string(), cmd);
                 self.cmd = cmd;
                 return true;
             }
             0x98 => {
-                debug!("PFlash write: CFI query");
+                trace::pflash_write("CFI query".to_string(), cmd);
             }
             0xe8 => {
+                trace::pflash_write("write to buffer".to_string(), cmd);
                 self.status |= 0x80;
             }
             _ => {
@@ -471,6 +494,7 @@ impl PFlash {
     ) -> bool {
         match self.cmd {
             0x10 | 0x40 => {
+                trace::pflash_write("single byte program (1)".to_string(), self.cmd);
                 if !self.read_only {
                     if let Err(e) = self.write_data(data, offset) {
                         error!("Failed to write to PFlash device: {:?}.", e);
@@ -522,6 +546,7 @@ impl PFlash {
                     error!("Failed to extract bits from u32 value");
                     return false;
                 };
+                trace::pflash_write_block(value);
                 self.write_cycle = self.write_cycle.wrapping_add(1);
                 self.counter = value;
             }
@@ -539,6 +564,7 @@ impl PFlash {
                     }
                     return true;
                 } else {
+                    trace::pflash_write("unknown (un)blocking command".to_string(), cmd);
                     if let Err(e) = self.set_read_array_mode(true) {
                         error!("Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {:?}",
                             self.cmd,
@@ -560,6 +586,7 @@ impl PFlash {
                     }
                     return true;
                 }
+                trace::pflash_write("leaving query mode".to_string(), cmd);
             }
             _ => {
                 if let Err(e) = self.set_read_array_mode(true) {
@@ -588,6 +615,7 @@ impl PFlash {
                 self.status |= 0x80;
                 if self.counter == 0 {
                     let mask: u64 = !(self.write_blk_size as u64 - 1);
+                    trace::pflash_write("block write finished".to_string(), self.cmd);
                     self.write_cycle = self.write_cycle.wrapping_add(1);
                     if !self.read_only {
                         if let Err(e) = self.update_content(offset & mask, self.write_blk_size) {
@@ -699,6 +727,7 @@ impl SysBusDevOps for PFlash {
                 } else if self.device_width == 0 && data_len > 2 {
                     ret |= (self.status as u32) << 16;
                 }
+                trace::pflash_read_status(ret);
             }
             0x90 => {
                 if self.device_width == 0 {
@@ -711,9 +740,18 @@ impl SysBusDevOps for PFlash {
                     }
 
                     match index {
-                        0 => ret = self.ident[0] << 8 | self.ident[1],
-                        1 => ret = self.ident[2] << 8 | self.ident[3],
-                        _ => ret = 0,
+                        0 => {
+                            ret = self.ident[0] << 8 | self.ident[1];
+                            trace::pflash_manufacturer_id(ret);
+                        }
+                        1 => {
+                            ret = self.ident[2] << 8 | self.ident[3];
+                            trace::pflash_device_id(ret);
+                        }
+                        _ => {
+                            ret = 0;
+                            trace::pflash_device_info(index);
+                        }
                     }
                 } else {
                     // If a read request is larger than bank_width of PFlash device,
@@ -786,7 +824,7 @@ impl SysBusDevOps for PFlash {
             }
             _ => {
                 // This should never happen : reset state & treat it as a read.
-                error!("PFlash read: unknown command state 0x{:X}", self.cmd);
+                trace::pflash_read_unknown_state(self.cmd);
                 self.write_cycle = 0;
                 self.cmd = 0x00;
                 if let Err(e) = self.read_data(data, offset) {
@@ -795,6 +833,7 @@ impl SysBusDevOps for PFlash {
             }
         }
 
+        trace::pflash_io_read(offset, data_len, ret, self.cmd, self.write_cycle);
         write_data_u32(data, ret)
     }
 
@@ -805,6 +844,7 @@ impl SysBusDevOps for PFlash {
         }
         let cmd: u8 = data[0];
         let data_len: u8 = data.len() as u8;
+        trace::pflash_io_write(offset, data_len, value, self.write_cycle);
 
         if self.write_cycle == 0
             && self
@@ -821,17 +861,14 @@ impl SysBusDevOps for PFlash {
         // - PFlash write
         //   * cmd 0x10 | 0x40 represents single Byte Program.
         //   * cmd 0xe8 represents write to buffer.
-        // - cmd 0x20 | 0x28 represents PFlash erase (write all 1).
+        //   * cmd 0x20 | 0x28 represents PFlash erase (write all 1).
         match self.write_cycle {
             0 => self.handle_write_first_pass(cmd, offset),
             1 => self.handle_write_second_pass(cmd, offset, data, data_len, value),
             2 => self.handle_write_third_pass(offset, data),
             3 => self.handle_write_fourth_pass(cmd),
             _ => {
-                error!(
-                    "PFlash write: invalid write state: write cycle {}",
-                    self.write_cycle
-                );
+                trace::pflash_write("invalid write state".to_string(), cmd);
                 if let Err(e) = self.set_read_array_mode(false) {
                     error!("Failed to set PFlash to read array mode, error is {:?}", e);
                 }
@@ -840,7 +877,7 @@ impl SysBusDevOps for PFlash {
         }
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 
@@ -850,7 +887,7 @@ impl SysBusDevOps for PFlash {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        let res = self.get_sys_resource().unwrap();
+        let res = self.get_sys_resource_mut().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
         res.irq = 0;

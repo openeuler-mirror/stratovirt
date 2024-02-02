@@ -16,14 +16,16 @@ mod cpuid;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use kvm_bindings::{
-    kvm_cpuid_entry2, kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry,
-    kvm_regs, kvm_segment, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, CpuId, Msrs,
-    KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE,
-    KVM_MP_STATE_UNINITIALIZED,
+    kvm_cpuid_entry2 as CpuidEntry2, kvm_debugregs as DebugRegs, kvm_fpu as Fpu,
+    kvm_lapic_state as LapicState, kvm_mp_state as MpState, kvm_msr_entry as MsrEntry,
+    kvm_regs as Regs, kvm_segment as Segment, kvm_sregs as Sregs, kvm_vcpu_events as VcpuEvents,
+    kvm_xcrs as Xcrs, kvm_xsave as Xsave, CpuId,
+    KVM_CPUID_FLAG_SIGNIFCANT_INDEX as CPUID_FLAG_SIGNIFICANT_INDEX,
+    KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE,
+    KVM_MP_STATE_UNINITIALIZED as MP_STATE_UNINITIALIZED,
 };
-use kvm_ioctls::{Kvm, VcpuFd};
 
 use self::cpuid::host_cpuid;
 use crate::CPU;
@@ -59,6 +61,20 @@ const ECX_THREAD: u32 = 1u32 << 8;
 const ECX_CORE: u32 = 2u32 << 8;
 const ECX_DIE: u32 = 5u32 << 8;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum X86RegsIndex {
+    Regs,
+    Sregs,
+    Fpu,
+    MpState,
+    LapicState,
+    MsrEntry,
+    VcpuEvents,
+    Xsave,
+    Xcrs,
+    DebugRegs,
+}
+
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Clone, Debug)]
@@ -73,8 +89,8 @@ pub struct X86CPUBootConfig {
     /// zero page address, as the second parameter of __startup_64
     /// arch/x86/kernel/head_64.S:86
     pub zero_page: u64,
-    pub code_segment: kvm_segment,
-    pub data_segment: kvm_segment,
+    pub code_segment: Segment,
+    pub data_segment: Segment,
     pub gdt_base: u64,
     pub gdt_size: u16,
     pub idt_base: u64,
@@ -114,18 +130,18 @@ pub struct X86CPUState {
     nr_cores: u32,
     nr_dies: u32,
     nr_sockets: u32,
-    apic_id: u32,
-    regs: kvm_regs,
-    sregs: kvm_sregs,
-    fpu: kvm_fpu,
-    mp_state: kvm_mp_state,
-    lapic: kvm_lapic_state,
-    msr_len: usize,
-    msr_list: [kvm_msr_entry; 256],
-    cpu_events: kvm_vcpu_events,
-    xsave: kvm_xsave,
-    xcrs: kvm_xcrs,
-    debugregs: kvm_debugregs,
+    pub apic_id: u32,
+    pub regs: Regs,
+    pub sregs: Sregs,
+    pub fpu: Fpu,
+    pub mp_state: MpState,
+    pub lapic: LapicState,
+    pub msr_len: usize,
+    pub msr_list: [MsrEntry; 256],
+    pub cpu_events: VcpuEvents,
+    pub xsave: Xsave,
+    pub xcrs: Xcrs,
+    pub debugregs: DebugRegs,
 }
 
 impl X86CPUState {
@@ -136,11 +152,11 @@ impl X86CPUState {
     /// * `vcpu_id` - ID of this `CPU`.
     /// * `max_vcpus` - Number of vcpus.
     pub fn new(vcpu_id: u32, max_vcpus: u32) -> Self {
-        let mp_state = kvm_mp_state {
+        let mp_state = MpState {
             mp_state: if vcpu_id == 0 {
-                KVM_MP_STATE_RUNNABLE
+                MP_STATE_RUNNABLE
             } else {
-                KVM_MP_STATE_UNINITIALIZED
+                MP_STATE_UNINITIALIZED
             },
         };
         X86CPUState {
@@ -172,26 +188,6 @@ impl X86CPUState {
         self.debugregs = locked_cpu_state.debugregs;
     }
 
-    /// Set register value in `X86CPUState` according to `boot_config`.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    /// * `boot_config` - Boot message from boot_loader.
-    pub fn set_boot_config(
-        &mut self,
-        vcpu_fd: &Arc<VcpuFd>,
-        boot_config: &X86CPUBootConfig,
-    ) -> Result<()> {
-        self.setup_lapic(vcpu_fd)?;
-        self.setup_regs(boot_config);
-        self.setup_sregs(vcpu_fd, boot_config)?;
-        self.setup_fpu();
-        self.setup_msrs();
-
-        Ok(())
-    }
-
     /// Set cpu topology
     ///
     /// # Arguments
@@ -204,56 +200,7 @@ impl X86CPUState {
         Ok(())
     }
 
-    /// Reset register value with `X86CPUState`.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    /// * `caps` - Vcpu capabilities in kvm.
-    pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>, caps: &caps::X86CPUCaps) -> Result<()> {
-        self.setup_cpuid(vcpu_fd)
-            .with_context(|| format!("Failed to set cpuid for CPU {}", self.apic_id))?;
-
-        vcpu_fd
-            .set_mp_state(self.mp_state)
-            .with_context(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_sregs(&self.sregs)
-            .with_context(|| format!("Failed to set sregs for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_regs(&self.regs)
-            .with_context(|| format!("Failed to set regs for CPU {}", self.apic_id))?;
-        if caps.has_xsave {
-            vcpu_fd
-                .set_xsave(&self.xsave)
-                .with_context(|| format!("Failed to set xsave for CPU {}", self.apic_id))?;
-        } else {
-            vcpu_fd
-                .set_fpu(&self.fpu)
-                .with_context(|| format!("Failed to set fpu for CPU {}", self.apic_id))?;
-        }
-        if caps.has_xcrs {
-            vcpu_fd
-                .set_xcrs(&self.xcrs)
-                .with_context(|| format!("Failed to set xcrs for CPU {}", self.apic_id))?;
-        }
-        vcpu_fd
-            .set_debug_regs(&self.debugregs)
-            .with_context(|| format!("Failed to set debug register for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_lapic(&self.lapic)
-            .with_context(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len])?)
-            .with_context(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_vcpu_events(&self.cpu_events)
-            .with_context(|| format!("Failed to set vcpu events for CPU {}", self.apic_id))?;
-
-        Ok(())
-    }
-
-    fn setup_lapic(&mut self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+    pub fn setup_lapic(&mut self, lapic: LapicState) -> Result<()> {
         // Disable nmi and external interrupt before enter protected mode
         // See: https://elixir.bootlin.com/linux/v4.19.123/source/arch/x86/include/asm/apicdef.h
         const APIC_LVT0: usize = 0x350;
@@ -262,11 +209,9 @@ impl X86CPUState {
         const APIC_MODE_EXTINT: u32 = 0x7;
         const APIC_ID: usize = 0x20;
 
-        self.lapic = vcpu_fd
-            .get_lapic()
-            .with_context(|| format!("Failed to get lapic for CPU {}/KVM", self.apic_id))?;
+        self.lapic = lapic;
 
-        // SAFETY: The member regs in struct kvm_lapic_state is a u8 array with 1024 entries,
+        // SAFETY: The member regs in struct LapicState is a u8 array with 1024 entries,
         // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
         // Safe because all value in this unsafe block is certain.
         unsafe {
@@ -285,8 +230,8 @@ impl X86CPUState {
         Ok(())
     }
 
-    fn setup_regs(&mut self, boot_config: &X86CPUBootConfig) {
-        self.regs = kvm_regs {
+    pub fn setup_regs(&mut self, boot_config: &X86CPUBootConfig) {
+        self.regs = Regs {
             rflags: 0x0002, // Means processor has been initialized
             rip: boot_config.boot_ip,
             rsp: boot_config.boot_sp,
@@ -296,10 +241,8 @@ impl X86CPUState {
         };
     }
 
-    fn setup_sregs(&mut self, vcpu_fd: &Arc<VcpuFd>, boot_config: &X86CPUBootConfig) -> Result<()> {
-        self.sregs = vcpu_fd
-            .get_sregs()
-            .with_context(|| format!("Failed to get sregs for CPU {}/KVM", self.apic_id))?;
+    pub fn setup_sregs(&mut self, sregs: Sregs, boot_config: &X86CPUBootConfig) -> Result<()> {
+        self.sregs = sregs;
 
         self.sregs.cs.base = (boot_config.boot_selector as u64) << 4;
         self.sregs.cs.selector = boot_config.boot_selector;
@@ -321,7 +264,7 @@ impl X86CPUState {
         Ok(())
     }
 
-    fn set_prot64_sregs(&mut self, boot_config: &X86CPUBootConfig) {
+    pub fn set_prot64_sregs(&mut self, boot_config: &X86CPUBootConfig) {
         // X86_CR0_PE: Protection Enable
         // EFER_LME: Long mode enable
         // EFER_LMA: Long mode active
@@ -363,19 +306,19 @@ impl X86CPUState {
         self.sregs.cr0 |= X86_CR0_PG;
     }
 
-    fn setup_fpu(&mut self) {
+    pub fn setup_fpu(&mut self) {
         // Default value for fxregs_state.mxcsr
         // arch/x86/include/asm/fpu/types.h
         const MXCSR_DEFAULT: u32 = 0x1f80;
 
-        self.fpu = kvm_fpu {
+        self.fpu = Fpu {
             fcw: 0x37f,
             mxcsr: MXCSR_DEFAULT,
             ..Default::default()
         };
     }
 
-    fn setup_msrs(&mut self) {
+    pub fn setup_msrs(&mut self) {
         // Enable fasting-string operation to improve string
         // store operations.
         for (index, msr) in MSR_LIST.iter().enumerate() {
@@ -384,7 +327,7 @@ impl X86CPUState {
                 _ => 0u64,
             };
 
-            self.msr_list[index] = kvm_msr_entry {
+            self.msr_list[index] = MsrEntry {
                 index: *msr,
                 data,
                 ..Default::default()
@@ -393,7 +336,7 @@ impl X86CPUState {
         }
     }
 
-    fn adjust_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
+    pub fn adjust_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
         if self.nr_dies < 2 {
             return Ok(());
         }
@@ -411,7 +354,7 @@ impl X86CPUState {
             }
         }
         for index in 0..4 {
-            let entry = kvm_cpuid_entry2 {
+            let entry = CpuidEntry2 {
                 function: 0x1f,
                 index,
                 ..Default::default()
@@ -421,20 +364,11 @@ impl X86CPUState {
         Ok(())
     }
 
-    fn setup_cpuid(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+    pub fn setup_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
         let core_offset = 32u32 - (self.nr_threads - 1).leading_zeros();
         let die_offset = (32u32 - (self.nr_cores - 1).leading_zeros()) + core_offset;
         let pkg_offset = (32u32 - (self.nr_dies - 1).leading_zeros()) + die_offset;
-        let sys_fd = match Kvm::new() {
-            Ok(fd) => fd,
-            _ => bail!("setup_cpuid: Open /dev/kvm failed"),
-        };
-        let mut cpuid = sys_fd
-            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
-            .with_context(|| {
-                format!("Failed to get supported cpuid for CPU {}/KVM", self.apic_id)
-            })?;
-        self.adjust_cpuid(&mut cpuid)?;
+        self.adjust_cpuid(cpuid)?;
         let entries = cpuid.as_mut_slice();
 
         for entry in entries.iter_mut() {
@@ -517,7 +451,7 @@ impl X86CPUState {
 
                     entry.edx = self.apic_id;
                     entry.ecx = entry.index & 0xff;
-                    entry.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+                    entry.flags = CPUID_FLAG_SIGNIFICANT_INDEX;
 
                     match entry.index {
                         0 => {
@@ -557,41 +491,34 @@ impl X86CPUState {
             }
         }
 
-        vcpu_fd
-            .set_cpuid2(&cpuid)
-            .with_context(|| format!("Failed to set cpuid for CPU {}/KVM", self.apic_id))?;
         Ok(())
     }
 }
 
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let mut msr_entries = self.caps.create_msr_entries()?;
-        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
+        let hypervisor_cpu = self.hypervisor_cpu();
 
-        cpu_state_locked.mp_state = self.fd.get_mp_state()?;
-        cpu_state_locked.regs = self.fd.get_regs()?;
-        cpu_state_locked.sregs = self.fd.get_sregs()?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MpState, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Regs, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Sregs, &self.caps)?;
         if self.caps.has_xsave {
-            cpu_state_locked.xsave = self.fd.get_xsave()?;
+            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xsave, &self.caps)?;
         } else {
-            cpu_state_locked.fpu = self.fd.get_fpu()?;
+            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Fpu, &self.caps)?;
         }
         if self.caps.has_xcrs {
-            cpu_state_locked.xcrs = self.fd.get_xcrs()?;
+            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xcrs, &self.caps)?;
         }
-        cpu_state_locked.debugregs = self.fd.get_debug_regs()?;
-        cpu_state_locked.lapic = self.fd.get_lapic()?;
-        cpu_state_locked.msr_len = self.fd.get_msrs(&mut msr_entries)?;
-        for (i, entry) in msr_entries.as_slice().iter().enumerate() {
-            cpu_state_locked.msr_list[i] = *entry;
-        }
-        cpu_state_locked.cpu_events = self.fd.get_vcpu_events()?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::DebugRegs, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::LapicState, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MsrEntry, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::VcpuEvents, &self.caps)?;
 
-        Ok(cpu_state_locked.as_bytes().to_vec())
+        Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
+    fn set_state(&self, state: &[u8]) -> Result<()> {
         let cpu_state = *X86CPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
@@ -607,109 +534,3 @@ impl StateTransfer for CPU {
 }
 
 impl MigrationHook for CPU {}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use hypervisor::kvm::{KVMFds, KVM_FDS};
-    use kvm_bindings::kvm_segment;
-    use std::sync::Arc;
-
-    #[test]
-    fn test_x86_64_cpu() {
-        let kvm_fds = KVMFds::new();
-        if kvm_fds.vm_fd.is_none() {
-            return;
-        }
-        KVM_FDS.store(Arc::new(kvm_fds));
-
-        let code_seg = kvm_segment {
-            base: 0,
-            limit: 1048575,
-            selector: 16,
-            type_: 11,
-            present: 1,
-            dpl: 0,
-            db: 0,
-            s: 1,
-            l: 1,
-            g: 1,
-            avl: 0,
-            unusable: 0,
-            padding: 0,
-        };
-        let data_seg = kvm_segment {
-            base: 0,
-            limit: 1048575,
-            selector: 24,
-            type_: 3,
-            present: 1,
-            dpl: 0,
-            db: 1,
-            s: 1,
-            l: 0,
-            g: 1,
-            avl: 0,
-            unusable: 0,
-            padding: 0,
-        };
-        let cpu_config = X86CPUBootConfig {
-            prot64_mode: true,
-            boot_ip: 0,
-            boot_sp: 0,
-            boot_selector: 0,
-            zero_page: 0x0000_7000,
-            code_segment: code_seg,
-            data_segment: data_seg,
-            gdt_base: 0x500u64,
-            gdt_size: 16,
-            idt_base: 0x520u64,
-            idt_size: 8,
-            pml4_start: 0x0000_9000,
-        };
-
-        // For `get_lapic` in realize function to work,
-        // you need to create a irq_chip for VM before creating the VCPU.
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        vm_fd.create_irq_chip().unwrap();
-        let vcpu = Arc::new(vm_fd.create_vcpu(0).unwrap());
-        let mut x86_cpu = X86CPUState::new(0, 1);
-        // test `set_boot_config` function
-        assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
-
-        // test setup special registers
-        let cpu_caps = caps::X86CPUCaps::init_capabilities();
-        assert!(x86_cpu.reset_vcpu(&vcpu, &cpu_caps).is_ok());
-        let x86_sregs = vcpu.get_sregs().unwrap();
-        assert_eq!(x86_sregs.cs, code_seg);
-        assert_eq!(x86_sregs.ds, data_seg);
-        assert_eq!(x86_sregs.es, data_seg);
-        assert_eq!(x86_sregs.fs, data_seg);
-        assert_eq!(x86_sregs.gs, data_seg);
-        assert_eq!(x86_sregs.ss, data_seg);
-        assert_eq!(x86_sregs.gdt.base, cpu_config.gdt_base);
-        assert_eq!(x86_sregs.gdt.limit, cpu_config.gdt_size);
-        assert_eq!(x86_sregs.idt.base, cpu_config.idt_base);
-        assert_eq!(x86_sregs.idt.limit, cpu_config.idt_size);
-        assert_eq!(x86_sregs.cr0 & 0x1, 1);
-        assert_eq!((x86_sregs.cr0 & 0x8000_0000) >> 31, 1);
-        assert_eq!(x86_sregs.cr3, cpu_config.pml4_start);
-        assert_eq!((x86_sregs.cr4 & 0x20) >> 5, 1);
-        assert_eq!((x86_sregs.efer & 0x700) >> 8, 5);
-
-        // test setup_regs function
-        let x86_regs = vcpu.get_regs().unwrap();
-        assert_eq!(x86_regs.rflags, 0x0002);
-        assert_eq!(x86_regs.rip, 0);
-        assert_eq!(x86_regs.rsp, 0);
-        assert_eq!(x86_regs.rbp, 0);
-        assert_eq!(x86_regs.rsi, 0x0000_7000);
-
-        // test setup_fpu function
-        if !cpu_caps.has_xsave {
-            let x86_fpu = vcpu.get_fpu().unwrap();
-            assert_eq!(x86_fpu.fcw, 0x37f);
-        }
-    }
-}

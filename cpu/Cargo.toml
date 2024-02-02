@@ -15,7 +15,6 @@ log = "0.4"
 libc = "0.2"
 nix = "0.26.2"
 vmm-sys-util = "0.11.1"
-hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }

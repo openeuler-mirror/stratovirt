@@ -27,9 +27,6 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use chardev_backend::chardev::{Chardev, InputReceiver};
-use hypervisor::kvm::KVM_FDS;
-#[cfg(target_arch = "aarch64")]
-use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
 use migration::{
     snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
@@ -138,7 +135,6 @@ impl Serial {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
     ) -> Result<()> {
         self.chardev
             .lock()
@@ -157,11 +153,6 @@ impl Serial {
             dev.clone(),
             SERIAL_SNAPSHOT_ID,
         );
-        #[cfg(target_arch = "aarch64")]
-        bs.lock().unwrap().kernel_cmdline.push(Param {
-            param_type: "earlycon".to_string(),
-            value: format!("uart,mmio,0x{:08x}", region_base),
-        });
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
@@ -187,14 +178,9 @@ impl Serial {
 
         self.state.iir = iir;
         if iir != UART_IIR_NO_INT {
-            if let Some(evt) = self.interrupt_evt() {
-                if let Err(e) = evt.write(1) {
-                    error!("serial: failed to write interrupt eventfd ({:?}).", e);
-                }
-                return;
-            }
-            error!("serial: failed to update iir.");
+            self.inject_interrupt();
         }
+        trace::serial_update_iir(self.state.iir);
     }
 
     // Read one byte data from a certain register selected by `offset`.
@@ -258,6 +244,7 @@ impl Serial {
             }
             _ => {}
         }
+        trace::serial_read(offset, ret);
 
         ret
     }
@@ -276,6 +263,7 @@ impl Serial {
     // * fail to write serial.
     // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
+        trace::serial_write(offset, data);
         match offset {
             0 => {
                 if self.state.lcr & UART_LCR_DLAB != 0 {
@@ -356,6 +344,7 @@ impl InputReceiver for Serial {
             self.rbr.extend(data);
             self.state.lsr |= UART_LSR_DR;
             self.update_iir();
+            trace::serial_receive(data.len());
         }
     }
 
@@ -401,16 +390,11 @@ impl SysBusDevOps for Serial {
         }
     }
 
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> Result<i32> {
-        let mut irq: i32 = -1;
-        if let Some(e) = self.interrupt_evt() {
-            irq = UART_IRQ;
-            KVM_FDS.load().register_irqfd(&e, irq as u32)?;
-        }
-        Ok(irq)
+    fn get_irq(&self, _sysbus: &mut SysBus) -> Result<i32> {
+        Ok(UART_IRQ)
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }
@@ -444,7 +428,7 @@ impl AmlBuilder for Serial {
 }
 
 impl StateTransfer for Serial {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = self.state;
         let (rbr_state, _) = self.rbr.as_slices();
         state.rbr_len = rbr_state.len();
@@ -453,7 +437,7 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let serial_state = *SerialState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("SERIAL"))?;
         let mut rbr = VecDeque::<u8>::default();

@@ -853,7 +853,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                trace::virtio_send_interrupt("Net".to_string());
+                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
             }
 
             rx_packets += 1;
@@ -940,7 +940,7 @@ impl NetIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
                     })?;
-                trace::virtio_send_interrupt("Net".to_string());
+                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
             }
             tx_packets += 1;
             if tx_packets >= self.queue_size {
@@ -1642,7 +1642,7 @@ impl VirtioDevice for Net {
 unsafe impl Sync for Net {}
 
 impl StateTransfer for Net {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioNetState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
@@ -1652,7 +1652,7 @@ impl StateTransfer for Net {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let s_len = std::mem::size_of::<VirtioNetState>();
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);

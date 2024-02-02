@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error};
+use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -177,12 +177,11 @@ impl XhciPciDevice {
             .assign_usb_port(dev)
             .with_context(|| "No available USB port.")?;
         locked_xhci.port_update(&usb_port, false)?;
-        let mut locked_dev = dev.lock().unwrap();
-        debug!(
-            "Attach usb device: xhci port id {} device id {}",
-            usb_port.lock().unwrap().port_id,
-            locked_dev.device_id()
+        trace::usb_xhci_attach_device(
+            &usb_port.lock().unwrap().port_id,
+            &dev.lock().unwrap().device_id(),
         );
+        let mut locked_dev = dev.lock().unwrap();
         locked_dev.handle_attach()?;
         locked_dev.set_controller(Arc::downgrade(&self.xhci));
         Ok(())
@@ -203,6 +202,7 @@ impl XhciPciDevice {
         let mut locked_port = usb_port.lock().unwrap();
         let dev = locked_port.dev.as_ref().unwrap();
         let mut locked_dev = dev.lock().unwrap();
+        trace::usb_xhci_detach_device(&locked_port.port_id, &locked_dev.device_id());
         locked_dev.usb_device_base_mut().unplugged = true;
         locked_dev.unrealize()?;
         drop(locked_dev);
@@ -276,11 +276,10 @@ impl PciDevOps for XhciPciDevice {
 
         let intrs_num = self.xhci.lock().unwrap().intrs.len() as u32;
         init_msix(
+            &mut self.base,
             0_usize,
             intrs_num,
-            &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.base.id,
             Some(&self.mem_region),
             Some((XHCI_MSIX_TABLE_OFFSET, XHCI_MSIX_PBA_OFFSET)),
         )?;
@@ -341,6 +340,7 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        trace::usb_xhci_exit();
         Ok(())
     }
 

@@ -12,18 +12,17 @@
 
 pub mod error;
 
-pub use anyhow::{bail, Context, Result};
 pub use error::SysBusError;
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::{Device, DeviceBase};
+use crate::{Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use hypervisor::kvm::KVM_FDS;
 use util::AsAny;
 
 // Now that the serial device use a hardcoded IRQ number (4), and the starting
@@ -48,6 +47,7 @@ pub struct SysBus {
     pub min_free_irq: i32,
     pub mmio_region: (u64, u64),
     pub min_free_base: u64,
+    pub irq_manager: Option<Arc<dyn LineIrqManager>>,
 }
 
 impl fmt::Debug for SysBus {
@@ -91,6 +91,7 @@ impl SysBus {
             min_free_irq: free_irqs.0,
             mmio_region,
             min_free_base: mmio_region.0,
+            irq_manager: None,
         }
     }
 
@@ -203,7 +204,7 @@ impl Default for SysRes {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum SysBusDevType {
     Serial,
     Rtc,
@@ -226,6 +227,8 @@ pub struct SysBusDevBase {
     pub res: SysRes,
     /// Interrupt event file descriptor.
     pub interrupt_evt: Option<Arc<EventFd>>,
+    /// Interrupt state.
+    pub irq_state: IrqState,
 }
 
 impl Default for SysBusDevBase {
@@ -235,6 +238,7 @@ impl Default for SysBusDevBase {
             dev_type: SysBusDevType::Others,
             res: SysRes::default(),
             interrupt_evt: None,
+            irq_state: IrqState::default(),
         }
     }
 }
@@ -242,26 +246,8 @@ impl Default for SysBusDevBase {
 impl SysBusDevBase {
     pub fn new(dev_type: SysBusDevType) -> SysBusDevBase {
         Self {
-            base: DeviceBase::default(),
             dev_type,
-            res: SysRes::default(),
-            interrupt_evt: None,
-        }
-    }
-
-    fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
-        let irq = sysbus.min_free_irq;
-        if irq > sysbus.free_irqs.1 {
-            bail!("IRQ number exhausted.");
-        }
-
-        match &self.interrupt_evt {
-            None => Ok(-1_i32),
-            Some(evt) => {
-                KVM_FDS.load().register_irqfd(evt, irq as u32)?;
-                sysbus.min_free_irq = irq + 1;
-                Ok(irq)
-            }
+            ..Default::default()
         }
     }
 
@@ -304,11 +290,17 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
         self.sysbusdev_base().interrupt_evt.clone()
     }
 
-    fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
-        self.sysbusdev_base_mut().set_irq(sysbus)
+    fn get_irq(&self, sysbus: &mut SysBus) -> Result<i32> {
+        let irq = sysbus.min_free_irq;
+        if irq > sysbus.free_irqs.1 {
+            bail!("IRQ number exhausted.");
+        }
+
+        sysbus.min_free_irq = irq + 1;
+        Ok(irq)
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         None
     }
 
@@ -318,12 +310,29 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        let irq = self.set_irq(sysbus)?;
-        self.get_sys_resource()
-            .with_context(|| "Failed to get sys resource.")?;
+        let irq = self.get_irq(sysbus)?;
+        let interrupt_evt = self.sysbusdev_base().interrupt_evt.clone();
+        let irq_manager = sysbus.irq_manager.clone();
+
+        self.sysbusdev_base_mut().irq_state =
+            IrqState::new(irq as u32, interrupt_evt, irq_manager, TriggerMode::Edge);
+        let irq_state = &mut self.sysbusdev_base_mut().irq_state;
+        irq_state.register_irq()?;
+
         self.sysbusdev_base_mut()
             .set_sys(irq, region_base, region_size);
         Ok(())
+    }
+
+    fn inject_interrupt(&self) {
+        let irq_state = &self.sysbusdev_base().irq_state;
+        irq_state.trigger_irq().unwrap_or_else(|e| {
+            log::error!(
+                "Device {:?} failed to inject interrupt: {:?}",
+                self.sysbusdev_base().dev_type,
+                e
+            )
+        });
     }
 
     fn reset(&mut self) -> Result<()> {

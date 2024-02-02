@@ -20,7 +20,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -308,7 +307,6 @@ name = "cpu"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -337,7 +335,6 @@ dependencies = [
  "chardev_backend",
  "cpu",
  "drm-fourcc",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
@@ -354,6 +351,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "trace",
  "ui",
  "util",
  "v4l2-sys-mit",
@@ -723,12 +721,17 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "hypervisor"
 version = "2.3.0"
 dependencies = [
+ "address_space",
  "anyhow",
- "arc-swap",
+ "cpu",
+ "devices",
  "kvm-bindings",
  "kvm-ioctls",
+ "libc",
  "log",
- "once_cell",
+ "machine_manager",
+ "migration",
+ "migration_derive",
  "thiserror",
  "util",
  "vmm-sys-util",
@@ -930,6 +933,7 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "hex",
+ "kvm-bindings",
  "libc",
  "log",
  "once_cell",
@@ -982,7 +986,6 @@ name = "migration"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "log",
@@ -1720,6 +1723,7 @@ dependencies = [
  "serde_json",
  "sscanf",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -1814,6 +1818,7 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "log",
+ "machine_manager",
  "once_cell",
  "thiserror",
  "util",
@@ -1838,7 +1843,6 @@ dependencies = [
  "byteorder",
  "chardev_backend",
  "devices",
- "hypervisor",
  "kvm-ioctls",
  "libc",
  "log",

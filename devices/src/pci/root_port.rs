@@ -37,7 +37,7 @@ use crate::pci::{init_multifunction, PciDevBase, PciError, PciIntxState, INTERRU
 use crate::pci::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, PciDevOps,
 };
-use crate::{Device, DeviceBase};
+use crate::{Device, DeviceBase, MsiIrqManager};
 use address_space::Region;
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
 use migration::{
@@ -374,15 +374,7 @@ impl PciDevOps for RootPort {
         )?;
 
         self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
-        init_msix(
-            0,
-            1,
-            &mut self.base.config,
-            self.dev_id.clone(),
-            &self.base.base.id,
-            None,
-            None,
-        )?;
+        init_msix(&mut self.base, 0, 1, self.dev_id.clone(), None, None)?;
 
         init_intx(
             self.name(),
@@ -556,6 +548,11 @@ impl PciDevOps for RootPort {
 
         None
     }
+
+    fn get_msi_irq_manager(&self) -> Option<Arc<dyn MsiIrqManager>> {
+        let msix = self.base.config.msix.as_ref().unwrap();
+        msix.lock().unwrap().msi_irq_manager.clone()
+    }
 }
 
 impl HotplugOps for RootPort {
@@ -666,7 +663,7 @@ impl StateTransfer for RootPort {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 

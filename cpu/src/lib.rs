@@ -36,6 +36,8 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::Arm64CoreRegs;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUCaps as CPUCaps;
@@ -46,49 +48,52 @@ pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUTopology as CPUTopology;
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmRegsIndex as RegsIndex;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::CpregListEntry;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
 pub use error::CpuError;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUState as ArchCPU;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUTopology as CPUTopology;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::X86RegsIndex as RegsIndex;
 
 use std::cell::RefCell;
-use std::sync::atomic::{fence, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use kvm_ioctls::{VcpuExit, VcpuFd};
-use libc::{c_int, c_void, siginfo_t};
+use kvm_ioctls::Cap;
 use log::{error, info, warn};
 use nix::unistd::gettid;
-use vmm_sys_util::signal::{register_signal_handler, Killable};
+use vmm_sys_util::signal::Killable;
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
-use machine_manager::machine::MachineInterface;
+use machine_manager::machine::{HypervisorType, MachineInterface};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
-#[cfg(not(test))]
-use util::test_helper::is_test_enabled;
-#[cfg(target_arch = "x86_64")]
-use x86_64::caps::X86CPUCaps as CPUCaps;
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
 #[cfg(not(target_env = "musl"))]
-const VCPU_TASK_SIGNAL: i32 = 34;
+pub const VCPU_TASK_SIGNAL: i32 = 34;
 #[cfg(target_env = "musl")]
-const VCPU_TASK_SIGNAL: i32 = 35;
+pub const VCPU_TASK_SIGNAL: i32 = 35;
 #[cfg(not(target_env = "musl"))]
-const VCPU_RESET_SIGNAL: i32 = 35;
+pub const VCPU_RESET_SIGNAL: i32 = 35;
 #[cfg(target_env = "musl")]
-const VCPU_RESET_SIGNAL: i32 = 36;
+pub const VCPU_RESET_SIGNAL: i32 = 36;
 
 /// Watch `0x3ff` IO port to record the magic value trapped from guest kernel.
 #[cfg(all(target_arch = "x86_64", feature = "boot_time"))]
@@ -129,7 +134,7 @@ pub trait CPUInterface {
         #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
     ) -> Result<()>;
 
-    /// Start `CPU` thread and run virtual CPU in kvm.
+    /// Start `CPU` thread and run virtual CPU in hypervisor.
     ///
     /// # Arguments
     ///
@@ -140,7 +145,7 @@ pub trait CPUInterface {
     where
         Self: std::marker::Sized;
 
-    /// Kick `CPU` to exit kvm emulation.
+    /// Kick `CPU` to exit hypervisor emulation.
     fn kick(&self) -> Result<()>;
 
     /// Make `CPU` lifecycle from `Running` to `Paused`.
@@ -160,22 +165,57 @@ pub trait CPUInterface {
 
     /// Make `CPU` destroy because of guest inner reset.
     fn guest_reset(&self) -> Result<()>;
-
-    /// Handle vcpu event from `kvm`.
-    fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
 
-/// `CPU` is a wrapper around creating and using a kvm-based VCPU.
+pub trait CPUHypervisorOps: Send + Sync {
+    fn get_hypervisor_type(&self) -> HypervisorType;
+
+    fn check_extension(&self, cap: Cap) -> bool;
+
+    fn get_msr_index_list(&self) -> Vec<u32>;
+
+    fn init_pmu(&self) -> Result<()>;
+
+    fn vcpu_init(&self) -> Result<()>;
+
+    fn set_boot_config(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        boot_config: &CPUBootConfig,
+        #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
+    ) -> Result<()>;
+
+    fn get_one_reg(&self, reg_id: u64) -> Result<u128>;
+
+    fn get_regs(
+        &self,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        regs_index: RegsIndex,
+        caps: &CPUCaps,
+    ) -> Result<()>;
+
+    fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
+
+    fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()>;
+
+    fn vcpu_exec(
+        &self,
+        cpu_thread_worker: CPUThreadWorker,
+        thread_barrier: Arc<Barrier>,
+    ) -> Result<()>;
+
+    fn kick(&self) -> Result<()>;
+}
+
+/// `CPU` is a wrapper around creating and using a hypervisor-based VCPU.
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
-    id: u8,
-    /// The file descriptor of this kvm-based VCPU.
-    fd: Arc<VcpuFd>,
+    pub id: u8,
     /// Architecture special CPU property.
-    arch_cpu: Arc<Mutex<ArchCPU>>,
-    /// LifeCycle state of kvm-based VCPU.
-    state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+    pub arch_cpu: Arc<Mutex<ArchCPU>>,
+    /// LifeCycle state of hypervisor-based VCPU.
+    pub state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
     /// The thread handler of this virtual CPU.
     task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     /// The thread tid of this VCPU.
@@ -183,11 +223,13 @@ pub struct CPU {
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The capability of VCPU.
-    caps: CPUCaps,
+    pub caps: CPUCaps,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
-    /// Sync the pause state of vCPU in kvm and userspace.
+    /// Sync the pause state of vCPU in hypervisor and userspace.
     pause_signal: Arc<AtomicBool>,
+    /// Interact between the vCPU and hypervisor.
+    pub hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
 }
 
 impl CPU {
@@ -200,22 +242,22 @@ impl CPU {
     /// * `arch_cpu` - Architecture special `CPU` property.
     /// * `vm` - The virtual machine this `CPU` gets attached to.
     pub fn new(
-        vcpu_fd: Arc<VcpuFd>,
+        hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
     ) -> Self {
         CPU {
             id,
-            fd: vcpu_fd,
             arch_cpu,
             state: Arc::new((Mutex::new(CpuLifecycleState::Created), Condvar::new())),
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
-            caps: CPUCaps::init_capabilities(),
+            caps: CPUCaps::init_capabilities(hypervisor_cpu.clone()),
             boot_state: Arc::new(Mutex::new(ArchCPU::default())),
             pause_signal: Arc::new(AtomicBool::new(false)),
+            hypervisor_cpu,
         }
     }
 
@@ -226,11 +268,6 @@ impl CPU {
     /// Get this `CPU`'s ID.
     pub fn id(&self) -> u8 {
         self.id
-    }
-
-    /// Get this `CPU`'s file descriptor.
-    pub fn fd(&self) -> &Arc<VcpuFd> {
-        &self.fd
     }
 
     /// Get this `CPU`'s state.
@@ -256,8 +293,21 @@ impl CPU {
     }
 
     /// Set thread id for `CPU`.
-    fn set_tid(&self) {
+    pub fn set_tid(&self) {
         *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
+    }
+
+    /// Get the hypervisor of this `CPU`.
+    pub fn hypervisor_cpu(&self) -> &Arc<dyn CPUHypervisorOps> {
+        &self.hypervisor_cpu
+    }
+
+    pub fn vm(&self) -> Weak<Mutex<dyn MachineInterface + Send + Sync>> {
+        self.vm.clone()
+    }
+
+    pub fn pause_signal(&self) -> Arc<AtomicBool> {
+        self.pause_signal.clone()
     }
 }
 
@@ -277,11 +327,9 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        self.arch_cpu
-            .lock()
-            .unwrap()
+        self.hypervisor_cpu
             .set_boot_config(
-                &self.fd,
+                self.arch_cpu.clone(),
                 boot,
                 #[cfg(target_arch = "aarch64")]
                 config,
@@ -300,11 +348,8 @@ impl CPUInterface for CPU {
 
     fn resume(&self) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
-        self.arch()
-            .lock()
-            .unwrap()
-            .set_virtual_timer_cnt(self.fd())?;
-
+        self.hypervisor_cpu
+            .set_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
         let (cpu_state_locked, cvar) = &*self.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
         if *cpu_state == CpuLifecycleState::Running {
@@ -333,18 +378,20 @@ impl CPUInterface for CPU {
         }
 
         let local_cpu = cpu.clone();
+        let cpu_id = cpu.id();
+        let hypervisor_cpu = cpu.hypervisor_cpu().clone();
+        let hyp_type = hypervisor_cpu.get_hypervisor_type();
         let cpu_thread_worker = CPUThreadWorker::new(cpu);
         let handle = thread::Builder::new()
-            .name(format!("CPU {}/KVM", local_cpu.id))
+            .name(format!("CPU {}/{:?}", local_cpu.id, hyp_type))
             .spawn(move || {
-                if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
-                    error!(
-                        "Some error occurred in cpu{} thread: {:?}",
-                        cpu_thread_worker.thread_cpu.id, e
-                    );
+                if let Err(e) = hypervisor_cpu.vcpu_exec(cpu_thread_worker, thread_barrier) {
+                    error!("Some error occurred in cpu{} thread: {:?}", cpu_id, e);
                 }
             })
-            .with_context(|| format!("Failed to create thread for CPU {}/KVM", local_cpu.id()))?;
+            .with_context(|| {
+                format!("Failed to create thread for CPU {}/{:?}", cpu_id, hyp_type)
+            })?;
         local_cpu.set_task(Some(handle));
         Ok(())
     }
@@ -396,7 +443,7 @@ impl CPUInterface for CPU {
             }
         }
 
-        // It shall wait for the vCPU pause state from kvm exits.
+        // It shall wait for the vCPU pause state from hypervisor exits.
         loop {
             if self.pause_signal.load(Ordering::SeqCst) {
                 break;
@@ -404,10 +451,8 @@ impl CPUInterface for CPU {
         }
 
         #[cfg(target_arch = "aarch64")]
-        self.arch()
-            .lock()
-            .unwrap()
-            .get_virtual_timer_cnt(self.fd())?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount, &self.caps)?;
 
         Ok(())
     }
@@ -476,113 +521,12 @@ impl CPUInterface for CPU {
 
         Ok(())
     }
-
-    fn kvm_vcpu_exec(&self) -> Result<bool> {
-        let vm = self
-            .vm
-            .upgrade()
-            .with_context(|| CpuError::NoMachineInterface)?;
-
-        match self.fd.run() {
-            Ok(run) => match run {
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::IoIn(addr, data) => {
-                    vm.lock().unwrap().pio_in(u64::from(addr), data);
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::IoOut(addr, data) => {
-                    #[cfg(feature = "boot_time")]
-                    capture_boot_signal(addr as u64, data);
-
-                    vm.lock().unwrap().pio_out(u64::from(addr), data);
-                }
-                VcpuExit::MmioRead(addr, data) => {
-                    vm.lock().unwrap().mmio_read(addr, data);
-                }
-                VcpuExit::MmioWrite(addr, data) => {
-                    #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
-                    capture_boot_signal(addr, data);
-
-                    vm.lock().unwrap().mmio_write(addr, data);
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::Hlt => {
-                    info!("Vcpu{} received KVM_EXIT_HLT signal", self.id());
-                    return Err(anyhow!(CpuError::VcpuHltEvent(self.id())));
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::Shutdown => {
-                    info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", self.id());
-                    self.guest_shutdown()?;
-
-                    return Ok(false);
-                }
-                #[cfg(target_arch = "aarch64")]
-                VcpuExit::SystemEvent(event, flags) => {
-                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
-                        info!(
-                            "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
-                            self.id()
-                        );
-                        self.guest_shutdown()
-                            .with_context(|| "Some error occurred in guest shutdown")?;
-                        return Ok(true);
-                    } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
-                        info!(
-                            "Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal",
-                            self.id()
-                        );
-                        self.guest_reset()
-                            .with_context(|| "Some error occurred in guest reset")?;
-                        return Ok(true);
-                    } else {
-                        error!(
-                            "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
-                            self.id(),
-                            event,
-                            flags
-                        );
-                    }
-                    return Ok(false);
-                }
-                VcpuExit::FailEntry(reason, cpuid) => {
-                    info!(
-                        "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
-                        cpuid, reason
-                    );
-                    return Ok(false);
-                }
-                VcpuExit::InternalError => {
-                    info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", self.id());
-                    return Ok(false);
-                }
-                r => {
-                    return Err(anyhow!(CpuError::VcpuExitReason(
-                        self.id(),
-                        format!("{:?}", r)
-                    )));
-                }
-            },
-            Err(ref e) => {
-                match e.errno() {
-                    libc::EAGAIN => {}
-                    libc::EINTR => {
-                        self.fd.set_kvm_immediate_exit(0);
-                    }
-                    _ => {
-                        return Err(anyhow!(CpuError::UnhandledKvmExit(self.id())));
-                    }
-                };
-            }
-        }
-        Ok(true)
-    }
 }
 
 /// The struct to handle events in cpu thread.
 #[allow(clippy::upper_case_acronyms)]
-struct CPUThreadWorker {
-    thread_cpu: Arc<CPU>,
+pub struct CPUThreadWorker {
+    pub thread_cpu: Arc<CPU>,
 }
 
 impl CPUThreadWorker {
@@ -594,7 +538,7 @@ impl CPUThreadWorker {
     }
 
     /// Init vcpu thread static variable.
-    fn init_local_thread_vcpu(&self) {
+    pub fn init_local_thread_vcpu(&self) {
         Self::LOCAL_THREAD_VCPU.with(|thread_vcpu| {
             *thread_vcpu.borrow_mut() = Some(CPUThreadWorker {
                 thread_cpu: self.thread_cpu.clone(),
@@ -602,13 +546,13 @@ impl CPUThreadWorker {
         })
     }
 
-    fn run_on_local_thread_vcpu<F>(func: F) -> Result<()>
+    pub fn run_on_local_thread_vcpu<F>(func: F) -> Result<()>
     where
-        F: FnOnce(&CPU),
+        F: FnOnce(Arc<CPU>),
     {
         Self::LOCAL_THREAD_VCPU.with(|thread_vcpu| {
             if let Some(local_thread_vcpu) = thread_vcpu.borrow().as_ref() {
-                func(&local_thread_vcpu.thread_cpu);
+                func(local_thread_vcpu.thread_cpu.clone());
                 Ok(())
             } else {
                 Err(anyhow!(CpuError::VcpuLocalThreadNotPresent))
@@ -616,43 +560,8 @@ impl CPUThreadWorker {
         })
     }
 
-    /// Init signal for `CPU` event.
-    fn init_signals() -> Result<()> {
-        extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
-            match signum {
-                VCPU_TASK_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        vcpu.fd().set_kvm_immediate_exit(1);
-                        // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
-                        vcpu.pause_signal.store(true, Ordering::SeqCst);
-                        fence(Ordering::Release)
-                    });
-                }
-                VCPU_RESET_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        if let Err(e) = vcpu.arch_cpu.lock().unwrap().reset_vcpu(
-                            &vcpu.fd,
-                            #[cfg(target_arch = "x86_64")]
-                            &vcpu.caps,
-                        ) {
-                            error!("Failed to reset vcpu state: {:?}", e)
-                        }
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
-            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
-        register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
-            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
-
-        Ok(())
-    }
-
-    /// Judge whether the kvm vcpu is ready to emulate.
-    fn ready_for_running(&self) -> Result<bool> {
+    /// Judge whether the hypervisor vcpu is ready to emulate.
+    pub fn ready_for_running(&self) -> Result<bool> {
         let mut flag = 0_u32;
         let (cpu_state_locked, cvar) = &*self.thread_cpu.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
@@ -679,64 +588,6 @@ impl CPUThreadWorker {
                 }
             }
         }
-    }
-
-    /// Handle the all events in vcpu thread.
-    fn handle(&self, thread_barrier: Arc<Barrier>) -> Result<()> {
-        self.init_local_thread_vcpu();
-        if let Err(e) = Self::init_signals() {
-            error!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e);
-        }
-
-        self.thread_cpu.set_tid();
-
-        // The vcpu thread is going to run,
-        // reset its running environment.
-        #[cfg(not(test))]
-        self.thread_cpu
-            .arch_cpu
-            .lock()
-            .unwrap()
-            .reset_vcpu(
-                &self.thread_cpu.fd,
-                #[cfg(target_arch = "x86_64")]
-                &self.thread_cpu.caps,
-            )
-            .with_context(|| "Failed to reset for cpu register state")?;
-
-        // Wait for all vcpu to complete the running
-        // environment initialization.
-        thread_barrier.wait();
-
-        info!("vcpu{} start running", self.thread_cpu.id);
-        while let Ok(true) = self.ready_for_running() {
-            #[cfg(not(test))]
-            {
-                if is_test_enabled() {
-                    thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                if !self
-                    .thread_cpu
-                    .kvm_vcpu_exec()
-                    .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
-                {
-                    break;
-                }
-            }
-            #[cfg(test)]
-            {
-                thread::sleep(Duration::from_millis(5));
-            }
-        }
-
-        // The vcpu thread is about to exit, marking the state
-        // of the CPU state as Stopped.
-        let (cpu_state, cvar) = &*self.thread_cpu.state;
-        *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-        cvar.notify_one();
-
-        Ok(())
     }
 }
 
@@ -842,7 +693,7 @@ impl CpuTopology {
 /// Capture the boot signal that trap from guest kernel, and then record
 /// kernel boot timestamp.
 #[cfg(feature = "boot_time")]
-fn capture_boot_signal(addr: u64, data: &[u8]) {
+pub fn capture_boot_signal(addr: u64, data: &[u8]) {
     if addr == MAGIC_SIGNAL_GUEST_BOOT {
         if data[0] == MAGIC_VALUE_SIGNAL_GUEST_BOOT_START {
             info!("Kernel starts to boot!");
@@ -855,160 +706,8 @@ fn capture_boot_signal(addr: u64, data: &[u8]) {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     use super::*;
-    use hypervisor::kvm::{KVMFds, KVM_FDS};
-    use machine_manager::machine::{
-        KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
-    };
-
-    struct TestVm {
-        #[cfg(target_arch = "x86_64")]
-        pio_in: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
-        #[cfg(target_arch = "x86_64")]
-        pio_out: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
-        mmio_read: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
-        mmio_write: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
-    }
-
-    impl TestVm {
-        fn new() -> Self {
-            TestVm {
-                #[cfg(target_arch = "x86_64")]
-                pio_in: Arc::new(Mutex::new(Vec::new())),
-                #[cfg(target_arch = "x86_64")]
-                pio_out: Arc::new(Mutex::new(Vec::new())),
-                mmio_read: Arc::new(Mutex::new(Vec::new())),
-                mmio_write: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-    }
-
-    impl MachineLifecycle for TestVm {
-        fn notify_lifecycle(&self, _old: KvmVmState, _new: KvmVmState) -> bool {
-            true
-        }
-    }
-
-    impl MachineAddressInterface for TestVm {
-        #[cfg(target_arch = "x86_64")]
-        fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
-            self.pio_in.lock().unwrap().push((addr, data.to_vec()));
-            true
-        }
-
-        #[cfg(target_arch = "x86_64")]
-        fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
-            self.pio_out.lock().unwrap().push((addr, data.to_vec()));
-            true
-        }
-
-        fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
-            #[cfg(target_arch = "aarch64")]
-            {
-                data[3] = 0x0;
-                data[2] = 0x0;
-                data[1] = 0x5;
-                data[0] = 0x6;
-            }
-            self.mmio_read.lock().unwrap().push((addr, data.to_vec()));
-            true
-        }
-
-        fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
-            self.mmio_write.lock().unwrap().push((addr, data.to_vec()));
-            true
-        }
-    }
-
-    impl MachineInterface for TestVm {}
-
-    #[test]
-    #[allow(unused)]
-    fn test_cpu_lifecycle() {
-        let kvm_fds = KVMFds::new();
-        if kvm_fds.vm_fd.is_none() {
-            return;
-        }
-        KVM_FDS.store(Arc::new(kvm_fds));
-
-        let vm = Arc::new(Mutex::new(TestVm::new()));
-        let cpu = CPU::new(
-            Arc::new(
-                KVM_FDS
-                    .load()
-                    .vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .create_vcpu(0)
-                    .unwrap(),
-            ),
-            0,
-            Arc::new(Mutex::new(ArchCPU::default())),
-            vm.clone(),
-        );
-        let (cpu_state, _) = &*cpu.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
-        drop(cpu_state);
-
-        let cpus_thread_barrier = Arc::new(Barrier::new(2));
-        let cpu_thread_barrier = cpus_thread_barrier.clone();
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .get_preferred_target(&mut kvi)
-                .unwrap();
-            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
-            cpu.fd.vcpu_init(&kvi).unwrap();
-        }
-
-        // Test cpu life cycle as:
-        // Created -> Paused -> Running -> Paused -> Running -> Destroy
-        let cpu_arc = Arc::new(cpu);
-        CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
-
-        // Wait for CPU thread init signal hook
-        std::thread::sleep(Duration::from_millis(50));
-        cpus_thread_barrier.wait();
-        let (cpu_state, _) = &*cpu_arc.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
-        drop(cpu_state);
-
-        assert!(cpu_arc.resume().is_ok());
-
-        // Wait for CPU finish state change.
-        std::thread::sleep(Duration::from_millis(50));
-        let (cpu_state, _) = &*cpu_arc.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
-        drop(cpu_state);
-
-        assert!(cpu_arc.pause().is_ok());
-
-        // Wait for CPU finish state change.
-        std::thread::sleep(Duration::from_millis(50));
-        let (cpu_state, _) = &*cpu_arc.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
-        drop(cpu_state);
-
-        assert!(cpu_arc.resume().is_ok());
-        // Wait for CPU finish state change.
-        std::thread::sleep(Duration::from_millis(50));
-
-        assert!(cpu_arc.destroy().is_ok());
-
-        // Wait for CPU finish state change.
-        std::thread::sleep(Duration::from_millis(50));
-        let (cpu_state, _) = &*cpu_arc.state;
-        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Stopped);
-        drop(cpu_state);
-    }
 
     #[test]
     fn test_cpu_get_topu() {

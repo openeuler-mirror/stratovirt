@@ -359,7 +359,6 @@ impl XhciInterrupter {
 pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let xhci_dev = xhci_dev.clone();
     let cap_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("cap read {:x} {:x}", addr.0, offset);
         let locked_dev = xhci_dev.lock().unwrap();
         let max_ports = locked_dev.numports_2 + locked_dev.numports_3;
         let max_intrs = locked_dev.intrs.len() as u32;
@@ -406,6 +405,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 0
             }
         };
+        trace::usb_xhci_cap_read(&addr.0, &offset, &value);
         write_data_u32(data, value)
     };
 
@@ -427,7 +427,6 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let xhci = xhci_dev.clone();
     let oper_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("oper read {:x} {:x}", addr.0, offset);
         let locked_xhci = xhci.lock().unwrap();
         let value = match offset {
             XHCI_OPER_REG_USBCMD => locked_xhci.oper.get_usb_cmd(),
@@ -455,12 +454,12 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 0
             }
         };
+        trace::usb_xhci_oper_read(&addr.0, &offset, &value);
         write_data_u32(data, value)
     };
 
     let xhci = xhci_dev.clone();
     let oper_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("oper write {:x} {:x}", addr.0, offset);
         let mut value = 0;
         if !read_data_u32(data, &mut value) {
             return false;
@@ -540,6 +539,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 return false;
             }
         };
+        trace::usb_xhci_oper_write(&addr.0, &offset, &value);
         true
     };
 
@@ -553,7 +553,6 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let xhci = xhci_dev.clone();
     let runtime_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("runtime read {:x} {:x}", addr.0, offset);
         let mut value = 0;
         if offset < 0x20 {
             if offset == 0x0 {
@@ -586,6 +585,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
             };
         }
+        trace::usb_xhci_runtime_read(&addr.0, &offset, &value);
         write_data_u32(data, value)
     };
 
@@ -595,7 +595,6 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if !read_data_u32(data, &mut value) {
             return false;
         }
-        debug!("runtime write {:x} {:x} {:x}", addr.0, offset, value);
         if offset < 0x20 {
             error!("Runtime write not implemented: offset {}", offset);
             return false;
@@ -671,6 +670,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 );
             }
         };
+        trace::usb_xhci_runtime_write(&addr.0, &offset, &value);
         true
     };
 
@@ -680,10 +680,10 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     }
 }
 
-/// Build doorbeell region ops.
+/// Build doorbell region ops.
 pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("doorbell read addr {:x} offset {:x}", addr.0, offset);
+        trace::usb_xhci_doorbell_read(&addr.0, &offset, &0);
         write_data_u32(data, 0)
     };
     let xhci = xhci_dev.clone();
@@ -692,7 +692,6 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if !read_data_u32(data, &mut value) {
             return false;
         }
-        debug!("doorbell write {:x} {:x}", addr.0, offset);
         if !xhci.lock().unwrap().running() {
             error!("Failed to write doorbell, XHCI is not running");
             return false;
@@ -710,6 +709,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 return false;
             }
         }
+        trace::usb_xhci_doorbell_write(&addr.0, &offset, &value);
         true
     };
 
@@ -723,7 +723,6 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
     let port = xhci_port.clone();
     let port_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
-        debug!("port read {:x} {:x}", addr.0, offset);
         let locked_port = port.lock().unwrap();
         let value = match offset {
             XHCI_PORTSC => locked_port.portsc,
@@ -735,6 +734,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
                 return false;
             }
         };
+        trace::usb_xhci_port_read(&addr.0, &offset, &value);
         write_data_u32(data, value)
     };
 
@@ -744,7 +744,6 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
         if !read_data_u32(data, &mut value) {
             return false;
         }
-        debug!("port write {:x} {:x} {:x}", addr.0, offset, value);
         match offset {
             XHCI_PORTSC => {
                 if let Err(e) = xhci_portsc_write(&port, value) {
@@ -760,6 +759,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
                 return false;
             }
         }
+        trace::usb_xhci_port_write(&addr.0, &offset, &value);
         true
     };
 
@@ -812,12 +812,14 @@ fn xhci_portsc_ls_write(port: &mut UsbPort, old_pls: u32, new_pls: u32) -> u32 {
         PLS_U0 => {
             if old_pls != PLS_U0 {
                 port.set_port_link_state(new_pls);
+                trace::usb_xhci_port_link(&port.port_id, &new_pls);
                 return PORTSC_PLC;
             }
         }
         PLS_U3 => {
             if old_pls < PLS_U3 {
                 port.set_port_link_state(new_pls);
+                trace::usb_xhci_port_link(&port.port_id, &new_pls);
             }
         }
         PLS_RESUME => {}

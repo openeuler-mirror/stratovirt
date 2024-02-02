@@ -140,10 +140,9 @@ impl VirtioMmioDevice {
 
         VirtioMmioDevice {
             base: SysBusDevBase {
-                base: DeviceBase::default(),
                 dev_type: SysBusDevType::VirtioMmio,
-                res: SysRes::default(),
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+                ..Default::default()
             },
             device,
             host_notify_info: HostNotifyInfo::new(queue_num),
@@ -159,6 +158,10 @@ impl VirtioMmioDevice {
         region_size: u64,
         #[cfg(target_arch = "x86_64")] bs: &Arc<Mutex<BootSource>>,
     ) -> Result<Arc<Mutex<Self>>> {
+        if region_base >= sysbus.mmio_region.1 {
+            bail!("Mmio region space exhausted.");
+        }
+        self.set_sys_resource(sysbus, region_base, region_size)?;
         self.assign_interrupt_cb();
         self.device
             .lock()
@@ -166,10 +169,6 @@ impl VirtioMmioDevice {
             .realize()
             .with_context(|| "Failed to realize virtio.")?;
 
-        if region_base >= sysbus.mmio_region.1 {
-            bail!("Mmio region space exhausted.");
-        }
-        self.set_sys_resource(sysbus, region_base, region_size)?;
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size, "VirtioMmio")?;
 
@@ -232,7 +231,7 @@ impl VirtioMmioDevice {
     }
 
     fn assign_interrupt_cb(&mut self) {
-        let interrupt_evt = self.base.interrupt_evt.clone();
+        let irq_state = self.base.irq_state.clone();
         let locked_dev = self.device.lock().unwrap();
         let virtio_base = locked_dev.virtio_base();
         let device_status = virtio_base.device_status.clone();
@@ -257,10 +256,7 @@ impl VirtioMmioDevice {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                let interrupt = interrupt_evt.as_ref().unwrap();
-                interrupt
-                    .write(1)
-                    .with_context(|| VirtioError::EventFdWrite)?;
+                irq_state.trigger_irq()?;
 
                 Ok(())
             },
@@ -528,7 +524,7 @@ impl SysBusDevOps for VirtioMmioDevice {
         ret
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }
@@ -540,14 +536,14 @@ impl acpi::AmlBuilder for VirtioMmioDevice {
 }
 
 impl StateTransfer for VirtioMmioDevice {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioMmioState {
             virtio_base: self.device.lock().unwrap().virtio_base().get_state(),
         };
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let s_len = std::mem::size_of::<VirtioMmioState>();
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);
@@ -571,7 +567,7 @@ impl StateTransfer for VirtioMmioDevice {
 }
 
 impl MigrationHook for VirtioMmioDevice {
-    fn resume(&mut self) -> migration::Result<()> {
+    fn resume(&mut self) -> Result<()> {
         let mut locked_dev = self.device.lock().unwrap();
         if !locked_dev.device_activated() {
             return Ok(());

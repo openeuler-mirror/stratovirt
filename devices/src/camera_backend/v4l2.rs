@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use v4l2_sys_mit::{
     v4l2_buf_type_V4L2_BUF_TYPE_VIDEO_CAPTURE, v4l2_buffer, v4l2_fmtdesc, v4l2_format,
     v4l2_frmivalenum, v4l2_frmsizeenum, v4l2_frmsizetypes_V4L2_FRMSIZE_TYPE_DISCRETE,
@@ -129,7 +129,7 @@ impl V4l2CameraBackend {
             self.unregister_fd()?;
         }
         let backend = self.backend.as_ref().with_context(|| "Backend is none")?;
-        debug!("Camera {} register fd {}", self.id, backend.as_raw_fd());
+        trace::camera_register_fd(&self.id, backend.as_raw_fd());
         // Register event notifier for /dev/videoX.
         let handler = Arc::new(Mutex::new(V4l2IoHandler::new(
             &self.sample,
@@ -152,7 +152,7 @@ impl V4l2CameraBackend {
             return Ok(());
         }
         let backend = self.backend.as_ref().with_context(|| "Backend is none")?;
-        debug!("Camera {} unregister fd {}", self.id, backend.as_raw_fd());
+        trace::camera_unregister_fd(&self.id, backend.as_raw_fd());
         unregister_event_helper(self.iothread.as_ref(), &mut self.delete_evts)?;
         self.listening = false;
         Ok(())
@@ -245,11 +245,7 @@ impl CameraBackend for V4l2CameraBackend {
 
         // NOTE: Reopen backend to avoid Device or Resource busy.
         let backend = V4l2Backend::new(self.dev_path.clone(), BUFFER_CNT)?;
-        debug!(
-            "Camera {} set format open fd {}",
-            self.id,
-            backend.as_raw_fd()
-        );
+        trace::camera_set_format(&self.id, backend.as_raw_fd());
         self.backend = Some(Arc::new(backend));
 
         let mut fmt = new_init::<v4l2_format>();
@@ -381,10 +377,7 @@ impl CameraBackend for V4l2CameraBackend {
                         frm.interval, format_index, frame_index
                     )
                 })?;
-                debug!(
-                    "v4l2 get_format_by_index fmt {}, frm {}, info {:?}",
-                    format_index, frame_index, out
-                );
+                trace::camera_get_format_by_index(format_index, frame_index, &out);
                 return Ok(out);
             }
         }

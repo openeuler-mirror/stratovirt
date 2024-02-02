@@ -15,7 +15,7 @@ use std::os::unix::prelude::RawFd;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 use log::info;
 
 use super::config::IothreadConfig;
@@ -47,7 +47,7 @@ impl EventLoop {
     /// # Arguments
     ///
     /// * `iothreads` - refer to `-iothread` params
-    pub fn object_init(iothreads: &Option<Vec<IothreadConfig>>) -> util::Result<()> {
+    pub fn object_init(iothreads: &Option<Vec<IothreadConfig>>) -> Result<()> {
         let mut io_threads = HashMap::new();
         if let Some(thrs) = iothreads {
             for thr in thrs {
@@ -129,7 +129,7 @@ impl EventLoop {
     ///
     /// * `notifiers` - The wrapper of events will be handled in the event loop specified by name.
     /// * `name` - specify which event loop to manage
-    pub fn update_event(notifiers: Vec<EventNotifier>, name: Option<&String>) -> util::Result<()> {
+    pub fn update_event(notifiers: Vec<EventNotifier>, name: Option<&String>) -> Result<()> {
         if let Some(ctx) = Self::get_ctx(name) {
             ctx.update_events(notifiers)
         } else {
@@ -143,7 +143,7 @@ impl EventLoop {
     ///
     /// Once run main loop, `epoll` in `MainLoopContext` will execute
     /// `epoll_wait()` function to wait for events.
-    pub fn loop_run() -> util::Result<()> {
+    pub fn loop_run() -> Result<()> {
         // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
         // accessing.
         unsafe {
@@ -170,7 +170,7 @@ pub fn register_event_helper(
     notifiers: Vec<EventNotifier>,
     ctx_name: Option<&String>,
     record_evts: &mut Vec<RawFd>,
-) -> util::Result<()> {
+) -> Result<()> {
     let mut notifiers_fds = get_notifiers_fds(&notifiers);
     EventLoop::update_event(notifiers, ctx_name)?;
     record_evts.append(&mut notifiers_fds);
@@ -180,7 +180,7 @@ pub fn register_event_helper(
 pub fn unregister_event_helper(
     ctx_name: Option<&String>,
     record_evts: &mut Vec<RawFd>,
-) -> util::Result<()> {
+) -> Result<()> {
     EventLoop::update_event(gen_delete_notifiers(record_evts), ctx_name)?;
     record_evts.clear();
     Ok(())

@@ -132,6 +132,8 @@ pub struct UsbKeyboardAdapter {
 
 impl KeyboardOpts for UsbKeyboardAdapter {
     fn do_key_event(&mut self, keycode: u16, down: bool) -> Result<()> {
+        trace::usb_keyboard_event(&keycode, &down);
+
         let mut scan_codes = Vec::new();
         let mut keycode = keycode;
         if keycode & SCANCODE_GREY != 0 {
@@ -146,7 +148,7 @@ impl KeyboardOpts for UsbKeyboardAdapter {
 
         let mut locked_kbd = self.usb_kbd.lock().unwrap();
         if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
-            debug!("Keyboard queue is full!");
+            trace::usb_keyboard_queue_full();
             // Return ok to ignore the request.
             return Ok(());
         }
@@ -210,7 +212,6 @@ impl UsbDevice for UsbKeyboard {
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
-        debug!("handle_control request {:?}", device_req);
         let mut locked_packet = packet.lock().unwrap();
         match self
             .base

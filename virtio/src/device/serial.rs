@@ -19,7 +19,7 @@ use std::{cmp, usize};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -306,7 +306,7 @@ impl VirtioDevice for Serial {
 }
 
 impl StateTransfer for Serial {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = VirtioSerialState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
@@ -315,7 +315,7 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let state = VirtioSerialState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
         self.base.device_features = state.device_features;
@@ -417,7 +417,6 @@ struct SerialControlHandler {
 impl SerialPortHandler {
     fn output_handle(&mut self) {
         trace::virtio_receive_request("Serial".to_string(), "to IO".to_string());
-
         self.output_handle_internal().unwrap_or_else(|e| {
             error!("Port handle output error: {:?}", e);
             report_virtio_error(
@@ -438,7 +437,6 @@ impl SerialPortHandler {
             if elem.desc_num == 0 {
                 break;
             }
-            debug!("elem desc_unm: {}", elem.desc_num);
 
             // Discard requests when there is no port using this queue. Popping elements without
             // processing means discarding the request.
@@ -447,17 +445,17 @@ impl SerialPortHandler {
                 let mut iovec_size = Element::iovec_size(&iovec);
                 while iovec_size > 0 {
                     let mut buffer = [0_u8; BUF_SIZE];
-                    let size = iov_to_buf(&self.mem_space, &iovec, &mut buffer)?;
+                    let size = iov_to_buf(&self.mem_space, &iovec, &mut buffer)? as u64;
 
-                    self.write_chardev_msg(&buffer, size);
+                    self.write_chardev_msg(&buffer, size as usize);
 
-                    iovec = iov_discard_front(&mut iovec, size as u64)
+                    iovec = iov_discard_front(&mut iovec, size)
                         .unwrap_or_default()
                         .to_vec();
                     // Safety: iovec follows the iov_discard_front operation and
                     // iovec_size always equals Element::iovec_size(&iovec).
-                    iovec_size -= size as u64;
-                    debug!("iovec size {}, write size {}", iovec_size, size);
+                    iovec_size -= size;
+                    trace::virtio_serial_output_data(iovec_size, size);
                 }
             }
 
@@ -483,6 +481,7 @@ impl SerialPortHandler {
                         VirtioInterruptType::Vring,
                     )
                 })?;
+            trace::virtqueue_send_interrupt("Serial", &*queue_lock as *const _ as u64);
         }
 
         Ok(())
@@ -515,7 +514,7 @@ impl SerialPortHandler {
     fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
         let port = self.port.as_ref();
         if port.is_none() || !port.unwrap().lock().unwrap().guest_connected {
-            debug!("virtio-serial port is none or disconnected");
+            trace::virtio_serial_disconnected_port();
             return 0;
         }
 
@@ -603,6 +602,7 @@ impl SerialPortHandler {
                             VirtioInterruptType::Vring,
                         )
                     })?;
+                trace::virtqueue_send_interrupt("Serial", &*queue_lock as *const _ as u64);
             }
 
             if left == 0 {
@@ -724,6 +724,7 @@ impl SerialControlHandler {
                         VirtioInterruptType::Vring,
                     )
                 })?;
+            trace::virtqueue_send_interrupt("Serial", &*queue_lock as *const _ as u64);
         }
 
         Ok(())
@@ -875,6 +876,7 @@ impl SerialControlHandler {
                         VirtioInterruptType::Vring,
                     )
                 })?;
+            trace::virtqueue_send_interrupt("Serial", &*queue_lock as *const _ as u64);
         }
 
         Ok(())

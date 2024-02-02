@@ -132,27 +132,22 @@ impl PL011 {
     pub fn new(cfg: SerialConfig) -> Result<Self> {
         Ok(PL011 {
             base: SysBusDevBase {
-                base: DeviceBase::default(),
                 dev_type: SysBusDevType::PL011,
-                res: SysRes::default(),
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                ..Default::default()
             },
             state: PL011State::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         })
     }
 
-    fn interrupt(&self) {
+    fn interrupt(&mut self) {
         let irq_mask = INT_E | INT_MS | INT_RT | INT_TX | INT_RX;
 
         let flag = self.state.int_level & self.state.int_enabled;
         if flag & irq_mask != 0 {
-            if let Err(e) = self.interrupt_evt().unwrap().write(1) {
-                error!(
-                    "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {:?}",
-                    flag, e,
-                )
-            }
+            self.inject_interrupt();
+            trace::pl011_interrupt(flag);
         }
     }
 
@@ -206,11 +201,13 @@ impl InputReceiver for PL011 {
             }
             self.state.rfifo[slot] = *val as u32;
             self.state.read_count += 1;
+            trace::pl011_receive(self.state.rfifo[slot], self.state.read_count);
         }
 
         // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
         if ((self.state.lcr & 0x10) == 0) || (self.state.read_count as usize == PL011_FIFO_SIZE) {
             self.state.flags |= PL011_FLAG_RXFF as u32;
+            trace::pl011_receive_full();
         }
         if self.state.read_count >= self.state.read_trigger {
             self.state.int_level |= INT_RX;
@@ -268,6 +265,7 @@ impl SysBusDevOps for PL011 {
                 if self.state.read_count == self.state.read_trigger - 1 {
                     self.state.int_level &= !INT_RX;
                 }
+                trace::pl011_read_fifo(self.state.read_count);
                 self.state.rsr = c >> 8;
                 self.interrupt();
                 ret = c;
@@ -322,6 +320,7 @@ impl SysBusDevOps for PL011 {
             }
         }
         data.copy_from_slice(&ret.as_bytes()[0..data.len()]);
+        trace::pl011_read(offset, ret);
 
         true
     }
@@ -331,6 +330,7 @@ impl SysBusDevOps for PL011 {
         if !read_data_u32(data, &mut value) {
             return false;
         }
+        trace::pl011_write(offset, value);
 
         match offset >> 2 {
             0 => {
@@ -360,9 +360,11 @@ impl SysBusDevOps for PL011 {
             }
             9 => {
                 self.state.ibrd = value;
+                trace::pl011_baudrate_change(self.state.ibrd, self.state.fbrd);
             }
             10 => {
                 self.state.fbrd = value;
+                trace::pl011_baudrate_change(self.state.ibrd, self.state.fbrd);
             }
             11 => {
                 // PL011 works in two modes: character mode or FIFO mode.
@@ -405,17 +407,17 @@ impl SysBusDevOps for PL011 {
         true
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 }
 
 impl StateTransfer for PL011 {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         self.state = *PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 

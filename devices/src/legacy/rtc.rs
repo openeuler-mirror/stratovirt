@@ -120,7 +120,6 @@ impl RTC {
     pub fn new() -> Result<RTC> {
         let mut rtc = RTC {
             base: SysBusDevBase {
-                base: DeviceBase::default(),
                 dev_type: SysBusDevType::Rtc,
                 res: SysRes {
                     region_base: RTC_PORT_INDEX,
@@ -128,6 +127,7 @@ impl RTC {
                     irq: -1,
                 },
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                ..Default::default()
             },
             cmos_data: [0_u8; 128],
             cur_index: 0_u8,
@@ -216,6 +216,7 @@ impl RTC {
                 if self.update_in_progress() {
                     data[0] |= REG_A_UIP;
                     self.inject_interrupt();
+                    trace::rtc_inject_interrupt();
                 }
             }
             RTC_REG_C => {
@@ -226,6 +227,7 @@ impl RTC {
                 data[0] = self.cmos_data[self.cur_index as usize];
             }
         }
+        trace::rtc_read(self.cur_index, data[0]);
 
         true
     }
@@ -235,6 +237,7 @@ impl RTC {
             error!("RTC only supports writing data byte by byte.");
             return false;
         }
+        trace::rtc_write(self.cur_index, data[0]);
 
         match self.cur_index {
             RTC_SECONDS | RTC_MINUTES | RTC_HOURS | RTC_DAY_OF_WEEK | RTC_DAY_OF_MONTH
@@ -271,16 +274,6 @@ impl RTC {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size, "RTC")?;
         Ok(())
-    }
-
-    fn inject_interrupt(&self) {
-        if let Some(evt_fd) = self.interrupt_evt() {
-            if let Err(e) = evt_fd.write(1) {
-                error!("cmos rtc: failed to write interrupt eventfd ({:?}).", e);
-            }
-            return;
-        }
-        error!("cmos rtc: failed to get interrupt event fd.");
     }
 
     /// Get current clock value.
@@ -398,7 +391,7 @@ impl SysBusDevOps for RTC {
         }
     }
 
-    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
         Some(&mut self.base.res)
     }
 

@@ -1,0 +1,221 @@
+[[events]]
+name = "vnc_dpy_switch"
+args = "old_width: &dyn fmt::Debug, old_height: &dyn fmt::Debug, new_width: &dyn fmt::Debug, new_height: &dyn fmt::Debug"
+message = "old_width={:?} old_height={:?}, new_width={:?}, new_height={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_dpy_pageflip"
+args = "w: &dyn fmt::Debug, h: &dyn fmt::Debug, fmt: &dyn fmt::Debug"
+message = "w={:?} h={:?} fmt={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_dpy_refresh"
+args = "dirty_num: &dyn fmt::Debug, update_interval: &dyn fmt::Debug"
+message = "dirty_num={:?} update_interval={:?} ms"
+enabled = true
+
+[[events]]
+name = "vnc_dpy_image_update"
+args = "x: &dyn fmt::Debug, y: &dyn fmt::Debug, w: &dyn fmt::Debug, h: &dyn fmt::Debug"
+message = "x={:?} y={:?} x={:?} y={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_dpy_cursor_update"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug"
+message = "width={:?} height={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_server_desktop_resize"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug"
+message = "width={:?} height={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_connect"
+args = "stream: &dyn fmt::Debug"
+message = "stream={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_handle_version"
+args = "major: &usize, minor: &usize"
+message = "major={:?} minor={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_handle_init"
+args = "clients: &dyn fmt::Debug, conn_limits: &dyn fmt::Debug"
+message = "total clients={:?}, limits={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_handle_auth"
+args = "auth_type: &u8"
+message = "auth_type={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_key_event"
+args = "keysym: &dyn fmt::Debug, down: &bool"
+message = "keysym={:?} down={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_point_event"
+args = "button: &dyn fmt::Debug, x: &u16, y: &u16"
+message = "button={:?} x={:?} y={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_vencrypt_init"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vnc_client_vencrypt_auth"
+args = "auth: &dyn fmt::Debug, subauth: &dyn fmt::Debug"
+message = "auth={:?}, subauth={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_tls_handshake_done"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vnc_client_get_mechname_length"
+args = "len: &u32"
+message = "length={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_get_mechname"
+args = "mechname: &dyn fmt::Debug"
+message = "mechname={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_get_authmessage_length"
+args = "length: &dyn fmt::Debug"
+message = "length={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_client_sasl_auth"
+args = "result: &dyn fmt::Debug, serverout_len: &dyn fmt::Debug"
+message = "result={:?}, serverout_len={:?}"
+enabled = true
+
+[[events]]
+name = "vnc_server_send_mech_list"
+args = "mech_list: &dyn fmt::Debug"
+message = "mech_list={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_enter_callback"
+args = "enter_or_leave: &dyn fmt::Debug"
+message = "{:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_switch"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_refresh"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_image_update"
+args = "dev_name: &dyn fmt::Debug, x: &i32, y: &i32, w: &i32, h: &i32"
+message = "device_name={:?} x={:?} y={:?} w={:?} h={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_channel_cursor_update"
+args = "dev_name: &dyn fmt::Debug"
+message = "device_name={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_switch"
+args = "old_width: &dyn fmt::Debug, old_height: &dyn fmt::Debug, new_width: &dyn fmt::Debug, new_height: &dyn fmt::Debug"
+message = "old_width={:?} old_height={:?} new_width={:?} new_height={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_update"
+args = "x: &dyn fmt::Debug, y: &dyn fmt::Debug, w: &dyn fmt::Debug, h: &dyn fmt::Debug"
+message = "x={:?} y={:?} w={:?} h={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_dyp_refresh"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "gtk_dyp_cursor_define"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug, hot_x: &dyn fmt::Debug, hot_y: &dyn fmt::Debug, data_len: &dyn fmt::Debug"
+message = "width={:?} height={:?} hot_x={:?} hot_y={:?} data_len={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_configure_callback"
+args = "width: &dyn fmt::Debug, height: &dyn fmt::Debug"
+message = "width={:?} height={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_key_event_callback"
+args = "key_value: &dyn fmt::Debug, press: &dyn fmt::Debug"
+message = "key_value={:?} press={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_pointer_callback"
+args = "button_mask: &dyn fmt::Debug"
+message = "button_mask={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_cursor_move_event"
+args = "x: &dyn fmt::Debug, y: &dyn fmt::Debug"
+message = "x={:?} y={:?}"
+enabled = true
+
+[[events]]
+name = "gtk_scroll_callback"
+args = "direction: &dyn fmt::Debug"
+message = "direction={:?}"
+enabled = true
+
+[[events]]
+name = "console_dpy_refresh"
+args = "interval: &dyn fmt::Debug"
+message = "interval={:?} ms"
+enabled = true
+
+[[events]]
+name = "console_dpy_ui_info"
+args = "dev_name: &dyn fmt::Debug, width: &dyn fmt::Debug, height: &dyn fmt::Debug, last_width: &dyn fmt::Debug, last_height: &dyn fmt::Debug"
+message = "dev_name={:?} width={:?} height={:?} last_width={:?} last_height={:?}"
+enabled = true
+
+[[events]]
+name = "console_select"
+args = "con_id: &dyn fmt::Debug"
+message = "console id={:?}"
+enabled = true

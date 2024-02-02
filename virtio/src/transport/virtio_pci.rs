@@ -15,7 +15,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
 use machine_manager::config::M;
@@ -43,7 +43,7 @@ use devices::pci::config::{
 use devices::pci::msix::MsixState;
 use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
-    PciBus, PciDevBase, PciDevOps, PciError, Result as PciResult,
+    PciBus, PciDevBase, PciDevOps, PciError,
 };
 use devices::{Device, DeviceBase};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -131,7 +131,7 @@ const MAX_FEATURES_SELECT_NUM: u32 = 2;
 /// The bar0 size of enable_bar0 features
 const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
-fn init_gpu_bar0(config: &mut PciConfig) -> PciResult<()> {
+fn init_gpu_bar0(config: &mut PciConfig) -> Result<()> {
     let host_mmap = Arc::new(HostMemMapping::new(
         GuestAddress(0),
         None,
@@ -413,7 +413,7 @@ impl VirtioPciDevice {
         ret
     }
 
-    fn modern_mem_region_map<T: ByteCode>(&mut self, data: T) -> PciResult<usize> {
+    fn modern_mem_region_map<T: ByteCode>(&mut self, data: T) -> Result<usize> {
         let cap_offset = self.base.config.add_pci_cap(
             PCI_CAP_ID_VNDR,
             size_of::<T>() + PCI_CAP_VNDR_AND_NEXT_SIZE as usize,
@@ -531,7 +531,7 @@ impl VirtioPciDevice {
     /// # Arguments
     ///
     /// * `offset` - The offset of common config.
-    fn read_common_config(&self, offset: u64) -> PciResult<u32> {
+    fn read_common_config(&self, offset: u64) -> Result<u32> {
         let locked_device = self.device.lock().unwrap();
         let value = match offset {
             COMMON_DFSELECT_REG => locked_device.hfeatures_sel(),
@@ -601,7 +601,7 @@ impl VirtioPciDevice {
     /// # Errors
     ///
     /// Returns Error if the offset is out of bound.
-    fn write_common_config(&mut self, offset: u64, value: u32) -> PciResult<()> {
+    fn write_common_config(&mut self, offset: u64, value: u32) -> Result<()> {
         let mut locked_device = self.device.lock().unwrap();
         match offset {
             COMMON_DFSELECT_REG => {
@@ -771,7 +771,7 @@ impl VirtioPciDevice {
     fn modern_mem_region_init(
         virtio_pci: Arc<Mutex<VirtioPciDevice>>,
         modern_mem_region: &Region,
-    ) -> PciResult<()> {
+    ) -> Result<()> {
         // 1. PCI common cap sub-region.
         let common_region_ops = Self::build_common_cfg_ops(virtio_pci.clone());
         let common_region = Region::init_io_region(
@@ -987,7 +987,7 @@ impl PciDevOps for VirtioPciDevice {
         &mut self.base
     }
 
-    fn realize(mut self) -> PciResult<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -1088,11 +1088,10 @@ impl PciDevOps for VirtioPciDevice {
 
         let nvectors = self.device.lock().unwrap().queue_num() + 1;
         init_msix(
+            &mut self.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             nvectors as u32,
-            &mut self.base.config,
             self.dev_id.clone(),
-            &self.base.base.id,
             None,
             None,
         )?;
@@ -1154,7 +1153,7 @@ impl PciDevOps for VirtioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> PciResult<()> {
+    fn unrealize(&mut self) -> Result<()> {
         self.device
             .lock()
             .unwrap()
@@ -1199,7 +1198,7 @@ impl PciDevOps for VirtioPciDevice {
         self.do_cfg_access(offset, end, true);
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.deactivate_device();
         self.device
             .lock()
@@ -1238,7 +1237,7 @@ impl PciDevOps for VirtioPciDevice {
 }
 
 impl StateTransfer for VirtioPciDevice {
-    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = VirtioPciState {
             dev_id: self.dev_id.load(Ordering::Acquire),
             ..Default::default()
@@ -1265,7 +1264,7 @@ impl StateTransfer for VirtioPciDevice {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let pci_state = VirtioPciState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
@@ -1296,7 +1295,7 @@ impl StateTransfer for VirtioPciDevice {
 }
 
 impl MigrationHook for VirtioPciDevice {
-    fn resume(&mut self) -> migration::Result<()> {
+    fn resume(&mut self) -> Result<()> {
         if !self.device.lock().unwrap().device_activated() {
             return Ok(());
         }
@@ -1334,10 +1333,11 @@ impl MigrationHook for VirtioPciDevice {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use anyhow::Result;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::{Result as VirtioResult, VirtioBase};
+    use crate::VirtioBase;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
     use devices::pci::{
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
@@ -1377,20 +1377,20 @@ mod tests {
             &mut self.base
         }
 
-        fn realize(&mut self) -> VirtioResult<()> {
+        fn realize(&mut self) -> Result<()> {
             self.init_config_features()?;
             Ok(())
         }
 
-        fn init_config_features(&mut self) -> VirtioResult<()> {
+        fn init_config_features(&mut self) -> Result<()> {
             Ok(())
         }
 
-        fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
+        fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> Result<()> {
             Ok(())
         }
 
-        fn write_config(&mut self, _offset: u64, _data: &[u8]) -> VirtioResult<()> {
+        fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
             Ok(())
         }
 
@@ -1399,12 +1399,12 @@ mod tests {
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
             _queue_evts: Vec<Arc<EventFd>>,
-        ) -> VirtioResult<()> {
+        ) -> Result<()> {
             self.is_activated = true;
             Ok(())
         }
 
-        fn deactivate(&mut self) -> VirtioResult<()> {
+        fn deactivate(&mut self) -> Result<()> {
             Ok(())
         }
     }
@@ -1552,13 +1552,11 @@ mod tests {
             false,
         );
 
-        let id = virtio_pci.name();
         assert!(init_msix(
+            &mut virtio_pci.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             (virtio_dev.lock().unwrap().queue_num() + 1) as u32,
-            &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &id,
             None,
             None,
         )
@@ -1709,20 +1707,18 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         virtio_pci.base.config.set_interrupt_pin();
 
-        let id = virtio_pci.name();
         init_msix(
+            &mut virtio_pci.base,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
-            &mut virtio_pci.base.config,
             virtio_pci.dev_id.clone(),
-            &id,
             None,
             None,
         )
         .unwrap();
 
         init_intx(
-            id,
+            virtio_pci.name(),
             &mut virtio_pci.base.config,
             virtio_pci.base.parent_bus.clone(),
             virtio_pci.base.devfn,

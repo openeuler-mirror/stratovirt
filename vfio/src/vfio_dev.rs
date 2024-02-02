@@ -226,7 +226,7 @@ impl VfioContainer {
         Ok(())
     }
 
-    fn add_listener_region(&self, fr: &FlatRange) -> address_space::Result<()> {
+    fn add_listener_region(&self, fr: &FlatRange) -> Result<()> {
         if fr.owner.region_type() != address_space::RegionType::Ram {
             return Ok(());
         }
@@ -238,7 +238,7 @@ impl VfioContainer {
             None => bail!("Failed to get host address"),
         };
         let userspace_addr = hva + fr.offset_in_region;
-        address_space::Result::with_context(
+        Result::with_context(
             self.vfio_dma_map(guest_phys_addr, memory_size, userspace_addr),
             || {
                 format!(
@@ -250,14 +250,14 @@ impl VfioContainer {
         Ok(())
     }
 
-    fn del_listener_region(&self, fr: &FlatRange) -> address_space::Result<()> {
+    fn del_listener_region(&self, fr: &FlatRange) -> Result<()> {
         if fr.owner.region_type() != address_space::RegionType::Ram {
             return Ok(());
         }
 
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let size = fr.addr_range.size;
-        address_space::Result::with_context(self.vfio_dma_unmap(guest_phys_addr, size), || {
+        Result::with_context(self.vfio_dma_unmap(guest_phys_addr, size), || {
             format!(
                 "Failed to do dma unmap: gpa 0x{:x}, size 0x{:x}.",
                 guest_phys_addr, size
@@ -289,7 +289,7 @@ impl Listener for VfioContainer {
         range: Option<&FlatRange>,
         _evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> address_space::Result<()> {
+    ) -> Result<()> {
         match req_type {
             ListenerReqType::AddRegion => {
                 self.add_listener_region(range.unwrap())?;
@@ -369,11 +369,11 @@ impl VfioGroup {
             attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
             addr: &self.fd.as_raw_fd() as *const i32 as u64,
         };
-        match KVM_DEVICE_FD.as_ref() {
+        match KVM_DEVICE_FD.lock().unwrap().as_ref() {
             Some(fd) => fd
                 .set_device_attr(&attr)
                 .with_context(|| "Failed to add group to kvm device.")?,
-            None => bail!("Failed to create kvm device."),
+            None => bail!("Kvm device hasn't been created."),
         }
         Ok(())
     }
@@ -389,7 +389,7 @@ impl VfioGroup {
             attr: u64::from(KVM_DEV_VFIO_GROUP_DEL),
             addr: &self.fd.as_raw_fd() as *const i32 as u64,
         };
-        match KVM_DEVICE_FD.as_ref() {
+        match KVM_DEVICE_FD.lock().unwrap().as_ref() {
             Some(fd) => fd
                 .set_device_attr(&attr)
                 .with_context(|| "Failed to delete group from kvm device.")?,

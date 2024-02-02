@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -15,14 +15,18 @@ use thiserror::Error;
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Error, Debug)]
 pub enum HypervisorError {
-    #[error("Util error")]
-    Util {
-        #[from]
-        source: util::error::UtilError,
-    },
-    #[error("KvmIoctl")]
-    KvmIoctl {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
+    #[cfg(target_arch = "x86_64")]
+    #[error("Failed to set identity map address.")]
+    SetIdentityMapAddr,
+    #[cfg(target_arch = "x86_64")]
+    #[error("Failed to set tss address.")]
+    SetTssErr,
+    #[cfg(target_arch = "x86_64")]
+    #[error("Failed to create PIT.")]
+    CrtPitErr,
+    #[error("Failed to create irq chip.")]
+    #[cfg(target_arch = "x86_64")]
+    CrtIrqchipErr,
+    #[error("Failed to create KVM device: {0:#?}.")]
+    CreateKvmDevice(kvm_ioctls::Error),
 }

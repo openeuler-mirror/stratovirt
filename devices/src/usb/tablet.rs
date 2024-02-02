@@ -135,9 +135,12 @@ pub struct UsbTabletAdapter {
 
 impl PointerOpts for UsbTabletAdapter {
     fn update_point_state(&mut self, input_event: InputEvent) -> Result<()> {
+        trace::usb_tablet_update_point_state(&input_event.input_type);
+
         let mut locked_tablet = self.tablet.lock().unwrap();
         if locked_tablet.hid.num >= QUEUE_LENGTH {
-            debug!("Pointer queue is full!");
+            trace::usb_tablet_queue_full();
+
             // Return ok to ignore the request.
             return Ok(());
         }
@@ -186,11 +189,13 @@ impl PointerOpts for UsbTabletAdapter {
     }
 
     fn sync(&mut self) -> Result<()> {
+        trace::usb_tablet_point_sync();
         let mut locked_tablet = self.tablet.lock().unwrap();
 
         // The last evt is used to save the latest button state,
         // so the max number of events can be cached at one time is QUEUE_LENGTH - 1.
         if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
+            trace::usb_tablet_queue_full();
             return Ok(());
         }
         let curr_index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
@@ -250,7 +255,6 @@ impl UsbDevice for UsbTablet {
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
-        debug!("handle_control request {:?}", device_req);
         let mut locked_packet = packet.lock().unwrap();
         match self
             .base
