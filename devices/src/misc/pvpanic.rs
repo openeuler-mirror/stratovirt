@@ -142,14 +142,6 @@ impl Device for PvPanicPci {
     fn device_base_mut(&mut self) -> &mut DeviceBase {
         &mut self.base.base
     }
-
-    fn hotpluggable(&self) -> bool {
-        false
-    }
-
-    fn name(&self) -> String {
-        "PvPanic".to_string()
-    }
 }
 
 impl PciDevOps for PvPanicPci {
