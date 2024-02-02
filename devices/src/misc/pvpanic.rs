@@ -20,8 +20,10 @@ use log::{debug, error, info};
 
 use crate::pci::{
     config::{
-        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, PCI_CONFIG_SPACE_SIZE,
-        PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
+        PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
+        PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
+        PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
+        SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
@@ -29,9 +31,8 @@ use crate::{Device, DeviceBase};
 use address_space::{GuestAddress, Region, RegionOps};
 use machine_manager::config::{PvpanicDevConfig, PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 
-const PCI_CLASS_SYSTEM_OTHER: u16 = 0x0880;
-const PCI_CLASS_PI: u16 = 0x09;
-const PCI_REVISION_ID_PVPANIC: u8 = 1;
+const PVPANIC_PCI_REVISION_ID: u8 = 1;
+const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 
 #[cfg(target_arch = "aarch64")]
 // param size in Region::init_io_region must greater than 4
@@ -168,7 +169,7 @@ impl PciDevOps for PvPanicPci {
             PCI_DEVICE_ID_REDHAT_PVPANIC,
         )?;
 
-        self.base.config.config[REVISION_ID] = PCI_REVISION_ID_PVPANIC;
+        self.base.config.config[REVISION_ID] = PVPANIC_PCI_REVISION_ID;
 
         le_write_u16(
             &mut self.base.config.config,
@@ -176,7 +177,19 @@ impl PciDevOps for PvPanicPci {
             PCI_CLASS_SYSTEM_OTHER,
         )?;
 
-        self.base.config.config[PCI_CLASS_PI as usize] = 0x00;
+        le_write_u16(
+            &mut self.base.config.config,
+            SUBSYSTEM_VENDOR_ID,
+            PVPANIC_PCI_VENDOR_ID,
+        )?;
+
+        le_write_u16(
+            &mut self.base.config.config,
+            SUBSYSTEM_ID,
+            PCI_SUBDEVICE_ID_QEMU,
+        )?;
+
+        self.base.config.config[CLASS_PI as usize] = 0x00;
 
         self.base.config.config[HEADER_TYPE as usize] = 0x00;
 
