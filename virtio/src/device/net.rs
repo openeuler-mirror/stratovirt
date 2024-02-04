@@ -684,14 +684,16 @@ struct RxVirtio {
     queue_full: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: Arc<EventFd>,
+    recv_evt: Arc<EventFd>,
 }
 
 impl RxVirtio {
-    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
+    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>, recv_evt: Arc<EventFd>) -> Self {
         RxVirtio {
             queue_full: false,
             queue,
             queue_evt,
+            recv_evt,
         }
     }
 }
@@ -859,9 +861,9 @@ impl NetIoHandler {
             rx_packets += 1;
             if rx_packets >= self.queue_size {
                 self.rx
-                    .queue_evt
+                    .recv_evt
                     .write(1)
-                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
+                    .with_context(|| "Failed to trigger tap queue event".to_string())?;
                 break;
             }
         }
@@ -973,6 +975,7 @@ impl NetIoHandler {
         let mut notifiers_fds = vec![
             locked_net_io.update_evt.as_raw_fd(),
             locked_net_io.rx.queue_evt.as_raw_fd(),
+            locked_net_io.rx.recv_evt.as_raw_fd(),
             locked_net_io.tx.queue_evt.as_raw_fd(),
         ];
         if old_tap_fd != -1 {
@@ -1049,6 +1052,16 @@ impl EventNotifierHelper for NetIoHandler {
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+
+            if let Err(ref e) = locked_net_io.rx.recv_evt.write(1) {
+                error!("Failed to trigger tap receive event, {:?}", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    &locked_net_io.device_broken,
+                );
+            }
+
             if let Some(tap) = locked_net_io.tap.as_ref() {
                 if !locked_net_io.is_listening {
                     let notifier = vec![EventNotifier::new(
@@ -1059,6 +1072,7 @@ impl EventNotifierHelper for NetIoHandler {
                         Vec::new(),
                     )];
                     locked_net_io.is_listening = true;
+                    locked_net_io.rx.queue_full = false;
                     return Some(notifier);
                 }
             }
@@ -1118,7 +1132,7 @@ impl EventNotifierHelper for NetIoHandler {
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
-                    if locked_net_io.rx.queue_full {
+                    if locked_net_io.rx.queue_full && locked_net_io.is_listening {
                         let notifier = vec![EventNotifier::new(
                             NotifierOperation::Park,
                             tap.as_raw_fd(),
@@ -1127,7 +1141,6 @@ impl EventNotifierHelper for NetIoHandler {
                             Vec::new(),
                         )];
                         locked_net_io.is_listening = false;
-                        locked_net_io.rx.queue_full = false;
                         return Some(notifier);
                     }
                 }
@@ -1136,6 +1149,13 @@ impl EventNotifierHelper for NetIoHandler {
             let tap_fd = tap.as_raw_fd();
             notifiers.push(build_event_notifier(
                 tap_fd,
+                Some(handler.clone()),
+                NotifierOperation::AddShared,
+                EventSet::IN | EventSet::EDGE_TRIGGERED,
+            ));
+            let recv_evt_fd = locked_net_io.rx.recv_evt.as_raw_fd();
+            notifiers.push(build_event_notifier(
+                recv_evt_fd,
                 Some(handler),
                 NotifierOperation::AddShared,
                 EventSet::IN | EventSet::EDGE_TRIGGERED,
@@ -1540,8 +1560,9 @@ impl VirtioDevice for Net {
             }
 
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
+            let recv_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let mut handler = NetIoHandler {
-                rx: RxVirtio::new(rx_queue, rx_queue_evt),
+                rx: RxVirtio::new(rx_queue, rx_queue_evt, recv_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
                 tap: self.taps.as_ref().map(|t| t[index].clone()),
                 tap_fd: -1,
