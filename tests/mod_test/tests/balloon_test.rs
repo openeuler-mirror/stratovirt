@@ -744,7 +744,7 @@ fn balloon_fpr_001() {
 fn balloon_fpr_002() {
     balloon_fpr_fun(false);
 }
-#[allow(dead_code)]
+
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
     pub num_pages: u32,
@@ -962,11 +962,10 @@ fn balloon_deactive_001() {
 }
 
 #[derive(Clone, Copy, Default)]
-#[allow(dead_code)]
 #[repr(packed(1))]
 struct BalloonStat {
-    tag: u16,
-    val: u64,
+    _tag: u16,
+    _val: u64,
 }
 impl ByteCode for BalloonStat {}
 /// balloon device deactive config test
@@ -1002,8 +1001,8 @@ fn auto_balloon_test_001() {
     assert_eq!(interval, MONITOR_INTERVAL_SECOND_DEFAULT);
 
     let stat = BalloonStat {
-        tag: 0,
-        val: 131070,
+        _tag: 0,
+        _val: 131070,
     };
     let msg_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
     balloon
