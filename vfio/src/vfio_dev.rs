@@ -24,7 +24,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use kvm_bindings::{
     kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD, KVM_DEV_VFIO_GROUP_DEL,
 };
-use log::warn;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
@@ -76,11 +75,6 @@ ioctl_io_nr!(
     VFIO_DEVICE_GET_REGION_INFO,
     vfio::VFIO_TYPE,
     vfio::VFIO_BASE + 0x08
-);
-ioctl_io_nr!(
-    VFIO_DEVICE_GET_IRQ_INFO,
-    vfio::VFIO_TYPE,
-    vfio::VFIO_BASE + 0x09
 );
 ioctl_io_nr!(
     VFIO_DEVICE_SET_IRQS,
@@ -496,13 +490,6 @@ struct VfioRegionWithCap {
     cap_info: vfio::__IncompleteArrayField<u8>,
 }
 
-#[allow(dead_code)]
-pub struct VfioIrq {
-    count: u32,
-    flags: u32,
-    index: u32,
-}
-
 impl VfioDevice {
     pub fn new(path: &Path, mem_as: &Arc<AddressSpace>) -> Result<Arc<Mutex<Self>>> {
         if !path.exists() {
@@ -726,39 +713,6 @@ impl VfioDevice {
         }
 
         Ok(regions)
-    }
-
-    pub fn get_irqs_info(&self, num_irqs: u32) -> Result<HashMap<u32, VfioIrq>> {
-        let mut irqs: HashMap<u32, VfioIrq> = HashMap::new();
-
-        for index in 0..num_irqs {
-            let mut info = vfio::vfio_irq_info {
-                argsz: size_of::<vfio::vfio_irq_info>() as u32,
-                flags: 0,
-                index,
-                count: 0,
-            };
-
-            let ret =
-                // SAFETY: Device is the owner of file, and we will verify the result is valid.
-                unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
-            if ret < 0 {
-                warn!(
-                    "VFIO_DEVICE_GET_IRQ_INFO return irq type{} not supported",
-                    index
-                );
-                continue;
-            }
-
-            let irq = VfioIrq {
-                flags: info.flags,
-                count: info.count,
-                index,
-            };
-            irqs.insert(index, irq);
-        }
-
-        Ok(irqs)
     }
 
     /// Read region information from VFIO device.

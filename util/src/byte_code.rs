@@ -78,7 +78,6 @@ mod test {
     use super::*;
 
     #[repr(C)]
-    #[allow(dead_code)]
     #[derive(Copy, Clone, Default)]
     struct TestData {
         type_id: [u8; 8],

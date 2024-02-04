@@ -76,31 +76,29 @@ struct GuestIovec {
 }
 
 #[derive(Clone, Copy, Default)]
-#[allow(dead_code)]
 #[repr(packed(1))]
 struct BalloonStat {
     _tag: u16,
-    val: u64,
+    _val: u64,
 }
 
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
-#[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
-    num_pages: u32,
+    _num_pages: u32,
     /// Number of pages we've actually got in balloon device.
-    actual: u32,
+    _actual: u32,
     _reserved: u32,
     _reserved1: u32,
     /// Buffer percent is a percentage of memory actually needed by
     /// the applications and services running inside the virtual machine.
     /// This parameter takes effect only when VIRTIO_BALLOON_F_MESSAGE_VQ is supported.
     /// Recommended value range: [20, 80] and default is 50.
-    membuf_percent: u32,
+    _membuf_percent: u32,
     /// Monitor interval(second) host wants to adjust VM memory size.
     /// Recommended value range: [5, 300] and default is 10.
-    monitor_interval: u32,
+    _monitor_interval: u32,
 }
 
 impl ByteCode for BalloonStat {}
@@ -703,7 +701,7 @@ impl BalloonIoHandler {
                         let ram_size = (balloon_dev.mem_info.lock().unwrap().get_ram_size()
                             >> VIRTIO_BALLOON_PFN_SHIFT)
                             as u32;
-                        balloon_dev.set_num_pages(cmp::min(stat.val as u32, ram_size));
+                        balloon_dev.set_num_pages(cmp::min(stat._val as u32, ram_size));
                     }
                 }
                 balloon_dev
@@ -1021,12 +1019,12 @@ impl VirtioDevice for Balloon {
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
-            num_pages: self.num_pages,
-            actual: self.actual.load(Ordering::Acquire),
+            _num_pages: self.num_pages,
+            _actual: self.actual.load(Ordering::Acquire),
             _reserved: 0_u32,
             _reserved1: 0_u32,
-            membuf_percent: self.bln_cfg.membuf_percent,
-            monitor_interval: self.bln_cfg.monitor_interval,
+            _membuf_percent: self.bln_cfg.membuf_percent,
+            _monitor_interval: self.bln_cfg.monitor_interval,
         };
 
         let config_len =

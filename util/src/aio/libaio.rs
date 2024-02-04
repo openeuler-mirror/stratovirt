@@ -21,8 +21,6 @@ use super::threads::ThreadsAioContext;
 use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 
 const IOCB_FLAG_RESFD: u32 = 1;
-#[allow(dead_code)]
-const IOCB_FLAG_IOPRIO: u32 = 1 << 1;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
@@ -53,14 +51,10 @@ struct IoCb {
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types, dead_code)]
+#[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 enum IoCmd {
-    Pread = 0,
-    Pwrite = 1,
-    Fsync = 2,
     Fdsync = 3,
-    Noop = 6,
     Preadv = 7,
     Pwritev = 8,
 }

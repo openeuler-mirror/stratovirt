@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -61,9 +60,6 @@ struct VfioMsixInfo {
     table: MsixTable,
     // Msix entries.
     entries: u16,
-    // Vfio device irq info
-    #[allow(dead_code)]
-    vfio_irq: HashMap<u32, VfioIrq>,
 }
 
 struct VfioBar {
@@ -231,14 +227,8 @@ impl VfioPciDevice {
         Ok(())
     }
 
-    /// Get MSI-X table, vfio_irq and entry information from vfio device.
+    /// Get MSI-X table and entry information from vfio device.
     fn get_msix_info(&mut self) -> Result<VfioMsixInfo> {
-        let locked_dev = self.vfio_device.lock().unwrap();
-        let n = locked_dev.dev_info.num_irqs;
-        let vfio_irq = locked_dev
-            .get_irqs_info(n)
-            .with_context(|| "Failed to get vfio irqs info")?;
-
         let cap_offset = self.base.config.find_pci_cap(MSIX_CAP_ID);
         let table = le_read_u32(
             &self.base.config.config,
@@ -265,7 +255,6 @@ impl VfioPciDevice {
                 table_size: (entries * MSIX_TABLE_ENTRY_SIZE) as u64,
             },
             entries,
-            vfio_irq,
         })
     }
 
