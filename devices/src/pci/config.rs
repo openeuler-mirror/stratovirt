@@ -41,6 +41,7 @@ pub const DEVICE_ID: u8 = 0x02;
 /// Command register.
 pub const COMMAND: u8 = 0x04;
 pub const REVISION_ID: usize = 0x08;
+pub const CLASS_PI: u16 = 0x09;
 /// Sub-Class Code Register.
 pub const SUB_CLASS_CODE: u8 = 0x0a;
 pub const SUBSYSTEM_VENDOR_ID: usize = 0x2c;
@@ -306,6 +307,7 @@ pub const PCI_DEVICE_ID_REDHAT_PVPANIC: u16 = 0x0011;
 // Device classes and subclasses
 pub const PCI_CLASS_MEMORY_RAM: u16 = 0x0500;
 pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
+pub const PCI_CLASS_SYSTEM_OTHER: u16 = 0x0880;
 
 /// Type of bar region.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
