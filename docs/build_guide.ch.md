@@ -64,6 +64,18 @@ $ cargo build --workspace --bins --release --target ${arch}-unknown-linux-musl
 $ cargo build --release --features "scream_alsa"
 ```
 
+## 5. OpenHarmony OS版本的编译
+
+StratoVirt支持在Openharmony OS(OHOS)的运行。该版本的编译需要一台x64机器，并使用OHOS提供的RUST交叉编译工具链、以及SDK。
+
+编译之前，需要把OHOS SDK的路径指定到环境变量OHOS_SDK中。另外，StratoVirt依赖的crate有部分不支持OHOS的编译，需要对其源码做相关修改。
+
+编译命令示意如下：
+
+```
+RUSTFLAGS="-C link-arg=--target=aarch64-linux-ohos -C linker={OHOS_SDK}/llvm/bin/clang" cargo build --target aarch64-linux-ohos --features {FEATURES}"
+```
+
 # 通过容器构建StratoVirt静态链接二进制
 
 ## 1. 检查docker环境

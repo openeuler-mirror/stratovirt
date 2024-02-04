@@ -295,7 +295,7 @@ impl UnixSock {
         if !out_fds.is_empty() {
             let cmsg = cmsghdr {
                 cmsg_len: cmsg_len as _,
-                #[cfg(target_env = "musl")]
+                #[cfg(any(target_env = "musl", target_env = "ohos"))]
                 __pad1: 0,
                 cmsg_level: SOL_SOCKET,
                 cmsg_type: SCM_RIGHTS,

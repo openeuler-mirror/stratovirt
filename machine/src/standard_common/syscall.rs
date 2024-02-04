@@ -108,7 +108,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_exit),
         BpfRule::new(libc::SYS_exit_group),
         BpfRule::new(libc::SYS_rt_sigreturn),
-        #[cfg(target_env = "musl")]
+        #[cfg(any(target_env = "musl", target_env = "ohos"))]
         BpfRule::new(libc::SYS_tkill),
         BpfRule::new(libc::SYS_newfstatat),
         #[cfg(target_env = "gnu")]
@@ -267,7 +267,7 @@ fn ioctl_allow_list() -> BpfRule {
 }
 
 fn madvise_rule() -> BpfRule {
-    #[cfg(target_env = "musl")]
+    #[cfg(any(target_env = "musl", target_env = "ohos"))]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
@@ -283,7 +283,7 @@ fn madvise_rule() -> BpfRule {
 }
 
 fn futex_rule() -> BpfRule {
-    #[cfg(target_env = "musl")]
+    #[cfg(any(target_env = "musl", target_env = "ohos"))]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_PRIVATE)

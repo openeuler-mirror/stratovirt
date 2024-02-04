@@ -38,9 +38,9 @@ use crate::{
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
     vnc::{
-        auth_sasl::AuthState, framebuffer_update, round_up_div, server_io::VncServer,
-        set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
-        MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
+        framebuffer_update, round_up_div, server_io::VncServer, set_area_dirty, write_pixel,
+        AuthState, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE,
+        MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT, OUTPUT_THROTTLE_SCALE,
     },
 };
 use util::{
@@ -401,6 +401,7 @@ pub struct ClientIoHandler {
     /// Vnc client io handler.
     pub handlers: HashMap<String, Rc<NotifierCallback>>,
     /// Tls server connection.
+    #[cfg(feature = "vnc_auth")]
     pub tls_conn: Option<rustls::ServerConnection>,
     /// Message handler.
     pub msg_handler: fn(&mut ClientIoHandler) -> Result<()>,
@@ -423,6 +424,7 @@ impl ClientIoHandler {
             stream,
             io_channel,
             handlers: HashMap::new(),
+            #[cfg(feature = "vnc_auth")]
             tls_conn: None,
             msg_handler: ClientIoHandler::handle_version,
             expect: 12,
@@ -535,7 +537,10 @@ impl ClientIoHandler {
             version.minor = 3;
         }
         self.client.conn_state.lock().unwrap().version = version;
+        #[cfg(feature = "vnc_auth")]
         let auth = self.server.security_type.borrow().auth;
+        #[cfg(not(feature = "vnc_auth"))]
+        let auth = AuthState::No;
 
         if self.client.conn_state.lock().unwrap().version.minor == 3 {
             match auth {
@@ -615,7 +620,10 @@ impl ClientIoHandler {
     fn handle_auth(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         trace::vnc_client_handle_auth(&buf[0]);
+        #[cfg(feature = "vnc_auth")]
         let auth = self.server.security_type.borrow().auth;
+        #[cfg(not(feature = "vnc_auth"))]
+        let auth = AuthState::No;
         let client = self.client.clone();
         let version = client.conn_state.lock().unwrap().version.clone();
 
@@ -635,6 +643,7 @@ impl ClientIoHandler {
                 }
                 self.update_event_handler(1, ClientIoHandler::handle_client_init);
             }
+            #[cfg(feature = "vnc_auth")]
             AuthState::Vencrypt => {
                 // Send VeNCrypt version 0.2.
                 let mut buf = [0u8; 2];
