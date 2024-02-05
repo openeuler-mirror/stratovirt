@@ -176,7 +176,7 @@ impl ScsiDevice {
         self.buf_align = alignments.1;
         let drive_id = VmConfig::get_drive_id(&drive_files, &self.config.path_on_host)?;
 
-        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
+        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type, None)?;
         let conf = BlockProperty {
             id: drive_id,
             format: self.config.format,

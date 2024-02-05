@@ -49,8 +49,8 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::aio::{
-    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioReqResult, Iovec, OpCode,
-    WriteZeroesState,
+    iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioEngine, AioReqResult,
+    Iovec, OpCode, WriteZeroesState,
 };
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -1066,7 +1066,16 @@ impl VirtioDevice for Block {
             self.buf_align = alignments.1;
             let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
 
-            let aio = Aio::new(Arc::new(BlockIoHandler::complete_func), self.blk_cfg.aio)?;
+            let mut thread_pool = None;
+            if self.blk_cfg.aio != AioEngine::Off {
+                thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
+            }
+            let aio = Aio::new(
+                Arc::new(BlockIoHandler::complete_func),
+                self.blk_cfg.aio,
+                thread_pool,
+            )?;
+
             let conf = BlockProperty {
                 id: drive_id,
                 format: self.blk_cfg.format,
@@ -1389,6 +1398,7 @@ mod tests {
     // Use different input parameters to verify block `new()` and `realize()` functionality.
     #[test]
     fn test_block_init() {
+        assert!(EventLoop::object_init(&None).is_ok());
         // New block device
         let mut block = init_default_block();
         assert_eq!(block.disk_sectors, 0);
@@ -1417,6 +1427,7 @@ mod tests {
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
         assert_eq!(block.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
+        EventLoop::loop_clean();
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and

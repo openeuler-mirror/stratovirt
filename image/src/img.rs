@@ -171,7 +171,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         .custom_flags(libc::O_CREAT | libc::O_TRUNC)
         .open(path.clone())?;
 
-    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off)?;
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
     let image_info = match disk_fmt {
         DiskFormat::Raw => {
             create_options.conf.format = DiskFormat::Raw;
@@ -333,7 +333,7 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     qcow2_conf.discard = true;
     qcow2_conf.write_zeroes = WriteZeroesState::Unmap;
 
-    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off).unwrap();
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
     let mut qcow2_driver = Qcow2Driver::new(image_file.file.try_clone()?, aio, qcow2_conf.clone())?;
     qcow2_driver.load_metadata(qcow2_conf)?;
 
@@ -362,7 +362,7 @@ pub(crate) fn create_qcow2_driver_for_check(
     file: File,
     conf: BlockProperty,
 ) -> Result<Qcow2Driver<()>> {
-    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off).unwrap();
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
     let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone())
         .with_context(|| "Failed to create qcow2 driver")?;
 
@@ -479,7 +479,7 @@ mod test {
         fn create_driver(&self) -> Qcow2Driver<()> {
             let mut conf = BlockProperty::default();
             conf.format = DiskFormat::Qcow2;
-            let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off).unwrap();
+            let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
             let mut qcow2_driver =
                 Qcow2Driver::new(self.file.try_clone().unwrap(), aio, conf.clone()).unwrap();
             qcow2_driver.load_metadata(conf).unwrap();

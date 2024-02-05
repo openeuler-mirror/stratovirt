@@ -222,5 +222,6 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     }
 
     EventLoop::loop_run().with_context(|| "MainLoop exits unexpectedly: error occurs")?;
+    EventLoop::loop_clean();
     Ok(())
 }
