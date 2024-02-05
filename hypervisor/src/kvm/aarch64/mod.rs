@@ -208,7 +208,9 @@ impl KvmCpu {
                 }
             }
             RegsIndex::VcpuEvents => {
-                locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                if self.caps.vcpu_events {
+                    locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                }
             }
             RegsIndex::CpregList => {
                 let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES)?;
@@ -250,14 +252,18 @@ impl KvmCpu {
                     .with_context(|| format!("Failed to set core register for CPU {}", apic_id))?;
             }
             RegsIndex::MpState => {
-                self.fd
-                    .set_mp_state(locked_arch_cpu.mp_state)
-                    .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
+                if self.caps.mp_state {
+                    self.fd
+                        .set_mp_state(locked_arch_cpu.mp_state)
+                        .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
+                }
             }
             RegsIndex::VcpuEvents => {
-                self.fd
-                    .set_vcpu_events(&locked_arch_cpu.cpu_events)
-                    .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))?;
+                if self.caps.vcpu_events {
+                    self.fd
+                        .set_vcpu_events(&locked_arch_cpu.cpu_events)
+                        .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))?;
+                }
             }
             RegsIndex::CpregList => {
                 for cpreg in locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len].iter() {
@@ -281,7 +287,7 @@ impl KvmCpu {
     /// # Arguments
     ///
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
-    pub fn get_core_regs(&self) -> Result<kvm_regs> {
+    fn get_core_regs(&self) -> Result<kvm_regs> {
         let mut core_regs = kvm_regs::default();
 
         core_regs.regs.sp = self.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
@@ -320,7 +326,7 @@ impl KvmCpu {
     ///
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
     /// * `core_regs` - kvm_regs state to be written.
-    pub fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
+    fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
         self.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
         self.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
         self.set_one_reg(
@@ -399,19 +405,10 @@ impl KvmCpu {
     }
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
-        let locked_arch_cpu = cpu.arch_cpu.lock().unwrap();
-        let apic_id = locked_arch_cpu.apic_id;
-        self.set_core_regs(locked_arch_cpu.core_regs)
-            .with_context(|| format!("Failed to set core register for CPU {}", apic_id))?;
-        self.fd
-            .set_mp_state(locked_arch_cpu.mp_state)
-            .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
-        for cpreg in locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len].iter() {
-            self.set_cpreg(cpreg)
-                .with_context(|| format!("Failed to set cpreg for CPU {}", apic_id))?;
-        }
-        self.fd
-            .set_vcpu_events(&locked_arch_cpu.cpu_events)
-            .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))
+        let arch_cpu = &cpu.arch_cpu;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::MpState)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)
     }
 }
