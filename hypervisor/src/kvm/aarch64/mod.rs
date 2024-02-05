@@ -198,8 +198,7 @@ impl KvmCpu {
         self.arch_vcpu_init()?;
 
         arch_cpu.lock().unwrap().mpidr =
-            self.fd
-                .get_one_reg(KVM_REG_ARM_MPIDR_EL1)
+            self.get_one_reg(KVM_REG_ARM_MPIDR_EL1)
                 .with_context(|| "Failed to get mpidr")? as u64;
 
         arch_cpu.lock().unwrap().features = *vcpu_config;
@@ -207,8 +206,19 @@ impl KvmCpu {
         Ok(())
     }
 
+    fn get_one_reg(&self, reg_id: u64) -> Result<u128> {
+        let mut val = [0_u8; 16];
+        self.fd.get_one_reg(reg_id, &mut val)?;
+        Ok(u128::from_le_bytes(val))
+    }
+
+    fn set_one_reg(&self, reg_id: u64, val: u128) -> Result<()> {
+        self.fd.set_one_reg(reg_id, &val.to_le_bytes())?;
+        Ok(())
+    }
+
     pub fn arch_get_one_reg(&self, reg_id: u64) -> Result<u128> {
-        Ok(self.fd.get_one_reg(reg_id)?)
+        self.get_one_reg(reg_id)
     }
 
     pub fn arch_get_regs(
@@ -251,7 +261,6 @@ impl KvmCpu {
             }
             RegsIndex::VtimerCount => {
                 locked_arch_cpu.vtimer_cnt = self
-                    .fd
                     .get_one_reg(KVM_REG_ARM_TIMER_CNT)
                     .with_context(|| "Failed to get virtual timer count")?
                     as u64;
@@ -290,8 +299,7 @@ impl KvmCpu {
                 }
             }
             RegsIndex::VtimerCount => {
-                self.fd
-                    .set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
+                self.set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
                     .with_context(|| "Failed to set virtual timer count")?;
             }
         }
@@ -309,34 +317,30 @@ impl KvmCpu {
     pub fn get_core_regs(&self) -> Result<kvm_regs> {
         let mut core_regs = kvm_regs::default();
 
-        core_regs.regs.sp = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
-        core_regs.sp_el1 = self.fd.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
-        core_regs.regs.pstate = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
-        core_regs.regs.pc = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
-        core_regs.elr_el1 = self.fd.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
+        core_regs.regs.sp = self.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
+        core_regs.sp_el1 = self.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
+        core_regs.regs.pstate = self.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
+        core_regs.regs.pc = self.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
+        core_regs.elr_el1 = self.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
 
         for i in 0..KVM_NR_REGS as usize {
             core_regs.regs.regs[i] =
-                self.fd
-                    .get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
+                self.get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
         }
 
         for i in 0..KVM_NR_SPSR as usize {
-            core_regs.spsr[i] = self.fd.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
+            core_regs.spsr[i] = self.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
         }
 
         for i in 0..KVM_NR_FP_REGS as usize {
-            core_regs.fp_regs.vregs[i] = self
-                .fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
+            core_regs.fp_regs.vregs[i] =
+                self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
         }
 
         core_regs.fp_regs.fpsr =
-            self.fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
+            self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
         core_regs.fp_regs.fpcr =
-            self.fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
+            self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
 
         Ok(core_regs)
     }
@@ -350,43 +354,38 @@ impl KvmCpu {
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
     /// * `core_regs` - kvm_regs state to be written.
     pub fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
-        self.fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
-        self.fd.set_one_reg(
+        self.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
+        self.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
+        self.set_one_reg(
             Arm64CoreRegs::UserPTRegPState.into(),
             core_regs.regs.pstate as u128,
         )?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
+        self.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
+        self.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
 
         for i in 0..KVM_NR_REGS as usize {
-            self.fd.set_one_reg(
+            self.set_one_reg(
                 Arm64CoreRegs::UserPTRegRegs(i).into(),
                 core_regs.regs.regs[i] as u128,
             )?;
         }
 
         for i in 0..KVM_NR_SPSR as usize {
-            self.fd
-                .set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
+            self.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
         }
 
         for i in 0..KVM_NR_FP_REGS as usize {
-            self.fd.set_one_reg(
+            self.set_one_reg(
                 Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
                 core_regs.fp_regs.vregs[i],
             )?;
         }
 
-        self.fd.set_one_reg(
+        self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
             core_regs.fp_regs.fpsr as u128,
         )?;
-        self.fd.set_one_reg(
+        self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
             core_regs.fp_regs.fpcr as u128,
         )?;
@@ -418,7 +417,7 @@ impl KvmCpu {
 
     pub fn get_cpreg(&self, cpreg_list_entry: &mut CpregListEntry) -> Result<()> {
         if self.normal_cpreg_entry(cpreg_list_entry) {
-            cpreg_list_entry.value = self.fd.get_one_reg(cpreg_list_entry.reg_id)?;
+            cpreg_list_entry.value = self.get_one_reg(cpreg_list_entry.reg_id)?;
         }
 
         Ok(())
@@ -426,7 +425,7 @@ impl KvmCpu {
 
     pub fn set_cpreg(&self, cpreg: &CpregListEntry) -> Result<()> {
         if self.normal_cpreg_entry(cpreg) {
-            self.fd.set_one_reg(cpreg.reg_id, cpreg.value)?;
+            self.set_one_reg(cpreg.reg_id, cpreg.value)?;
         }
 
         Ok(())
