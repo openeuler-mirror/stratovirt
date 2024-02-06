@@ -64,7 +64,7 @@ impl AudioInterface for AudioDemo {
             .unwrap_or_else(|e| error!("Failed to flush data to file: {:?}", e));
     }
 
-    fn receive(&mut self, recv_data: &StreamData) -> bool {
+    fn receive(&mut self, recv_data: &StreamData) -> i32 {
         thread::sleep(time::Duration::from_millis(20));
         // SAFETY: Audio demo device is only used for test.
         let data = unsafe {
@@ -78,7 +78,11 @@ impl AudioInterface for AudioDemo {
             0
         });
 
-        size == data.len()
+        if size == data.len() {
+            1
+        } else {
+            0
+        }
     }
 
     fn destroy(&mut self) {}

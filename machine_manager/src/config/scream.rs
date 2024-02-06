@@ -23,6 +23,8 @@ pub enum ScreamInterface {
     Alsa,
     #[cfg(feature = "scream_pulseaudio")]
     PulseAudio,
+    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+    OhAudio,
     Demo,
 }
 
@@ -36,6 +38,8 @@ impl FromStr for ScreamInterface {
             #[cfg(feature = "scream_pulseaudio")]
             "PulseAudio" => Ok(ScreamInterface::PulseAudio),
             "Demo" => Ok(ScreamInterface::Demo),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            "OhAudio" => Ok(ScreamInterface::OhAudio),
             _ => Err(anyhow!("Unknown scream interface")),
         }
     }

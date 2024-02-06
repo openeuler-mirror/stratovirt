@@ -13,6 +13,8 @@
 #[cfg(feature = "scream_alsa")]
 mod alsa;
 mod audio_demo;
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+mod ohos;
 #[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
@@ -36,6 +38,8 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::scream::{ScreamConfig, ScreamInterface};
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 
@@ -147,6 +151,17 @@ impl Default for ShmemStreamFmt {
             channel_map: 0x03,
             pad2: 0,
         }
+    }
+}
+
+impl ShmemStreamFmt {
+    pub fn get_rate(&self) -> u32 {
+        let sample_rate = if self.rate >= WINDOWS_SAMPLE_BASE_RATE {
+            AUDIO_SAMPLE_RATE_44KHZ
+        } else {
+            AUDIO_SAMPLE_RATE_48KHZ
+        };
+        sample_rate * (self.rate % WINDOWS_SAMPLE_BASE_RATE) as u32
     }
 }
 
@@ -294,14 +309,18 @@ impl StreamData {
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
+        let addr = hva + capt.offset as u64;
+        let mut locked_interface = interface.lock().unwrap();
 
+        locked_interface.pre_receive(addr, capt);
         while capt.is_started != 0 {
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
 
-            if interface.lock().unwrap().receive(self) {
-                self.chunk_idx = (self.chunk_idx + 1) % capt.max_chunks;
+            let recv_chunks_cnt = locked_interface.receive(self);
+            if recv_chunks_cnt > 0 {
+                self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
 
                 // Make sure chunk_idx write does not bypass audio chunk write.
                 fence(Ordering::SeqCst);
@@ -339,6 +358,8 @@ impl Scream {
             ScreamInterface::Alsa => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
             #[cfg(feature = "scream_pulseaudio")]
             ScreamInterface::PulseAudio => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            ScreamInterface::OhAudio => Arc::new(Mutex::new(OhAudio::init(dir))),
             ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
                 self.playback.clone(),
@@ -430,6 +451,9 @@ impl Scream {
 
 pub trait AudioInterface: Send {
     fn send(&mut self, recv_data: &StreamData);
-    fn receive(&mut self, recv_data: &StreamData) -> bool;
+    // For OHOS's audio task. It confirms shmem info.
+    #[allow(unused_variables)]
+    fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
+    fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
 }
