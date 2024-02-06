@@ -210,8 +210,8 @@ impl<T: Clone> AioCb<T> {
 
     pub fn rw_sync(&self) -> i32 {
         let mut ret = match self.opcode {
-            OpCode::Preadv => raw_readv(self.file_fd, &self.iovec, self.offset as usize),
-            OpCode::Pwritev => raw_writev(self.file_fd, &self.iovec, self.offset as usize),
+            OpCode::Preadv => raw_readv(self.file_fd, &self.iovec, self.offset),
+            OpCode::Pwritev => raw_writev(self.file_fd, &self.iovec, self.offset),
             _ => -1,
         };
         if ret < 0 {
@@ -232,7 +232,7 @@ impl<T: Clone> AioCb<T> {
     }
 
     fn discard_sync(&self) -> i32 {
-        let ret = raw_discard(self.file_fd, self.offset as usize, self.nbytes);
+        let ret = raw_discard(self.file_fd, self.offset, self.nbytes);
         if ret < 0 && ret != -libc::ENOTSUP {
             error!("Failed to do sync discard.");
         }
@@ -242,12 +242,12 @@ impl<T: Clone> AioCb<T> {
     fn write_zeroes_sync(&mut self) -> i32 {
         let mut ret;
         if self.opcode == OpCode::WriteZeroesUnmap {
-            ret = raw_discard(self.file_fd, self.offset as usize, self.nbytes);
+            ret = raw_discard(self.file_fd, self.offset, self.nbytes);
             if ret == 0 {
                 return ret;
             }
         }
-        ret = raw_write_zeroes(self.file_fd, self.offset as usize, self.nbytes);
+        ret = raw_write_zeroes(self.file_fd, self.offset, self.nbytes);
         if ret == -libc::ENOTSUP && !self.iovec.is_empty() {
             self.opcode = OpCode::Pwritev;
             return self.rw_sync();

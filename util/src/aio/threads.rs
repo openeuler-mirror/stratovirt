@@ -111,7 +111,7 @@ impl TaskOperation for ThreadsTasks {
             ret = self.io_data.nbytes as i32;
         }
 
-        self.complete_func(&self.io_data, ret as i32);
+        self.complete_func(&self.io_data, ret);
     }
 }
 
