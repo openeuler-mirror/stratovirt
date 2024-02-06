@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2024 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -10,13 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::Arc;
-
 use kvm_bindings::{kvm_msr_entry, Msrs};
 use kvm_ioctls::Cap;
+use kvm_ioctls::Kvm;
 use vmm_sys_util::fam::Error;
-
-use crate::CPUHypervisorOps;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/arch/x86/include/asm/msr-index.h#L558
 const MSR_IA32_MISC_ENABLE: ::std::os::raw::c_uint = 0x1a0;
@@ -39,11 +36,12 @@ pub struct X86CPUCaps {
 
 impl X86CPUCaps {
     /// Initialize X86CPUCaps instance.
-    pub fn init_capabilities(hypervisor_cpu: Arc<dyn CPUHypervisorOps>) -> Self {
+    pub fn init_capabilities() -> Self {
+        let kvm = Kvm::new().unwrap();
         X86CPUCaps {
-            has_xsave: hypervisor_cpu.check_extension(Cap::Xsave),
-            has_xcrs: hypervisor_cpu.check_extension(Cap::Xcrs),
-            supported_msrs: hypervisor_cpu.get_msr_index_list(),
+            has_xsave: kvm.check_extension(Cap::Xsave),
+            has_xcrs: kvm.check_extension(Cap::Xcrs),
+            supported_msrs: kvm.get_msr_index_list().unwrap().as_slice().to_vec(),
         }
     }
 

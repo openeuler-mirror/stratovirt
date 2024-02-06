@@ -40,8 +40,6 @@ pub use aarch64::Arm64CoreRegs;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::ArmCPUCaps as CPUCaps;
-#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUFeatures as CPUFeatures;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
@@ -56,8 +54,6 @@ pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
 pub use error::CpuError;
-#[cfg(target_arch = "x86_64")]
-pub use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
@@ -74,7 +70,6 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use kvm_ioctls::Cap;
 use log::{error, info, warn};
 use nix::unistd::gettid;
 use vmm_sys_util::signal::Killable;
@@ -174,10 +169,6 @@ pub trait CPUInterface {
 pub trait CPUHypervisorOps: Send + Sync {
     fn get_hypervisor_type(&self) -> HypervisorType;
 
-    fn check_extension(&self, cap: Cap) -> bool;
-
-    fn get_msr_index_list(&self) -> Vec<u32>;
-
     fn init_pmu(&self) -> Result<()>;
 
     fn vcpu_init(&self) -> Result<()>;
@@ -191,12 +182,7 @@ pub trait CPUHypervisorOps: Send + Sync {
 
     fn get_one_reg(&self, reg_id: u64) -> Result<u128>;
 
-    fn get_regs(
-        &self,
-        arch_cpu: Arc<Mutex<ArchCPU>>,
-        regs_index: RegsIndex,
-        caps: &CPUCaps,
-    ) -> Result<()>;
+    fn get_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
 
     fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
 
@@ -226,8 +212,6 @@ pub struct CPU {
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
-    /// The capability of VCPU.
-    pub caps: CPUCaps,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
     /// Sync the pause state of vCPU in hypervisor and userspace.
@@ -258,7 +242,6 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
-            caps: CPUCaps::init_capabilities(hypervisor_cpu.clone()),
             boot_state: Arc::new(Mutex::new(ArchCPU::default())),
             pause_signal: Arc::new(AtomicBool::new(false)),
             hypervisor_cpu,
@@ -456,7 +439,7 @@ impl CPUInterface for CPU {
 
         #[cfg(target_arch = "aarch64")]
         self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount, &self.caps)?;
+            .get_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
 
         Ok(())
     }

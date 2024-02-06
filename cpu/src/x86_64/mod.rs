@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod caps;
-
 mod cpuid;
 
 use std::sync::{Arc, Mutex};
@@ -499,21 +497,16 @@ impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         let hypervisor_cpu = self.hypervisor_cpu();
 
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MpState, &self.caps)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Regs, &self.caps)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Sregs, &self.caps)?;
-        if self.caps.has_xsave {
-            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xsave, &self.caps)?;
-        } else {
-            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Fpu, &self.caps)?;
-        }
-        if self.caps.has_xcrs {
-            hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xcrs, &self.caps)?;
-        }
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::DebugRegs, &self.caps)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::LapicState, &self.caps)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MsrEntry, &self.caps)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::VcpuEvents, &self.caps)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MpState)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Regs)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Sregs)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xsave)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Fpu)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xcrs)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::DebugRegs)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::LapicState)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MsrEntry)?;
+        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::VcpuEvents)?;
 
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
