@@ -677,12 +677,10 @@ impl LineIrqManager for KVMInterruptManager {
 
         match trigger_mode {
             TriggerMode::Edge => {
-                self.vm_fd
-                    .register_irqfd(&irq_fd, irq as u32)
-                    .map_err(|e| {
-                        error!("Failed to register irq, error is {:?}", e);
-                        e
-                    })?;
+                self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
+                    error!("Failed to register irq, error is {:?}", e);
+                    e
+                })?;
             }
             _ => {
                 bail!("Unsupported registering irq fd for interrupt of level mode.");
@@ -693,12 +691,10 @@ impl LineIrqManager for KVMInterruptManager {
     }
 
     fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
-        self.vm_fd
-            .unregister_irqfd(&irq_fd, irq as u32)
-            .map_err(|e| {
-                error!("Failed to unregister irq, error is {:?}", e);
-                e
-            })?;
+        self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
+            error!("Failed to unregister irq, error is {:?}", e);
+            e
+        })?;
 
         Ok(())
     }
