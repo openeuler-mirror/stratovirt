@@ -23,7 +23,7 @@ use util::num_ops::round_up;
 pub const QCOW2_MAX_SNAPSHOTS: usize = 65536;
 
 // Length of Qcow2 internal snapshot which doesn't have icount in extra data.
-// Qcow2 snapshots created by qemu-kvm/qemu-img(version <= 5.0) may have this format.
+// Qcow2 snapshots created by qemu-img(version <= 5.0) may have this format.
 const SNAPSHOT_EXTRA_DATA_LEN_16: usize = 16;
 // Length of Qcow2 internal snapshot which has icount in extra data.
 const SNAPSHOT_EXTRA_DATA_LEN_24: usize = 24;

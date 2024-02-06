@@ -20,6 +20,7 @@ use kvm_bindings::{kvm_userspace_memory_region as KvmMemSlot, KVM_MEM_READONLY};
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use log::{debug, warn};
 
+use crate::HypervisorError;
 use address_space::{
     AddressRange, AddressSpaceError, FlatRange, Listener, ListenerReqType, MemSlot,
     RegionIoEventFd, RegionType,
@@ -82,7 +83,7 @@ impl KvmMemoryListener {
                 .find_intersection(range)
                 .is_some()
             {
-                return Err(anyhow!(AddressSpaceError::KvmSlotOverlap {
+                return Err(anyhow!(HypervisorError::KvmSlotOverlap {
                     add: (guest_addr, size),
                     exist: (s.guest_addr, s.size)
                 }));
@@ -100,7 +101,7 @@ impl KvmMemoryListener {
             }
         }
 
-        Err(anyhow!(AddressSpaceError::NoAvailKvmSlot(slots.len())))
+        Err(anyhow!(HypervisorError::NoAvailKvmSlot(slots.len())))
     }
 
     /// Delete a slot after finding it according to the given arguments.
@@ -123,7 +124,7 @@ impl KvmMemoryListener {
                 return Ok(*slot);
             }
         }
-        Err(anyhow!(AddressSpaceError::NoMatchedKvmSlot(addr, size)))
+        Err(anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)))
     }
 
     /// Align a piece of memory segment according to `alignment`,

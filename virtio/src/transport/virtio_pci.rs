@@ -309,7 +309,7 @@ pub struct VirtioPciDevice {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Multi-Function flag.
     multi_func: bool,
-    /// If the device need to register irqfd to kvm.
+    /// If the device need to register irqfd.
     need_irqfd: bool,
 }
 
