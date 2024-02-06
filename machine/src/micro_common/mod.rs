@@ -126,7 +126,7 @@ impl MmioReplaceableInfo {
     }
 }
 
-/// A wrapper around creating and using a kvm-based micro VM.
+/// A wrapper around creating and using a micro VM.
 pub struct LightMachine {
     // Machine base members.
     pub(crate) base: MachineBase,

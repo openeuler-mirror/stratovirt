@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod cpu_caps;
 pub mod gicv2;
 pub mod gicv3;
 
@@ -24,8 +25,8 @@ use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use crate::kvm::{KvmCpu, KvmHypervisor};
 use cpu::{
-    ArchCPU, Arm64CoreRegs, CPUBootConfig, CPUCaps, CPUFeatures, CpregListEntry, RegsIndex, CPU,
-    PMU_INTR, PPI_BASE,
+    ArchCPU, Arm64CoreRegs, CPUBootConfig, CPUFeatures, CpregListEntry, RegsIndex, CPU, PMU_INTR,
+    PPI_BASE,
 };
 
 // Arm Architecture Reference Manual defines the encoding of AArch64 system registers:
@@ -122,10 +123,6 @@ impl KvmHypervisor {
 }
 
 impl KvmCpu {
-    pub fn arch_get_msr_index_list(&self) -> Vec<u32> {
-        Vec::new()
-    }
-
     pub fn arch_init_pmu(&self) -> Result<()> {
         let pmu_attr = kvm_device_attr {
             group: KVM_ARM_VCPU_PMU_V3_CTRL,
@@ -225,7 +222,6 @@ impl KvmCpu {
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         regs_index: RegsIndex,
-        _caps: &CPUCaps,
     ) -> Result<()> {
         let mut locked_arch_cpu = arch_cpu.lock().unwrap();
 
@@ -234,11 +230,13 @@ impl KvmCpu {
                 locked_arch_cpu.core_regs = self.get_core_regs()?;
             }
             RegsIndex::MpState => {
-                let mut mp_state = self.fd.get_mp_state()?;
-                if mp_state.mp_state != KVM_MP_STATE_STOPPED {
-                    mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+                if self.caps.mp_state {
+                    let mut mp_state = self.fd.get_mp_state()?;
+                    if mp_state.mp_state != KVM_MP_STATE_STOPPED {
+                        mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+                    }
+                    locked_arch_cpu.mp_state = mp_state;
                 }
-                locked_arch_cpu.mp_state = mp_state;
             }
             RegsIndex::VcpuEvents => {
                 locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;

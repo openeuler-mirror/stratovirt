@@ -20,8 +20,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
@@ -308,7 +306,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
@@ -335,8 +332,6 @@ dependencies = [
  "chardev_backend",
  "cpu",
  "drm-fourcc",
- "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "libpulse-binding",
  "libpulse-simple-binding",
@@ -911,7 +906,6 @@ dependencies = [
  "cpu",
  "devices",
  "hypervisor",
- "kvm-bindings",
  "libc",
  "log",
  "machine_manager",
@@ -933,7 +927,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "hex",
- "kvm-bindings",
  "libc",
  "log",
  "once_cell",
@@ -986,7 +979,6 @@ name = "migration"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "kvm-bindings",
  "kvm-ioctls",
  "log",
  "machine_manager",
@@ -1767,7 +1759,6 @@ dependencies = [
  "byteorder",
  "io-uring",
  "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "nix 0.26.2",
@@ -1843,7 +1834,6 @@ dependencies = [
  "byteorder",
  "chardev_backend",
  "devices",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",

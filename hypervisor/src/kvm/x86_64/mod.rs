@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod cpu_caps;
+
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -21,7 +23,7 @@ use crate::kvm::listener::KvmIoListener;
 use crate::kvm::{KvmCpu, KvmHypervisor};
 use crate::HypervisorError;
 use address_space::Listener;
-use cpu::{ArchCPU, CPUBootConfig, CPUCaps, RegsIndex, CPU};
+use cpu::{ArchCPU, CPUBootConfig, RegsIndex, CPU};
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
@@ -72,11 +74,6 @@ impl KvmHypervisor {
 }
 
 impl KvmCpu {
-    pub fn arch_get_msr_index_list(&self) -> Vec<u32> {
-        let kvm = Kvm::new().unwrap();
-        kvm.get_msr_index_list().unwrap().as_slice().to_vec()
-    }
-
     pub fn arch_init_pmu(&self) -> Result<()> {
         Ok(())
     }
@@ -117,9 +114,8 @@ impl KvmCpu {
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         regs_index: RegsIndex,
-        caps: &CPUCaps,
     ) -> Result<()> {
-        let mut msr_entries = caps.create_msr_entries()?;
+        let mut msr_entries = self.caps.create_msr_entries()?;
         let mut locked_arch_cpu = arch_cpu.lock().unwrap();
         match regs_index {
             RegsIndex::Regs => {
@@ -129,7 +125,9 @@ impl KvmCpu {
                 locked_arch_cpu.sregs = self.fd.get_sregs()?;
             }
             RegsIndex::Fpu => {
-                locked_arch_cpu.fpu = self.fd.get_fpu()?;
+                if !self.caps.has_xsave {
+                    locked_arch_cpu.fpu = self.fd.get_fpu()?;
+                }
             }
             RegsIndex::MpState => {
                 locked_arch_cpu.mp_state = self.fd.get_mp_state()?;
@@ -147,10 +145,14 @@ impl KvmCpu {
                 locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
             }
             RegsIndex::Xsave => {
-                locked_arch_cpu.xsave = self.fd.get_xsave()?;
+                if self.caps.has_xsave {
+                    locked_arch_cpu.xsave = self.fd.get_xsave()?;
+                }
             }
             RegsIndex::Xcrs => {
-                locked_arch_cpu.xcrs = self.fd.get_xcrs()?;
+                if self.caps.has_xcrs {
+                    locked_arch_cpu.xcrs = self.fd.get_xcrs()?;
+                }
             }
             RegsIndex::DebugRegs => {
                 locked_arch_cpu.debugregs = self.fd.get_debug_regs()?;
@@ -226,7 +228,6 @@ impl KvmCpu {
     }
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
-        let caps = &cpu.caps;
         let locked_arch_cpu = cpu.arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
 
@@ -255,7 +256,7 @@ impl KvmCpu {
         self.fd
             .set_regs(&locked_arch_cpu.regs)
             .with_context(|| format!("Failed to set regs for CPU {}", apic_id))?;
-        if caps.has_xsave {
+        if self.caps.has_xsave {
             self.fd
                 .set_xsave(&locked_arch_cpu.xsave)
                 .with_context(|| format!("Failed to set xsave for CPU {}", apic_id))?;
@@ -264,7 +265,7 @@ impl KvmCpu {
                 .set_fpu(&locked_arch_cpu.fpu)
                 .with_context(|| format!("Failed to set fpu for CPU {}", apic_id))?;
         }
-        if caps.has_xcrs {
+        if self.caps.has_xcrs {
             self.fd
                 .set_xcrs(&locked_arch_cpu.xcrs)
                 .with_context(|| format!("Failed to set xcrs for CPU {}", apic_id))?;

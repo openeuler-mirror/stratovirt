@@ -357,7 +357,7 @@ impl StdMachineOps for StdMachine {
             )?;
             vcpu.realize(boot_cfg, topology).with_context(|| {
                 format!(
-                    "Failed to realize arch cpu register/features for CPU {}/KVM",
+                    "Failed to realize arch cpu register/features for CPU {}",
                     vcpu_id
                 )
             })?;

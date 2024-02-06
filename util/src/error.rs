@@ -14,16 +14,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum UtilError {
-    #[error("KvmIoctl")]
-    KvmIoctl {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
-    #[error("Io")]
-    Io {
-        #[from]
-        source: std::io::Error,
-    },
     #[error("Nul")]
     Nul {
         #[from]

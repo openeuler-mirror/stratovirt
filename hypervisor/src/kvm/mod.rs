@@ -53,6 +53,8 @@ use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
 use crate::HypervisorError;
+#[cfg(target_arch = "aarch64")]
+use aarch64::cpu_caps::ArmCPUCaps as CPUCaps;
 use address_space::{AddressSpace, Listener};
 #[cfg(feature = "boot_time")]
 use cpu::capture_boot_signal;
@@ -61,8 +63,8 @@ use cpu::CPUFeatures;
 #[cfg(not(test))]
 use cpu::CpuError;
 use cpu::{
-    ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker,
-    CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
+    ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuLifecycleState,
+    RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
@@ -77,6 +79,8 @@ use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
 use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
 #[cfg(not(test))]
 use util::test_helper::is_test_enabled;
+#[cfg(target_arch = "x86_64")]
+use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -362,6 +366,8 @@ pub struct KvmCpu {
     #[cfg(target_arch = "aarch64")]
     vm_fd: Option<Arc<VmFd>>,
     fd: Arc<VcpuFd>,
+    /// The capability of VCPU.
+    caps: CPUCaps,
     #[cfg(target_arch = "aarch64")]
     /// Used to pass vcpu target and supported features to kvm.
     pub kvi: Mutex<kvm_vcpu_init>,
@@ -373,6 +379,7 @@ impl KvmCpu {
             #[cfg(target_arch = "aarch64")]
             vm_fd,
             fd: Arc::new(vcpu_fd),
+            caps: CPUCaps::init_capabilities(),
             #[cfg(target_arch = "aarch64")]
             kvi: Mutex::new(kvm_vcpu_init::default()),
         }
@@ -517,15 +524,6 @@ impl CPUHypervisorOps for KvmCpu {
         HypervisorType::Kvm
     }
 
-    fn check_extension(&self, cap: Cap) -> bool {
-        let kvm = Kvm::new().unwrap();
-        kvm.check_extension(cap)
-    }
-
-    fn get_msr_index_list(&self) -> Vec<u32> {
-        self.arch_get_msr_index_list()
-    }
-
     fn init_pmu(&self) -> Result<()> {
         self.arch_init_pmu()
     }
@@ -550,13 +548,8 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_get_one_reg(reg_id)
     }
 
-    fn get_regs(
-        &self,
-        arch_cpu: Arc<Mutex<ArchCPU>>,
-        regs_index: RegsIndex,
-        caps: &CPUCaps,
-    ) -> Result<()> {
-        self.arch_get_regs(arch_cpu, regs_index, caps)
+    fn get_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()> {
+        self.arch_get_regs(arch_cpu, regs_index)
     }
 
     fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()> {
@@ -817,7 +810,7 @@ mod test {
     use kvm_bindings::kvm_segment;
 
     #[cfg(target_arch = "x86_64")]
-    use cpu::{ArchCPU, CPUBootConfig, CPUCaps};
+    use cpu::{ArchCPU, CPUBootConfig};
     use machine_manager::machine::{
         MachineAddressInterface, MachineInterface, MachineLifecycle, VmState,
     };
@@ -958,7 +951,7 @@ mod test {
             .is_ok());
 
         // test setup special registers
-        let cpu_caps = CPUCaps::init_capabilities(hypervisor_cpu.clone());
+        let cpu_caps = CPUCaps::init_capabilities();
         assert!(hypervisor_cpu.reset_vcpu(Arc::new(cpu)).is_ok());
         let x86_sregs = hypervisor_cpu.fd.get_sregs().unwrap();
         assert_eq!(x86_sregs.cs, code_seg);

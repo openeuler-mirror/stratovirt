@@ -13,8 +13,8 @@
 pub mod caps;
 mod core_regs;
 
+pub use self::caps::ArmCPUFeatures;
 pub use self::caps::CpregListEntry;
-pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 pub use self::core_regs::Arm64CoreRegs;
 
 use std::sync::{Arc, Mutex};
@@ -189,23 +189,13 @@ impl ArmCPUState {
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs, &self.caps)?;
-
-        if self.caps.mp_state {
-            self.hypervisor_cpu.get_regs(
-                self.arch_cpu.clone(),
-                ArmRegsIndex::MpState,
-                &self.caps,
-            )?;
-        };
-
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs)?;
         self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CpregList, &self.caps)?;
-        self.hypervisor_cpu.get_regs(
-            self.arch_cpu.clone(),
-            ArmRegsIndex::VcpuEvents,
-            &self.caps,
-        )?;
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::MpState)?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CpregList)?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::VcpuEvents)?;
 
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }

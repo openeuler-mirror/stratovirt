@@ -29,4 +29,10 @@ pub enum HypervisorError {
     CrtIrqchipErr,
     #[error("Failed to create KVM device: {0:#?}.")]
     CreateKvmDevice(kvm_ioctls::Error),
+    #[error("No available kvm_mem_slot, total count is {0}")]
+    NoAvailKvmSlot(usize),
+    #[error("Failed to find matched kvm_mem_slot, addr 0x{0:X}, size 0x{1:X}")]
+    NoMatchedKvmSlot(u64, u64),
+    #[error("Added KVM mem range (0x{:X}, 0x{:X}) overlaps with exist one (0x{:X}, 0x{:X})", add.0, add.1, exist.0, exist.1)]
+    KvmSlotOverlap { add: (u64, u64), exist: (u64, u64) },
 }
