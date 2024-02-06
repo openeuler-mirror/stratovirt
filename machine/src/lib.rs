@@ -496,7 +496,7 @@ pub trait MachineOps {
                 )
                 .with_context(|| {
                     format!(
-                        "Failed to realize arch cpu register/features for CPU {}/KVM",
+                        "Failed to realize arch cpu register/features for CPU {}",
                         cpu_index
                     )
                 })?;

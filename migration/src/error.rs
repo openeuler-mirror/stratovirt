@@ -26,11 +26,6 @@ pub enum MigrationError {
         #[from]
         source: std::io::Error,
     },
-    #[error("Ioctl")]
-    Ioctl {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
     #[error("Json")]
     Json {
         #[from]
