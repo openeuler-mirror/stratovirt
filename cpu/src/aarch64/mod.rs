@@ -11,11 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod caps;
-mod core_regs;
 
 pub use self::caps::ArmCPUFeatures;
 pub use self::caps::CpregListEntry;
-pub use self::core_regs::Arm64CoreRegs;
 
 use std::sync::{Arc, Mutex};
 
