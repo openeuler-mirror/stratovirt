@@ -81,7 +81,7 @@ impl From<capi::OhAudioStreamResult> for OAErr {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 struct SampleSize(pub capi::OhAudioStreamType);
 
 impl TryFrom<u8> for SampleSize {
