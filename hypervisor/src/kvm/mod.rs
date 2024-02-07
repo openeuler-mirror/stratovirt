@@ -22,8 +22,6 @@ mod listener;
 pub mod vm_state;
 
 #[cfg(target_arch = "aarch64")]
-pub use self::aarch64::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
-#[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv2::KvmGICv2;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
