@@ -36,8 +36,6 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::Arm64CoreRegs;
-#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUFeatures as CPUFeatures;
