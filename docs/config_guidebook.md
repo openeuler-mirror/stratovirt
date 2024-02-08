@@ -57,10 +57,11 @@ Currently, these options are supported.
 
 * CPU Family: Set the CPU family for VM, default to `host`, and this is the only supported variant currently.
 * pmu: This enables armv8 PMU for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
+* sve: This enables SVE feature for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
 
 ```shell
 # cmdline
--cpu host[,pmu={on|off}]
+-cpu host[,pmu={on|off}][,sve={on|off}]
 ```
 
 ### 1.3 Memory
