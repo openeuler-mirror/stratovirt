@@ -391,10 +391,10 @@ pub trait UsbDevice: Send + Sync {
         }
     }
 
-    /// Handle control pakcet.
+    /// Handle control packet.
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest);
 
-    /// Handle data pakcet.
+    /// Handle data packet.
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
