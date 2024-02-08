@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use machine_manager::config::{CpuConfig, PmuConfig};
+use machine_manager::config::{CpuConfig, PmuConfig, SveConfig};
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ArmCPUFeatures {
     pub pmu: bool,
+    pub sve: bool,
 }
 
 impl From<&CpuConfig> for ArmCPUFeatures {
@@ -23,6 +24,10 @@ impl From<&CpuConfig> for ArmCPUFeatures {
             pmu: match &conf.pmu {
                 PmuConfig::On => true,
                 PmuConfig::Off => false,
+            },
+            sve: match &conf.sve {
+                SveConfig::On => true,
+                SveConfig::Off => false,
             },
         }
     }
