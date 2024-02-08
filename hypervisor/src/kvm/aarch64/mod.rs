@@ -155,6 +155,9 @@ impl KvmCpu {
 
         // Enable PMU from config.
         if vcpu_config.pmu {
+            if !self.caps.pmuv3 {
+                bail!("PMUv3 is not supported by KVM");
+            }
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PMU_V3;
         }
         // Enable SVE from config.
