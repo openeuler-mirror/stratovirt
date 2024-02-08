@@ -217,7 +217,7 @@ mod test {
 
     impl TaskOperation for PoolTask {
         fn run(&mut self) {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             self.count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -234,12 +234,20 @@ mod test {
             assert!(ThreadPool::submit_task(pool.clone(), task).is_ok());
         }
 
-        thread::sleep(time::Duration::from_millis(10));
+        // Waiting for creating.
+        while pool.pool_state.lock().unwrap().req_lists.len != 0 {
+            thread::sleep(time::Duration::from_millis(10));
+
+            let now = time::SystemTime::now();
+            let duration = now.duration_since(begin).unwrap().as_millis();
+            assert!(duration < 500 * 10);
+        }
+
         assert!(pool.cancel().is_ok());
         let end = time::SystemTime::now();
         let duration = end.duration_since(begin).unwrap().as_millis();
         // All tasks are processed in parallel.
-        assert!(duration < 50 * 10);
+        assert!(duration < 500 * 10);
         // All the task has been finished.
         assert_eq!(count.load(Ordering::SeqCst), 10);
     }
