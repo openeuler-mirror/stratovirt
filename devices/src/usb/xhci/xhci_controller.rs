@@ -2037,6 +2037,13 @@ impl XhciDevice {
             if report != TRBCCode::Invalid {
                 xfer.status = report;
                 xfer.submit_transfer()?;
+
+                if let Some(usb_dev) = xfer.packet.lock().unwrap().target_dev.as_ref() {
+                    if let Some(usb_dev) = usb_dev.clone().upgrade() {
+                        let mut locked_usb_dev = usb_dev.lock().unwrap();
+                        locked_usb_dev.cancel_packet(&xfer.packet);
+                    }
+                }
             }
             xfer.running_async = false;
             killed = 1;
