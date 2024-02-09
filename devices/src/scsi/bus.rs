@@ -766,7 +766,7 @@ fn scsi_cdb_length(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i32 {
     }
 }
 
-fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
+pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
     let dev_lock = dev.lock().unwrap();
     let block_size = dev_lock.block_size as i32;
     drop(dev_lock);
@@ -824,7 +824,7 @@ fn scsi_cdb_lba(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i64 {
     }
 }
 
-fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
+pub fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
     match cdb[0] {
         WRITE_6
         | WRITE_10
