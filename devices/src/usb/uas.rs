@@ -51,9 +51,6 @@ const UAS_IU_BODY_SIZE: usize = 30;
 // Size of cdb in UAS Command IU
 const UAS_COMMAND_CDB_SIZE: usize = 16;
 
-// CRC16 of "STRATOVIRT"
-const USB_UAS_VENDOR_ID: u16 = 0xB74C;
-
 // UAS Pipe IDs
 const UAS_PIPE_ID_COMMAND: u8 = 0x01;
 const UAS_PIPE_ID_STATUS: u8 = 0x02;
@@ -91,10 +88,6 @@ const _UAS_TMF_CLEAR_ACA: u8 = 0x40;
 const _UAS_TMF_QUERY_TASK: u8 = 0x80;
 const _UAS_TMF_QUERY_TASK_SET: u8 = 0x81;
 const _UAS_TMF_QUERY_ASYNC_EVENT: u8 = 0x82;
-
-// USB Pipe Usage Descriptor
-const USB_DT_PIPE_USAGE: u8 = 0x24;
-const USB_DT_PIPE_USAGE_SIZE: u8 = 4;
 
 pub struct UsbUas {
     base: UsbDeviceBase,
@@ -259,9 +252,9 @@ static DESC_DEVICE_UAS_SUPER: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bDeviceSubClass: 0,
             bDeviceProtocol: 0,
             bMaxPacketSize0: 9,
-            idVendor: USB_UAS_VENDOR_ID,
-            idProduct: 0x0001,
-            bcdDevice: 0x0,
+            idVendor: USB_VENDOR_ID_STRATOVIRT,
+            idProduct: USB_PRODUCT_ID_UAS,
+            bcdDevice: 0,
             iManufacturer: UsbUasStringId::Manufacturer as u8,
             iProduct: UsbUasStringId::Product as u8,
             iSerialNumber: UsbUasStringId::SerialNumber as u8,
@@ -293,8 +286,8 @@ static DESC_IFACE_UAS_SUPER: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 4,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: 0x06, // SCSI
-            bInterfaceProtocol: 0x62, // UAS
+            bInterfaceSubClass: USB_SUBCLASS_SCSI,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_UAS,
             iInterface: 0,
         },
         other_desc: vec![],
@@ -429,9 +422,9 @@ static DESC_DEVICE_UAS_HIGH: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bDeviceSubClass: 0,
             bDeviceProtocol: 0,
             bMaxPacketSize0: 64,
-            idVendor: USB_UAS_VENDOR_ID,
-            idProduct: 0x0002,
-            bcdDevice: 0x0001,
+            idVendor: USB_VENDOR_ID_STRATOVIRT,
+            idProduct: USB_PRODUCT_ID_UAS,
+            bcdDevice: 0,
             iManufacturer: UsbUasStringId::Manufacturer as u8,
             iProduct: UsbUasStringId::Product as u8,
             iSerialNumber: UsbUasStringId::SerialNumber as u8,
@@ -463,8 +456,8 @@ static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 1,
             bNumEndpoints: 4,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: 0x06, // SCSI
-            bInterfaceProtocol: 0x62, // UAS
+            bInterfaceSubClass: USB_SUBCLASS_SCSI,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_UAS,
             iInterface: 0,
         },
         other_desc: vec![],
@@ -476,7 +469,7 @@ static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | UAS_PIPE_ID_COMMAND,
                     bmAttributes: USB_ENDPOINT_ATTR_BULK,
                     wMaxPacketSize: 512,
-                    bInterval: 0xFF,
+                    bInterval: 0,
                 },
                 extra: UsbPipeUsageDescriptor {
                     bLength: USB_DT_PIPE_USAGE_SIZE,
@@ -494,7 +487,7 @@ static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | UAS_PIPE_ID_STATUS,
                     bmAttributes: USB_ENDPOINT_ATTR_BULK,
                     wMaxPacketSize: 512,
-                    bInterval: 0xFF,
+                    bInterval: 0,
                 },
                 extra: UsbPipeUsageDescriptor {
                     bLength: USB_DT_PIPE_USAGE_SIZE,
@@ -512,7 +505,7 @@ static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | UAS_PIPE_ID_DATA_IN,
                     bmAttributes: USB_ENDPOINT_ATTR_BULK,
                     wMaxPacketSize: 512,
-                    bInterval: 0xFF,
+                    bInterval: 0,
                 },
                 extra: UsbPipeUsageDescriptor {
                     bLength: USB_DT_PIPE_USAGE_SIZE,
@@ -530,7 +523,7 @@ static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
                     bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | UAS_PIPE_ID_DATA_OUT,
                     bmAttributes: USB_ENDPOINT_ATTR_BULK,
                     wMaxPacketSize: 512,
-                    bInterval: 0xFF,
+                    bInterval: 0,
                 },
                 extra: UsbPipeUsageDescriptor {
                     bLength: USB_DT_PIPE_USAGE_SIZE,
@@ -557,9 +550,7 @@ static DESC_IFACE_EMPTY: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 0,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: 0x00, // SCSI
-            bInterfaceProtocol: 0x00, // BOT
-            iInterface: 0,
+            ..Default::default()
         },
         other_desc: vec![],
         endpoints: vec![],

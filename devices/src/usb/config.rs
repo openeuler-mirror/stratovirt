@@ -206,6 +206,7 @@ pub const USB_DT_DEBUG: u8 = 10;
 pub const USB_DT_INTERFACE_ASSOCIATION: u8 = 11;
 pub const USB_DT_BOS: u8 = 15;
 pub const USB_DT_DEVICE_CAPABILITY: u8 = 16;
+pub const USB_DT_PIPE_USAGE: u8 = 36;
 pub const USB_DT_ENDPOINT_COMPANION: u8 = 48;
 
 /// USB SuperSpeed Device Capability.
@@ -221,6 +222,7 @@ pub const USB_DT_ENDPOINT_SIZE: u8 = 7;
 pub const USB_DT_DEVICE_QUALIFIER_SIZE: u8 = 10;
 pub const USB_DT_BOS_SIZE: u8 = 5;
 pub const USB_DT_SS_CAP_SIZE: u8 = 10;
+pub const USB_DT_PIPE_USAGE_SIZE: u8 = 4;
 pub const USB_DT_SS_EP_COMP_SIZE: u8 = 6;
 
 /// USB Endpoint Descriptor
@@ -237,8 +239,27 @@ pub const USB_CONFIGURATION_ATTR_ONE: u8 = 1 << 7;
 pub const USB_CONFIGURATION_ATTR_SELF_POWER: u8 = 1 << 6;
 pub const USB_CONFIGURATION_ATTR_REMOTE_WAKEUP: u8 = 1 << 5;
 
-// USB Class
+/// USB Class
 pub const USB_CLASS_HID: u8 = 3;
 pub const USB_CLASS_MASS_STORAGE: u8 = 8;
 pub const USB_CLASS_VIDEO: u8 = 0xe;
 pub const USB_CLASS_MISCELLANEOUS: u8 = 0xef;
+
+/// USB Subclass
+pub const USB_SUBCLASS_BOOT: u8 = 0x01;
+pub const USB_SUBCLASS_SCSI: u8 = 0x06;
+
+/// USB Interface Protocol
+pub const USB_IFACE_PROTOCOL_KEYBOARD: u8 = 0x01;
+pub const USB_IFACE_PROTOCOL_BOT: u8 = 0x50;
+pub const USB_IFACE_PROTOCOL_UAS: u8 = 0x62;
+
+/// CRC16 of "STRATOVIRT"
+pub const USB_VENDOR_ID_STRATOVIRT: u16 = 0xB74C;
+
+/// USB Product IDs
+pub const USB_PRODUCT_ID_UVC: u16 = 0x0001;
+pub const USB_PRODUCT_ID_KEYBOARD: u16 = 0x0002;
+pub const USB_PRODUCT_ID_STORAGE: u16 = 0x0003;
+pub const USB_PRODUCT_ID_TABLET: u16 = 0x0004;
+pub const USB_PRODUCT_ID_UAS: u16 = 0x0005;
