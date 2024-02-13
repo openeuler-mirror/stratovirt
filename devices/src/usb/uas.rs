@@ -20,6 +20,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info, warn};
 use machine_manager::config::{DriveFile, UsbUasConfig};
 use once_cell::sync::Lazy;
+use strum::EnumCount;
+use strum_macros::EnumCount;
 use util::byte_code::ByteCode;
 
 use super::config::*;
@@ -106,7 +108,7 @@ pub struct UsbUas {
     data_ready_sent: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, EnumCount)]
 enum UsbUasStringId {
     #[allow(unused)]
     Invalid = 0,
@@ -117,7 +119,7 @@ enum UsbUasStringId {
     ConfigSuper = 5,
 }
 
-const UAS_DESC_STRINGS: [&str; 6] = [
+const UAS_DESC_STRINGS: [&str; UsbUasStringId::COUNT] = [
     "",
     "StratoVirt",
     "StratoVirt USB Uas",
