@@ -43,7 +43,7 @@ static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
             idVendor: USB_STORAGE_VENDOR_ID,
-            idProduct: 0x0001,
+            idProduct: USB_PRODUCT_ID_STORAGE,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
             iProduct: STR_PRODUCT_STORAGE_INDEX,
@@ -82,8 +82,8 @@ static DESC_IFACE_STORAGE: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 2,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: 0x06, // SCSI
-            bInterfaceProtocol: 0x50, // Bulk-only
+            bInterfaceSubClass: USB_SUBCLASS_SCSI,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_BOT,
             iInterface: 0,
         },
         other_desc: vec![],

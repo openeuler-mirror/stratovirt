@@ -44,7 +44,7 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
             idVendor: 0x0627,
-            idProduct: 0x0001,
+            idProduct: USB_PRODUCT_ID_TABLET,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
             iProduct: STR_PRODUCT_TABLET_INDEX,
