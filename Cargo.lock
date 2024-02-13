@@ -382,6 +382,8 @@ dependencies = [
  "rusb",
  "serde",
  "serde_json",
+ "strum",
+ "strum_macros",
  "thiserror",
  "trace",
  "ui",
