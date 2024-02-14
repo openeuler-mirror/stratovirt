@@ -35,6 +35,24 @@ message = "virtio-serial port is none or disconnected."
 enabled = true
 
 [[events]]
+name = "virtio_serial_pause_rx"
+args = ""
+message = "pause rx."
+enabled = true
+
+[[events]]
+name = "virtio_serial_unpause_chardev_rx"
+args = ""
+message = "unpause rx on chardev."
+enabled = true
+
+[[events]]
+name = "virtio_serial_new_inputqueue_buf"
+args = ""
+message = "new buf appeared in virtio-serial input queue."
+enabled = true
+
+[[events]]
 name = "virtio_rng_write_req_data"
 args = "size: u32"
 message = "size {}"

@@ -267,6 +267,7 @@ impl VirtioDevice for Serial {
             let port = find_port_by_nr(&self.ports, nr as u32);
             let handler = SerialPortHandler {
                 input_queue: queues[queue_id * 2].clone(),
+                input_queue_evt: queue_evts[queue_id * 2].clone(),
                 output_queue: queues[queue_id * 2 + 1].clone(),
                 output_queue_evt: queue_evts[queue_id * 2 + 1].clone(),
                 mem_space: mem_space.clone(),
@@ -335,6 +336,8 @@ impl MigrationHook for Serial {}
 #[derive(Clone)]
 pub struct SerialPort {
     name: Option<String>,
+    /// Whether rx paused
+    paused: bool,
     /// Chardev vector for serialport.
     pub chardev: Arc<Mutex<Chardev>>,
     /// Number id.
@@ -357,6 +360,7 @@ impl SerialPort {
 
         SerialPort {
             name: Some(port_cfg.id),
+            paused: false,
             chardev: Arc::new(Mutex::new(Chardev::new(port_cfg.chardev))),
             nr: port_cfg.nr,
             is_console: port_cfg.is_console,
@@ -379,6 +383,14 @@ impl SerialPort {
         Ok(())
     }
 
+    fn unpause_chardev_rx(&mut self) {
+        trace::virtio_serial_unpause_chardev_rx();
+        if self.paused {
+            self.paused = false;
+            self.chardev.lock().unwrap().unpause_rx();
+        }
+    }
+
     fn activate(&mut self, handler: &Arc<Mutex<SerialPortHandler>>) {
         self.chardev.lock().unwrap().set_receiver(handler);
     }
@@ -391,6 +403,7 @@ impl SerialPort {
 /// Handler for queues which are used for port.
 struct SerialPortHandler {
     input_queue: Arc<Mutex<Queue>>,
+    input_queue_evt: Arc<EventFd>,
     output_queue: Arc<Mutex<Queue>>,
     output_queue_evt: Arc<EventFd>,
     mem_space: Arc<AddressSpace>,
@@ -425,6 +438,15 @@ impl SerialPortHandler {
                 &self.device_broken,
             );
         });
+    }
+
+    fn input_avail_handle(&mut self) {
+        // new buffer appeared in input queue. Unpause RX
+        trace::virtio_serial_new_inputqueue_buf();
+
+        self.enable_inputqueue_notify(false);
+        let mut port_locked = self.port.as_ref().unwrap().lock().unwrap();
+        port_locked.unpause_chardev_rx();
     }
 
     fn output_handle_internal(&mut self) -> Result<()> {
@@ -536,6 +558,18 @@ impl SerialPortHandler {
         }
     }
 
+    fn enable_inputqueue_notify(&mut self, enable: bool) {
+        if self.device_broken.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let mut queue_lock = self.input_queue.lock().unwrap();
+        let _ =
+            queue_lock
+                .vring
+                .suppress_queue_notify(&self.mem_space, self.driver_features, !enable);
+    }
+
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
@@ -628,12 +662,32 @@ impl EventNotifierHelper for SerialPortHandler {
             h_lock.output_handle();
             None
         });
+
+        let cloned_inp_cls = serial_handler.clone();
+        let input_avail_handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            let mut h_lock = cloned_inp_cls.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            h_lock.input_avail_handle();
+            None
+        });
+
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             serial_handler.lock().unwrap().output_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
             vec![handler],
+        ));
+
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            serial_handler.lock().unwrap().input_queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![input_avail_handler],
         ));
 
         notifiers
@@ -654,6 +708,20 @@ impl InputReceiver for SerialPortHandler {
 
     fn remain_size(&mut self) -> usize {
         self.get_input_avail_bytes(BUF_SIZE)
+    }
+
+    fn set_paused(&mut self) {
+        trace::virtio_serial_pause_rx();
+        if self.port.is_none() {
+            return;
+        }
+
+        if self.port.as_ref().unwrap().lock().unwrap().guest_connected {
+            self.enable_inputqueue_notify(true);
+        }
+
+        let mut locked_port = self.port.as_ref().unwrap().lock().unwrap();
+        locked_port.paused = true;
     }
 }
 
@@ -789,7 +857,11 @@ impl SerialControlHandler {
                 }
             }
             VIRTIO_CONSOLE_PORT_OPEN => {
-                port.lock().unwrap().guest_connected = ctrl.value != 0;
+                let mut locked_port = port.lock().unwrap();
+                locked_port.guest_connected = ctrl.value != 0;
+                if ctrl.value != 0 {
+                    locked_port.unpause_chardev_rx();
+                }
             }
             _ => (),
         }
