@@ -2077,7 +2077,7 @@ impl XhciDevice {
         &mut self,
         slot_id: u32,
         ep: &UsbEndpoint,
-        _stream_id: u32,
+        stream_id: u32,
     ) -> Result<()> {
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
@@ -2087,7 +2087,7 @@ impl XhciDevice {
             ));
             return Ok(());
         }
-        self.kick_endpoint(slot_id, ep_id as u32, 0)?;
+        self.kick_endpoint(slot_id, ep_id as u32, stream_id)?;
         Ok(())
     }
 
