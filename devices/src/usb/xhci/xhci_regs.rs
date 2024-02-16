@@ -703,7 +703,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             return false;
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id, 0) {
                 error!("Failed to kick endpoint: {:?}", e);
                 xhci.host_controller_error();
                 return false;

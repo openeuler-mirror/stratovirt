@@ -482,7 +482,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
             locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
-    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
+    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep, 0) {
         error!("Failed to wakeup endpoint {:?}", e);
     }
     Ok(())
@@ -510,12 +510,12 @@ pub struct UsbPacket {
     pub actual_length: u32,
     /// Endpoint number.
     pub ep_number: u8,
+    /// Stream id.
+    pub stream: u32,
     /// Transfer for complete packet.
     pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
     /// Target USB device for this packet.
     pub target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
-    /// Stream id.
-    pub stream: u32,
 }
 
 impl std::fmt::Display for UsbPacket {
@@ -533,6 +533,7 @@ impl UsbPacket {
         packet_id: u32,
         pid: u32,
         ep_number: u8,
+        stream: u32,
         iovecs: Vec<Iovec>,
         xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
         target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
@@ -546,9 +547,9 @@ impl UsbPacket {
             status: UsbPacketStatus::Success,
             actual_length: 0,
             ep_number,
+            stream,
             xfer_ops,
             target_dev,
-            stream: 0,
         }
     }
 

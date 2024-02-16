@@ -120,6 +120,7 @@ pub struct XhciTransfer {
     td: Vec<XhciTRB>,
     complete: bool,
     slotid: u32,
+    streamid: u32,
     epid: u32,
     in_xfer: bool,
     iso_xfer: bool,
@@ -149,6 +150,7 @@ impl XhciTransfer {
             complete: false,
             slotid: ep_info.0,
             epid: ep_info.1,
+            streamid: 0,
             in_xfer,
             iso_xfer: false,
             timed_xfer: false,
@@ -1195,6 +1197,7 @@ impl XhciDevice {
             packet_id,
             USB_TOKEN_OUT as u32,
             0,
+            0,
             Vec::new(),
             None,
             Some(target_dev),
@@ -1558,7 +1561,7 @@ impl XhciDevice {
     }
 
     /// Data plane
-    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
+    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32, _stream_id: u32) -> Result<()> {
         let epctx = match self.get_endpoint_ctx(slot_id, ep_id) {
             Ok(epctx) => epctx,
             Err(e) => {
@@ -1839,7 +1842,7 @@ impl XhciDevice {
                 if ep_state == EP_STOPPED && ep_state == EP_ERROR {
                     return;
                 }
-                if let Err(e) = locked_xhci.kick_endpoint(slotid, epid) {
+                if let Err(e) = locked_xhci.kick_endpoint(slotid, epid, 0) {
                     error!("Failed to kick endpoint: {:?}", e);
                 }
             });
@@ -1954,11 +1957,13 @@ impl XhciDevice {
 
         let packet_id = self.generate_packet_id();
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);
+        let stream = locked_xfer.streamid;
         let xfer_ops = Arc::downgrade(xfer) as Weak<Mutex<dyn TransferOps>>;
         let packet = UsbPacket::new(
             packet_id,
             dir as u32,
             ep_number,
+            stream,
             vec,
             Some(xfer_ops),
             target_dev,
@@ -2068,7 +2073,12 @@ impl XhciDevice {
     }
 
     /// Used for device to wakeup endpoint
-    pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
+    pub fn wakeup_endpoint(
+        &mut self,
+        slot_id: u32,
+        ep: &UsbEndpoint,
+        _stream_id: u32,
+    ) -> Result<()> {
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
         if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
             trace::usb_xhci_unimplemented(&format!(
@@ -2077,7 +2087,7 @@ impl XhciDevice {
             ));
             return Ok(());
         }
-        self.kick_endpoint(slot_id, ep_id as u32)?;
+        self.kick_endpoint(slot_id, ep_id as u32, 0)?;
         Ok(())
     }
 
