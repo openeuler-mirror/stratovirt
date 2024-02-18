@@ -100,12 +100,9 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let mut xsdt_entries = Vec::new();
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
-                .with_context(|| "Failed to build ACPI FACS table")?;
-            xsdt_entries.push(facs_addr);
-        }
+        let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
+            .with_context(|| "Failed to build ACPI FACS table")?;
+        xsdt_entries.push(facs_addr);
 
         let dsdt_addr = self
             .build_dsdt_table(&acpi_tables, &mut loader)
@@ -678,7 +675,6 @@ pub(crate) trait AcpiBuilder {
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
     /// `loader` - ACPI table loader.
-    #[cfg(target_arch = "x86_64")]
     fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>, loader: &mut TableLoader) -> Result<u64>
     where
         Self: Sized,
