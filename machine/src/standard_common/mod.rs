@@ -102,12 +102,11 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
             .with_context(|| "Failed to build ACPI FACS table")?;
-        xsdt_entries.push(facs_addr);
 
         let dsdt_addr = self
             .build_dsdt_table(&acpi_tables, &mut loader)
             .with_context(|| "Failed to build ACPI DSDT table")?;
-        let fadt_addr = Self::build_fadt_table(&acpi_tables, &mut loader, dsdt_addr)
+        let fadt_addr = Self::build_fadt_table(&acpi_tables, &mut loader, facs_addr, dsdt_addr)
             .with_context(|| "Failed to build ACPI FADT table")?;
         xsdt_entries.push(fadt_addr);
 
@@ -569,10 +568,12 @@ pub(crate) trait AcpiBuilder {
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
     /// `loader` - ACPI table loader.
+    /// `facs_addr` - Offset of ACPI FACS table in `acpi_data`.
     /// `dsdt_addr` - Offset of ACPI DSDT table in `acpi_data`.
     fn build_fadt_table(
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
+        facs_addr: u64,
         dsdt_addr: u64,
     ) -> Result<u64>
     where
@@ -646,6 +647,18 @@ pub(crate) trait AcpiBuilder {
         locked_acpi_data.extend(fadt.aml_bytes());
         let fadt_end = locked_acpi_data.len() as u32;
         drop(locked_acpi_data);
+
+        // FACS address field's offset in FADT.
+        let facs_offset = 36_u32;
+        // Size of FACS address.
+        let facs_size = 4_u8;
+        loader.add_pointer_entry(
+            ACPI_TABLE_FILE,
+            fadt_begin + facs_offset,
+            facs_size,
+            ACPI_TABLE_FILE,
+            facs_addr as u32,
+        )?;
 
         // xDSDT address field's offset in FADT.
         let xdsdt_offset = 140_u32;
