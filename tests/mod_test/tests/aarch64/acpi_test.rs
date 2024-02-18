@@ -172,13 +172,17 @@ fn check_iort(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[40..]), 48); // Node offset
     assert_eq!(data[48], 0); // ITS group node
     assert_eq!(LittleEndian::read_u16(&data[49..]), 24); // ITS node length
+    assert_eq!(data[51], 1); // ITS node revision
     assert_eq!(LittleEndian::read_u32(&data[64..]), 1); // ITS count
     assert_eq!(data[72], 2); // Root Complex Node
     assert_eq!(LittleEndian::read_u16(&data[73..]), 56); // Length of Root Complex Node
+    assert_eq!(data[75], 3); // Revision of Root Complex Node
+    assert_eq!(LittleEndian::read_u32(&data[76..]), 1); // Identifier of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[80..]), 1); // Mapping counts of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[84..]), 36); // Mapping offset of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[88..]), 1); // Cache of coherent device
     assert_eq!(data[95], 3); // Memory flags of coherent device
+    assert_eq!(data[104], 0x40); // Memory address size limit
     assert_eq!(LittleEndian::read_u32(&data[112..]), 0xffff); // Identity RID mapping
 
     // Without SMMU, id mapping is the first node in ITS group node
