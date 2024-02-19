@@ -162,6 +162,7 @@ dependencies = [
  "machine_manager",
  "once_cell",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]

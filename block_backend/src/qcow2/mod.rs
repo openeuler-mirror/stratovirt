@@ -306,6 +306,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     pub fn flush(&mut self) -> Result<()> {
+        trace::qcow2_flush(&self.driver.block_prop.id);
         self.table.flush()?;
         self.refcount.flush()
     }
@@ -1478,6 +1479,7 @@ impl<T: Clone + Send + Sync> Qcow2Driver<T> {
     }
 
     fn process_discards(&mut self, completecb: T, opcode: OpCode, unmap: bool) -> Result<()> {
+        trace::qcow2_process_discards(&self.driver.block_prop.id, &opcode, unmap);
         let mut req_list = Vec::new();
         for task in self.refcount.discard_list.iter() {
             req_list.push(CombineRequest {
@@ -1625,6 +1627,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)
             .with_context(|| " Invalid read request")?;
+        trace::block_read_vectored(&self.driver.block_prop.id, offset, nbytes);
 
         let mut left = iovec;
         let mut req_list: Vec<CombineRequest> = Vec::new();
@@ -1658,6 +1661,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let nbytes = get_iov_size(&iovec);
         self.check_request(offset, nbytes)
             .with_context(|| " Invalid write request")?;
+        trace::block_write_vectored(&self.driver.block_prop.id, offset, nbytes);
 
         let mut req_list: Vec<CombineRequest> = Vec::new();
         let mut copied = 0;
@@ -1695,6 +1699,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
     }
 
     fn datasync(&mut self, completecb: T) -> Result<()> {
+        trace::block_datasync(&self.driver.block_prop.id);
         self.flush()
             .unwrap_or_else(|e| error!("Flush failed when syncing data, {:?}", e));
         self.driver.datasync(completecb)
@@ -1705,6 +1710,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
     }
 
     fn discard(&mut self, offset: usize, nbytes: u64, completecb: T) -> Result<()> {
+        trace::block_discard(&self.driver.block_prop.id, offset, nbytes);
         // Align to cluster_size.
         let file_size = self.header.size;
         let align_size = self.header.cluster_size();
@@ -1733,6 +1739,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
+        trace::block_write_zeroes(&self.driver.block_prop.id, offset, nbytes, unmap);
         let file_size = self.header.size;
         let align_size = self.header.cluster_size();
         let mut offset_start = std::cmp::min(offset as u64, file_size);
@@ -1776,10 +1783,12 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
     }
 
     fn flush_request(&mut self) -> Result<()> {
+        trace::block_flush_request(&self.driver.block_prop.id);
         self.driver.flush_request()
     }
 
     fn drain_request(&self) {
+        trace::block_drain_request(&self.driver.block_prop.id);
         self.driver.drain_request();
     }
 

@@ -1,0 +1,53 @@
+[[events]]
+name = "block_read_vectored"
+args = "id: &str, offset: usize, nbytes: u64"
+message = "read vectored for device \"{}\", offset {}, nbytes {}"
+enabled = true
+
+[[events]]
+name = "block_write_vectored"
+args = "id: &str, offset: usize, nbytes: u64"
+message = "write vectored for device \"{}\", offset {}, nbytes {}"
+enabled = true
+
+[[events]]
+name = "block_write_zeroes"
+args = "id: &str, offset: usize, nbytes: u64, unmap: bool"
+message = "write zeroes for device \"{}\", offset {}, nbytes {}, unmap {}"
+enabled = true
+
+[[events]]
+name = "block_discard"
+args = "id: &str, offset: usize, nbytes: u64"
+message = "discard for device \"{}\", offset {}, nbytes {}"
+enabled = true
+
+[[events]]
+name = "block_datasync"
+args = "id: &str"
+message = "datasync for device \"{}\""
+enabled = true
+
+[[events]]
+name = "block_flush_request"
+args = "id: &str"
+message = "flush request for device \"{}\""
+enabled = true
+
+[[events]]
+name = "block_drain_request"
+args = "id: &str"
+message = "drain request for device \"{}\""
+enabled = true
+
+[[events]]
+name = "qcow2_flush"
+args = "id: &str"
+message = "qcow2 flush cache data for device \"{}\""
+enabled = true
+
+[[events]]
+name = "qcow2_process_discards"
+args = "id: &str, opcode: &dyn fmt::Debug, unmap: bool"
+message = "qcow2 process discard for device \"{}\", opcode {:?}, unmap {}"
+enabled = true
