@@ -56,7 +56,7 @@ pub struct FileDriver<T: Clone + 'static> {
     aio: Rc<RefCell<Aio<T>>>,
     pub incomplete: Arc<AtomicU64>,
     delete_evts: Vec<RawFd>,
-    block_prop: BlockProperty,
+    pub block_prop: BlockProperty,
 }
 
 impl<T: Clone + 'static> FileDriver<T> {
