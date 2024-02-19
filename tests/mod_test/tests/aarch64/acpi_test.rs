@@ -24,6 +24,8 @@ use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libtest::{test_init, TestState};
 
+// Now facs table data length is 64.
+const FACS_TABLE_DATA_LENGTH: u32 = 64;
 // Now dsdt table data length is 3482.
 const DSDT_TABLE_DATA_LENGTH: u32 = 3482;
 // Now fadt table data length is 276.
@@ -40,10 +42,10 @@ const IORT_TABLE_DATA_LENGTH: u32 = 128;
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 6069(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 6069;
-// Now acpi tables data length is 40510(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 40510;
+// Now acpi tables data length is 6133(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 6133;
+// Now acpi tables data length is 40574(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 40574;
 
 enum TABLE {
     Fadt,
@@ -92,7 +94,12 @@ fn check_dsdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[4..]), DSDT_TABLE_DATA_LENGTH); // Check length
 }
 
-fn check_fadt(data: &[u8]) -> u64 {
+fn check_facs(data: &[u8]) {
+    assert_eq!(String::from_utf8_lossy(&data[..4]), "FACS");
+    assert_eq!(LittleEndian::read_u32(&data[4..]), FACS_TABLE_DATA_LENGTH); // Check length
+}
+
+fn check_fadt(data: &[u8]) -> (u32, u64) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "FACP");
     assert_eq!(LittleEndian::read_u32(&data[4..]), FADT_TABLE_DATA_LENGTH); // Check length
 
@@ -100,11 +107,15 @@ fn check_fadt(data: &[u8]) -> u64 {
     assert_eq!(LittleEndian::read_u16(&data[129..]), 0x3); // ARM Boot Architecture Flags
     assert_eq!(LittleEndian::read_i32(&data[131..]), 3); // FADT minor revision
 
+    // Check 32-bit address of FACS table.
+    let facs_addr = LittleEndian::read_u32(&data[36..]);
+    assert_eq!(facs_addr, 0);
+
     // Check 64-bit address of DSDT table.
     let dsdt_addr = LittleEndian::read_u64(&data[140..]);
-    assert_eq!(dsdt_addr, 0);
+    assert_ne!(dsdt_addr, 0);
 
-    dsdt_addr
+    (facs_addr, dsdt_addr)
 }
 
 fn check_madt(data: &[u8], cpu: u8) {
@@ -360,7 +371,10 @@ fn test_tables(test_state: &TestState, alloc: &mut GuestAllocator, xsdt_addr: us
     // Check FADT
     let mut offset = entry_addr + TABLE::Fadt as usize * 8;
     let fadt_addr = LittleEndian::read_u64(&read_data[offset..]);
-    let dsdt_addr = check_fadt(&read_data[(fadt_addr as usize)..]);
+    let (facs_addr, dsdt_addr) = check_fadt(&read_data[(fadt_addr as usize)..]);
+
+    // Check FACS (FACS table is pointed to by the FADT table)
+    check_facs(&read_data[(facs_addr as usize)..]);
 
     // Check DSDT (DSDT table is pointed to by the FADT table)
     check_dsdt(&read_data[(dsdt_addr as usize)..]);
