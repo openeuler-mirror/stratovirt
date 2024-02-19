@@ -565,6 +565,7 @@ impl NetCtrlHandler {
             )
             .with_context(|| "Failed to get control header")?;
 
+            trace::virtio_net_handle_ctrl(ctrl_hdr.class, ctrl_hdr.cmd);
             match ctrl_hdr.class {
                 VIRTIO_NET_CTRL_RX => {
                     ack = self
@@ -629,6 +630,7 @@ impl NetCtrlHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("ctrl", VirtioInterruptType::Vring)
                     })?;
+                trace::virtqueue_send_interrupt("Net", &*locked_queue as *const _ as u64);
             }
         }
 
