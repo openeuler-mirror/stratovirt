@@ -46,7 +46,6 @@ const ACPI_TABLES_DATA_LENGTH_8: usize = 6069;
 const ACPI_TABLES_DATA_LENGTH_200: usize = 40510;
 
 enum TABLE {
-    Dsdt,
     Fadt,
     Madt,
     Gtdt,
@@ -93,13 +92,19 @@ fn check_dsdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[4..]), DSDT_TABLE_DATA_LENGTH); // Check length
 }
 
-fn check_fadt(data: &[u8]) {
+fn check_fadt(data: &[u8]) -> u64 {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "FACP");
     assert_eq!(LittleEndian::read_u32(&data[4..]), FADT_TABLE_DATA_LENGTH); // Check length
 
     assert_eq!(LittleEndian::read_i32(&data[112..]), 0x10_0500); // Enable HW_REDUCED_ACPI bit
     assert_eq!(LittleEndian::read_u16(&data[129..]), 0x3); // ARM Boot Architecture Flags
     assert_eq!(LittleEndian::read_i32(&data[131..]), 3); // FADT minor revision
+
+    // Check 64-bit address of DSDT table.
+    let dsdt_addr = LittleEndian::read_u64(&data[140..]);
+    assert_eq!(dsdt_addr, 0);
+
+    dsdt_addr
 }
 
 fn check_madt(data: &[u8], cpu: u8) {
@@ -349,18 +354,16 @@ fn test_tables(test_state: &TestState, alloc: &mut GuestAllocator, xsdt_addr: us
     );
 
     // XSDT entry: An array of 64-bit physical addresses that point to other DESCRIPTION_HEADERs.
-    // DESCRIPTION_HEADERs: DSDT, FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
-    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>() - 8;
-
-    // Check DSDT
-    let mut offset = entry_addr + TABLE::Dsdt as usize * 8;
-    let dsdt_addr = LittleEndian::read_u64(&read_data[offset..]);
-    check_dsdt(&read_data[(dsdt_addr as usize)..]);
+    // DESCRIPTION_HEADERs: FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
+    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>();
 
     // Check FADT
-    offset = entry_addr + TABLE::Fadt as usize * 8;
+    let mut offset = entry_addr + TABLE::Fadt as usize * 8;
     let fadt_addr = LittleEndian::read_u64(&read_data[offset..]);
-    check_fadt(&read_data[(fadt_addr as usize)..]);
+    let dsdt_addr = check_fadt(&read_data[(fadt_addr as usize)..]);
+
+    // Check DSDT (DSDT table is pointed to by the FADT table)
+    check_dsdt(&read_data[(dsdt_addr as usize)..]);
 
     // Check MADT
     offset = entry_addr + TABLE::Madt as usize * 8;
@@ -426,11 +429,11 @@ fn check_madt_of_two_gicr(
     );
 
     // XSDT entry: An array of 64-bit physical addresses that point to other DESCRIPTION_HEADERs.
-    // DESCRIPTION_HEADERs: DSDT, FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
-    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>() - 8;
+    // DESCRIPTION_HEADERs: FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
+    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>();
 
     // MADT offset base on XSDT
-    let mut offset = entry_addr + 2 * 8;
+    let mut offset = entry_addr + TABLE::Madt as usize * 8;
     let madt_addr = LittleEndian::read_u64(&read_data[offset..]) as usize;
 
     // Check second GIC Redistributor
