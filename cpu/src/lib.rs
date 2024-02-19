@@ -62,7 +62,7 @@ pub use x86_64::X86CPUTopology as CPUTopology;
 pub use x86_64::X86RegsIndex as RegsIndex;
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
@@ -70,7 +70,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use log::{error, info, warn};
 use nix::unistd::gettid;
-use vmm_sys_util::signal::Killable;
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
@@ -193,6 +192,27 @@ pub trait CPUHypervisorOps: Send + Sync {
     ) -> Result<()>;
 
     fn kick(&self) -> Result<()>;
+
+    fn kick_vcpu_thread(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+    ) -> Result<()>;
+
+    fn pause(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()>;
+
+    fn resume(
+        &self,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()>;
+
+    fn reset(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()>;
 }
 
 /// `CPU` is a wrapper around creating and using a hypervisor-based VCPU.
@@ -335,18 +355,9 @@ impl CPUInterface for CPU {
         #[cfg(target_arch = "aarch64")]
         self.hypervisor_cpu
             .set_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
-        let (cpu_state_locked, cvar) = &*self.state;
-        let mut cpu_state = cpu_state_locked.lock().unwrap();
-        if *cpu_state == CpuLifecycleState::Running {
-            warn!("vcpu{} in running state, no need to resume", self.id());
-            return Ok(());
-        }
 
-        *cpu_state = CpuLifecycleState::Running;
-        self.pause_signal.store(false, Ordering::SeqCst);
-        drop(cpu_state);
-        cvar.notify_one();
-        Ok(())
+        self.hypervisor_cpu
+            .resume(self.state.clone(), self.pause_signal.clone())
     }
 
     fn start(cpu: Arc<CPU>, thread_barrier: Arc<Barrier>, paused: bool) -> Result<()> {
@@ -382,58 +393,20 @@ impl CPUInterface for CPU {
     }
 
     fn reset(&self) -> Result<()> {
-        let task = self.task.lock().unwrap();
-        match task.as_ref() {
-            Some(thread) => thread
-                .kill(VCPU_RESET_SIGNAL)
-                .with_context(|| CpuError::KickVcpu("Fail to reset vcpu".to_string())),
-            None => {
-                warn!("VCPU thread not started, no need to reset");
-                Ok(())
-            }
-        }
+        self.hypervisor_cpu.reset(self.task.clone())
     }
 
     fn kick(&self) -> Result<()> {
-        let task = self.task.lock().unwrap();
-        match task.as_ref() {
-            Some(thread) => thread
-                .kill(VCPU_TASK_SIGNAL)
-                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
-            None => {
-                warn!("VCPU thread not started, no need to kick");
-                Ok(())
-            }
-        }
+        self.hypervisor_cpu
+            .kick_vcpu_thread(self.task.clone(), self.state.clone())
     }
 
     fn pause(&self) -> Result<()> {
-        let task = self.task.lock().unwrap();
-        let (cpu_state, cvar) = &*self.state;
-
-        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
-            cvar.notify_one()
-        }
-
-        match task.as_ref() {
-            Some(thread) => {
-                if let Err(e) = thread.kill(VCPU_TASK_SIGNAL) {
-                    return Err(anyhow!(CpuError::StopVcpu(format!("{:?}", e))));
-                }
-            }
-            None => {
-                warn!("vCPU thread not started, no need to stop");
-                return Ok(());
-            }
-        }
-
-        // It shall wait for the vCPU pause state from hypervisor exits.
-        loop {
-            if self.pause_signal.load(Ordering::SeqCst) {
-                break;
-            }
-        }
+        self.hypervisor_cpu.pause(
+            self.task.clone(),
+            self.state.clone(),
+            self.pause_signal.clone(),
+        )?;
 
         #[cfg(target_arch = "aarch64")]
         self.hypervisor_cpu
