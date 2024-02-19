@@ -1766,6 +1766,7 @@ dependencies = [
  "once_cell",
  "serde",
  "thiserror",
+ "trace",
  "v4l2-sys-mit",
  "vmm-sys-util",
 ]
