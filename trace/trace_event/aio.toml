@@ -1,0 +1,5 @@
+[[events]]
+name = "aio_submit_request"
+args = "fd: RawFd, opcode: &dyn fmt::Debug, offset: usize, nbytes: u64"
+message = "fd: {}, opcode {:?}, offset {}, nbytes {}"
+enabled = true
