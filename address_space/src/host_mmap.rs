@@ -144,7 +144,7 @@ impl FileBackend {
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
-            page_size: fstat.optimal_transfer_size() as u64,
+            page_size: fstat.optimal_transfer_size() as _,
         })
     }
 }

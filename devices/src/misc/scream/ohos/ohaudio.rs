@@ -61,7 +61,7 @@ impl OhAudioRender {
     fn check_data_ready(&self, recv_data: &StreamData) -> bool {
         let size = recv_data.fmt.size as u32 / 8;
         let channels = recv_data.fmt.channels as u32;
-        let rate = recv_data.fmt.get_rate() as u32;
+        let rate = recv_data.fmt.get_rate();
         // Wait for data of 500 ms ready.
         // FIXME: the value of rate is wrong.
         self.prepared_data >= (size * channels * rate / 2)
@@ -336,10 +336,10 @@ impl OhAudio {
     pub fn init(dir: ScreamDirection) -> Self {
         match dir {
             ScreamDirection::Playback => Self {
-                processor: Box::new(OhAudioRender::default()),
+                processor: Box::<OhAudioRender>::default(),
             },
             ScreamDirection::Record => Self {
-                processor: Box::new(OhAudioCapture::default()),
+                processor: Box::<OhAudioCapture>::default(),
             },
         }
     }
