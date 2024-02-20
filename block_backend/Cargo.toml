@@ -15,3 +15,4 @@ once_cell = "1.18.0"
 libc = "0.2"
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
+trace = {path = "../trace"}

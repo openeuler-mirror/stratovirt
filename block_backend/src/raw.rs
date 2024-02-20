@@ -60,6 +60,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
 
     fn read_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
         let nbytes = get_iov_size(&iovec);
+        trace::block_read_vectored(&self.driver.block_prop.id, offset, nbytes);
         self.driver.read_vectored(
             vec![CombineRequest::new(iovec, offset as u64, nbytes)],
             completecb,
@@ -68,6 +69,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
 
     fn write_vectored(&mut self, iovec: Vec<Iovec>, offset: usize, completecb: T) -> Result<()> {
         let nbytes = get_iov_size(&iovec);
+        trace::block_write_vectored(&self.driver.block_prop.id, offset, nbytes);
         self.driver.write_vectored(
             vec![CombineRequest::new(iovec, offset as u64, nbytes)],
             completecb,
@@ -81,6 +83,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         completecb: T,
         unmap: bool,
     ) -> Result<()> {
+        trace::block_write_zeroes(&self.driver.block_prop.id, offset, nbytes, unmap);
         self.driver.write_zeroes(
             vec![CombineRequest::new(Vec::new(), offset as u64, nbytes)],
             completecb,
@@ -89,6 +92,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     }
 
     fn discard(&mut self, offset: usize, nbytes: u64, completecb: T) -> Result<()> {
+        trace::block_discard(&self.driver.block_prop.id, offset, nbytes);
         self.driver.discard(
             vec![CombineRequest::new(Vec::new(), offset as u64, nbytes)],
             completecb,
@@ -96,14 +100,17 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     }
 
     fn datasync(&mut self, completecb: T) -> Result<()> {
+        trace::block_datasync(&self.driver.block_prop.id);
         self.driver.datasync(completecb)
     }
 
     fn flush_request(&mut self) -> Result<()> {
+        trace::block_flush_request(&self.driver.block_prop.id);
         self.driver.flush_request()
     }
 
     fn drain_request(&self) {
+        trace::block_drain_request(&self.driver.block_prop.id);
         self.driver.drain_request();
     }
 

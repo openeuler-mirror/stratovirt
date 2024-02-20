@@ -153,3 +153,57 @@ name = "virtio_gpu_console_hw_update"
 args = "con: usize, w: i32, h: i32"
 message = "console {} receive hw update request, update size {} {}."
 enabled = true
+
+[[events]]
+name = "virtio_net_handle_ctrl"
+args = "class: u8, cmd: u8"
+message = "class {}, cmd {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_pop_avail"
+args = "vring: u64, in_num: usize, out_num: usize"
+message = "virtqueue {:#X} pop avail elem, in_iov length {}, out_iov length {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_add_used"
+args = "vring: u64, next_used: u64, index: u16, len: u32"
+message = "virtqueue {:#X} add used elem, used index {}, desc index {}, len {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_set_avail_event"
+args = "vring: u64, event_idx: u16"
+message = "virtqueue {:#X} set avail event idx {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_common"
+args = "func: &str, id: &str"
+message = "{} for device {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_read_common_config"
+args = "id: &str, offset: u64"
+message = "read common config for {}, offset is {:#X}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_write_common_config"
+args = "id: &str, offset: u64, value: u32"
+message = "write common config for {}, offset is {:#X}, value is {:#X}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_read_config"
+args = "id: &str, offset: u64, len: usize"
+message = "read config for {}, offset is {:#X}, len is {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_write_config"
+args = "id: &str, offset: u64, data: &[u8]"
+message = "write config for {}, offset is {:#X}, data is {:X?}"
+enabled = true

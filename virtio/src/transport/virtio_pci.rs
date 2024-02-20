@@ -427,6 +427,7 @@ impl VirtioPciDevice {
     }
 
     fn activate_device(&self) -> bool {
+        trace::virtio_tpt_common("activate_device", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
             return true;
@@ -499,6 +500,7 @@ impl VirtioPciDevice {
     }
 
     fn deactivate_device(&self) -> bool {
+        trace::virtio_tpt_common("deactivate_device", &self.base.base.id);
         if self.need_irqfd && self.base.config.msix.is_some() {
             let msix = self.base.config.msix.as_ref().unwrap();
             if msix.lock().unwrap().unregister_irqfd().is_err() {
@@ -532,6 +534,7 @@ impl VirtioPciDevice {
     ///
     /// * `offset` - The offset of common config.
     fn read_common_config(&self, offset: u64) -> Result<u32> {
+        trace::virtio_tpt_read_common_config(&self.base.base.id, offset);
         let locked_device = self.device.lock().unwrap();
         let value = match offset {
             COMMON_DFSELECT_REG => locked_device.hfeatures_sel(),
@@ -602,6 +605,7 @@ impl VirtioPciDevice {
     ///
     /// Returns Error if the offset is out of bound.
     fn write_common_config(&mut self, offset: u64, value: u32) -> Result<()> {
+        trace::virtio_tpt_write_common_config(&self.base.base.id, offset, value);
         let mut locked_device = self.device.lock().unwrap();
         match offset {
             COMMON_DFSELECT_REG => {
@@ -1154,6 +1158,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        trace::virtio_tpt_common("unrealize", &self.base.base.id);
         self.device
             .lock()
             .unwrap()
@@ -1170,6 +1175,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
+        trace::virtio_tpt_read_config(&self.base.base.id, offset as u64, data.len());
         self.do_cfg_access(offset, offset + data.len(), false);
         self.base.config.read(offset, data);
     }
@@ -1184,6 +1190,7 @@ impl PciDevOps for VirtioPciDevice {
             );
             return;
         }
+        trace::virtio_tpt_write_config(&self.base.base.id, offset as u64, data);
 
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
@@ -1199,6 +1206,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        trace::virtio_tpt_common("reset", &self.base.base.id);
         self.deactivate_device();
         self.device
             .lock()

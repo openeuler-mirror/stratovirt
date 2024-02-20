@@ -188,6 +188,7 @@ impl VirtioMmioDevice {
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
+        trace::virtio_tpt_common("activate", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         let queue_num = locked_dev.queue_num();
         let queue_type = locked_dev.queue_type();
@@ -271,6 +272,7 @@ impl VirtioMmioDevice {
     ///
     /// * `offset` - The offset of common config.
     fn read_common_config(&mut self, offset: u64) -> Result<u32> {
+        trace::virtio_tpt_read_common_config(&self.base.base.id, offset);
         let locked_device = self.device.lock().unwrap();
         let value = match offset {
             MAGIC_VALUE_REG => MMIO_MAGIC_VALUE,
@@ -316,6 +318,7 @@ impl VirtioMmioDevice {
     ///
     /// Returns Error if the offset is out of bound.
     fn write_common_config(&mut self, offset: u64, value: u32) -> Result<()> {
+        trace::virtio_tpt_write_common_config(&self.base.base.id, offset, value);
         let mut locked_device = self.device.lock().unwrap();
         match offset {
             DEVICE_FEATURES_SEL_REG => locked_device.set_hfeatures_sel(value),
@@ -399,6 +402,7 @@ impl SysBusDevOps for VirtioMmioDevice {
 
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        trace::virtio_tpt_read_config(&self.base.base.id, offset, data.len());
         match offset {
             0x00..=0xff if data.len() == 4 => {
                 let value = match self.read_common_config(offset) {
@@ -444,6 +448,7 @@ impl SysBusDevOps for VirtioMmioDevice {
 
     /// Write data by virtio driver from VM.
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        trace::virtio_tpt_write_config(&self.base.base.id, offset, data);
         match offset {
             0x00..=0xff if data.len() == 4 => {
                 let value = LittleEndian::read_u32(data);
