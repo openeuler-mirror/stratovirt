@@ -18,7 +18,6 @@ pub mod error;
 #[cfg(feature = "vnc")]
 pub mod vnc;
 
-mod balloon;
 mod boot_source;
 mod chardev;
 #[cfg(feature = "demo_device")]
@@ -41,8 +40,6 @@ mod ramfb;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
-#[cfg(feature = "scream")]
-pub mod scream;
 mod scsi;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
@@ -50,7 +47,6 @@ mod tls_creds;
 mod usb;
 mod vfio;
 
-pub use balloon::*;
 pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
@@ -90,6 +86,7 @@ pub use vnc::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -101,7 +98,7 @@ use trace::set_state_by_pattern;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
-    num_ops::str_to_usize,
+    num_ops::str_to_num,
     test_helper::is_test_enabled,
     AsAny,
 };
@@ -621,6 +618,14 @@ impl From<ExBool> for bool {
     }
 }
 
+pub fn parse_bool(s: &str) -> Result<bool> {
+    match s {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(anyhow!("Unknow bool value {s}")),
+    }
+}
+
 fn enable_trace_events(path: &str) -> Result<()> {
     let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
     let mut buf = String::new();
@@ -660,8 +665,8 @@ impl FromStr for UnsignedInteger {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let value = str_to_usize(s.to_string())
-            .map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
+        let value =
+            str_to_num::<usize>(s).map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
         Ok(UnsignedInteger(value))
     }
 }
@@ -730,6 +735,34 @@ pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Resu
     arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
 
     Ok(())
+}
+
+/// Configure StratoVirt parameters in clap format.
+pub fn str_slip_to_clap(args: &str) -> Vec<String> {
+    let args_vecs = args.split([',', '=']).collect::<Vec<&str>>();
+    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len());
+    for (cnt, param) in args_vecs.iter().enumerate() {
+        if cnt % 2 == 1 {
+            itr.push(format!("--{}", param));
+        } else {
+            itr.push(param.to_string());
+        }
+    }
+    itr
+}
+
+pub fn valid_id(id: &str) -> Result<String> {
+    check_arg_too_long(id, "id")?;
+    Ok(id.to_string())
+}
+
+pub fn existed_path(path: &str) -> Result<String> {
+    let filepath = path.to_string();
+    if !Path::new(path).exists() {
+        bail!(ConfigError::FileNotExist(filepath));
+    }
+
+    Ok(filepath)
 }
 
 #[cfg(test)]

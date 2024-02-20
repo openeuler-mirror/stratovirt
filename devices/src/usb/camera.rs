@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use log::{error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -34,7 +35,8 @@ use crate::usb::descriptor::*;
 use crate::usb::{
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
-use machine_manager::config::UsbCameraConfig;
+use machine_manager::config::camera::CameraDevConfig;
+use machine_manager::config::valid_id;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
@@ -91,6 +93,17 @@ const VS_COMMIT_CONTROL: u8 = 2;
 const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "usb_camera")]
+pub struct UsbCameraConfig {
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub iothread: Option<String>,
+    #[arg(long)]
+    pub cameradev: String,
+}
 
 pub struct UsbCamera {
     base: UsbDeviceBase,                           // general usb device object
@@ -490,10 +503,10 @@ impl VideoStreamingControl {
 }
 
 impl UsbCamera {
-    pub fn new(config: UsbCameraConfig) -> Result<Self> {
-        let camera = create_cam_backend(config.clone())?;
+    pub fn new(config: UsbCameraConfig, cameradev: CameraDevConfig) -> Result<Self> {
+        let camera = create_cam_backend(config.clone(), cameradev)?;
         Ok(Self {
-            base: UsbDeviceBase::new(config.id.unwrap(), USB_CAMERA_BUFFER_LEN),
+            base: UsbDeviceBase::new(config.id, USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
             camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
             camera_backend: camera,

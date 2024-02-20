@@ -20,6 +20,7 @@ mod pulseaudio;
 
 use std::{
     mem,
+    str::FromStr,
     sync::{
         atomic::{fence, Ordering},
         Arc, Mutex, Weak,
@@ -27,7 +28,8 @@ use std::{
     thread,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use core::time;
 use log::{error, warn};
 
@@ -37,7 +39,7 @@ use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
-use machine_manager::config::scream::{ScreamConfig, ScreamInterface};
+use machine_manager::config::{get_pci_df, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
@@ -331,29 +333,72 @@ impl StreamData {
     }
 }
 
+#[derive(Clone, Debug)]
+enum ScreamInterface {
+    #[cfg(feature = "scream_alsa")]
+    Alsa,
+    #[cfg(feature = "scream_pulseaudio")]
+    PulseAudio,
+    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+    OhAudio,
+    Demo,
+}
+
+impl FromStr for ScreamInterface {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            #[cfg(feature = "scream_alsa")]
+            "ALSA" => Ok(ScreamInterface::Alsa),
+            #[cfg(feature = "scream_pulseaudio")]
+            "PulseAudio" => Ok(ScreamInterface::PulseAudio),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            "OhAudio" => Ok(ScreamInterface::OhAudio),
+            "Demo" => Ok(ScreamInterface::Demo),
+            _ => Err(anyhow!("Unknown scream interface")),
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "ivshmem_scream")]
+pub struct ScreamConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long)]
+    pub memdev: String,
+    #[arg(long)]
+    interface: ScreamInterface,
+    #[arg(long, default_value = "")]
+    playback: String,
+    #[arg(long, default_value = "")]
+    record: String,
+}
+
 /// Scream sound card device structure.
 pub struct Scream {
     hva: u64,
     size: u64,
-    interface: ScreamInterface,
-    playback: String,
-    record: String,
+    config: ScreamConfig,
 }
 
 impl Scream {
-    pub fn new(size: u64, dev_cfg: &ScreamConfig) -> Self {
+    pub fn new(size: u64, config: ScreamConfig) -> Self {
         Self {
             hva: 0,
             size,
-            interface: dev_cfg.interface,
-            playback: dev_cfg.playback.clone(),
-            record: dev_cfg.record.clone(),
+            config,
         }
     }
 
     #[allow(unused_variables)]
     fn interface_init(&self, name: &str, dir: ScreamDirection) -> Arc<Mutex<dyn AudioInterface>> {
-        match self.interface {
+        match self.config.interface {
             #[cfg(feature = "scream_alsa")]
             ScreamInterface::Alsa => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
             #[cfg(feature = "scream_pulseaudio")]
@@ -362,8 +407,8 @@ impl Scream {
             ScreamInterface::OhAudio => Arc::new(Mutex::new(OhAudio::init(dir))),
             ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
-                self.playback.clone(),
-                self.record.clone(),
+                self.config.playback.clone(),
+                self.config.record.clone(),
             ))),
         }
     }

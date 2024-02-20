@@ -21,6 +21,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Result};
+use clap::Parser;
 use libc::c_int;
 use libusb1_sys::{
     libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths, libusb_transfer,
@@ -45,7 +46,7 @@ use crate::usb::{
 };
 use host_usblib::*;
 use machine_manager::{
-    config::UsbHostConfig,
+    config::valid_id,
     event_loop::{register_event_helper, unregister_event_helper},
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
@@ -53,11 +54,13 @@ use util::{
     byte_code::ByteCode,
     link_list::{List, Node},
     loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback},
+    num_ops::str_to_num,
 };
 
 const NON_ISO_PACKETS_NUMS: c_int = 0;
 const HANDLE_TIMEOUT_MS: u64 = 2;
 const USB_HOST_BUFFER_LEN: usize = 12 * 1024;
+const USBHOST_ADDR_MAX: i64 = 127;
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
@@ -336,6 +339,27 @@ impl IsoQueue {
     }
 }
 
+#[derive(Parser, Clone, Debug, Default)]
+#[command(name = "usb_host")]
+pub struct UsbHostConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: String,
+    #[arg(long, default_value = "0")]
+    hostbus: u8,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..=USBHOST_ADDR_MAX))]
+    hostaddr: u8,
+    #[arg(long)]
+    hostport: Option<String>,
+    #[arg(long, default_value = "0", value_parser = str_to_num::<u16>)]
+    vendorid: u16,
+    #[arg(long, default_value = "0", value_parser = str_to_num::<u16>)]
+    productid: u16,
+    #[arg(long = "isobsize", default_value = "32")]
+    iso_urb_frames: u32,
+    #[arg(long = "isobufs", default_value = "4")]
+    iso_urb_count: u32,
+}
+
 /// Abstract object of the host USB device.
 pub struct UsbHost {
     base: UsbDeviceBase,
@@ -375,7 +399,7 @@ impl UsbHost {
         context.set_log_level(rusb::LogLevel::None);
         let iso_urb_frames = config.iso_urb_frames;
         let iso_urb_count = config.iso_urb_count;
-        let id = config.id.clone().unwrap();
+        let id = config.id.clone();
         Ok(Self {
             config,
             context,

@@ -62,7 +62,7 @@ use machine_manager::qmp::{
 };
 use migration::MigrationManager;
 use util::aio::WriteZeroesState;
-use util::{loop_context::EventLoopManager, num_ops::str_to_usize, set_termi_canon_mode};
+use util::{loop_context::EventLoopManager, num_ops::str_to_num, set_termi_canon_mode};
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VhostUser,
     VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
@@ -669,7 +669,7 @@ impl DeviceInterface for LightMachine {
         // get slot of bus by addr or lun
         let mut slot = 0;
         if let Some(addr) = args.addr {
-            if let Ok(num) = str_to_usize(addr) {
+            if let Ok(num) = str_to_num::<usize>(&addr) {
                 slot = num;
             } else {
                 return Response::create_error_response(
