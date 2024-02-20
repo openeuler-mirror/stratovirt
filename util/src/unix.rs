@@ -248,7 +248,7 @@ impl UnixSock {
     ) -> *mut cmsghdr {
         let next_cmsg = (cmsg_ptr as *mut u8).wrapping_add(
             // SAFETY: Safe to get cmsg_len because the parameter is valid.
-            unsafe { CMSG_LEN(cmsg.cmsg_len as u32) } as usize,
+            unsafe { CMSG_LEN(cmsg.cmsg_len as _) } as usize,
         ) as *mut cmsghdr;
         // Safe to get msg_control because the parameter is valid.
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;

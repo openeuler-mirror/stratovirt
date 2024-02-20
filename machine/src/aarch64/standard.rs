@@ -942,7 +942,7 @@ impl AcpiBuilder for StdMachine {
         for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as u32;
+                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as _;
                 break;
             }
         }
