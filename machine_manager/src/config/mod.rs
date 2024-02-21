@@ -86,6 +86,7 @@ pub use vnc::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+#[cfg(not(all(target_env = "ohos", feature = "usb_camera_oh")))]
 use std::path::Path;
 use std::str::FromStr;
 
@@ -758,6 +759,7 @@ pub fn valid_id(id: &str) -> Result<String> {
 
 pub fn existed_path(path: &str) -> Result<String> {
     let filepath = path.to_string();
+    #[cfg(not(target_env = "ohos"))]
     if !Path::new(path).exists() {
         bail!(ConfigError::FileNotExist(filepath));
     }

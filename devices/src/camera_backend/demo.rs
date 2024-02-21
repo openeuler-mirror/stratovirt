@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+#[cfg(not(target_env = "ohos"))]
 use cairo::{Format, ImageSurface};
 use log::{debug, error, info};
 use rand::{thread_rng, Rng};
