@@ -22,7 +22,7 @@ use cpu::{CPUBootConfig, CPUTopology};
 use devices::legacy::FwCfgOps;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
+use machine_manager::config::{SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use virtio::VirtioMmioDevice;
@@ -166,8 +166,6 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cpus,
         )?;
 
-        let migrate_info = locked_vm.get_migrate_info();
-
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
         // Add mmio devices
@@ -177,12 +175,7 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(None)?)
-        } else {
-            None
-        };
-
+        let boot_config = locked_vm.load_boot_source(None)?;
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
