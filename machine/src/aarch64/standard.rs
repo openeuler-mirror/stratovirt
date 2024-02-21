@@ -556,21 +556,9 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config =
-            if migrate.0 == MigrateMode::Unknown {
-                Some(locked_vm.load_boot_source(
-                    fwcfg.as_ref(),
-                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-                )?)
-            } else {
-                None
-            };
-        let cpu_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_cpu_features(vm_config)?)
-        } else {
-            None
-        };
+        let boot_config = locked_vm
+            .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
@@ -591,37 +579,33 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .with_context(|| "Failed to add devices")?;
 
-        if let Some(boot_cfg) = boot_config {
-            let mut fdt_helper = FdtBuilder::new();
-            locked_vm
-                .generate_fdt_node(&mut fdt_helper)
-                .with_context(|| MachineError::GenFdtErr)?;
-            let fdt_vec = fdt_helper.finish()?;
-            locked_vm.dtb_vec = fdt_vec.clone();
-            locked_vm
-                .base
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr),
-                    fdt_vec.len() as u64,
-                )
-                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
-        }
+        let mut fdt_helper = FdtBuilder::new();
+        locked_vm
+            .generate_fdt_node(&mut fdt_helper)
+            .with_context(|| MachineError::GenFdtErr)?;
+        let fdt_vec = fdt_helper.finish()?;
+        locked_vm.dtb_vec = fdt_vec.clone();
+        locked_vm
+            .base
+            .sys_mem
+            .write(
+                &mut fdt_vec.as_slice(),
+                GuestAddress(boot_config.fdt_addr),
+                fdt_vec.len() as u64,
+            )
+            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
-        if migrate.0 == MigrateMode::Unknown {
-            if let Some(fw_cfg) = fwcfg {
-                let mut mem_array = Vec::new();
-                let mem_size = vm_config.machine_config.mem_config.mem_size;
-                mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-                locked_vm
-                    .build_acpi_tables(&fw_cfg)
-                    .with_context(|| "Failed to create ACPI tables")?;
-                locked_vm
-                    .build_smbios(&fw_cfg, mem_array)
-                    .with_context(|| "Failed to create smbios tables")?;
-            }
+        if let Some(fw_cfg) = fwcfg {
+            let mut mem_array = Vec::new();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
+            locked_vm
+                .build_acpi_tables(&fw_cfg)
+                .with_context(|| "Failed to create ACPI tables")?;
+            locked_vm
+                .build_smbios(&fw_cfg, mem_array)
+                .with_context(|| "Failed to create smbios tables")?;
         }
 
         locked_vm

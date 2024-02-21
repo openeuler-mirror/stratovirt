@@ -463,8 +463,8 @@ pub trait MachineOps {
         nr_cpus: u8,
         #[cfg(target_arch = "x86_64")] max_cpus: u8,
         topology: &CPUTopology,
-        boot_cfg: &Option<CPUBootConfig>,
-        #[cfg(target_arch = "aarch64")] vcpu_cfg: &Option<CPUFeatures>,
+        boot_cfg: &CPUBootConfig,
+        #[cfg(target_arch = "aarch64")] vcpu_cfg: &CPUFeatures,
     ) -> Result<Vec<Arc<CPU>>>
     where
         Self: Sized,
@@ -484,21 +484,19 @@ pub trait MachineOps {
             MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
         }
 
-        if let Some(boot_config) = boot_cfg {
-            for (cpu_index, cpu) in cpus.iter().enumerate() {
-                cpu.realize(
-                    boot_config,
-                    topology,
-                    #[cfg(target_arch = "aarch64")]
-                    &vcpu_cfg.unwrap_or_default(),
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
+            cpu.realize(
+                boot_cfg,
+                topology,
+                #[cfg(target_arch = "aarch64")]
+                vcpu_cfg,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to realize arch cpu register/features for CPU {}",
+                    cpu_index
                 )
-                .with_context(|| {
-                    format!(
-                        "Failed to realize arch cpu register/features for CPU {}",
-                        cpu_index
-                    )
-                })?;
-            }
+            })?;
         }
 
         Ok(cpus)
@@ -510,9 +508,8 @@ pub trait MachineOps {
     ///
     /// * `CPUFeatures` - The features of vcpu.
     #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
-        let features = vcpu_cfg.unwrap_or_default();
-        if features.pmu {
+    fn cpu_post_init(&self, vcpu_cfg: &CPUFeatures) -> Result<()> {
+        if vcpu_cfg.pmu {
             for cpu in self.machine_base().cpus.iter() {
                 cpu.hypervisor_cpu.init_pmu()?;
             }

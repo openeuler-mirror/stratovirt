@@ -206,13 +206,6 @@ impl StateTransfer for CPU {
         *cpu_state_locked = cpu_state;
         drop(cpu_state_locked);
 
-        self.hypervisor_cpu.vcpu_init()?;
-
-        if cpu_state.features.pmu {
-            self.hypervisor_cpu
-                .init_pmu()
-                .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
-        }
         Ok(())
     }
 
