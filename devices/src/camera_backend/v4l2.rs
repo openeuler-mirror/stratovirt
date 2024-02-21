@@ -26,7 +26,7 @@ use v4l2_sys_mit::{
 };
 use vmm_sys_util::epoll::EventSet;
 
-use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
+use super::{PIXFMT_MJPG, PIXFMT_NV12, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
     CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
@@ -232,7 +232,10 @@ impl V4l2CameraBackend {
     }
 
     fn is_pixfmt_supported(&self, pixelformat: u32) -> bool {
-        pixelformat == PIXFMT_MJPG || pixelformat == PIXFMT_RGB565 || pixelformat == PIXFMT_YUYV
+        pixelformat == PIXFMT_MJPG
+            || pixelformat == PIXFMT_RGB565
+            || pixelformat == PIXFMT_YUYV
+            || pixelformat == PIXFMT_NV12
     }
 }
 
@@ -440,6 +443,7 @@ fn cam_fmt_to_v4l2(t: &FmtType) -> u32 {
         FmtType::Yuy2 => PIXFMT_YUYV,
         FmtType::Rgb565 => PIXFMT_RGB565,
         FmtType::Mjpg => PIXFMT_MJPG,
+        FmtType::Nv12 => PIXFMT_NV12,
     }
 }
 
@@ -448,6 +452,7 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
         PIXFMT_YUYV => FmtType::Yuy2,
         PIXFMT_RGB565 => FmtType::Rgb565,
         PIXFMT_MJPG => FmtType::Mjpg,
+        PIXFMT_NV12 => FmtType::Nv12,
         _ => bail!("Invalid v4l2 type {}", t),
     };
     Ok(fmt)
