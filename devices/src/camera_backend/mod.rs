@@ -14,6 +14,7 @@
 //! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait
 //! CameraBackend.
 
+#[cfg(not(target_env = "ohos")]
 pub mod demo;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
@@ -22,6 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
+#[cfg(not(target_env = "ohos")]
 use self::demo::DemoCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
@@ -183,10 +185,12 @@ pub fn create_cam_backend(
             cameradev.path,
             config.iothread,
         )?)),
+        #[cfg(not(target_env = "ohos")]
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
             config.id,
             cameradev.path,
         )?)),
+        _ => bail!("Not supportted CamBackendType."),
     };
 
     Ok(cam)
