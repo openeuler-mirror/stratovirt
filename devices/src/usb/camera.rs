@@ -493,8 +493,8 @@ impl VideoStreamingControl {
             error!("Invalid interval {:?}", e);
             0
         });
-        self.dwMaxVideoFrameSize =
-            get_video_frame_size(fmt.width, fmt.height).unwrap_or_else(|e| {
+        self.dwMaxVideoFrameSize = get_video_frame_size(fmt.width, fmt.height, fmt.fmttype)
+            .unwrap_or_else(|e| {
                 error!("Invalid frame size {:?}", e);
                 0
             });
@@ -730,7 +730,8 @@ impl UsbCamera {
     ) -> Result<()> {
         self.vs_control.bFormatIndex = vs_control.bFormatIndex;
         self.vs_control.bFrameIndex = vs_control.bFrameIndex;
-        self.vs_control.dwMaxVideoFrameSize = get_video_frame_size(fmt.width, fmt.height)?;
+        self.vs_control.dwMaxVideoFrameSize =
+            get_video_frame_size(fmt.width, fmt.height, fmt.fmttype)?;
         self.vs_control.dwFrameInterval = vs_control.dwFrameInterval;
         Ok(())
     }
@@ -1105,8 +1106,13 @@ fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
 }
 
 fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
+    let bits_per_pixel = match fmt.format {
+        FmtType::Yuy2 | FmtType::Rgb565 => 0x10,
+        FmtType::Nv12 => 0xc,
+        _ => 0,
+    };
     let header = match fmt.format {
-        FmtType::Yuy2 | FmtType::Rgb565 => VsDescUncompressedFmt {
+        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 => VsDescUncompressedFmt {
             bLength: 0x1B,
             bDescriptorType: CS_INTERFACE,
             bDescriptorSubtype: VS_FORMAT_UNCOMPRESSED,
@@ -1115,7 +1121,7 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
             guidFormat: *MEDIA_TYPE_GUID_HASHMAP
                 .get(&fmt.format)
                 .with_context(|| "unsupported video format.")?,
-            bBitsPerPixel: 0x10,
+            bBitsPerPixel: bits_per_pixel,
             bDefaultFrameIndex: 1,
             bAspectRatioX: 0,
             bAspectRatioY: 0,
@@ -1144,22 +1150,27 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
     Ok(header)
 }
 
+#[inline(always)]
+fn get_subtype(pixfmt: FmtType) -> u8 {
+    match pixfmt {
+        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 => VS_FRAME_UNCOMPRESSED,
+        FmtType::Mjpg => VS_FRAME_MJPEG,
+    }
+}
+
 fn gen_frm_desc(pixfmt: FmtType, frm: &CameraFrame) -> Result<Vec<u8>> {
-    let bitrate = get_bit_rate(frm.width, frm.height, frm.interval)?;
+    let bitrate = get_bit_rate(frm.width, frm.height, frm.interval, pixfmt)?;
     let desc = VsDescFrm {
         bLength: 0x1e, // TODO: vary with interval number.
         bDescriptorType: CS_INTERFACE,
-        bDescriptorSubtype: match pixfmt {
-            FmtType::Rgb565 | FmtType::Yuy2 => VS_FRAME_UNCOMPRESSED,
-            FmtType::Mjpg => VS_FRAME_MJPEG,
-        },
+        bDescriptorSubtype: get_subtype(pixfmt),
         bFrameIndex: frm.index,
         bmCapabilities: 0x1,
         wWidth: frm.width as u16,
         wHeight: frm.height as u16,
         dwMinBitRate: bitrate,
         dwMaxBitRate: bitrate,
-        dwMaxVideoFrameBufSize: get_video_frame_size(frm.width, frm.height)?,
+        dwMaxVideoFrameBufSize: get_video_frame_size(frm.width, frm.height, pixfmt)?,
         dwDefaultFrameInterval: frm.interval,
         bFrameIntervalType: 1,
         dwIntervalVals: frm.interval,

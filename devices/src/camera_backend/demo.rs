@@ -250,6 +250,7 @@ impl ImageFrame {
             FmtType::Mjpg => build_fake_mjpg(width, height),
             FmtType::Yuy2 => convert_to_yuy2(data.deref(), width, height),
             FmtType::Rgb565 => data.deref().to_vec(),
+            FmtType::Nv12 => bail!("demo device does not support NV12 now"),
         };
         self.frame_idx += 1;
         if self.frame_idx > FRAME_IDX_LIMIT {
