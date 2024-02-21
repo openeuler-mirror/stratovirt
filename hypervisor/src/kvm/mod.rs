@@ -27,12 +27,11 @@ pub use aarch64::gicv2::KvmGICv2;
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
 
 use std::collections::HashMap;
-use std::sync::atomic::{fence, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::atomic::{fence, AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(not(test))]
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
@@ -41,10 +40,11 @@ use kvm_bindings::*;
 use kvm_ioctls::VcpuExit;
 use kvm_ioctls::{Cap, DeviceFd, Kvm, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
-use log::{error, info};
+use log::{error, info, warn};
 use vmm_sys_util::{
-    eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
-    signal::register_signal_handler,
+    eventfd::EventFd,
+    ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+    signal::{register_signal_handler, Killable},
 };
 
 use self::listener::KvmMemoryListener;
@@ -58,11 +58,9 @@ use address_space::{AddressSpace, Listener};
 use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
-#[cfg(not(test))]
-use cpu::CpuError;
 use cpu::{
-    ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuLifecycleState,
-    RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
+    ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
+    CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
@@ -232,6 +230,7 @@ impl HypervisorOps for KvmHypervisor {
             .create_vcpu(vcpu_id as u64)
             .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
+            vcpu_id,
             #[cfg(target_arch = "aarch64")]
             self.vm_fd.clone(),
             vcpu_fd,
@@ -361,6 +360,7 @@ impl MigrateOps for KvmHypervisor {
 }
 
 pub struct KvmCpu {
+    id: u8,
     #[cfg(target_arch = "aarch64")]
     vm_fd: Option<Arc<VmFd>>,
     fd: Arc<VcpuFd>,
@@ -372,8 +372,13 @@ pub struct KvmCpu {
 }
 
 impl KvmCpu {
-    pub fn new(#[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>, vcpu_fd: VcpuFd) -> Self {
+    pub fn new(
+        id: u8,
+        #[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>,
+        vcpu_fd: VcpuFd,
+    ) -> Self {
         Self {
+            id,
             #[cfg(target_arch = "aarch64")]
             vm_fd,
             fd: Arc::new(vcpu_fd),
@@ -620,6 +625,91 @@ impl CPUHypervisorOps for KvmCpu {
     fn kick(&self) -> Result<()> {
         self.fd.set_kvm_immediate_exit(1);
         Ok(())
+    }
+
+    fn kick_vcpu_thread(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        _state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+    ) -> Result<()> {
+        let task = task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_TASK_SIGNAL)
+                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to kick");
+                Ok(())
+            }
+        }
+    }
+
+    fn pause(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let task = task.lock().unwrap();
+        let (cpu_state, cvar) = &*state;
+
+        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
+            cvar.notify_one()
+        }
+
+        match task.as_ref() {
+            Some(thread) => {
+                if let Err(e) = thread.kill(VCPU_TASK_SIGNAL) {
+                    return Err(anyhow!(CpuError::StopVcpu(format!("{:?}", e))));
+                }
+            }
+            None => {
+                warn!("vCPU thread not started, no need to stop");
+                return Ok(());
+            }
+        }
+
+        // It shall wait for the vCPU pause state from hypervisor exits.
+        loop {
+            if pause_signal.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resume(
+        &self,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let (cpu_state_locked, cvar) = &*state;
+        let mut cpu_state = cpu_state_locked.lock().unwrap();
+        if *cpu_state == CpuLifecycleState::Running {
+            warn!("vcpu{} in running state, no need to resume", self.id);
+            return Ok(());
+        }
+
+        *cpu_state = CpuLifecycleState::Running;
+        pause_signal.store(false, Ordering::SeqCst);
+        drop(cpu_state);
+        cvar.notify_one();
+        Ok(())
+    }
+
+    fn reset(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()> {
+        let task = task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_RESET_SIGNAL)
+                .with_context(|| CpuError::KickVcpu("Fail to reset vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to reset");
+                Ok(())
+            }
+        }
     }
 }
 
@@ -937,6 +1027,7 @@ mod test {
         vm_fd.create_irq_chip().unwrap();
         let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
+            0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,
@@ -993,6 +1084,7 @@ mod test {
 
         let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
+            0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,
