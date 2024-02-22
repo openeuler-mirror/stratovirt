@@ -225,3 +225,81 @@ name = "virtio_tpt_write_config"
 args = "id: &str, offset: u64, data: &[u8]"
 message = "write config for {}, offset is {:#X}, data is {:X?}"
 enabled = true
+
+[[events]]
+name = "vhost_set_owner"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vhost_reset_owner"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vhost_get_features"
+args = "features: u64"
+message = "features: {:#x}."
+enabled = true
+
+[[events]]
+name = "vhost_set_features"
+args = "features: u64"
+message = "features: {:#x}."
+enabled = true
+
+[[events]]
+name = "vhost_set_mem_table"
+args = "mem: &dyn fmt::Debug"
+message = "mem table: {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_num"
+args = "queue_idx: usize, num: u16"
+message = "set vring {} descriptors num {}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_addr"
+args = "vring_addr: &dyn fmt::Debug"
+message = "vring addr: {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_base"
+args = "queue_idx: usize, num: u16"
+message = "queue_idx {} num {}."
+enabled = true
+
+[[events]]
+name = "vhost_get_vring_base"
+args = "queue_idx: usize, num: u16"
+message = "queue_idx {} num {}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_call"
+args = "queue_idx: usize, event_fd: &dyn fmt::Debug"
+message = "queue_idx {}, event_fd {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_kick"
+args = "queue_idx: usize, event_fd: &dyn fmt::Debug"
+message = "queue_idx {}, event_fd {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_enable"
+args = "queue_idx: usize, status: bool"
+message = "set vring {} status {}."
+enabled = true
+
+[[events]]
+name = "vhost_delete_mem_range_failed"
+args = ""
+message = "Vhost: deleting mem region failed: not matched."
+enabled = true
