@@ -61,7 +61,7 @@ use machine_manager::config::ShutdownAction;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -685,16 +685,16 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
+    fn add_pflash_device(&mut self, configs: &[DriveConfig]) -> Result<()> {
         let mut configs_vec = configs.to_vec();
-        configs_vec.sort_by_key(|c| c.unit);
+        configs_vec.sort_by_key(|c| c.unit.unwrap());
         let sector_len: u32 = 1024 * 256;
         let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
         let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
         for i in 0..=1 {
             let (fd, read_only) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
-                let read_only = configs_vec[i].read_only;
+                let read_only = configs_vec[i].readonly;
                 let fd = self.fetch_drive_file(path)?;
                 (Some(fd), read_only)
             } else {

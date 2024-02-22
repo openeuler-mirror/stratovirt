@@ -139,7 +139,7 @@ pub struct VmConfig {
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
     pub object: ObjectConfig,
-    pub pflashs: Option<Vec<PFlashConfig>>,
+    pub pflashs: Option<Vec<DriveConfig>>,
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
@@ -395,7 +395,7 @@ impl VmConfig {
                 &mut drive_files,
                 &drive.id,
                 &drive.path_on_host,
-                drive.read_only,
+                drive.readonly,
                 drive.direct,
             )?;
         }
@@ -405,7 +405,7 @@ impl VmConfig {
                     &mut drive_files,
                     "",
                     &pflash.path_on_host,
-                    pflash.read_only,
+                    pflash.readonly,
                     false,
                 )?;
             }
@@ -619,8 +619,8 @@ impl From<ExBool> for bool {
 
 pub fn parse_bool(s: &str) -> Result<bool> {
     match s {
-        "on" => Ok(true),
-        "off" => Ok(false),
+        "true" | "on" | "yes" | "unmap" => Ok(true),
+        "false" | "off" | "no" | "ignore" => Ok(false),
         _ => Err(anyhow!("Unknow bool value {s}")),
     }
 }

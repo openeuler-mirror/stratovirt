@@ -268,7 +268,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         .remove(&scsi_drive)
         .with_context(|| "No drive configured matched for scsi device")?;
     scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
-    scsi_dev_cfg.read_only = drive_arg.read_only;
+    scsi_dev_cfg.read_only = drive_arg.readonly;
     scsi_dev_cfg.direct = drive_arg.direct;
     scsi_dev_cfg.aio_type = drive_arg.aio;
     scsi_dev_cfg.format = drive_arg.format;
