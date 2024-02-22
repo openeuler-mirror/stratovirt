@@ -402,8 +402,10 @@ impl FromStr for ScreamInterface {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "ivshmem_scream")]
+#[command(no_binary_name(true))]
 pub struct ScreamConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long)]

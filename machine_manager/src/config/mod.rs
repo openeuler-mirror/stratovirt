@@ -737,14 +737,56 @@ pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Resu
 }
 
 /// Configure StratoVirt parameters in clap format.
-pub fn str_slip_to_clap(args: &str) -> Vec<String> {
-    let args_vecs = args.split([',', '=']).collect::<Vec<&str>>();
-    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len());
-    for (cnt, param) in args_vecs.iter().enumerate() {
-        if cnt % 2 == 1 {
-            itr.push(format!("--{}", param));
-        } else {
-            itr.push(param.to_string());
+///
+/// The first parameter will be parsed as the `binary name` unless Command::no_binary_name is used when using `clap`.
+/// Stratovirt command line may use the first parameter as class type.
+/// Eg:
+/// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
+///   This cmdline has no class type.
+/// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
+///   This cmdline sets device type `virtio-balloon-pci` as the first parameter.
+///
+/// Use first_pos_is_type to indicate whether the first parameter is a type class which needs a separate analysis.
+/// Eg:
+/// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
+///   Set first_pos_is_type false for this cmdline has no class type.
+/// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
+///   Set first_pos_is_type true for this cmdline has device type "virtio-balloon-pci" as the first parameter.
+///
+/// Use first_pos_is_subcommand to indicate whether the first parameter is a subclass.
+/// Eg:
+/// Chardev has stdio/unix-socket/tcp-socket/pty/file classes. These classes have different configurations but will be stored
+/// in the same `ChardevConfig` structure by using `enum`. So, we will use class type as a subcommand to indicate which subtype
+/// will be used to store the configuration in enumeration type. Subcommand in `clap` doesn't need `--` in parameter.
+/// 1. -serial file,path=<file_path>
+///   Set first_pos_is_subcommand true for first parameter `file` is the subclass type for chardev.
+pub fn str_slip_to_clap(
+    args: &str,
+    first_pos_is_type: bool,
+    mut first_pos_is_subcommand: bool,
+) -> Vec<String> {
+    let args_str = if first_pos_is_type && !first_pos_is_subcommand {
+        format!("classtype={}", args)
+    } else {
+        args.to_string()
+    };
+    let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
+    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len() * 2);
+    for params in args_vecs {
+        let key_value = params.split(['=']).collect::<Vec<&str>>();
+        // Command line like "key=value" will be converted to "--key value".
+        // Command line like "key" will be converted to "--key".
+        for (cnt, param) in key_value.iter().enumerate() {
+            if cnt % 2 == 0 {
+                if first_pos_is_subcommand {
+                    itr.push(param.to_string());
+                    first_pos_is_subcommand = false;
+                } else {
+                    itr.push(format!("--{}", param));
+                }
+            } else {
+                itr.push(param.to_string());
+            }
         }
     }
     itr
