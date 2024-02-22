@@ -65,7 +65,6 @@ use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use log::{error, info, warn};
@@ -135,9 +134,6 @@ pub trait CPUInterface {
     where
         Self: std::marker::Sized;
 
-    /// Kick `CPU` to exit hypervisor emulation.
-    fn kick(&self) -> Result<()>;
-
     /// Make `CPU` lifecycle from `Running` to `Paused`.
     fn pause(&self) -> Result<()>;
 
@@ -203,6 +199,12 @@ pub trait CPUHypervisorOps: Send + Sync {
         &self,
         state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
         pause_signal: Arc<AtomicBool>,
+    ) -> Result<()>;
+
+    fn destroy(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
     ) -> Result<()>;
 }
 
@@ -383,11 +385,6 @@ impl CPUInterface for CPU {
         Ok(())
     }
 
-    fn kick(&self) -> Result<()> {
-        self.hypervisor_cpu
-            .kick_vcpu_thread(self.task.clone(), self.state.clone())
-    }
-
     fn pause(&self) -> Result<()> {
         self.hypervisor_cpu.pause(
             self.task.clone(),
@@ -403,30 +400,8 @@ impl CPUInterface for CPU {
     }
 
     fn destroy(&self) -> Result<()> {
-        let (cpu_state, cvar) = &*self.state;
-        let mut cpu_state = cpu_state.lock().unwrap();
-        if *cpu_state == CpuLifecycleState::Running {
-            *cpu_state = CpuLifecycleState::Stopping;
-        } else if *cpu_state == CpuLifecycleState::Stopped
-            || *cpu_state == CpuLifecycleState::Paused
-        {
-            return Ok(());
-        }
-
-        self.kick()?;
-        cpu_state = cvar
-            .wait_timeout(cpu_state, Duration::from_millis(32))
-            .unwrap()
-            .0;
-
-        if *cpu_state == CpuLifecycleState::Stopped {
-            Ok(())
-        } else {
-            Err(anyhow!(CpuError::DestroyVcpu(format!(
-                "VCPU still in {:?} state",
-                *cpu_state
-            ))))
-        }
+        self.hypervisor_cpu
+            .destroy(self.task.clone(), self.state.clone())
     }
 
     fn guest_shutdown(&self) -> Result<()> {
