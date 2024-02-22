@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -35,7 +36,7 @@ use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevO
 use crate::usb::UsbDevice;
 use crate::{Device, DeviceBase};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
-use machine_manager::config::XhciConfig;
+use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -63,6 +64,26 @@ const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
 const XHCI_PCI_PORT_LENGTH: u32 = 0x10;
 const XHCI_MSIX_TABLE_OFFSET: u32 = 0x3000;
 const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
+
+/// XHCI controller configuration.
+#[derive(Parser, Clone, Debug, Default)]
+#[command(name = "nec-usb-xhci")]
+pub struct XhciConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: Option<String>,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    // number of usb2.0 ports.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..u8::MAX as i64))]
+    pub p2: Option<u8>,
+    // number of usb3.0 ports.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..u8::MAX as i64))]
+    pub p3: Option<u8>,
+    #[arg(long)]
+    pub iothread: Option<String>,
+}
 
 /// Registers offset.
 /// 0x0    0x40    0x440    0x1000    0x2000      0x3000   0x4000
