@@ -692,6 +692,39 @@ impl CPUHypervisorOps for KvmCpu {
         cvar.notify_one();
         Ok(())
     }
+
+    fn destroy(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+    ) -> Result<()> {
+        let (cpu_state, cvar) = &*state;
+        let mut locked_cpu_state = cpu_state.lock().unwrap();
+        if *locked_cpu_state == CpuLifecycleState::Running {
+            *locked_cpu_state = CpuLifecycleState::Stopping;
+        } else if *locked_cpu_state == CpuLifecycleState::Stopped
+            || *locked_cpu_state == CpuLifecycleState::Paused
+        {
+            return Ok(());
+        }
+        drop(locked_cpu_state);
+
+        self.kick_vcpu_thread(task, state.clone())?;
+        let mut locked_cpu_state = cpu_state.lock().unwrap();
+        locked_cpu_state = cvar
+            .wait_timeout(locked_cpu_state, Duration::from_millis(32))
+            .unwrap()
+            .0;
+
+        if *locked_cpu_state == CpuLifecycleState::Stopped {
+            Ok(())
+        } else {
+            Err(anyhow!(CpuError::DestroyVcpu(format!(
+                "VCPU still in {:?} state",
+                *locked_cpu_state
+            ))))
+        }
+    }
 }
 
 struct KVMInterruptManager {
