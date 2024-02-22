@@ -155,13 +155,28 @@ impl KvmCpu {
 
         // Enable PMU from config.
         if vcpu_config.pmu {
+            if !self.caps.pmuv3 {
+                bail!("PMUv3 is not supported by KVM");
+            }
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PMU_V3;
+        }
+        // Enable SVE from config.
+        if vcpu_config.sve {
+            if !self.caps.sve {
+                bail!("SVE is not supported by KVM");
+            }
+            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_SVE;
         }
         drop(kvi);
 
         arch_cpu.lock().unwrap().set_core_reg(boot_config);
 
         self.arch_vcpu_init()?;
+
+        if vcpu_config.sve {
+            self.fd
+                .vcpu_finalize(&(kvm_bindings::KVM_ARM_VCPU_SVE as i32))?;
+        }
 
         arch_cpu.lock().unwrap().mpidr =
             self.get_one_reg(KVM_REG_ARM_MPIDR_EL1)

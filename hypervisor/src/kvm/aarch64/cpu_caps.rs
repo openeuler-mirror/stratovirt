@@ -23,6 +23,8 @@ pub struct ArmCPUCaps {
     pub psci02: bool,
     pub mp_state: bool,
     pub vcpu_events: bool,
+    pub pmuv3: bool,
+    pub sve: bool,
 }
 
 impl ArmCPUCaps {
@@ -37,6 +39,8 @@ impl ArmCPUCaps {
             psci02: kvm.check_extension(Cap::ArmPsci02),
             mp_state: kvm.check_extension(Cap::MpState),
             vcpu_events: kvm.check_extension(Cap::VcpuEvents),
+            pmuv3: kvm.check_extension(Cap::ArmPmuV3),
+            sve: kvm.check_extension(Cap::ArmSve),
         }
     }
 }
