@@ -882,8 +882,10 @@ impl EventNotifierHelper for BalloonIoHandler {
 }
 
 #[derive(Parser, Debug, Clone, Default)]
-#[command(name = "balloon")]
+#[command(no_binary_name(true))]
 pub struct BalloonConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     pub id: String,
     #[arg(long)]

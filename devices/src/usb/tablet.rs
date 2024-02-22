@@ -114,8 +114,10 @@ const STR_SERIAL_TABLET_INDEX: u8 = 4;
 const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
 
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "usb_tablet")]
+#[command(no_binary_name(true))]
 pub struct UsbTabletConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long)]

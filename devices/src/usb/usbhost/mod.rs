@@ -357,8 +357,10 @@ impl IsoQueue {
 }
 
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "usb_host")]
+#[command(no_binary_name(true))]
 pub struct UsbHostConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long, default_value = "0")]

@@ -90,8 +90,10 @@ const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "usb_camera")]
+#[command(no_binary_name(true))]
 pub struct UsbCameraConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     pub id: String,
     #[arg(long)]

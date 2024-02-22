@@ -121,8 +121,10 @@ const DESC_STRINGS: [&str; 5] = [
 ];
 
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "usb_keyboard")]
+#[command(no_binary_name(true))]
 pub struct UsbKeyboardConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long)]

@@ -67,8 +67,10 @@ const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
 
 /// XHCI controller configuration.
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "nec-usb-xhci")]
+#[command(no_binary_name(true))]
 pub struct XhciConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: Option<String>,
     #[arg(long)]

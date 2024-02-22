@@ -666,13 +666,13 @@ pub trait MachineOps {
         if vm_config.dev_name.get("balloon").is_some() {
             bail!("Only one balloon device is supported for each vm.");
         }
-        let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         vm_config.dev_name.insert("balloon".to_string(), 1);
 
         let sys_mem = self.get_sys_mem();
         let balloon = Arc::new(Mutex::new(Balloon::new(config.clone(), sys_mem.clone())));
         Balloon::object_init(balloon.clone());
-        match parse_device_type(cfg_args)?.as_str() {
+        match config.classtype.as_str() {
             "virtio-balloon-device" => {
                 if config.addr.is_some() || config.bus.is_some() || config.multifunction.is_some() {
                     bail!("virtio balloon device config is error!");
@@ -1545,7 +1545,7 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - XHCI Configuration.
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
-        let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
@@ -1569,7 +1569,7 @@ pub trait MachineOps {
         cfg_args: &str,
         token_id: Option<Arc<RwLock<u64>>>,
     ) -> Result<()> {
-        let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf {
             bus: config.bus.clone(),
             addr: config.addr,
@@ -1692,14 +1692,16 @@ pub trait MachineOps {
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match parse_device_type(cfg_args)?.as_str() {
             "usb-kbd" => {
-                let config = UsbKeyboardConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let config =
+                    UsbKeyboardConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
                 let keyboard = UsbKeyboard::new(config);
                 keyboard
                     .realize()
                     .with_context(|| "Failed to realize usb keyboard device")?
             }
             "usb-tablet" => {
-                let config = UsbTabletConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let config =
+                    UsbTabletConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
                 let tablet = UsbTablet::new(config);
                 tablet
                     .realize()
@@ -1707,7 +1709,8 @@ pub trait MachineOps {
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
-                let config = UsbCameraConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let config =
+                    UsbCameraConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
                 let cameradev = get_cameradev_by_id(vm_config, config.cameradev.clone())
                     .with_context(|| {
                         format!(
@@ -1736,7 +1739,8 @@ pub trait MachineOps {
             }
             #[cfg(feature = "usb_host")]
             "usb-host" => {
-                let config = UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let config =
+                    UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
                 let usbhost = UsbHost::new(config)?;
                 usbhost
                     .realize()
