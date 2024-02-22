@@ -13,6 +13,7 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
+use clap::Parser;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 
@@ -27,6 +28,7 @@ use super::{
     notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
+use machine_manager::config::valid_id;
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
 
 /// Keyboard device descriptor
@@ -118,6 +120,17 @@ const DESC_STRINGS: [&str; 5] = [
     "1",
 ];
 
+#[derive(Parser, Clone, Debug, Default)]
+#[command(name = "usb_keyboard")]
+pub struct UsbKeyboardConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: String,
+    #[arg(long)]
+    bus: Option<String>,
+    #[arg(long)]
+    port: Option<String>,
+}
+
 /// USB keyboard device.
 pub struct UsbKeyboard {
     base: UsbDeviceBase,
@@ -164,9 +177,9 @@ impl KeyboardOpts for UsbKeyboardAdapter {
 }
 
 impl UsbKeyboard {
-    pub fn new(id: String) -> Self {
+    pub fn new(config: UsbKeyboardConfig) -> Self {
         Self {
-            base: UsbDeviceBase::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
+            base: UsbDeviceBase::new(config.id, USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Keyboard),
             cntlr: None,
         }

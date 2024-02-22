@@ -93,34 +93,6 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
     Ok(dev)
 }
 
-#[derive(Debug)]
-pub struct UsbKeyboardConfig {
-    pub id: Option<String>,
-}
-
-impl UsbKeyboardConfig {
-    fn new() -> Self {
-        UsbKeyboardConfig { id: None }
-    }
-}
-
-impl ConfigCheck for UsbKeyboardConfig {
-    fn check(&self) -> Result<()> {
-        check_id(self.id.clone(), "usb-keyboard")
-    }
-}
-
-pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
-    let mut cmd_parser = CmdParser::new("usb-kbd");
-    cmd_parser.push("").push("id").push("bus").push("port");
-    cmd_parser.parse(conf)?;
-    let mut dev = UsbKeyboardConfig::new();
-    dev.id = cmd_parser.get_value::<String>("id")?;
-
-    dev.check()?;
-    Ok(dev)
-}
-
 pub fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
     check_arg_too_long(&id.unwrap(), "id")?;
