@@ -58,11 +58,11 @@ use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
+use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::{
-    keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
-    UsbDevice,
+    keyboard::UsbKeyboard, storage::UsbStorage, xhci::xhci_pci::XhciPciDevice, UsbDevice,
 };
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -85,9 +85,7 @@ use machine_manager::config::{
     NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
-use machine_manager::config::{
-    parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
-};
+use machine_manager::config::{parse_usb_keyboard, parse_usb_storage, parse_xhci};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{MachineInterface, VmState};
 use migration::{MigrateOps, MigrationManager};
@@ -1729,9 +1727,8 @@ pub trait MachineOps {
                     .with_context(|| "Failed to realize usb keyboard device")?
             }
             "usb-tablet" => {
-                let device_cfg = parse_usb_tablet(cfg_args)?;
-                // SAFETY: id is already checked not none in parse_usb_tablet().
-                let tablet = UsbTablet::new(device_cfg.id.unwrap());
+                let config = UsbTabletConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let tablet = UsbTablet::new(config);
                 tablet
                     .realize()
                     .with_context(|| "Failed to realize usb tablet device")?

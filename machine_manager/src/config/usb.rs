@@ -121,34 +121,6 @@ pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
     Ok(dev)
 }
 
-#[derive(Debug)]
-pub struct UsbTabletConfig {
-    pub id: Option<String>,
-}
-
-impl UsbTabletConfig {
-    fn new() -> Self {
-        UsbTabletConfig { id: None }
-    }
-}
-
-impl ConfigCheck for UsbTabletConfig {
-    fn check(&self) -> Result<()> {
-        check_id(self.id.clone(), "usb-tablet")
-    }
-}
-
-pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
-    let mut cmd_parser = CmdParser::new("usb-tablet");
-    cmd_parser.push("").push("id").push("bus").push("port");
-    cmd_parser.parse(conf)?;
-    let mut dev = UsbTabletConfig::new();
-    dev.id = cmd_parser.get_value::<String>("id")?;
-
-    dev.check()?;
-    Ok(dev)
-}
-
 pub fn check_id(id: Option<String>, device: &str) -> Result<()> {
     check_arg_nonexist(id.clone(), "id", device)?;
     check_arg_too_long(&id.unwrap(), "id")?;
