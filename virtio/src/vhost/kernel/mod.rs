@@ -22,7 +22,6 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use log::debug;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
@@ -183,7 +182,7 @@ impl VhostMemInfo {
                 return;
             }
         }
-        debug!("Vhost: deleting mem region failed: not matched");
+        trace::vhost_delete_mem_range_failed();
     }
 }
 
@@ -265,6 +264,7 @@ impl AsRawFd for VhostBackend {
 
 impl VhostOps for VhostBackend {
     fn set_owner(&self) -> Result<()> {
+        trace::vhost_set_owner();
         // SAFETY: self.fd was created in function new() and the
         // return value will be checked later.
         let ret = unsafe { ioctl(self, VHOST_SET_OWNER()) };
@@ -277,6 +277,7 @@ impl VhostOps for VhostBackend {
     }
 
     fn reset_owner(&self) -> Result<()> {
+        trace::vhost_reset_owner();
         // SAFETY: self.fd was created in function new() and the
         // return value will be checked later.
         let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
@@ -298,10 +299,12 @@ impl VhostOps for VhostBackend {
                 "VHOST_GET_FEATURES".to_string()
             )));
         }
+        trace::vhost_get_features(avail_features);
         Ok(avail_features)
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
+        trace::vhost_set_features(features);
         // SAFETY: self.fd was created in function new()  and the
         // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_FEATURES(), &features) };
@@ -334,6 +337,7 @@ impl VhostOps for VhostBackend {
                 .copy_from_slice(region.as_bytes());
         }
 
+        trace::vhost_set_mem_table(&bytes);
         // SAFETY: self.fd was created in function new()  and the
         // return value will be checked later.
         let ret = unsafe { ioctl_with_ptr(self, VHOST_SET_MEM_TABLE(), bytes.as_ptr()) };
@@ -346,6 +350,7 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_vring_num(&self, queue_idx: usize, num: u16) -> Result<()> {
+        trace::vhost_set_vring_num(queue_idx, num);
         let vring_state = VhostVringState {
             index: queue_idx as u32,
             num: u32::from(num),
@@ -397,6 +402,7 @@ impl VhostOps for VhostBackend {
             log_guest_addr: 0_u64,
         };
 
+        trace::vhost_set_vring_addr(&vring_addr);
         // SAFETY: self.fd was created in function new()  and the
         // return value will be checked later.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_ADDR(), &vring_addr) };
@@ -409,6 +415,7 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_vring_base(&self, queue_idx: usize, num: u16) -> Result<()> {
+        trace::vhost_set_vring_base(queue_idx, num);
         let vring_state = VhostVringState {
             index: queue_idx as u32,
             num: u32::from(num),
@@ -438,10 +445,12 @@ impl VhostOps for VhostBackend {
                 "VHOST_GET_VRING_BASE".to_string()
             )));
         }
+        trace::vhost_get_vring_base(queue_idx, vring_state.num as u16);
         Ok(vring_state.num as u16)
     }
 
     fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
+        trace::vhost_set_vring_call(queue_idx, &fd);
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
@@ -458,6 +467,7 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
+        trace::vhost_set_vring_kick(queue_idx, &fd);
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),

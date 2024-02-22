@@ -794,6 +794,7 @@ impl VhostUserClient {
 
 impl VhostOps for VhostUserClient {
     fn set_owner(&self) -> Result<()> {
+        trace::vhost_set_owner();
         let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetOwner as u32, 0, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
@@ -821,10 +822,12 @@ impl VhostOps for VhostUserClient {
             .wait_ack_msg::<u64>(request)
             .with_context(|| "Failed to wait ack msg for getting features")?;
 
+        trace::vhost_get_features(features);
         Ok(features)
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
+        trace::vhost_set_features(features);
         self.set_value(VhostUserMsgReq::SetFeatures, features)
     }
 
@@ -858,10 +861,12 @@ impl VhostOps for VhostUserClient {
             )
             .with_context(|| "Failed to send msg for setting mem table")?;
 
+        trace::vhost_set_mem_table(&memcontext.regions);
         Ok(())
     }
 
     fn set_vring_num(&self, queue_idx: usize, num: u16) -> Result<()> {
+        trace::vhost_set_vring_num(queue_idx, num);
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -920,7 +925,7 @@ impl VhostOps for VhostUserClient {
                     queue.avail_ring.0
                 )
             })?;
-        let _vring_addr = VhostUserVringAddr {
+        let vring_addr = VhostUserVringAddr {
             index: index as u32,
             flags,
             desc_user_addr,
@@ -928,17 +933,19 @@ impl VhostOps for VhostUserClient {
             avail_user_addr,
             log_guest_addr: 0_u64,
         };
+        trace::vhost_set_vring_addr(&vring_addr);
         self.client
             .lock()
             .unwrap()
             .sock
-            .send_msg(Some(&hdr), Some(&_vring_addr), payload_opt, &[])
+            .send_msg(Some(&hdr), Some(&vring_addr), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting vring addr")?;
 
         Ok(())
     }
 
     fn set_vring_base(&self, queue_idx: usize, last_avail_idx: u16) -> Result<()> {
+        trace::vhost_set_vring_base(queue_idx, last_avail_idx);
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -964,6 +971,7 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
+        trace::vhost_set_vring_call(queue_idx, &fd);
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -988,6 +996,7 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
+        trace::vhost_set_vring_kick(queue_idx, &fd);
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -1012,6 +1021,7 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_vring_enable(&self, queue_idx: usize, status: bool) -> Result<()> {
+        trace::vhost_set_vring_enable(queue_idx, status);
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -1059,6 +1069,7 @@ impl VhostOps for VhostUserClient {
             .wait_ack_msg::<VhostUserVringState>(request)
             .with_context(|| "Failed to wait ack msg for getting vring base")?;
 
+        trace::vhost_get_vring_base(queue_idx, res.value as u16);
         Ok(res.value as u16)
     }
 }
