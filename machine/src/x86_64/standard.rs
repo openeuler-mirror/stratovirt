@@ -184,7 +184,7 @@ impl StdMachine {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
-            cpu.set_to_boot_state();
+            cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
         }
 
         locked_vm
@@ -200,8 +200,6 @@ impl StdMachine {
         }
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.reset()
-                .with_context(|| format!("Failed to reset vcpu{}", cpu_index))?;
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }

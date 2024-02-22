@@ -60,7 +60,7 @@ use cpu::capture_boot_signal;
 use cpu::CPUFeatures;
 use cpu::{
     ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
-    CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
+    CpuLifecycleState, RegsIndex, CPU, VCPU_TASK_SIGNAL,
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
@@ -391,29 +391,17 @@ impl KvmCpu {
     /// Init signal for `CPU` event.
     fn init_signals(&self) -> Result<()> {
         extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
-            match signum {
-                VCPU_TASK_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        vcpu.hypervisor_cpu().kick().unwrap();
-                        // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
-                        vcpu.pause_signal().store(true, Ordering::SeqCst);
-                        fence(Ordering::Release)
-                    });
-                }
-                VCPU_RESET_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        if let Err(e) = vcpu.hypervisor_cpu().reset_vcpu(vcpu.clone()) {
-                            error!("Failed to reset vcpu state: {:?}", e)
-                        }
-                    });
-                }
-                _ => {}
+            if signum == VCPU_TASK_SIGNAL {
+                let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                    vcpu.hypervisor_cpu().kick().unwrap();
+                    // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
+                    vcpu.pause_signal().store(true, Ordering::SeqCst);
+                    fence(Ordering::Release)
+                });
             }
         }
 
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
-            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
-        register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
             .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
 
         Ok(())
@@ -559,6 +547,12 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_set_regs(arch_cpu, regs_index)
     }
 
+    fn put_register(&self, cpu: Arc<CPU>) -> Result<()> {
+        self.arch_put_register(cpu)?;
+
+        Ok(())
+    }
+
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
         self.arch_reset_vcpu(cpu)?;
 
@@ -581,7 +575,7 @@ impl CPUHypervisorOps for KvmCpu {
         cpu_thread_worker.thread_cpu.set_tid();
 
         #[cfg(not(test))]
-        self.reset_vcpu(cpu_thread_worker.thread_cpu.clone())?;
+        self.put_register(cpu_thread_worker.thread_cpu.clone())?;
 
         // Wait for all vcpu to complete the running
         // environment initialization.
@@ -697,19 +691,6 @@ impl CPUHypervisorOps for KvmCpu {
         drop(cpu_state);
         cvar.notify_one();
         Ok(())
-    }
-
-    fn reset(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()> {
-        let task = task.lock().unwrap();
-        match task.as_ref() {
-            Some(thread) => thread
-                .kill(VCPU_RESET_SIGNAL)
-                .with_context(|| CpuError::KickVcpu("Fail to reset vcpu".to_string())),
-            None => {
-                warn!("VCPU thread not started, no need to reset");
-                Ok(())
-            }
-        }
     }
 }
 
@@ -1041,7 +1022,7 @@ mod test {
 
         // test setup special registers
         let cpu_caps = CPUCaps::init_capabilities();
-        assert!(hypervisor_cpu.reset_vcpu(Arc::new(cpu)).is_ok());
+        assert!(hypervisor_cpu.put_register(Arc::new(cpu)).is_ok());
         let x86_sregs = hypervisor_cpu.fd.get_sregs().unwrap();
         assert_eq!(x86_sregs.cs, code_seg);
         assert_eq!(x86_sregs.ds, data_seg);

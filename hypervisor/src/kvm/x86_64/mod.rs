@@ -227,7 +227,7 @@ impl KvmCpu {
         Ok(())
     }
 
-    pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+    pub fn arch_put_register(&self, cpu: Arc<CPU>) -> Result<()> {
         let locked_arch_cpu = cpu.arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
 
@@ -286,5 +286,10 @@ impl KvmCpu {
             .with_context(|| format!("Failed to set vcpu events for CPU {}", apic_id))?;
 
         Ok(())
+    }
+
+    pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+        cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
+        self.arch_put_register(cpu)
     }
 }

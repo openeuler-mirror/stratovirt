@@ -397,11 +397,16 @@ impl KvmCpu {
         Ok(true)
     }
 
-    pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+    pub fn arch_put_register(&self, cpu: Arc<CPU>) -> Result<()> {
         let arch_cpu = &cpu.arch_cpu;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::MpState)?;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)
+    }
+
+    pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+        cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
+        self.arch_vcpu_init()
     }
 }

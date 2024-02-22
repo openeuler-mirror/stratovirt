@@ -207,13 +207,10 @@ impl StdMachine {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
-            cpu.set_to_boot_state();
+            cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
             if cpu_index == 0 {
                 fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
             }
-            cpu.hypervisor_cpu()
-                .vcpu_init()
-                .with_context(|| "Failed to init vcpu")?;
         }
 
         locked_vm
