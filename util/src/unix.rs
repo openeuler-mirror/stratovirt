@@ -223,6 +223,22 @@ impl UnixSock {
         Ok(())
     }
 
+    pub fn listen_set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+        self.listener
+            .as_ref()
+            .unwrap()
+            .set_nonblocking(nonblocking)
+            .with_context(|| "couldn't set nonblocking for unix sock listener")
+    }
+
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+        self.sock
+            .as_ref()
+            .unwrap()
+            .set_nonblocking(nonblocking)
+            .with_context(|| "couldn't set nonblocking")
+    }
+
     /// Get Stream's fd from `UnixSock`.
     pub fn get_stream_raw_fd(&self) -> RawFd {
         self.sock.as_ref().unwrap().as_raw_fd()

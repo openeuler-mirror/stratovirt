@@ -25,6 +25,7 @@ sasl2-sys = { version = "0.1.20", optional = true }
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
 trace = { path = "../trace" }
+address_space = { path = "../address_space" }
 
 [features]
 keycode = []
@@ -33,3 +34,4 @@ console = ["pixman"]
 gtk = ["console", "keycode", "dep:cairo-rs", "dep:gtk", "dep:gettext-rs", "machine_manager/gtk"]
 vnc = ["console", "keycode", "machine_manager/vnc"]
 vnc_auth = ["vnc", "dep:rustls", "dep:rustls-pemfile", "dep:sasl2-sys", "machine_manager/vnc_auth"]
+ohui_srv = ["console", "keycode", "machine_manager/ohui_srv"]
