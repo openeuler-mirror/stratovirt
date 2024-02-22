@@ -216,7 +216,7 @@ impl KvmCpu {
                 let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES)?;
                 self.fd.get_reg_list(&mut cpreg_list)?;
                 locked_arch_cpu.cpreg_len = 0;
-                for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
+                for cpreg in cpreg_list.as_slice() {
                     let mut cpreg_entry = CpregListEntry {
                         reg_id: *cpreg,
                         value: 0,
@@ -225,6 +225,7 @@ impl KvmCpu {
                         // We sync these cpreg by hand, such as core regs.
                         continue;
                     }
+                    let index = locked_arch_cpu.cpreg_len;
                     locked_arch_cpu.cpreg_list[index] = cpreg_entry;
                     locked_arch_cpu.cpreg_len += 1;
                 }
@@ -368,8 +369,8 @@ impl KvmCpu {
     }
 
     fn reg_sync_by_cpreg_list(reg_id: u64) -> Result<bool> {
-        let coproc = reg_id & KVM_REG_ARM_COPROC_MASK as u64;
-        if coproc != KVM_REG_ARM_CORE as u64 {
+        let coproc = reg_id as u32 & KVM_REG_ARM_COPROC_MASK;
+        if coproc == KVM_REG_ARM_CORE {
             return Ok(false);
         }
 

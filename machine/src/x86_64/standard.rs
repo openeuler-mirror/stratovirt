@@ -544,19 +544,12 @@ impl MachineOps for StdMachine {
         locked_vm.add_devices(vm_config)?;
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
-
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
-        } else {
-            None
-        };
+        let boot_config = locked_vm.load_boot_source(fwcfg.as_ref())?;
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
-
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -567,32 +560,30 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
+        locked_vm.init_cpu_controller(boot_config, topology, vm.clone())?;
 
-        if migrate.0 == MigrateMode::Unknown {
-            if let Some(fw_cfg) = fwcfg {
-                locked_vm
-                    .build_acpi_tables(&fw_cfg)
-                    .with_context(|| "Failed to create ACPI tables")?;
-                let mut mem_array = Vec::new();
-                let mem_size = vm_config.machine_config.mem_config.mem_size;
-                let below_size =
-                    std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+        if let Some(fw_cfg) = fwcfg {
+            locked_vm
+                .build_acpi_tables(&fw_cfg)
+                .with_context(|| "Failed to create ACPI tables")?;
+            let mut mem_array = Vec::new();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            let below_size =
+                std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+            mem_array.push((
+                MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+                below_size,
+            ));
+            if mem_size > below_size {
                 mem_array.push((
-                    MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
-                    below_size,
+                    MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                    mem_size - below_size,
                 ));
-                if mem_size > below_size {
-                    mem_array.push((
-                        MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
-                        mem_size - below_size,
-                    ));
-                }
-
-                locked_vm
-                    .build_smbios(&fw_cfg, mem_array)
-                    .with_context(|| "Failed to create smbios tables")?;
             }
+
+            locked_vm
+                .build_smbios(&fw_cfg, mem_array)
+                .with_context(|| "Failed to create smbios tables")?;
         }
 
         locked_vm
