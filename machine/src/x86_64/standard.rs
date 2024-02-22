@@ -45,7 +45,7 @@ use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -628,9 +628,9 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
+    fn add_pflash_device(&mut self, configs: &[DriveConfig]) -> Result<()> {
         let mut configs_vec = configs.to_vec();
-        configs_vec.sort_by_key(|c| c.unit);
+        configs_vec.sort_by_key(|c| c.unit.unwrap());
         // The two PFlash devices locates below 4GB, this variable represents the end address
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
@@ -638,7 +638,7 @@ impl MachineOps for StdMachine {
             let mut fd = self.fetch_drive_file(&config.path_on_host)?;
             let pfl_size = fd.metadata().unwrap().len();
 
-            if config.unit == 0 {
+            if config.unit.unwrap() == 0 {
                 // According to the Linux/x86 boot protocol, the memory region of
                 // 0x000000 - 0x100000 (1 MiB) is for BIOS usage. And the top 128
                 // KiB is for BIOS code which is stored in the first PFlash.
@@ -674,7 +674,7 @@ impl MachineOps for StdMachine {
                 sector_len,
                 4_u32,
                 1_u32,
-                config.read_only,
+                config.readonly,
             )
             .with_context(|| MachineError::InitPflashErr)?;
             PFlash::realize(

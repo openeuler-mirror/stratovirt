@@ -86,7 +86,7 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
         .remove(&storage_drive)
         .with_context(|| "No drive configured matched for usb storage device.")?;
     dev.scsi_cfg.path_on_host = drive_arg.path_on_host.clone();
-    dev.scsi_cfg.read_only = drive_arg.read_only;
+    dev.scsi_cfg.read_only = drive_arg.readonly;
     dev.scsi_cfg.aio_type = drive_arg.aio;
     dev.scsi_cfg.direct = drive_arg.direct;
     dev.scsi_cfg.format = drive_arg.format;

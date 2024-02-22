@@ -83,8 +83,8 @@ use machine_manager::config::{
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
     parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
     parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
-    BootSource, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
-    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
@@ -1828,7 +1828,7 @@ pub trait MachineOps {
         None
     }
 
-    fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
+    fn add_pflash_device(&mut self, _configs: &[DriveConfig]) -> Result<()> {
         bail!("Pflash device is not supported!");
     }
 

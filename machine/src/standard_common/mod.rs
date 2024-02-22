@@ -1272,7 +1272,7 @@ impl DeviceInterface for StdMachine {
         if let Err(e) = self.register_drive_file(
             &config.id,
             &args.file.filename,
-            config.read_only,
+            config.readonly,
             config.direct,
         ) {
             error!("{:?}", e);
@@ -1672,12 +1672,7 @@ impl DeviceInterface for StdMachine {
                         None,
                     );
                 }
-                let drive_cfg = match self
-                    .get_vm_config()
-                    .lock()
-                    .unwrap()
-                    .add_block_drive(cmd_args[2])
-                {
+                let drive_cfg = match self.get_vm_config().lock().unwrap().add_drive(cmd_args[2]) {
                     Ok(cfg) => cfg,
                     Err(ref e) => {
                         return Response::create_error_response(
@@ -1689,7 +1684,7 @@ impl DeviceInterface for StdMachine {
                 if let Err(e) = self.register_drive_file(
                     &drive_cfg.id,
                     &drive_cfg.path_on_host,
-                    drive_cfg.read_only,
+                    drive_cfg.readonly,
                     drive_cfg.direct,
                 ) {
                     error!("{:?}", e);
@@ -1915,8 +1910,10 @@ impl DeviceInterface for StdMachine {
 fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     let mut config = DriveConfig {
         id: args.node_name.clone(),
+        drive_type: "none".to_string(),
+        unit: None,
         path_on_host: args.file.filename.clone(),
-        read_only: args.read_only.unwrap_or(false),
+        readonly: args.read_only.unwrap_or(false),
         direct: true,
         iops: args.iops,
         aio: args.file.aio,
