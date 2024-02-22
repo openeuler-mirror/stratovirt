@@ -283,13 +283,13 @@ macro_rules! create_device_add_matches {
         match $command {
             $(
                 $($driver_name)|+ => {
-                    $controller.$function_name($($arg),*)?;
+                    $controller.$function_name($($arg),*).with_context(|| format!("add {} fail.", $command))?;
                 },
             )*
             $(
                 #[cfg($($features)*)]
                 $driver_name1 => {
-                    $controller.$function_name1($($arg1),*)?;
+                    $controller.$function_name1($($arg1),*).with_context(|| format!("add {} fail.", $command))?;
                 },
             )*
             _ => bail!("Unsupported device: {:?}", $command),
