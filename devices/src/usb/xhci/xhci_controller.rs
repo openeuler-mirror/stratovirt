@@ -64,6 +64,10 @@ const TRB_CR_DC: u32 = 1 << 9;
 const TRB_CR_SLOTID_SHIFT: u32 = 24;
 const TRB_CR_SLOTID_MASK: u32 = 0xff;
 const COMMAND_LIMIT: u32 = 256;
+const EP_CTX_MAX_PSTREAMS_SHIFT: u32 = 10;
+const EP_CTX_MAX_PSTREAMS_MASK: u32 = 0xf;
+const EP_CTX_LSA_SHIFT: u32 = 15;
+const EP_CTX_LSA_MASK: u32 = 0x01;
 const EP_CTX_INTERVAL_SHIFT: u32 = 16;
 const EP_CTX_INTERVAL_MASK: u32 = 0xff;
 const EVENT_TRB_CCODE_SHIFT: u32 = 24;
@@ -110,6 +114,17 @@ const EP_CONTEXT_EP_TYPE_MASK: u32 = 0x7;
 const EP_CONTEXT_EP_TYPE_SHIFT: u32 = 3;
 const ISO_BASE_TIME_INTERVAL: u64 = 125000;
 const MFINDEX_WRAP_NUM: u64 = 0x4000;
+/// Stream Context.
+const STREAM_CTX_SCT_SHIFT: u32 = 1;
+const STREAM_CTX_SCT_MASK: u32 = 0x7;
+const _STREAM_CTX_SCT_SECONDARY_TR: u32 = 0;
+const STREAM_CTX_SCT_PRIMARY_TR: u32 = 1;
+const _STREAM_CTX_SCT_PRIMARY_SSA_8: u32 = 2;
+const _STREAM_CTX_SCT_PRIMARY_SSA_16: u32 = 3;
+const _STREAM_CTX_SCT_PRIMARY_SSA_32: u32 = 4;
+const _STREAM_CTX_SCT_PRIMARY_SSA_64: u32 = 5;
+const _STREAM_CTX_SCT_PRIMARY_SSA_128: u32 = 6;
+const _STREAM_CTX_SCT_PRIMARY_SSA_256: u32 = 7;
 
 type DmaAddr = u64;
 
@@ -286,6 +301,10 @@ pub struct XhciEpContext {
     mfindex_last: u64,
     transfers: LinkedList<Arc<Mutex<XhciTransfer>>>,
     retry: Option<Arc<Mutex<XhciTransfer>>>,
+    mem: Arc<AddressSpace>,
+    max_pstreams: u32,
+    lsa: bool,
+    stream_array: Option<Arc<XhciStreamArray>>,
 }
 
 impl XhciEpContext {
@@ -302,17 +321,33 @@ impl XhciEpContext {
             mfindex_last: 0,
             transfers: LinkedList::new(),
             retry: None,
+            mem: Arc::clone(mem),
+            max_pstreams: 0,
+            lsa: false,
+            stream_array: None,
         }
     }
 
     /// Init the endpoint context used the context read from memory.
-    fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) {
+    fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) -> Result<()> {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
         self.output_ctx_addr.store(output_ctx, Ordering::SeqCst);
-        self.ring.init(dequeue);
-        self.ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
+        self.max_pstreams = (ctx.ep_info >> EP_CTX_MAX_PSTREAMS_SHIFT) & EP_CTX_MAX_PSTREAMS_MASK;
+        self.lsa = ((ctx.ep_info >> EP_CTX_LSA_SHIFT) & EP_CTX_LSA_MASK) != 0;
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
+
+        if self.max_pstreams == 0 {
+            self.ring.init(dequeue);
+            self.ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
+        } else {
+            let mut stream_array =
+                XhciStreamArray::new(&self.mem, &self.output_ctx_addr, self.max_pstreams);
+            stream_array.init(dequeue)?;
+            self.stream_array = Some(Arc::new(stream_array));
+        }
+
+        Ok(())
     }
 
     fn get_ep_state(&self) -> u32 {
@@ -353,6 +388,41 @@ impl XhciEpContext {
             }
         }
         self.transfers = undo;
+    }
+
+    fn _get_stream_context(&self, stream_id: u32) -> Result<&XhciStreamContext> {
+        if self.stream_array.is_none() {
+            bail!("Endpoint {} does not support streams.", self.epid);
+        }
+
+        if !self.lsa {
+            bail!("Only Linear Streams Array (LSA) is supported.")
+        }
+
+        // SAFETY: Stream Array was checked to be not None.
+        let pstreams = &self.stream_array.as_ref().unwrap().0;
+        let pstreams_num = pstreams.len() as u32;
+
+        if stream_id >= pstreams_num || stream_id == 0 {
+            bail!(
+                "Stream ID {} is either invalid or reserved, max number of streams is {}.",
+                stream_id,
+                pstreams_num
+            );
+        }
+
+        let stream_context = &pstreams[stream_id as usize];
+
+        if self.lsa && (stream_context.sct != STREAM_CTX_SCT_PRIMARY_TR) {
+            bail!(
+                "Invalid SCT {} on stream {}, LSA is {}",
+                stream_context.sct,
+                stream_id,
+                self.lsa
+            );
+        }
+
+        Ok(stream_context)
     }
 }
 
@@ -678,6 +748,83 @@ pub trait DwordOrder: Default + Copy + Send + Sync {
         unsafe { from_raw_parts_mut(self as *mut Self as *mut u32, size_of::<Self>() / 4) }
     }
 }
+
+#[repr(transparent)]
+pub struct XhciStreamArray(Vec<XhciStreamContext>);
+
+impl XhciStreamArray {
+    fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>, max_pstreams: u32) -> Self {
+        let pstreams_num = 1 << (max_pstreams + 1);
+        let pstreams = (0..pstreams_num)
+            .map(|_| XhciStreamContext::new(mem, addr))
+            .collect();
+        XhciStreamArray(pstreams)
+    }
+
+    fn init(&mut self, mut dequeue: u64) -> Result<()> {
+        for stream_context in self.0.iter_mut() {
+            stream_context.init(dequeue)?;
+            dequeue += std::mem::size_of::<XhciStreamCtx>() as u64;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct XhciStreamContext {
+    /// Memory address space.
+    mem: Arc<AddressSpace>,
+    /// Address of this Stream Context.
+    dequeue: AtomicU64,
+    /// Stream Context Type (SCT).
+    sct: u32,
+    /// Secondary Stream Array.
+    _secondary_streams: Option<Arc<XhciStreamArray>>,
+    /// Transfer Ring.
+    ring: Option<Arc<XhciTransferRing>>,
+}
+
+impl XhciStreamContext {
+    fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>) -> Self {
+        // NOTE: No Secondary Stream Array support yet.
+        Self {
+            mem: Arc::clone(mem),
+            dequeue: AtomicU64::new(0),
+            sct: STREAM_CTX_SCT_PRIMARY_TR,
+            _secondary_streams: None,
+            ring: Some(Arc::new(XhciTransferRing::new(mem, addr))),
+        }
+    }
+
+    fn init(&mut self, addr: u64) -> Result<()> {
+        let mut stream_ctx = XhciStreamCtx::default();
+        dma_read_u32(&self.mem, GuestAddress(addr), stream_ctx.as_mut_dwords())?;
+        let dequeue = addr64_from_u32(stream_ctx.deq_lo & !0xf, stream_ctx.deq_hi);
+        self.set_dequeue_ptr(addr);
+        self.sct = (stream_ctx.deq_lo >> STREAM_CTX_SCT_SHIFT) & STREAM_CTX_SCT_MASK;
+        self.ring.as_ref().unwrap().init(dequeue);
+        Ok(())
+    }
+
+    pub fn get_dequeue_ptr(&self) -> u64 {
+        self.dequeue.load(Ordering::Acquire)
+    }
+
+    pub fn set_dequeue_ptr(&self, addr: u64) {
+        self.dequeue.store(addr, Ordering::Release);
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct XhciStreamCtx {
+    pub deq_lo: u32,
+    pub deq_hi: u32,
+    pub stopped_edtla: u32,
+    pub reserved: u32,
+}
+
+impl DwordOrder for XhciStreamCtx {}
 
 /// Xhci controller device.
 pub struct XhciDevice {
@@ -1422,7 +1569,7 @@ impl XhciDevice {
         epctx.epid = ep_id;
         epctx.enabled = true;
         // It is safe to use plus here because we previously verify the address on the outer layer.
-        epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx);
+        epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx)?;
         epctx.set_ep_state(EP_RUNNING);
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= EP_RUNNING;
