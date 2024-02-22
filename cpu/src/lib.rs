@@ -84,12 +84,6 @@ pub const VCPU_TASK_SIGNAL: i32 = 34;
 pub const VCPU_TASK_SIGNAL: i32 = 35;
 #[cfg(target_env = "ohos")]
 pub const VCPU_TASK_SIGNAL: i32 = 40;
-#[cfg(target_env = "gnu")]
-pub const VCPU_RESET_SIGNAL: i32 = 35;
-#[cfg(target_env = "musl")]
-pub const VCPU_RESET_SIGNAL: i32 = 36;
-#[cfg(target_env = "ohos")]
-pub const VCPU_RESET_SIGNAL: i32 = 41;
 
 /// Watch `0x3ff` IO port to record the magic value trapped from guest kernel.
 #[cfg(all(target_arch = "x86_64", feature = "boot_time"))]
@@ -153,9 +147,6 @@ pub trait CPUInterface {
     /// Make `CPU` lifecycle to `Stopping`, then `Stopped`.
     fn destroy(&self) -> Result<()>;
 
-    /// Reset registers value for `CPU`.
-    fn reset(&self) -> Result<()>;
-
     /// Make `CPU` destroy because of guest inner shutdown.
     fn guest_shutdown(&self) -> Result<()>;
 
@@ -182,6 +173,8 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn get_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
 
     fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()>;
+
+    fn put_register(&self, cpu: Arc<CPU>) -> Result<()>;
 
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()>;
 
@@ -211,8 +204,6 @@ pub trait CPUHypervisorOps: Send + Sync {
         state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
         pause_signal: Arc<AtomicBool>,
     ) -> Result<()>;
-
-    fn reset(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()>;
 }
 
 /// `CPU` is a wrapper around creating and using a hypervisor-based VCPU.
@@ -266,10 +257,6 @@ impl CPU {
         }
     }
 
-    pub fn set_to_boot_state(&self) {
-        self.arch_cpu.lock().unwrap().set(&self.boot_state);
-    }
-
     /// Get this `CPU`'s ID.
     pub fn id(&self) -> u8 {
         self.id
@@ -309,6 +296,10 @@ impl CPU {
 
     pub fn vm(&self) -> Weak<Mutex<dyn MachineInterface + Send + Sync>> {
         self.vm.clone()
+    }
+
+    pub fn boot_state(&self) -> Arc<Mutex<ArchCPU>> {
+        self.boot_state.clone()
     }
 
     pub fn pause_signal(&self) -> Arc<AtomicBool> {
@@ -390,10 +381,6 @@ impl CPUInterface for CPU {
             })?;
         local_cpu.set_task(Some(handle));
         Ok(())
-    }
-
-    fn reset(&self) -> Result<()> {
-        self.hypervisor_cpu.reset(self.task.clone())
     }
 
     fn kick(&self) -> Result<()> {
