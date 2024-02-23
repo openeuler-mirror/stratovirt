@@ -14,21 +14,26 @@
 //! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait
 //! CameraBackend.
 
-#[cfg(not(target_env = "ohos")]
+#[cfg(not(target_env = "ohos"))]
 pub mod demo;
+#[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+pub mod ohos;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-#[cfg(not(target_env = "ohos")]
+#[cfg(not(target_env = "ohos"))]
 use self::demo::DemoCameraBackend;
+#[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+use self::ohos::ohcam::OhCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
 use crate::usb::camera::UsbCameraConfig;
-use machine_manager::config::{CamBackendType, CameraDevConfig};
+use machine_manager::config::{CamBackendType, CameraDevConfig, ConfigError};
 use util::aio::Iovec;
 
 /// Frame interval in 100ns units.
@@ -73,6 +78,15 @@ pub struct CameraFormatList {
     pub format: FmtType,
     pub fmt_index: u8,
     pub frame: Vec<CameraFrame>,
+}
+
+pub fn check_path(path: &str) -> Result<String> {
+    let filepath = path.to_string();
+    if !Path::new(path).exists() {
+        bail!(ConfigError::FileNotExist(filepath));
+    }
+
+    Ok(filepath)
 }
 
 pub fn get_video_frame_size(width: u32, height: u32, fmt: FmtType) -> Result<u32> {
@@ -174,6 +188,7 @@ pub trait CameraBackend: Send + Sync {
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
 
+#[allow(unused_variables)]
 pub fn create_cam_backend(
     config: UsbCameraConfig,
     cameradev: CameraDevConfig,
@@ -185,12 +200,16 @@ pub fn create_cam_backend(
             cameradev.path,
             config.iothread,
         )?)),
-        #[cfg(not(target_env = "ohos")]
+        #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+        CamBackendType::OhCamera => Arc::new(Mutex::new(OhCameraBackend::new(
+            cameradev.id,
+            cameradev.path,
+        )?)),
+        #[cfg(not(target_env = "ohos"))]
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
             config.id,
             cameradev.path,
         )?)),
-        _ => bail!("Not supportted CamBackendType."),
     };
 
     Ok(cam)

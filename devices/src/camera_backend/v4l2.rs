@@ -28,7 +28,7 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::{PIXFMT_MJPG, PIXFMT_NV12, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
-    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
+    check_path, CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -80,9 +80,10 @@ pub struct V4l2CameraBackend {
 impl V4l2CameraBackend {
     pub fn new(id: String, path: String, iothread: Option<String>) -> Result<Self> {
         let backend = V4l2Backend::new(path.clone(), BUFFER_CNT)?;
+        let checked_path = check_path(path.as_str())?;
         let cam = V4l2CameraBackend {
             id,
-            dev_path: path,
+            dev_path: checked_path,
             sample: Arc::new(Mutex::new(Sample::default())),
             backend: Some(Arc::new(backend)),
             running: false,

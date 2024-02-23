@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use super::INTERVALS_PER_SEC;
 use crate::camera_backend::{
-    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
+    check_path, CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType,
 };
 use util::aio::{mem_from_buf, Iovec};
@@ -140,9 +140,10 @@ pub struct DemoCameraBackend {
 
 impl DemoCameraBackend {
     pub fn new(id: String, config_path: String) -> Result<Self> {
+        let checked_path = check_path(config_path.as_str())?;
         Ok(DemoCameraBackend {
             id,
-            config_path,
+            config_path: checked_path,
             frame_image: Arc::new(Mutex::new(FrameImage::default())),
             notify_cb: None,
             broken_cb: None,
