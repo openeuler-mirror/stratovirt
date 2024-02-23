@@ -121,6 +121,8 @@ impl PL011State {
 #[allow(clippy::upper_case_acronyms)]
 pub struct PL011 {
     base: SysBusDevBase,
+    /// Whether rx paused
+    paused: bool,
     /// Device state.
     state: PL011State,
     /// Character device for redirection.
@@ -136,6 +138,7 @@ impl PL011 {
                 interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
                 ..Default::default()
             },
+            paused: false,
             state: PL011State::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
         })
@@ -189,6 +192,14 @@ impl PL011 {
         .with_context(|| LegacyError::RegNotifierErr)?;
         Ok(())
     }
+
+    fn unpause_rx(&mut self) {
+        if self.paused {
+            trace::pl011_unpause_rx();
+            self.paused = false;
+            self.chardev.lock().unwrap().unpause_rx();
+        }
+    }
 }
 
 impl InputReceiver for PL011 {
@@ -217,6 +228,11 @@ impl InputReceiver for PL011 {
 
     fn remain_size(&mut self) -> usize {
         PL011_FIFO_SIZE - self.state.read_count as usize
+    }
+
+    fn set_paused(&mut self) {
+        trace::pl011_pause_rx();
+        self.paused = true;
     }
 }
 
@@ -249,6 +265,8 @@ impl SysBusDevOps for PL011 {
         match offset >> 2 {
             0 => {
                 // Data register.
+                self.unpause_rx();
+
                 self.state.flags &= !(PL011_FLAG_RXFF as u32);
                 let c = self.state.rfifo[self.state.read_pos as usize];
 
@@ -370,6 +388,7 @@ impl SysBusDevOps for PL011 {
                 // PL011 works in two modes: character mode or FIFO mode.
                 // Reset FIFO if the mode is changed.
                 if (self.state.lcr ^ value) & 0x10 != 0 {
+                    self.unpause_rx(); // fifo cleared, chardev-rx must be unpaused
                     self.state.read_count = 0;
                     self.state.read_pos = 0;
                 }
@@ -421,6 +440,7 @@ impl StateTransfer for PL011 {
         self.state = *PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 
+        self.unpause_rx();
         Ok(())
     }
 

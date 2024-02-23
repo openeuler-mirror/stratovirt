@@ -65,6 +65,18 @@ message = "ibrd {}, fbrd {}"
 enabled = true
 
 [[events]]
+name = "pl011_pause_rx"
+args = ""
+message = "rx paused"
+enabled = true
+
+[[events]]
+name = "pl011_unpause_rx"
+args = ""
+message = "rx unpause"
+enabled = true
+
+[[events]]
 name = "pl011_receive"
 args = "value: u32, read_count: u32"
 message = "new char 0x{:08x}, read_count now {}"
@@ -98,6 +110,18 @@ enabled = true
 name = "serial_receive"
 args = "len: usize"
 message = "data length {}"
+enabled = true
+
+[[events]]
+name = "serial_pause_rx"
+args = ""
+message = "rx paused"
+enabled = true
+
+[[events]]
+name = "serial_unpause_rx"
+args = ""
+message = "rx unpause"
 enabled = true
 
 [[events]]

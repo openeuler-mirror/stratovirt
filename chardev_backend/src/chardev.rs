@@ -39,15 +39,16 @@ use util::set_termi_raw_mode;
 use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
 
-/// When the receiver is not setup or remain_size is 0, we will delay the listen.
-const HANDLE_INPUT_DELAY: Duration = Duration::from_millis(50);
-
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
     /// Handle the input data and trigger interrupt if necessary.
     fn receive(&mut self, buffer: &[u8]);
     /// Return the remain space size of receiver buffer.
+    /// 0 if receiver is not ready or no space in FIFO
     fn remain_size(&mut self) -> usize;
+    /// Tell receiver that RX is paused and receiver
+    /// must unpause it when it becomes ready
+    fn set_paused(&mut self);
 }
 
 /// Provide the trait that notifies device the socket is opened or closed.
@@ -78,9 +79,12 @@ pub struct Chardev {
     receiver: Option<Arc<Mutex<dyn InputReceiver>>>,
     /// Used to notify device the socket is opened or closed.
     dev: Option<Arc<Mutex<dyn ChardevNotifyDevice>>>,
-    /// Timer used to relisten on input stream. When the receiver
-    /// is not setup or remain_size is 0, we will delay the listen.
-    relisten_timer: Option<u64>,
+    /// Whether event-handling of device is initialized
+    /// and we wait for port to become available
+    wait_port: bool,
+    /// Scheduled DPC to unpause input stream.
+    /// Unpause must be done inside event-loop
+    unpause_timer: Option<u64>,
 }
 
 impl Chardev {
@@ -94,7 +98,8 @@ impl Chardev {
             stream_fd: None,
             receiver: None,
             dev: None,
-            relisten_timer: None,
+            wait_port: false,
+            unpause_timer: None,
         }
     }
 
@@ -187,22 +192,49 @@ impl Chardev {
 
     pub fn set_receiver<T: 'static + InputReceiver>(&mut self, dev: &Arc<Mutex<T>>) {
         self.receiver = Some(dev.clone());
+        if self.wait_port {
+            warn!("Serial port for chardev \'{}\' appeared.", &self.id);
+            self.wait_port = false;
+            self.unpause_rx();
+        }
+    }
+
+    fn wait_for_port(&mut self, input_fd: RawFd) -> EventNotifier {
+        // set_receiver() will unpause rx
+        warn!(
+            "Serial port for chardev \'{}\' is not ready yet, waiting for port.",
+            &self.id
+        );
+
+        self.wait_port = true;
+
+        EventNotifier::new(
+            NotifierOperation::Modify,
+            input_fd,
+            None,
+            EventSet::HANG_UP,
+            vec![],
+        )
     }
 
     pub fn set_device(&mut self, dev: Arc<Mutex<dyn ChardevNotifyDevice>>) {
         self.dev = Some(dev.clone());
     }
 
-    fn cancel_relisten_timer(&mut self) {
-        let main_loop = EventLoop::get_ctx(None).unwrap();
-        if let Some(timer_id) = self.relisten_timer {
-            main_loop.timer_del(timer_id);
-            self.relisten_timer = None;
+    pub fn unpause_rx(&mut self) {
+        // Receiver calls this if it returned 0 from remain_size()
+        // and now it's ready to accept rx-data again
+        if self.input.is_none() {
+            error!("unpause called for non-initialized device \'{}\'", &self.id);
+            return;
         }
-    }
+        if self.unpause_timer.is_some() {
+            return; // already set
+        }
 
-    fn set_relisten_timer(&mut self, input_fd: RawFd) -> EventNotifier {
-        let relisten_fn = Box::new(move || {
+        let input_fd = self.input.clone().unwrap().lock().unwrap().as_raw_fd();
+
+        let unpause_fn = Box::new(move || {
             let res = EventLoop::update_event(
                 vec![EventNotifier::new(
                     NotifierOperation::Modify,
@@ -214,22 +246,20 @@ impl Chardev {
                 None,
             );
             if let Err(e) = res {
-                error!("Failed to relisten on fd {input_fd}: {e:?}");
+                error!("Failed to unpause on fd {input_fd}: {e:?}");
             }
         });
-
         let main_loop = EventLoop::get_ctx(None).unwrap();
-        let timer_id = main_loop.timer_add(relisten_fn, HANDLE_INPUT_DELAY);
-        self.cancel_relisten_timer();
-        self.relisten_timer = Some(timer_id);
+        let timer_id = main_loop.timer_add(unpause_fn, Duration::ZERO);
+        self.unpause_timer = Some(timer_id);
+    }
 
-        EventNotifier::new(
-            NotifierOperation::Modify,
-            input_fd,
-            None,
-            EventSet::HANG_UP,
-            vec![],
-        )
+    fn cancel_unpause_timer(&mut self) {
+        if let Some(timer_id) = self.unpause_timer {
+            let main_loop = EventLoop::get_ctx(None).unwrap();
+            main_loop.timer_del(timer_id);
+            self.unpause_timer = None;
+        }
     }
 }
 
@@ -284,13 +314,12 @@ fn get_terminal_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> 
     let event_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
         let mut locked_chardev = cloned_chardev.lock().unwrap();
         if locked_chardev.receiver.is_none() {
-            warn!(
-                "Failed to read input data from chardev \'{}\', receiver is none",
-                &locked_chardev.id
-            );
-            let cancel_listen = locked_chardev.set_relisten_timer(input_fd);
-            return Some(vec![cancel_listen]);
+            let wait_port = locked_chardev.wait_for_port(input_fd);
+            return Some(vec![wait_port]);
         }
+
+        locked_chardev.cancel_unpause_timer(); // it will be rescheduled if needed
+
         let receiver = locked_chardev.receiver.clone().unwrap();
         let input = locked_chardev.input.clone().unwrap();
         drop(locked_chardev);
@@ -298,10 +327,15 @@ fn get_terminal_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> 
         let mut locked_receiver = receiver.lock().unwrap();
         let buff_size = locked_receiver.remain_size();
         if buff_size == 0 {
-            drop(locked_receiver);
-            let mut locked_chardev = cloned_chardev.lock().unwrap();
-            let cancel_listen = locked_chardev.set_relisten_timer(input_fd);
-            return Some(vec![cancel_listen]);
+            locked_receiver.set_paused();
+
+            return Some(vec![EventNotifier::new(
+                NotifierOperation::Modify,
+                input_fd,
+                None,
+                EventSet::HANG_UP,
+                vec![],
+            )]);
         }
 
         let mut buffer = vec![0_u8; buff_size];
@@ -372,7 +406,7 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             locked_chardev.input = None;
             locked_chardev.output = None;
             locked_chardev.stream_fd = None;
-            locked_chardev.cancel_relisten_timer();
+            locked_chardev.cancel_unpause_timer();
             info!(
                 "Chardev \'{}\' event, connection closed: {}",
                 &locked_chardev.id, connection_info
@@ -402,14 +436,13 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
 
             let input_ready = event & EventSet::IN == EventSet::IN;
             if input_ready {
+                locked_chardev.cancel_unpause_timer();
+
                 if locked_chardev.receiver.is_none() {
-                    warn!(
-                        "Failed to read input data from chardev \'{}\', receiver is none",
-                        &locked_chardev.id
-                    );
-                    let cancel_listen = locked_chardev.set_relisten_timer(stream_fd);
-                    return Some(vec![cancel_listen]);
+                    let wait_port = locked_chardev.wait_for_port(stream_fd);
+                    return Some(vec![wait_port]);
                 }
+
                 let receiver = locked_chardev.receiver.clone().unwrap();
                 let input = locked_chardev.input.clone().unwrap();
                 drop(locked_chardev);
@@ -417,10 +450,15 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                 let mut locked_receiver = receiver.lock().unwrap();
                 let buff_size = locked_receiver.remain_size();
                 if buff_size == 0 {
-                    drop(locked_receiver);
-                    let mut locked_chardev = handling_chardev.lock().unwrap();
-                    let cancel_listen = locked_chardev.set_relisten_timer(stream_fd);
-                    return Some(vec![cancel_listen]);
+                    locked_receiver.set_paused();
+
+                    return Some(vec![EventNotifier::new(
+                        NotifierOperation::Modify,
+                        stream_fd,
+                        None,
+                        EventSet::HANG_UP,
+                        vec![],
+                    )]);
                 }
 
                 let mut buffer = vec![0_u8; buff_size];
