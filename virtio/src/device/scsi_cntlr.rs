@@ -33,15 +33,19 @@ use devices::ScsiBus::{
     EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{
-    config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
-    event_loop::EventLoop,
-};
+use machine_manager::{config::ScsiCntlrConfig, event_loop::EventLoop};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+
+/// According to Virtio Spec.
+/// Max_channel should be 0.
+/// Max_target should be less than or equal to 255.
+const VIRTIO_SCSI_MAX_TARGET: u16 = 255;
+/// Max_lun should be less than or equal to 16383 (2^14 - 1).
+const VIRTIO_SCSI_MAX_LUN: u32 = 16383;
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
@@ -171,7 +175,7 @@ impl VirtioDevice for ScsiCntlr {
         // seg_max: queue size - 2, 32 bit.
         self.config_space.seg_max = self.queue_size_max() as u32 - 2;
         self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
-        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN;
         // num_queues: request queues number.
         self.config_space.num_queues = self.config.queues;
 
