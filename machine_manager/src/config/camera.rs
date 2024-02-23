@@ -17,7 +17,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{existed_path, str_slip_to_clap, valid_id, VmConfig},
+    config::{str_slip_to_clap, valid_id, VmConfig},
     qmp::qmp_schema,
 };
 
@@ -26,7 +26,7 @@ use crate::{
 pub struct CameraDevConfig {
     #[arg(long, value_parser = valid_id)]
     pub id: String,
-    #[arg(long, value_parser = existed_path)]
+    #[arg(long)]
     pub path: String,
     #[arg(long)]
     pub backend: CamBackendType,
