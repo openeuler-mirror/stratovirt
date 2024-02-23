@@ -18,7 +18,7 @@ use once_cell::sync::Lazy;
 
 use crate::camera_backend::FmtType;
 
-pub const MEDIA_TYPE_GUID: [(FmtType, [u8; 16]); 2] = [
+pub const MEDIA_TYPE_GUID: [(FmtType, [u8; 16]); 3] = [
     (
         FmtType::Yuy2,
         [
@@ -30,6 +30,13 @@ pub const MEDIA_TYPE_GUID: [(FmtType, [u8; 16]); 2] = [
         FmtType::Rgb565,
         [
             b'R', b'G', b'B', b'P', 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38,
+            0x9b, 0x71,
+        ],
+    ),
+    (
+        FmtType::Nv12,
+        [
+            b'N', b'V', b'1', b'2', 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38,
             0x9b, 0x71,
         ],
     ),

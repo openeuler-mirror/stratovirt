@@ -17,7 +17,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{existed_path, str_slip_to_clap, valid_id, VmConfig},
+    config::{str_slip_to_clap, valid_id, VmConfig},
     qmp::qmp_schema,
 };
 
@@ -26,7 +26,7 @@ use crate::{
 pub struct CameraDevConfig {
     #[arg(long, value_parser = valid_id)]
     pub id: String,
-    #[arg(long, value_parser = existed_path)]
+    #[arg(long)]
     pub path: String,
     #[arg(long)]
     pub backend: CamBackendType,
@@ -36,6 +36,9 @@ pub struct CameraDevConfig {
 pub enum CamBackendType {
     #[cfg(feature = "usb_camera_v4l2")]
     V4l2,
+    #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+    OhCamera,
+    #[cfg(not(target_env = "ohos"))]
     Demo,
 }
 
@@ -46,6 +49,9 @@ impl FromStr for CamBackendType {
         match s {
             #[cfg(feature = "usb_camera_v4l2")]
             "v4l2" => Ok(CamBackendType::V4l2),
+            #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+            "ohcamera" => Ok(CamBackendType::OhCamera),
+            #[cfg(not(target_env = "ohos"))]
             "demo" => Ok(CamBackendType::Demo),
             _ => Err(anyhow!("Unknown camera backend type")),
         }
