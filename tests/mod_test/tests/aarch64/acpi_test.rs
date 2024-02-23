@@ -26,8 +26,8 @@ use mod_test::libtest::{test_init, TestState};
 
 // Now facs table data length is 64.
 const FACS_TABLE_DATA_LENGTH: u32 = 64;
-// Now dsdt table data length is 3482.
-const DSDT_TABLE_DATA_LENGTH: u32 = 3482;
+// Now dsdt table data length is 3488.
+const DSDT_TABLE_DATA_LENGTH: u32 = 3488;
 // Now fadt table data length is 276.
 const FADT_TABLE_DATA_LENGTH: u32 = 276;
 // Now madt table data length is 744.
@@ -43,9 +43,9 @@ const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
 // Now acpi tables data length is 6133(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 6133;
+const ACPI_TABLES_DATA_LENGTH_8: usize = 6139;
 // Now acpi tables data length is 40574(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 40574;
+const ACPI_TABLES_DATA_LENGTH_200: usize = 40580;
 
 enum TABLE {
     Fadt,
