@@ -17,6 +17,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::Parser;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 
@@ -32,9 +33,10 @@ use crate::{
         ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
         SCSI_CMD_BUF_SIZE,
     },
-    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
+    ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
-use machine_manager::config::{DriveFile, UsbStorageConfig};
+use machine_manager::config::{DriveConfig, DriveFile};
+use util::aio::AioEngine;
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -221,6 +223,21 @@ impl UsbStorageState {
     }
 }
 
+#[derive(Parser, Clone, Debug)]
+#[command(no_binary_name(true))]
+pub struct UsbStorageConfig {
+    #[arg(long, value_parser = ["usb-storage"])]
+    pub classtype: String,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub drive: String,
+    #[arg(long)]
+    bus: Option<String>,
+    #[arg(long)]
+    port: Option<String>,
+}
+
 /// USB storage device.
 pub struct UsbStorage {
     base: UsbDeviceBase,
@@ -228,7 +245,9 @@ pub struct UsbStorage {
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
     /// Configuration of the USB storage device.
-    pub config: UsbStorageConfig,
+    pub dev_cfg: UsbStorageConfig,
+    /// Configuration of the USB storage device's drive.
+    pub drive_cfg: DriveConfig,
     /// Scsi bus attached to this usb-storage device.
     scsi_bus: Arc<Mutex<ScsiBus>>,
     /// Effective scsi backend.
@@ -305,26 +324,37 @@ impl UsbMsdCsw {
 
 impl UsbStorage {
     pub fn new(
-        config: UsbStorageConfig,
+        dev_cfg: UsbStorageConfig,
+        drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-    ) -> Self {
-        let scsi_type = match &config.media as &str {
-            "disk" => SCSI_TYPE_DISK,
-            _ => SCSI_TYPE_ROM,
+    ) -> Result<Self> {
+        if drive_cfg.aio != AioEngine::Off || drive_cfg.direct {
+            bail!("USB-storage: \"aio=off,direct=false\" must be configured.");
+        }
+
+        let scsidev_classtype = match &drive_cfg.media as &str {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: dev_cfg.drive.clone(),
+            ..Default::default()
         };
 
-        Self {
-            base: UsbDeviceBase::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
+        Ok(Self {
+            base: UsbDeviceBase::new(dev_cfg.id.clone(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
-            config: config.clone(),
+            dev_cfg,
+            drive_cfg: drive_cfg.clone(),
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
             scsi_dev: Arc::new(Mutex::new(ScsiDevice::new(
-                config.scsi_cfg,
-                scsi_type,
+                scsi_dev_cfg,
+                drive_cfg,
                 drive_files,
             ))),
-        }
+        })
     }
 
     fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {

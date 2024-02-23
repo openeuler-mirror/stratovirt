@@ -44,7 +44,6 @@ mod scsi;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
 mod tls_creds;
-mod usb;
 mod vfio;
 
 pub use boot_source::*;
@@ -78,7 +77,6 @@ pub use scsi::*;
 pub use smbios::*;
 #[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
-pub use usb::*;
 pub use vfio::*;
 #[cfg(feature = "vnc")]
 pub use vnc::*;

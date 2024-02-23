@@ -14,11 +14,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
+use clap::Parser;
 
 use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
 use crate::{Device, DeviceBase};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
-use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
+use machine_manager::config::{valid_id, DriveConfig, DriveFile, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use util::aio::{Aio, AioEngine, WriteZeroesState};
 
@@ -56,6 +57,49 @@ pub const SCSI_DISK_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_DISK_DEFAULT_BLOCK_SIZE_
 /// Scsi media device's block size is 2048 Bytes.
 pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT: u32 = 11;
 pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT;
+
+// Stratovirt uses scsi mod in only virtio-scsi and usb-storage. Scsi's channel/target/lun
+// of usb-storage are both 0. Scsi's channel/target/lun of virtio-scsi is no more than 0/255/16383.
+// Set valid range of channel/target according to the range of virtio-scsi as 0/255.
+//
+// For stratovirt doesn't support `Flat space addressing format`(14 bits for lun) and only supports
+// `peripheral device addressing format`(8 bits for lun) now, lun should be less than 255(2^8 - 1) temporarily.
+const SCSI_MAX_CHANNEL: i64 = 0;
+const SCSI_MAX_TARGET: i64 = 255;
+const SUPPORT_SCSI_MAX_LUN: i64 = 255;
+
+#[derive(Parser, Clone, Debug, Default)]
+#[command(no_binary_name(true))]
+pub struct ScsiDevConfig {
+    #[arg(long, value_parser = ["scsi-cd", "scsi-hd"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, value_parser = valid_scsi_bus)]
+    pub bus: String,
+    /// Scsi four level hierarchical address(host, channel, target, lun).
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..=SCSI_MAX_CHANNEL))]
+    pub channel: u8,
+    #[arg(long, alias = "scsi-id", value_parser = clap::value_parser!(u8).range(..=SCSI_MAX_TARGET))]
+    pub target: u8,
+    #[arg(long, value_parser = clap::value_parser!(u16).range(..=SUPPORT_SCSI_MAX_LUN))]
+    pub lun: u16,
+    #[arg(long)]
+    pub drive: String,
+    #[arg(long)]
+    pub serial: Option<String>,
+    #[arg(long)]
+    pub bootindex: Option<u8>,
+}
+
+// Scsi device should has bus named as "$parent_cntlr_name.0".
+fn valid_scsi_bus(bus: &str) -> Result<String> {
+    let strs = bus.split('.').collect::<Vec<&str>>();
+    if strs.len() != 2 || strs[1] != "0" {
+        bail!("Invalid scsi bus {}", bus);
+    }
+    Ok(bus.to_string())
+}
 
 #[derive(Clone, Default)]
 pub struct ScsiDevState {
@@ -99,7 +143,9 @@ impl Device for ScsiDevice {
 pub struct ScsiDevice {
     pub base: DeviceBase,
     /// Configuration of the scsi device.
-    pub config: ScsiDevConfig,
+    pub dev_cfg: ScsiDevConfig,
+    /// Configuration of the scsi device's drive.
+    pub drive_cfg: DriveConfig,
     /// State of the scsi device.
     pub state: ScsiDevState,
     /// Block backend opened by scsi device.
@@ -129,13 +175,19 @@ unsafe impl Sync for ScsiDevice {}
 
 impl ScsiDevice {
     pub fn new(
-        config: ScsiDevConfig,
-        scsi_type: u32,
+        dev_cfg: ScsiDevConfig,
+        drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> ScsiDevice {
+        let scsi_type = match dev_cfg.classtype.as_str() {
+            "scsi-hd" => SCSI_TYPE_DISK,
+            _ => SCSI_TYPE_ROM,
+        };
+
         ScsiDevice {
-            base: DeviceBase::new(config.id.clone(), false),
-            config,
+            base: DeviceBase::new(dev_cfg.id.clone(), false),
+            dev_cfg,
+            drive_cfg,
             state: ScsiDevState::new(),
             block_backend: None,
             req_align: 1,
@@ -164,35 +216,35 @@ impl ScsiDevice {
             }
         }
 
-        if let Some(serial) = &self.config.serial {
+        if let Some(serial) = &self.dev_cfg.serial {
             self.state.serial = serial.clone();
         }
 
         let drive_files = self.drive_files.lock().unwrap();
         // File path can not be empty string. And it has also been checked in CmdParser::parse.
-        let file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
+        let file = VmConfig::fetch_drive_file(&drive_files, &self.drive_cfg.path_on_host)?;
 
-        let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
+        let alignments = VmConfig::fetch_drive_align(&drive_files, &self.drive_cfg.path_on_host)?;
         self.req_align = alignments.0;
         self.buf_align = alignments.1;
-        let drive_id = VmConfig::get_drive_id(&drive_files, &self.config.path_on_host)?;
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
 
         let mut thread_pool = None;
-        if self.config.aio_type != AioEngine::Off {
+        if self.drive_cfg.aio != AioEngine::Off {
             thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
         }
-        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type, thread_pool)?;
+        let aio = Aio::new(Arc::new(aio_complete_cb), self.drive_cfg.aio, thread_pool)?;
         let conf = BlockProperty {
             id: drive_id,
-            format: self.config.format,
+            format: self.drive_cfg.format,
             iothread,
-            direct: self.config.direct,
+            direct: self.drive_cfg.direct,
             req_align: self.req_align,
             buf_align: self.buf_align,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
-            l2_cache_size: self.config.l2_cache_size,
-            refcount_cache_size: self.config.refcount_cache_size,
+            l2_cache_size: self.drive_cfg.l2_cache_size,
+            refcount_cache_size: self.drive_cfg.refcount_cache_size,
         };
         let backend = create_block_backend(file, aio, conf)?;
         let disk_size = backend.lock().unwrap().disk_size()?;
@@ -200,5 +252,62 @@ impl ScsiDevice {
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_scsi_device_cmdline_parser() {
+        // Test1: Right.
+        let cmdline1 = "scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0,serial=123456,bootindex=1";
+        let config =
+            ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline1, true, false)).unwrap();
+        assert_eq!(config.id, "scsi0-0-0-0");
+        assert_eq!(config.bus, "scsi0.0");
+        assert_eq!(config.target, 0);
+        assert_eq!(config.lun, 0);
+        assert_eq!(config.drive, "drive-0-0-0-0");
+        assert_eq!(config.serial.unwrap(), "123456");
+        assert_eq!(config.bootindex.unwrap(), 1);
+
+        // Test2: Default value.
+        let cmdline2 = "scsi-cd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let config =
+            ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline2, true, false)).unwrap();
+        assert_eq!(config.channel, 0);
+        assert_eq!(config.serial, None);
+        assert_eq!(config.bootindex, None);
+
+        // Test3: Illegal value.
+        let cmdline3 = "scsi-hd,bus=scsi0.0,scsi-id=256,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "scsi-hd,bus=scsi0.0,scsi-id=0,lun=256,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "illegal,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+
+        // Test4: Missing necessary parameters.
+        let cmdline4 = "scsi-hd,scsi-id=0,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "scsi-hd,bus=scsi0.0,lun=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "scsi-hd,bus=scsi0.0,scsi-id=0,drive=drive-0-0-0-0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,id=scsi0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-0-0-0-0";
+        let result = ScsiDevConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
     }
 }

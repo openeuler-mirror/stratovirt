@@ -59,14 +59,16 @@ use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
+use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
-use devices::usb::{storage::UsbStorage, uas::UsbUas, UsbDevice};
+use devices::usb::UsbDevice;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
+use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -76,16 +78,13 @@ use machine_manager::config::parse_demo_dev;
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
-use machine_manager::config::parse_usb_storage;
-use machine_manager::config::parse_usb_uas;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
-    parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
-    BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
-    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    parse_root_port, parse_scsi_controller, parse_vfio, parse_vhost_user_blk, parse_virtio_serial,
+    parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig,
+    DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
+    NumaNodes, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -1119,29 +1118,27 @@ pub trait MachineOps {
     }
 
     fn add_scsi_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_scsi_device(vm_config, cfg_args)?;
-        let scsi_type = match parse_device_type(cfg_args)?.as_str() {
-            "scsi-hd" => SCSI_TYPE_DISK,
-            _ => SCSI_TYPE_ROM,
-        };
-        if let Some(bootindex) = device_cfg.boot_index {
+        let device_cfg = ScsiDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let drive_arg = vm_config
+            .drives
+            .remove(&device_cfg.drive)
+            .with_context(|| "No drive configured matched for scsi device")?;
+
+        if let Some(bootindex) = device_cfg.bootindex {
             self.check_bootindex(bootindex)
                 .with_context(|| "Failed to add scsi device for invalid bootindex")?;
         }
         let device = Arc::new(Mutex::new(ScsiDevice::new(
             device_cfg.clone(),
-            scsi_type,
+            drive_arg,
             self.get_drive_files(),
         )));
 
+        // Bus name `$parent_cntlr_name.0` is checked when parsing by clap.
+        let cntlr = device_cfg.bus.split('.').collect::<Vec<&str>>()[0].to_string();
         let pci_dev = self
-            .get_pci_dev_by_id_and_type(vm_config, Some(&device_cfg.cntlr), "virtio-scsi-pci")
-            .with_context(|| {
-                format!(
-                    "Can not find scsi controller from pci bus {}",
-                    device_cfg.cntlr
-                )
-            })?;
+            .get_pci_dev_by_id_and_type(vm_config, Some(&cntlr), "virtio-scsi-pci")
+            .with_context(|| format!("Can not find scsi controller from pci bus {}", cntlr))?;
         let locked_pcidev = pci_dev.lock().unwrap();
         let virtio_pcidev = locked_pcidev
             .as_any()
@@ -1167,7 +1164,7 @@ pub trait MachineOps {
             .insert((device_cfg.target, device_cfg.lun), device.clone());
         device.lock().unwrap().parent_bus = Arc::downgrade(bus);
 
-        if let Some(bootindex) = device_cfg.boot_index {
+        if let Some(bootindex) = device_cfg.bootindex {
             // Eg: OpenFirmware device path(virtio-scsi disk):
             // /pci@i0cf8/scsi@7[,3]/channel@0/disk@2,3
             //   |             |  |      |          | |
@@ -1725,15 +1722,25 @@ pub trait MachineOps {
                     .with_context(|| "Failed to realize usb camera device")?
             }
             "usb-storage" => {
-                let device_cfg = parse_usb_storage(vm_config, cfg_args)?;
-                let storage = UsbStorage::new(device_cfg, self.get_drive_files());
+                let device_cfg =
+                    UsbStorageConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+                let drive_cfg = vm_config
+                    .drives
+                    .remove(&device_cfg.drive)
+                    .with_context(|| "No drive configured matched for usb storage device.")?;
+                let storage = UsbStorage::new(device_cfg, drive_cfg, self.get_drive_files())?;
                 storage
                     .realize()
                     .with_context(|| "Failed to realize usb storage device")?
             }
             "usb-uas" => {
-                let device_cfg = parse_usb_uas(vm_config, cfg_args)?;
-                let uas = UsbUas::new(device_cfg, self.get_drive_files());
+                let device_cfg =
+                    UsbUasConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+                let drive_cfg = vm_config
+                    .drives
+                    .remove(&device_cfg.drive)
+                    .with_context(|| "No drive configured matched for usb uas device.")?;
+                let uas = UsbUas::new(device_cfg, drive_cfg, self.get_drive_files());
                 uas.realize()
                     .with_context(|| "Failed to realize usb uas device")?
             }
