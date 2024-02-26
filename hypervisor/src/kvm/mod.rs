@@ -794,13 +794,21 @@ impl LineIrqManager for KVMInterruptManager {
         Ok(())
     }
 
-    fn set_irq_line(&self, gsi: u32, level: bool) -> Result<()> {
+    fn set_level_irq(&self, gsi: u32, level: bool) -> Result<()> {
         let kvm_irq = self.arch_map_irq(gsi);
         self.vm_fd
             .set_irq_line(kvm_irq, level)
-            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, level))?;
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, level))
+    }
 
-        Ok(())
+    fn set_edge_irq(&self, gsi: u32) -> Result<()> {
+        let kvm_irq = self.arch_map_irq(gsi);
+        self.vm_fd
+            .set_irq_line(kvm_irq, true)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, true))?;
+        self.vm_fd
+            .set_irq_line(kvm_irq, false)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, false))
     }
 
     fn write_irqfd(&self, irq_fd: Arc<EventFd>) -> Result<()> {

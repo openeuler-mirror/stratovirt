@@ -67,7 +67,11 @@ pub trait LineIrqManager: Send + Sync {
         Ok(())
     }
 
-    fn set_irq_line(&self, _irq: u32, _level: bool) -> Result<()> {
+    fn set_level_irq(&self, _irq: u32, _level: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_edge_irq(&self, _irq: u32) -> Result<()> {
         Ok(())
     }
 
@@ -155,10 +159,9 @@ impl IrqState {
             return irq_handler.write_irqfd(irq_fd.clone());
         }
         if self.trigger_mode == TriggerMode::Edge {
-            irq_handler.set_irq_line(self.irq, true)?;
-            irq_handler.set_irq_line(self.irq, false)
+            irq_handler.set_edge_irq(self.irq)
         } else {
-            irq_handler.set_irq_line(self.irq, true)
+            irq_handler.set_level_irq(self.irq, true)
         }
     }
 }
