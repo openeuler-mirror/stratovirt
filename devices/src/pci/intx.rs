@@ -102,7 +102,7 @@ impl Intx {
             }
 
             let irq_handler = &locked_intx_state.irq_handler;
-            if let Err(e) = irq_handler.set_irq_line(irq, level) {
+            if let Err(e) = irq_handler.set_level_irq(irq, level) {
                 error!(
                     "Failed to set irq {} level {} of device {}: {}.",
                     irq, level, self.device_name, e
