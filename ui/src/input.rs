@@ -629,9 +629,15 @@ mod tests {
         test_input.register_input();
         let test_kdb = test_input.kbd.clone();
 
+        #[cfg(not(all(target_env = "ohos", feature = "ohui_srv")))]
         let keysym2qkeycode = KeyCode::keysym_to_qkeycode(DpyMod::Gtk);
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        let keysym2qkeycode = KeyCode::keysym_to_qkeycode(DpyMod::Ohui);
         // ["0", "a", "space"]
+        #[cfg(not(all(target_env = "ohos", feature = "ohui_srv")))]
         let keysym_lists: Vec<u16> = vec![0x0030, 0x0061, 0x0020];
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        let keysym_lists: Vec<u16> = vec![0x07D0, 0x07E1, 0x0802];
         let keycode_lists: Vec<u16> = keysym_lists
             .iter()
             .map(|x| *keysym2qkeycode.get(&x).unwrap())
