@@ -16,7 +16,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::ich9_lpc;
@@ -48,7 +48,6 @@ use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
     MigrateInterface, VmState,
@@ -203,6 +202,25 @@ impl StdMachine {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
+
+        Ok(())
+    }
+
+    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let locked_vm = vm.lock().unwrap();
+        let vmstate = {
+            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
+            *state
+        };
+
+        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if locked_vm.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
+        }
+
+        info!("vm destroy");
 
         Ok(())
     }
@@ -977,17 +995,10 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn destroy(&self) -> bool {
-        let vmstate = {
-            let state = self.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
             return false;
         }
-
-        info!("vm destroy");
-        EventLoop::get_ctx(None).unwrap().kick();
 
         true
     }
