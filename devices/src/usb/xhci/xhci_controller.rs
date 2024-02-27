@@ -60,6 +60,8 @@ pub const SLOT_CONFIGURED: u32 = 3;
 const TRB_CR_BSR: u32 = 1 << 9;
 const TRB_CR_EPID_SHIFT: u32 = 16;
 const TRB_CR_EPID_MASK: u32 = 0x1f;
+const TRB_CR_STREAMID_SHIFT: u32 = 16;
+const TRB_CR_STREAMID_MASK: u32 = 0xffff;
 const TRB_CR_DC: u32 = 1 << 9;
 const TRB_CR_SLOTID_SHIFT: u32 = 24;
 const TRB_CR_SLOTID_MASK: u32 = 0xff;
@@ -293,7 +295,7 @@ impl TransferOps for XhciTransfer {
 pub struct XhciEpContext {
     epid: u32,
     enabled: bool,
-    ring: Arc<XhciTransferRing>,
+    ring: Option<Arc<XhciTransferRing>>,
     ep_type: EpType,
     output_ctx_addr: Arc<AtomicU64>,
     state: Arc<AtomicU32>,
@@ -309,13 +311,12 @@ pub struct XhciEpContext {
 
 impl XhciEpContext {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
-        let addr = Arc::new(AtomicU64::new(0));
         Self {
             epid: 0,
             enabled: false,
-            ring: Arc::new(XhciTransferRing::new(mem, &addr)),
+            ring: None,
             ep_type: EpType::Invalid,
-            output_ctx_addr: addr,
+            output_ctx_addr: Arc::new(AtomicU64::new(0)),
             state: Arc::new(AtomicU32::new(0)),
             interval: 0,
             mfindex_last: 0,
@@ -338,12 +339,16 @@ impl XhciEpContext {
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
 
         if self.max_pstreams == 0 {
-            self.ring.init(dequeue);
-            self.ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
+            let ring = XhciTransferRing::new(&self.mem, &self.output_ctx_addr);
+            ring.init(dequeue);
+            ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
+            self.ring = Some(Arc::new(ring));
         } else {
             let mut stream_array =
                 XhciStreamArray::new(&self.mem, &self.output_ctx_addr, self.max_pstreams);
-            stream_array.init(dequeue)?;
+            stream_array
+                .init(dequeue)
+                .with_context(|| "Failed to initialize Stream Array.")?;
             self.stream_array = Some(Arc::new(stream_array));
         }
 
@@ -360,22 +365,46 @@ impl XhciEpContext {
 
     /// Update the endpoint state and write the state to memory.
     fn set_state(&mut self, state: u32) -> Result<()> {
-        set_ep_state_helper(&self.ring, &self.state, state)
+        set_ep_state_helper(self.ring.as_ref().unwrap(), &self.state, state)
     }
 
-    /// Update the dequeue pointer in endpoint context.
+    /// Update the dequeue pointer in endpoint or stream context.
     /// If dequeue is None, only flush the dequeue pointer to memory.
-    fn update_dequeue(&mut self, mem: &Arc<AddressSpace>, dequeue: Option<u64>) -> Result<()> {
-        let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+    fn update_dequeue(
+        &mut self,
+        mem: &Arc<AddressSpace>,
+        dequeue: Option<u64>,
+        stream_id: u32,
+    ) -> Result<()> {
+        let ring = self.get_ring(stream_id).with_context(|| {
+            format!(
+                "Failed to find Transfer Ring for Endpoint {}, Stream ID {}",
+                self.epid, stream_id
+            )
+        })?;
+
         if let Some(dequeue) = dequeue {
-            self.ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
-            self.ring
-                .set_cycle_bit((dequeue & EP_CTX_DCS) == EP_CTX_DCS);
+            ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
+            ring.set_cycle_bit((dequeue & EP_CTX_DCS) == EP_CTX_DCS);
         }
-        self.ring.update_dequeue_to_ctx(&mut ep_ctx);
-        dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+
+        if self.max_pstreams == 0 {
+            let mut ep_ctx = XhciEpCtx::default();
+            let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
+            dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+            ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
+            dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        } else {
+            let mut stream_ctx = XhciStreamCtx::default();
+            let stream_context = self.get_stream(stream_id).with_context(|| {
+                format!("Failed to find Stream Context with Stream ID {}", stream_id)
+            })?;
+            let output_addr = stream_context.dequeue.load(Ordering::Acquire);
+            dma_read_u32(mem, GuestAddress(output_addr), stream_ctx.as_mut_dwords())?;
+            ring.update_dequeue_to_ctx(stream_ctx.as_mut_dwords());
+            dma_write_u32(mem, GuestAddress(output_addr), stream_ctx.as_dwords())?;
+        }
+
         Ok(())
     }
 
@@ -390,7 +419,7 @@ impl XhciEpContext {
         self.transfers = undo;
     }
 
-    fn _get_stream_context(&self, stream_id: u32) -> Result<&XhciStreamContext> {
+    fn get_stream(&self, stream_id: u32) -> Result<&XhciStreamContext> {
         if self.stream_array.is_none() {
             bail!("Endpoint {} does not support streams.", self.epid);
         }
@@ -413,7 +442,7 @@ impl XhciEpContext {
 
         let stream_context = &pstreams[stream_id as usize];
 
-        if self.lsa && (stream_context.sct != STREAM_CTX_SCT_PRIMARY_TR) {
+        if stream_context.sct != STREAM_CTX_SCT_PRIMARY_TR {
             bail!(
                 "Invalid SCT {} on stream {}, LSA is {}",
                 stream_context.sct,
@@ -423,6 +452,18 @@ impl XhciEpContext {
         }
 
         Ok(stream_context)
+    }
+
+    fn get_ring(&self, stream_id: u32) -> Result<&Arc<XhciTransferRing>> {
+        if self.max_pstreams == 0 {
+            Ok(self.ring.as_ref().unwrap())
+        } else {
+            let stream_context = self.get_stream(stream_id).with_context(|| {
+                format!("Failed to find Stream Context with Stream ID {}", stream_id)
+            })?;
+            // SAFETY: Secondary Stream Arrays are not supported.
+            Ok(stream_context.ring.as_ref().unwrap())
+        }
     }
 }
 
@@ -437,7 +478,7 @@ fn set_ep_state_helper(
     dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
     ep_ctx.ep_info &= !EP_STATE_MASK;
     ep_ctx.ep_info |= state;
-    ring.update_dequeue_to_ctx(&mut ep_ctx);
+    ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
     dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
     ep_state.store(state, Ordering::SeqCst);
     Ok(())
@@ -800,9 +841,11 @@ impl XhciStreamContext {
         let mut stream_ctx = XhciStreamCtx::default();
         dma_read_u32(&self.mem, GuestAddress(addr), stream_ctx.as_mut_dwords())?;
         let dequeue = addr64_from_u32(stream_ctx.deq_lo & !0xf, stream_ctx.deq_hi);
+        let ring = self.ring.as_ref().unwrap();
         self.set_dequeue_ptr(addr);
         self.sct = (stream_ctx.deq_lo >> STREAM_CTX_SCT_SHIFT) & STREAM_CTX_SCT_MASK;
-        self.ring.as_ref().unwrap().init(dequeue);
+        ring.init(dequeue);
+        ring.set_cycle_bit((dequeue & 1) == 1);
         Ok(())
     }
 
@@ -1177,7 +1220,10 @@ impl XhciDevice {
                             slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
-                                event.ccode = self.set_tr_dequeue_pointer(slot_id, ep_id, &trb)?;
+                                let stream_id =
+                                    trb.control >> TRB_CR_STREAMID_SHIFT & TRB_CR_STREAMID_MASK;
+                                event.ccode =
+                                    self.set_tr_dequeue_pointer(slot_id, ep_id, stream_id, &trb)?;
                             }
                         }
                         TRBType::CrResetDevice => {
@@ -1679,6 +1725,7 @@ impl XhciDevice {
         &mut self,
         slotid: u32,
         epid: u32,
+        streamid: u32,
         trb: &XhciTRB,
     ) -> Result<TRBCCode> {
         trace::usb_xhci_set_tr_dequeue(&slotid, &epid, &trb.parameter);
@@ -1703,12 +1750,12 @@ impl XhciDevice {
             );
             return Ok(TRBCCode::ContextStateError);
         }
-        epctx.update_dequeue(&self.mem_space, Some(trb.parameter))?;
+        epctx.update_dequeue(&self.mem_space, Some(trb.parameter), streamid)?;
         Ok(TRBCCode::Success)
     }
 
     /// Data plane
-    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32, _stream_id: u32) -> Result<()> {
+    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32, stream_id: u32) -> Result<()> {
         let epctx = match self.get_endpoint_ctx(slot_id, ep_id) {
             Ok(epctx) => epctx,
             Err(e) => {
@@ -1725,11 +1772,15 @@ impl XhciDevice {
             return Ok(());
         }
 
-        trace::usb_xhci_ep_kick(&slot_id, &ep_id, &epctx.ring.get_dequeue_ptr());
+        trace::usb_xhci_ep_kick(
+            &slot_id,
+            &ep_id,
+            &epctx.ring.as_ref().unwrap().get_dequeue_ptr(),
+        );
         if self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
             .retry
             .is_some()
-            && !self.endpoint_retry_transfer(slot_id, ep_id)?
+            && !self.endpoint_retry_transfer(slot_id, ep_id, stream_id)?
         {
             // Return directly to retry again at the next kick.
             return Ok(());
@@ -1744,15 +1795,15 @@ impl XhciDevice {
         let ep_state = epctx.state.clone();
         const KICK_LIMIT: u32 = 256;
         let mut count = 0;
-        let ring = epctx.ring.clone();
+        let ring = epctx.ring.as_ref().unwrap().clone();
         loop {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-            let td = match epctx.ring.fetch_td()? {
+            let td = match epctx.ring.as_ref().unwrap().fetch_td()? {
                 Some(td) => {
                     trace::usb_xhci_unimplemented(&format!(
                         "fetch transfer trb {:?} ring dequeue {:?}",
                         td,
-                        epctx.ring.get_dequeue_ptr(),
+                        epctx.ring.as_ref().unwrap().get_dequeue_ptr(),
                     ));
                     td
                 }
@@ -1765,7 +1816,7 @@ impl XhciDevice {
                         let mut evt = XhciEvent::new(TRBType::ErTransfer, ccode);
                         evt.slot_id = slot_id as u8;
                         evt.ep_id = ep_id as u8;
-                        evt.ptr = epctx.ring.dequeue.load(Ordering::Acquire);
+                        evt.ptr = epctx.ring.as_ref().unwrap().dequeue.load(Ordering::Acquire);
                         if let Err(e) = self.intrs[0].lock().unwrap().send_event(&evt) {
                             error!("Failed to send event: {:?}", e);
                         }
@@ -1798,7 +1849,7 @@ impl XhciDevice {
             self.endpoint_do_transfer(&mut locked_xfer)?;
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             if locked_xfer.complete {
-                epctx.update_dequeue(&self.mem_space, None)?;
+                epctx.update_dequeue(&self.mem_space, None, stream_id)?;
             } else {
                 epctx.transfers.push_back(xfer.clone());
             }
@@ -1847,7 +1898,12 @@ impl XhciDevice {
     /// Return Ok(true) if retry is done.
     /// Return Ok(false) if packet is need to retry again.
     /// Return Err() if retry failed.
-    fn endpoint_retry_transfer(&mut self, slot_id: u32, ep_id: u32) -> Result<bool> {
+    fn endpoint_retry_transfer(
+        &mut self,
+        slot_id: u32,
+        ep_id: u32,
+        stream_id: u32,
+    ) -> Result<bool> {
         let slot = &mut self.slots[(slot_id - 1) as usize];
         // Safe because the retry is checked in the outer function call.
         let xfer = slot.endpoints[(ep_id - 1) as usize]
@@ -1879,7 +1935,7 @@ impl XhciDevice {
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if locked_xfer.complete {
             drop(locked_xfer);
-            epctx.update_dequeue(&self.mem_space, None)?;
+            epctx.update_dequeue(&self.mem_space, None, stream_id)?;
             epctx.flush_transfer();
         }
         epctx.retry = None;
