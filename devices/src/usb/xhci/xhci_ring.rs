@@ -206,15 +206,15 @@ impl XhciTransferRing {
         let mut ep_ctx = XhciEpCtx::default();
         let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
         dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
-        self.update_dequeue_to_ctx(&mut ep_ctx);
+        self.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
         dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
         Ok(())
     }
 
-    pub fn update_dequeue_to_ctx(&self, ep_ctx: &mut XhciEpCtx) {
+    pub fn update_dequeue_to_ctx(&self, ctx: &mut [u32]) {
         let dequeue = self.get_dequeue_ptr();
-        ep_ctx.deq_lo = dequeue as u32 | self.get_cycle_bit() as u32;
-        ep_ctx.deq_hi = (dequeue >> 32) as u32;
+        ctx[0] = dequeue as u32 | self.get_cycle_bit() as u32;
+        ctx[1] = (dequeue >> 32) as u32;
     }
 }
 
