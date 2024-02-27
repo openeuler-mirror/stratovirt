@@ -18,12 +18,13 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
-use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use vmm_sys_util::eventfd::EventFd;
 
+#[cfg(feature = "virtio_gpu")]
+use crate::Gpu;
 use crate::{
-    virtio_has_feature, Gpu, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice,
-    VirtioDeviceQuirk, VirtioInterrupt, VirtioInterruptType,
+    virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioDeviceQuirk,
+    VirtioInterrupt, VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
@@ -32,9 +33,9 @@ use crate::{
     VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE,
     VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
-use address_space::{
-    AddressRange, AddressSpace, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
-};
+#[cfg(feature = "virtio_gpu")]
+use address_space::HostMemMapping;
+use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
@@ -46,6 +47,8 @@ use devices::pci::{
     PciBus, PciDevBase, PciDevOps, PciError,
 };
 use devices::{Device, DeviceBase};
+#[cfg(feature = "virtio_gpu")]
+use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -128,6 +131,7 @@ const COMMON_Q_USEDHI_REG: u64 = 0x34;
 ///   1: select feature bits 32 to 63.
 const MAX_FEATURES_SELECT_NUM: u32 = 2;
 
+#[cfg(feature = "virtio_gpu")]
 fn init_gpu_bar0(dev: &Arc<Mutex<dyn VirtioDevice>>, config: &mut PciConfig) -> Result<()> {
     let locked_dev = dev.lock().unwrap();
     let gpu = locked_dev.as_any().downcast_ref::<Gpu>().unwrap();
@@ -1110,6 +1114,7 @@ impl PciDevOps for VirtioPciDevice {
 
         self.assign_interrupt_cb();
 
+        #[cfg(feature = "virtio_gpu")]
         if device_quirk == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0) {
             init_gpu_bar0(&self.device, &mut self.base.config)?;
         }
