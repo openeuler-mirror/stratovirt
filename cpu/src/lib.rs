@@ -180,13 +180,7 @@ pub trait CPUHypervisorOps: Send + Sync {
         thread_barrier: Arc<Barrier>,
     ) -> Result<()>;
 
-    fn kick(&self) -> Result<()>;
-
-    fn kick_vcpu_thread(
-        &self,
-        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
-        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
-    ) -> Result<()>;
+    fn set_hypervisor_exit(&self) -> Result<()>;
 
     fn pause(
         &self,

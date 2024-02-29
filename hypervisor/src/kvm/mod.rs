@@ -393,7 +393,7 @@ impl KvmCpu {
         extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
             if signum == VCPU_TASK_SIGNAL {
                 let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                    vcpu.hypervisor_cpu().kick().unwrap();
+                    vcpu.hypervisor_cpu().set_hypervisor_exit().unwrap();
                     // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
                     vcpu.pause_signal().store(true, Ordering::SeqCst);
                     fence(Ordering::Release)
@@ -508,6 +508,19 @@ impl KvmCpu {
         }
         Ok(true)
     }
+
+    fn kick_vcpu_thread(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()> {
+        let task = task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_TASK_SIGNAL)
+                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to kick");
+                Ok(())
+            }
+        }
+    }
 }
 
 impl CPUHypervisorOps for KvmCpu {
@@ -616,26 +629,9 @@ impl CPUHypervisorOps for KvmCpu {
         Ok(())
     }
 
-    fn kick(&self) -> Result<()> {
+    fn set_hypervisor_exit(&self) -> Result<()> {
         self.fd.set_kvm_immediate_exit(1);
         Ok(())
-    }
-
-    fn kick_vcpu_thread(
-        &self,
-        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
-        _state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
-    ) -> Result<()> {
-        let task = task.lock().unwrap();
-        match task.as_ref() {
-            Some(thread) => thread
-                .kill(VCPU_TASK_SIGNAL)
-                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
-            None => {
-                warn!("VCPU thread not started, no need to kick");
-                Ok(())
-            }
-        }
     }
 
     fn pause(
@@ -709,7 +705,7 @@ impl CPUHypervisorOps for KvmCpu {
         }
         drop(locked_cpu_state);
 
-        self.kick_vcpu_thread(task, state.clone())?;
+        self.kick_vcpu_thread(task)?;
         let mut locked_cpu_state = cpu_state.lock().unwrap();
         locked_cpu_state = cvar
             .wait_timeout(locked_cpu_state, Duration::from_millis(32))
