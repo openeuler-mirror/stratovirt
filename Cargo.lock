@@ -1056,6 +1056,7 @@ dependencies = [
  "hex",
  "libc",
  "machine",
+ "machine_manager",
  "rand",
  "serde",
  "serde_json",
