@@ -62,7 +62,7 @@ pub use x86_64::X86CPUTopology as CPUTopology;
 pub use x86_64::X86RegsIndex as RegsIndex;
 
 use std::cell::RefCell;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 
@@ -428,6 +428,8 @@ impl CPUInterface for CPU {
 
     fn guest_reset(&self) -> Result<()> {
         if let Some(vm) = self.vm.upgrade() {
+            let (cpu_state, _) = &*self.state;
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
             vm.lock().unwrap().reset();
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));
@@ -487,6 +489,9 @@ impl CPUThreadWorker {
                         info!("Vcpu{} paused", self.thread_cpu.id);
                         flag = 1;
                     }
+                    // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
+                    self.thread_cpu.pause_signal().store(true, Ordering::SeqCst);
+                    fence(Ordering::Release);
                     cpu_state = cvar.wait(cpu_state).unwrap();
                 }
                 CpuLifecycleState::Running => {
