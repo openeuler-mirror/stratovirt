@@ -281,8 +281,12 @@ impl CPU {
     }
 
     /// Set thread id for `CPU`.
-    pub fn set_tid(&self) {
-        *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
+    pub fn set_tid(&self, tid: Option<u64>) {
+        if tid.is_none() {
+            *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
+        } else {
+            *self.tid.lock().unwrap() = tid;
+        }
     }
 
     /// Get the hypervisor of this `CPU`.
