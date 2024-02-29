@@ -27,7 +27,7 @@ pub use aarch64::gicv2::KvmGICv2;
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
 
 use std::collections::HashMap;
-use std::sync::atomic::{fence, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -393,10 +393,7 @@ impl KvmCpu {
         extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
             if signum == VCPU_TASK_SIGNAL {
                 let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                    vcpu.hypervisor_cpu().set_hypervisor_exit().unwrap();
-                    // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
-                    vcpu.pause_signal().store(true, Ordering::SeqCst);
-                    fence(Ordering::Release)
+                    vcpu.hypervisor_cpu().set_hypervisor_exit().unwrap()
                 });
             }
         }
@@ -646,6 +643,8 @@ impl CPUHypervisorOps for KvmCpu {
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
             cvar.notify_one()
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused {
+            return Ok(());
         }
 
         match task.as_ref() {
