@@ -447,6 +447,8 @@ impl AmlBuilder for PciHost {
             // CCA: Cache Coherency Attribute, which determines whether
             // guest supports DMA features in pci host on aarch64 platform.
             pci_host_bridge.append_child(AmlNameDecl::new("_CCA", AmlOne));
+            // SEG: The PCI segment number.
+            pci_host_bridge.append_child(AmlNameDecl::new("_SEG", AmlZero));
         }
 
         build_osc_for_aml(&mut pci_host_bridge);

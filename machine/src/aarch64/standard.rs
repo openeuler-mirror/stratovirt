@@ -808,6 +808,8 @@ impl AcpiBuilder for StdMachine {
         let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
         gtdt.set_table_len(96);
 
+        // Counter control block physical address
+        gtdt.set_field(36, 0xFFFF_FFFF_FFFF_FFFF_u64);
         // Secure EL1 interrupt
         gtdt.set_field(48, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ + INTERRUPT_PPIS_COUNT);
         // Secure EL1 flags
@@ -827,6 +829,8 @@ impl AcpiBuilder for StdMachine {
         gtdt.set_field(72, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ + INTERRUPT_PPIS_COUNT);
         // Non secure EL2 flags
         gtdt.set_field(76, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+        // Counter read block physical address
+        gtdt.set_field(80, 0xFFFF_FFFF_FFFF_FFFF_u64);
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
@@ -921,7 +925,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> Result<u64> {
-        let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
+        let mut iort = AcpiTable::new(*b"IORT", 3, *b"STRATO", *b"VIRTIORT", 1);
         iort.set_table_len(128);
 
         // Number of IORT nodes is 2: ITS group node and Root Complex Node.
@@ -933,6 +937,8 @@ impl AcpiBuilder for StdMachine {
         iort.set_field(48, ACPI_IORT_NODE_ITS_GROUP);
         // ITS node length
         iort.set_field(49, 24_u16);
+        // ITS node revision
+        iort.set_field(51, 1_u8);
         // ITS count
         iort.set_field(64, 1_u32);
 
@@ -941,6 +947,10 @@ impl AcpiBuilder for StdMachine {
         // Length of Root Complex node
         let len = ROOT_COMPLEX_ENTRY_SIZE + ID_MAPPING_ENTRY_SIZE;
         iort.set_field(73, len);
+        // Revision of Root Complex node
+        iort.set_field(75, 3_u8);
+        // Identifier of Root Complex node
+        iort.set_field(76, 1_u32);
         // Mapping counts of Root Complex Node
         iort.set_field(80, 1_u32);
         // Mapping offset of Root Complex Node
@@ -949,6 +959,8 @@ impl AcpiBuilder for StdMachine {
         iort.set_field(88, 1_u32);
         // Memory flags of coherent device
         iort.set_field(95, 3_u8);
+        // Memory address size limit
+        iort.set_field(104, 0x40_u8);
         // Identity RID mapping
         iort.set_field(112, 0xffff_u32);
         // Without SMMU, id mapping is the first node in ITS group node

@@ -24,8 +24,10 @@ use mod_test::libdriver::machine::TestStdMachine;
 use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libtest::{test_init, TestState};
 
-// Now dsdt table data length is 3482.
-const DSDT_TABLE_DATA_LENGTH: u32 = 3482;
+// Now facs table data length is 64.
+const FACS_TABLE_DATA_LENGTH: u32 = 64;
+// Now dsdt table data length is 3488.
+const DSDT_TABLE_DATA_LENGTH: u32 = 3488;
 // Now fadt table data length is 276.
 const FADT_TABLE_DATA_LENGTH: u32 = 276;
 // Now madt table data length is 744.
@@ -40,13 +42,12 @@ const IORT_TABLE_DATA_LENGTH: u32 = 128;
 const SPCR_TABLE_DATA_LENGTH: u32 = 80;
 // Now mcfg table data length is 60.
 const MCFG_TABLE_DATA_LENGTH: u32 = 60;
-// Now acpi tables data length is 6069(cpu number is 8).
-const ACPI_TABLES_DATA_LENGTH_8: usize = 6069;
-// Now acpi tables data length is 40510(cpu number is 200).
-const ACPI_TABLES_DATA_LENGTH_200: usize = 40510;
+// Now acpi tables data length is 6133(cpu number is 8).
+const ACPI_TABLES_DATA_LENGTH_8: usize = 6139;
+// Now acpi tables data length is 40574(cpu number is 200).
+const ACPI_TABLES_DATA_LENGTH_200: usize = 40580;
 
 enum TABLE {
-    Dsdt,
     Fadt,
     Madt,
     Gtdt,
@@ -93,13 +94,29 @@ fn check_dsdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[4..]), DSDT_TABLE_DATA_LENGTH); // Check length
 }
 
-fn check_fadt(data: &[u8]) {
+fn check_facs(data: &[u8]) {
+    assert_eq!(String::from_utf8_lossy(&data[..4]), "FACS");
+    assert_eq!(LittleEndian::read_u32(&data[4..]), FACS_TABLE_DATA_LENGTH); // Check length
+}
+
+fn check_fadt(data: &[u8]) -> (u32, u64) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "FACP");
     assert_eq!(LittleEndian::read_u32(&data[4..]), FADT_TABLE_DATA_LENGTH); // Check length
 
-    assert_eq!(LittleEndian::read_i32(&data[112..]), 0x10_0500); // Enable HW_REDUCED_ACPI bit
+    // Enable HW_REDUCED_ACPI and LOW_POWER_S0_IDLE_CAPABLE bit
+    assert_eq!(LittleEndian::read_i32(&data[112..]), 0x30_0500);
     assert_eq!(LittleEndian::read_u16(&data[129..]), 0x3); // ARM Boot Architecture Flags
     assert_eq!(LittleEndian::read_i32(&data[131..]), 3); // FADT minor revision
+
+    // Check 32-bit address of FACS table.
+    let facs_addr = LittleEndian::read_u32(&data[36..]);
+    assert_eq!(facs_addr, 0);
+
+    // Check 64-bit address of DSDT table.
+    let dsdt_addr = LittleEndian::read_u64(&data[140..]);
+    assert_ne!(dsdt_addr, 0);
+
+    (facs_addr, dsdt_addr)
 }
 
 fn check_madt(data: &[u8], cpu: u8) {
@@ -146,6 +163,7 @@ fn check_gtdt(data: &[u8]) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "GTDT");
     assert_eq!(LittleEndian::read_u32(&data[4..]), GTDT_TABLE_DATA_LENGTH); // Check length
 
+    assert_eq!(LittleEndian::read_u64(&data[36..]), 0xFFFF_FFFF_FFFF_FFFF); // Counter control block physical address
     assert_eq!(LittleEndian::read_u32(&data[48..]), 29); // Secure EL1 interrupt
     assert_eq!(LittleEndian::read_u32(&data[52..]), 0); // Secure EL1 flags
     assert_eq!(LittleEndian::read_u32(&data[56..]), 30); // Non secure EL1 interrupt
@@ -154,6 +172,7 @@ fn check_gtdt(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[68..]), 0); // Virtual timer flags
     assert_eq!(LittleEndian::read_u32(&data[72..]), 26); // Non secure EL2 interrupt
     assert_eq!(LittleEndian::read_u32(&data[76..]), 0); // Non secure EL2 flags
+    assert_eq!(LittleEndian::read_u64(&data[80..]), 0xFFFF_FFFF_FFFF_FFFF); // Counter base block physical address
 }
 
 fn check_dbg2(data: &[u8]) {
@@ -170,13 +189,17 @@ fn check_iort(data: &[u8]) {
     assert_eq!(LittleEndian::read_u32(&data[40..]), 48); // Node offset
     assert_eq!(data[48], 0); // ITS group node
     assert_eq!(LittleEndian::read_u16(&data[49..]), 24); // ITS node length
+    assert_eq!(data[51], 1); // ITS node revision
     assert_eq!(LittleEndian::read_u32(&data[64..]), 1); // ITS count
     assert_eq!(data[72], 2); // Root Complex Node
     assert_eq!(LittleEndian::read_u16(&data[73..]), 56); // Length of Root Complex Node
+    assert_eq!(data[75], 3); // Revision of Root Complex Node
+    assert_eq!(LittleEndian::read_u32(&data[76..]), 1); // Identifier of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[80..]), 1); // Mapping counts of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[84..]), 36); // Mapping offset of Root Complex Node
     assert_eq!(LittleEndian::read_u32(&data[88..]), 1); // Cache of coherent device
     assert_eq!(data[95], 3); // Memory flags of coherent device
+    assert_eq!(data[104], 0x40); // Memory address size limit
     assert_eq!(LittleEndian::read_u32(&data[112..]), 0xffff); // Identity RID mapping
 
     // Without SMMU, id mapping is the first node in ITS group node
@@ -343,18 +366,19 @@ fn test_tables(test_state: &TestState, alloc: &mut GuestAllocator, xsdt_addr: us
     );
 
     // XSDT entry: An array of 64-bit physical addresses that point to other DESCRIPTION_HEADERs.
-    // DESCRIPTION_HEADERs: DSDT, FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
-    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>() - 8;
-
-    // Check DSDT
-    let mut offset = entry_addr + TABLE::Dsdt as usize * 8;
-    let dsdt_addr = LittleEndian::read_u64(&read_data[offset..]);
-    check_dsdt(&read_data[(dsdt_addr as usize)..]);
+    // DESCRIPTION_HEADERs: FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
+    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>();
 
     // Check FADT
-    offset = entry_addr + TABLE::Fadt as usize * 8;
+    let mut offset = entry_addr + TABLE::Fadt as usize * 8;
     let fadt_addr = LittleEndian::read_u64(&read_data[offset..]);
-    check_fadt(&read_data[(fadt_addr as usize)..]);
+    let (facs_addr, dsdt_addr) = check_fadt(&read_data[(fadt_addr as usize)..]);
+
+    // Check FACS (FACS table is pointed to by the FADT table)
+    check_facs(&read_data[(facs_addr as usize)..]);
+
+    // Check DSDT (DSDT table is pointed to by the FADT table)
+    check_dsdt(&read_data[(dsdt_addr as usize)..]);
 
     // Check MADT
     offset = entry_addr + TABLE::Madt as usize * 8;
@@ -420,11 +444,11 @@ fn check_madt_of_two_gicr(
     );
 
     // XSDT entry: An array of 64-bit physical addresses that point to other DESCRIPTION_HEADERs.
-    // DESCRIPTION_HEADERs: DSDT, FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
-    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>() - 8;
+    // DESCRIPTION_HEADERs: FADT, MADT, GTDT, IORT, SPCR, MCFG, SRAT, SLIT, PPTT
+    let entry_addr = xsdt_addr + mem::size_of::<AcpiTableHeader>();
 
     // MADT offset base on XSDT
-    let mut offset = entry_addr + 2 * 8;
+    let mut offset = entry_addr + TABLE::Madt as usize * 8;
     let madt_addr = LittleEndian::read_u64(&read_data[offset..]) as usize;
 
     // Check second GIC Redistributor

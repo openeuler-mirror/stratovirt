@@ -262,7 +262,7 @@ const CACHE_NODES: [CacheNode; CacheType::L3 as usize + 1] = [
     },
     // L2 unified cache
     CacheNode {
-        size: 524228,
+        size: 524288,
         sets: 1024,
         associativity: 8,
         attributes: 10,
