@@ -582,7 +582,7 @@ impl CPUHypervisorOps for KvmCpu {
             );
         }
 
-        cpu_thread_worker.thread_cpu.set_tid();
+        cpu_thread_worker.thread_cpu.set_tid(None);
 
         #[cfg(not(test))]
         self.put_register(cpu_thread_worker.thread_cpu.clone())?;
