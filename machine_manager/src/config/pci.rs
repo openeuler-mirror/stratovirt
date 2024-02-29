@@ -77,15 +77,14 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
     }
 
     let slot = addr_vec.first().unwrap();
-    let slot = str_to_num::<u8>(*slot).with_context(|| format!("Invalid slot num: {}", slot))?;
+    let slot = str_to_num::<u8>(slot).with_context(|| format!("Invalid slot num: {}", slot))?;
     if slot > 31 {
         bail!("Invalid slot num: {}", slot);
     }
 
     let func = if addr_vec.get(1).is_some() {
         let function = addr_vec.get(1).unwrap();
-        str_to_num::<u8>(*function)
-            .with_context(|| format!("Invalid function num: {}", function))?
+        str_to_num::<u8>(function).with_context(|| format!("Invalid function num: {}", function))?
     } else {
         0
     };
