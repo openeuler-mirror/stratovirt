@@ -1,0 +1,24 @@
+
+[[events]]
+name = "update_event"
+args = "raw_fd: &dyn fmt::Debug, operation: &dyn fmt::Debug"
+message = "raw_fd={:?} operation={:?}"
+enabled = true
+
+[[events]]
+name = "timer_add"
+args = "id: &dyn fmt::Debug, expire_time: &dyn fmt::Debug"
+message = "id={:?} expire_time={:?}"
+enabled = true
+
+[[events]]
+name = "timer_del"
+args = "id: &dyn fmt::Debug, expire_time: &dyn fmt::Debug"
+message = "id={:?} expire_time={:?}"
+enabled = true
+
+[[events]]
+name = "timer_run"
+args = "id: &dyn fmt::Debug"
+message = "id={:?}"
+enabled = true
