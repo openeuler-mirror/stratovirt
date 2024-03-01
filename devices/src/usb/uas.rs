@@ -58,7 +58,7 @@ const UAS_PIPE_ID_DATA_IN: u8 = 0x03;
 const UAS_PIPE_ID_DATA_OUT: u8 = 0x04;
 
 // UAS Streams Attributes
-const UAS_MAX_STREAMS_BM_ATTR: u8 = 0;
+const UAS_MAX_STREAMS_BM_ATTR: u8 = 4;
 const UAS_MAX_STREAMS: usize = 1 << UAS_MAX_STREAMS_BM_ATTR;
 
 // UAS IU IDs

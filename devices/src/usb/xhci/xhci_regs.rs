@@ -381,7 +381,9 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_CAP_REG_HCSPARAMS3 => 0x0,
             XHCI_CAP_REG_HCCPARAMS1 => {
-                0x8 << CAP_HCCP_EXCP_SHIFT | (0 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
+                // The offset of the first extended capability is (base) + (0x8 << 2)
+                // The primary stream array size is 1 << (0x7 + 1)
+                0x8 << CAP_HCCP_EXCP_SHIFT | (0x7 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,
