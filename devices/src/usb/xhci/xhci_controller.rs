@@ -137,28 +137,25 @@ pub struct XhciTransfer {
     td: Vec<XhciTRB>,
     complete: bool,
     slotid: u32,
-    streamid: u32,
     epid: u32,
+    streamid: u32,
+    ep_context: XhciEpContext,
     in_xfer: bool,
     iso_xfer: bool,
     timed_xfer: bool,
     running_retry: bool,
     running_async: bool,
     interrupter: Arc<Mutex<XhciInterrupter>>,
-    ep_ring: Arc<XhciTransferRing>,
-    ep_type: EpType,
-    ep_state: Arc<AtomicU32>,
     mfindex_kick: u64,
 }
 
 impl XhciTransfer {
     fn new(
-        ep_info: (u32, u32, EpType),
+        ep_info: (u32, u32, u32),
+        ep_context: &XhciEpContext,
         in_xfer: bool,
         td: Vec<XhciTRB>,
         intr: &Arc<Mutex<XhciInterrupter>>,
-        ring: &Arc<XhciTransferRing>,
-        ep_state: &Arc<AtomicU32>,
     ) -> Self {
         XhciTransfer {
             packet: Arc::new(Mutex::new(UsbPacket::default())),
@@ -167,16 +164,14 @@ impl XhciTransfer {
             complete: false,
             slotid: ep_info.0,
             epid: ep_info.1,
-            streamid: 0,
+            streamid: ep_info.2,
+            ep_context: ep_context.clone(),
             in_xfer,
             iso_xfer: false,
             timed_xfer: false,
             running_retry: false,
             running_async: false,
             interrupter: intr.clone(),
-            ep_ring: ring.clone(),
-            ep_type: ep_info.2,
-            ep_state: ep_state.clone(),
             mfindex_kick: 0,
         }
     }
@@ -190,18 +185,20 @@ impl XhciTransfer {
         if self.status == TRBCCode::Success {
             trace::usb_xhci_xfer_success(&self.packet.lock().unwrap().actual_length);
             self.submit_transfer()?;
-            self.ep_ring.refresh_dequeue_ptr()?;
+            let ring = self.ep_context.ring.as_ref().unwrap();
+            ring.refresh_dequeue_ptr(self.ep_context.output_ctx_addr.load(Ordering::Acquire))?;
             return Ok(());
         }
 
         trace::usb_xhci_xfer_error(&self.packet.lock().unwrap().status);
         self.report_transfer_error()?;
+        let ep_type = self.ep_context.ep_type;
 
-        if self.ep_type == EpType::IsoIn || self.ep_type == EpType::IsoOut {
+        if ep_type == EpType::IsoIn || ep_type == EpType::IsoOut {
             return Ok(());
         }
         // Set the endpoint state to halted if an error occurs in the packet.
-        set_ep_state_helper(&self.ep_ring, &self.ep_state, EP_HALTED)?;
+        self.ep_context.set_state(EP_HALTED)?;
 
         Ok(())
     }
@@ -292,6 +289,7 @@ impl TransferOps for XhciTransfer {
 }
 
 /// Endpoint context which use the ring to transfer data.
+#[derive(Clone)]
 pub struct XhciEpContext {
     epid: u32,
     enabled: bool,
@@ -339,13 +337,12 @@ impl XhciEpContext {
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
 
         if self.max_pstreams == 0 {
-            let ring = XhciTransferRing::new(&self.mem, &self.output_ctx_addr);
+            let ring = XhciTransferRing::new(&self.mem);
             ring.init(dequeue);
             ring.set_cycle_bit((ctx.deq_lo & 1) == 1);
             self.ring = Some(Arc::new(ring));
         } else {
-            let stream_array =
-                XhciStreamArray::new(&self.mem, &self.output_ctx_addr, self.max_pstreams);
+            let stream_array = XhciStreamArray::new(&self.mem, self.max_pstreams);
             stream_array
                 .init(dequeue)
                 .with_context(|| "Failed to initialize Stream Array.")?;
@@ -360,12 +357,21 @@ impl XhciEpContext {
     }
 
     fn set_ep_state(&self, state: u32) {
-        self.state.store(state, Ordering::SeqCst);
+        self.state.store(state, Ordering::Release);
     }
 
     /// Update the endpoint state and write the state to memory.
-    fn set_state(&mut self, state: u32) -> Result<()> {
-        set_ep_state_helper(self.ring.as_ref().unwrap(), &self.state, state)
+    fn set_state(&self, state: u32) -> Result<()> {
+        let mut ep_ctx = XhciEpCtx::default();
+        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
+        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        ep_ctx.ep_info &= !EP_STATE_MASK;
+        ep_ctx.ep_info |= state;
+        let ring = self.ring.as_ref().unwrap();
+        ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
+        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        self.set_ep_state(state);
+        Ok(())
     }
 
     /// Update the dequeue pointer in endpoint or stream context.
@@ -420,16 +426,16 @@ impl XhciEpContext {
     }
 
     fn get_stream(&self, stream_id: u32) -> Result<Arc<Mutex<XhciStreamContext>>> {
-        if self.stream_array.is_none() {
-            bail!("Endpoint {} does not support streams.", self.epid);
-        }
+        let stream_arr = self
+            .stream_array
+            .as_ref()
+            .ok_or_else(|| anyhow!("Endpoint {} does not support streams.", self.epid))?;
 
         if !self.lsa {
-            bail!("Only Linear Streams Array (LSA) is supported.")
+            bail!("Only Linear Streams Array (LSA) is supported.");
         }
 
-        // SAFETY: Stream Array was checked to be not None.
-        let pstreams = &self.stream_array.as_ref().unwrap().0;
+        let pstreams = &stream_arr.0;
         let pstreams_num = pstreams.len() as u32;
 
         if stream_id >= pstreams_num || stream_id == 0 {
@@ -443,8 +449,8 @@ impl XhciEpContext {
         let stream_context = &pstreams[stream_id as usize];
         let mut locked_context = stream_context.lock().unwrap();
 
-        if locked_context.needs_update {
-            locked_context.update()?;
+        if locked_context.needs_refresh {
+            locked_context.refresh()?;
         }
 
         if self.lsa && locked_context.sct != STREAM_CTX_SCT_PRIMARY_TR {
@@ -481,23 +487,6 @@ impl XhciEpContext {
         stream_arr.reset();
         Ok(())
     }
-}
-
-fn set_ep_state_helper(
-    ring: &Arc<XhciTransferRing>,
-    ep_state: &Arc<AtomicU32>,
-    state: u32,
-) -> Result<()> {
-    let mem = &ring.mem;
-    let mut ep_ctx = XhciEpCtx::default();
-    let output_addr = ring.output_ctx_addr.load(Ordering::Acquire);
-    dma_read_u32(mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
-    ep_ctx.ep_info &= !EP_STATE_MASK;
-    ep_ctx.ep_info |= state;
-    ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
-    dma_write_u32(mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
-    ep_state.store(state, Ordering::SeqCst);
-    Ok(())
 }
 
 /// Endpoint type, including control, bulk, interrupt and isochronous.
@@ -807,13 +796,14 @@ pub trait DwordOrder: Default + Copy + Send + Sync {
 }
 
 #[repr(transparent)]
+#[derive(Clone)]
 pub struct XhciStreamArray(Vec<Arc<Mutex<XhciStreamContext>>>);
 
 impl XhciStreamArray {
-    fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>, max_pstreams: u32) -> Self {
+    fn new(mem: &Arc<AddressSpace>, max_pstreams: u32) -> Self {
         let pstreams_num = 1 << (max_pstreams + 1);
         let pstreams = (0..pstreams_num)
-            .map(|_| Arc::new(Mutex::new(XhciStreamContext::new(mem, addr))))
+            .map(|_| Arc::new(Mutex::new(XhciStreamContext::new(mem))))
             .collect();
         XhciStreamArray(pstreams)
     }
@@ -834,6 +824,7 @@ impl XhciStreamArray {
     }
 }
 
+#[derive(Clone)]
 pub struct XhciStreamContext {
     /// Memory address space.
     mem: Arc<AddressSpace>,
@@ -843,28 +834,28 @@ pub struct XhciStreamContext {
     sct: u32,
     /// Transfer Ring.
     ring: Arc<XhciTransferRing>,
-    /// Whether this Stream Context is initialized.
-    needs_update: bool,
+    /// Whether the context is up to date.
+    needs_refresh: bool,
 }
 
 impl XhciStreamContext {
-    fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>) -> Self {
+    fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: Arc::clone(mem),
             dequeue: 0,
             sct: 0,
-            ring: Arc::new(XhciTransferRing::new(mem, addr)),
-            needs_update: true,
+            ring: Arc::new(XhciTransferRing::new(mem)),
+            needs_refresh: true,
         }
     }
 
     fn init(&mut self, addr: u64) -> Result<()> {
         self.dequeue = addr;
-        self.update()?;
+        self.refresh()?;
         Ok(())
     }
 
-    fn update(&mut self) -> Result<()> {
+    fn refresh(&mut self) -> Result<()> {
         let mut stream_ctx = XhciStreamCtx::default();
         dma_read_u32(
             &self.mem,
@@ -875,12 +866,12 @@ impl XhciStreamContext {
         self.sct = (stream_ctx.deq_lo >> STREAM_CTX_SCT_SHIFT) & STREAM_CTX_SCT_MASK;
         self.ring.init(dequeue);
         self.ring.set_cycle_bit((dequeue & 1) == 1);
-        self.needs_update = false;
+        self.needs_refresh = false;
         Ok(())
     }
 
     fn reset(&mut self) {
-        self.needs_update = true;
+        self.needs_refresh = true;
     }
 }
 
@@ -1825,10 +1816,8 @@ impl XhciDevice {
             return Ok(());
         }
         epctx.set_state(EP_RUNNING)?;
-        let ep_state = epctx.state.clone();
         const KICK_LIMIT: u32 = 256;
         let mut count = 0;
-        let ring = epctx.ring.as_ref().unwrap().clone();
         loop {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             let td = match epctx.ring.as_ref().unwrap().fetch_td()? {
@@ -1861,12 +1850,11 @@ impl XhciDevice {
             let in_xfer = transfer_in_direction(ep_id as u8, &td, epctx.ep_type);
             // NOTE: Only support primary interrupter now.
             let xfer = Arc::new(Mutex::new(XhciTransfer::new(
-                (slot_id, ep_id, epctx.ep_type),
+                (slot_id, ep_id, stream_id),
+                epctx,
                 in_xfer,
                 td,
                 &self.intrs[0],
-                &ring,
-                &ep_state,
             )));
             let packet = match self.setup_usb_packet(&xfer) {
                 Ok(pkt) => pkt,
