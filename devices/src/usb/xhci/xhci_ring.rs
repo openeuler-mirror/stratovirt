@@ -116,16 +116,14 @@ pub struct XhciTransferRing {
     pub dequeue: AtomicU64,
     /// Consumer Cycle State
     pub ccs: AtomicBool,
-    pub output_ctx_addr: Arc<AtomicU64>,
 }
 
 impl XhciTransferRing {
-    pub fn new(mem: &Arc<AddressSpace>, addr: &Arc<AtomicU64>) -> Self {
+    pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: mem.clone(),
             dequeue: AtomicU64::new(0),
             ccs: AtomicBool::new(true),
-            output_ctx_addr: addr.clone(),
         }
     }
 
@@ -202,12 +200,15 @@ impl XhciTransferRing {
     }
 
     /// Refresh dequeue pointer to output context.
-    pub fn refresh_dequeue_ptr(&self) -> Result<()> {
+    pub fn refresh_dequeue_ptr(&self, output_ctx_addr: u64) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        dma_read_u32(
+            &self.mem,
+            GuestAddress(output_ctx_addr),
+            ep_ctx.as_mut_dwords(),
+        )?;
         self.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
-        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, GuestAddress(output_ctx_addr), ep_ctx.as_dwords())?;
         Ok(())
     }
 
