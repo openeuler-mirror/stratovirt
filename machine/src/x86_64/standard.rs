@@ -779,6 +779,8 @@ pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sched_setattr),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_fadvise64),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rseq),
     ]
 }
 
