@@ -150,7 +150,7 @@ impl HypervisorOps for KvmHypervisor {
         sys_mem: &Arc<AddressSpace>,
     ) -> Result<()> {
         self.arch_init()?;
-
+        sys_mem.set_ioevtfd_enabled(true);
         sys_mem
             .register_listener(self.create_memory_listener())
             .with_context(|| "Failed to register hypervisor listener for memory space.")?;
