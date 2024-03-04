@@ -73,7 +73,6 @@ use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
 use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
-#[cfg(not(test))]
 use util::test_helper::is_test_enabled;
 #[cfg(target_arch = "x86_64")]
 use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
@@ -150,7 +149,11 @@ impl HypervisorOps for KvmHypervisor {
         sys_mem: &Arc<AddressSpace>,
     ) -> Result<()> {
         self.arch_init()?;
-        sys_mem.set_ioevtfd_enabled(true);
+
+        if !is_test_enabled() {
+            sys_mem.set_ioevtfd_enabled(true);
+        }
+
         sys_mem
             .register_listener(self.create_memory_listener())
             .with_context(|| "Failed to register hypervisor listener for memory space.")?;

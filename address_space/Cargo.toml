@@ -14,6 +14,7 @@ vmm-sys-util = "0.11.1"
 arc-swap = "1.6.0"
 thiserror = "1.0"
 anyhow = "1.0"
+once_cell = "1.18.0"
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }

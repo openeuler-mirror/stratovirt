@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
+use log::error;
+use once_cell::sync::OnceCell;
 
 use crate::{
     AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
@@ -134,7 +136,7 @@ pub struct AddressSpace {
     /// The backend memory region tree, used for migrate.
     machine_ram: Option<Arc<Region>>,
     /// Whether the hypervisor enables the ioeventfd.
-    hyp_ioevtfd_enabled: Arc<Mutex<bool>>,
+    hyp_ioevtfd_enabled: OnceCell<bool>,
 }
 
 impl fmt::Debug for AddressSpace {
@@ -166,7 +168,7 @@ impl AddressSpace {
             listeners: Arc::new(Mutex::new(Vec::new())),
             ioeventfds: Arc::new(Mutex::new(Vec::new())),
             machine_ram,
-            hyp_ioevtfd_enabled: Arc::new(Mutex::new(false)),
+            hyp_ioevtfd_enabled: OnceCell::new(),
         });
 
         root.set_belonged_address_space(&space);
@@ -624,7 +626,7 @@ impl AddressSpace {
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
         let view = self.flat_view.load();
 
-        if !*self.hyp_ioevtfd_enabled.lock().unwrap() {
+        if !*self.hyp_ioevtfd_enabled.get_or_init(|| false) {
             for evtfd in self.ioeventfds.lock().unwrap().iter() {
                 if addr != evtfd.addr_range.base || count != evtfd.addr_range.size {
                     continue;
@@ -749,7 +751,9 @@ impl AddressSpace {
     }
 
     pub fn set_ioevtfd_enabled(&self, ioevtfd_enabled: bool) {
-        *self.hyp_ioevtfd_enabled.lock().unwrap() = ioevtfd_enabled;
+        self.hyp_ioevtfd_enabled
+            .set(ioevtfd_enabled)
+            .unwrap_or_else(|_| error!("Failed to set hyp_ioevtfd_enabled"));
     }
 }
 
