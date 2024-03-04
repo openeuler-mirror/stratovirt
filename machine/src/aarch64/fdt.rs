@@ -138,10 +138,7 @@ fn generate_flash_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> 
     let node = format!("flash@{:x}", flash_base);
     let flash_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "cfi-flash")?;
-    fdt.set_property_array_u64(
-        "reg",
-        &[flash_base, flash_size, flash_base + flash_size, flash_size],
-    )?;
+    fdt.set_property_array_u64("reg", &[flash_base, flash_size])?;
     fdt.set_property_u32("bank-width", 4)?;
     fdt.end_node(flash_node_dep)
 }
@@ -268,7 +265,6 @@ impl CompileFDTHelper for MachineBase {
         fdt.set_property_string("method", "hvc")?;
         fdt.end_node(psci_node_dep)?;
 
-        let mut pflash_cnt = 0;
         for dev in self.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             match locked_dev.sysbusdev_base().dev_type {
@@ -285,12 +281,7 @@ impl CompileFDTHelper for MachineBase {
                     generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 SysBusDevType::Flash => {
-                    // Two pflash devices are created, but only one pflash node is required in the fdt table.
-                    // Thereforce, the second pflash device needs to be skipped.
-                    if pflash_cnt == 0 {
-                        generate_flash_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
-                        pflash_cnt += 1;
-                    }
+                    generate_flash_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }
