@@ -25,7 +25,6 @@ use crate::{
 use migration::{migration::Migratable, MigrationManager};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
-use util::test_helper::is_test_enabled;
 
 /// Contains an array of `FlatRange`.
 #[derive(Default, Clone, Debug)]
@@ -134,6 +133,8 @@ pub struct AddressSpace {
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
     /// The backend memory region tree, used for migrate.
     machine_ram: Option<Arc<Region>>,
+    /// Whether the hypervisor enables the ioeventfd.
+    hyp_ioevtfd_enabled: Arc<Mutex<bool>>,
 }
 
 impl fmt::Debug for AddressSpace {
@@ -165,6 +166,7 @@ impl AddressSpace {
             listeners: Arc::new(Mutex::new(Vec::new())),
             ioeventfds: Arc::new(Mutex::new(Vec::new())),
             machine_ram,
+            hyp_ioevtfd_enabled: Arc::new(Mutex::new(false)),
         });
 
         root.set_belonged_address_space(&space);
@@ -622,7 +624,7 @@ impl AddressSpace {
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
         let view = self.flat_view.load();
 
-        if is_test_enabled() {
+        if !*self.hyp_ioevtfd_enabled.lock().unwrap() {
             for evtfd in self.ioeventfds.lock().unwrap().iter() {
                 if addr != evtfd.addr_range.base || count != evtfd.addr_range.size {
                     continue;
@@ -744,6 +746,10 @@ impl AddressSpace {
         self.update_ioeventfds()
             .with_context(|| "Failed to generate and update ioeventfds")?;
         Ok(())
+    }
+
+    pub fn set_ioevtfd_enabled(&self, ioevtfd_enabled: bool) {
+        *self.hyp_ioevtfd_enabled.lock().unwrap() = ioevtfd_enabled;
     }
 }
 
