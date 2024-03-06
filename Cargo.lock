@@ -26,6 +26,7 @@ dependencies = [
  "migration",
  "migration_derive",
  "nix 0.26.2",
+ "once_cell",
  "thiserror",
  "util",
  "vmm-sys-util",
