@@ -90,6 +90,12 @@ impl PoolState {
 
         self.new_threads -= 1;
         self.pending_threads += 1;
+        trace::thread_pool_spawn_thread(
+            &self.total_threads,
+            &self.blocked_threads,
+            &self.new_threads,
+            &self.pending_threads,
+        );
         thread::Builder::new()
             .name("thread-pool".to_string())
             .spawn(move || worker_thread(pool))
@@ -120,6 +126,7 @@ impl Default for ThreadPool {
 impl ThreadPool {
     /// Submit task to thread pool.
     pub fn submit_task(pool: Arc<ThreadPool>, task: Box<dyn TaskOperation>) -> Result<()> {
+        trace::thread_pool_submit_task();
         let mut locked_state = pool.pool_state.lock().unwrap();
         if locked_state.spawn_thread_needed() {
             locked_state.spawn_thread(pool.clone())?
@@ -198,6 +205,7 @@ fn worker_thread(pool: Arc<ThreadPool>) {
         locked_state = pool.pool_state.lock().unwrap();
     }
     locked_state.total_threads -= 1;
+    trace::thread_pool_exit_thread(&locked_state.total_threads, &locked_state.req_lists.len);
 
     pool.stop_cond.notify_one();
     pool.request_cond.notify_one();

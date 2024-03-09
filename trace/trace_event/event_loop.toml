@@ -1,0 +1,42 @@
+
+[[events]]
+name = "update_event"
+args = "raw_fd: &dyn fmt::Debug, operation: &dyn fmt::Debug"
+message = "raw_fd={:?} operation={:?}"
+enabled = true
+
+[[events]]
+name = "timer_add"
+args = "id: &dyn fmt::Debug, expire_time: &dyn fmt::Debug"
+message = "id={:?} expire_time={:?}"
+enabled = true
+
+[[events]]
+name = "timer_del"
+args = "id: &dyn fmt::Debug, expire_time: &dyn fmt::Debug"
+message = "id={:?} expire_time={:?}"
+enabled = true
+
+[[events]]
+name = "timer_run"
+args = "id: &dyn fmt::Debug"
+message = "id={:?}"
+enabled = true
+
+[[events]]
+name = "thread_pool_submit_task"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "thread_pool_spawn_thread"
+args = "total_threads: &u64, blocked_threads: &u64, new_threads: &u64, pending_threads: &u64"
+message = "total_threads={:?} blocked_threads={:?} new_threads={:?} pending_threads={:?}"
+enabled = true
+
+[[events]]
+name = "thread_pool_exit_thread"
+args = "total_threads: &u64, lists_len: &dyn fmt::Debug"
+message = "total_threads={:?} lists_len={:?}"
+enabled = true

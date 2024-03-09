@@ -473,6 +473,7 @@ impl EventLoopContext {
     /// * `notifiers` - event notifiers wanted to add to or remove from `EventLoop`.
     pub fn update_events(&mut self, notifiers: Vec<EventNotifier>) -> Result<()> {
         for en in notifiers {
+            trace::update_event(&en.raw_fd, &en.op);
             match en.op {
                 NotifierOperation::AddExclusion | NotifierOperation::AddShared => {
                     self.add_event(en)?;
@@ -554,6 +555,7 @@ impl EventLoopContext {
                 break;
             }
         }
+        trace::timer_add(&timer.id, &timer.expire_time);
         timers.insert(index, timer);
         drop(timers);
         self.kick();
@@ -565,6 +567,7 @@ impl EventLoopContext {
         let mut timers = self.timers.lock().unwrap();
         for (i, t) in timers.iter().enumerate() {
             if timer_id == t.id {
+                trace::timer_del(&t.id, &t.expire_time);
                 timers.remove(i);
                 break;
             }
@@ -603,6 +606,7 @@ impl EventLoopContext {
         let expired_timers: Vec<Box<Timer>> = timers.drain(0..expired_nr).collect();
         drop(timers);
         for timer in expired_timers {
+            trace::timer_run(&timer.id);
             (timer.func)();
         }
     }
