@@ -903,6 +903,8 @@ impl PciConfig {
                         }
                     }
                 }
+
+                trace::pci_update_mappings_del(id, self.bars[id].address, self.bars[id].size);
                 self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
 
@@ -936,6 +938,7 @@ impl PciConfig {
                     }
                 }
 
+                trace::pci_update_mappings_add(id, self.bars[id].address, self.bars[id].size);
                 self.bars[id].address = new_addr;
             }
         }
