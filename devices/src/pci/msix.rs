@@ -450,6 +450,8 @@ impl Msix {
 
         let masked: bool = self.is_func_masked(config);
         let enabled: bool = self.is_enabled(config);
+        trace::msix_write_config(self.dev_id.load(Ordering::Relaxed) as u16, masked, enabled);
+
         let mask_state_changed = !((self.func_masked == masked) && (self.enabled == enabled));
 
         self.func_masked = masked;

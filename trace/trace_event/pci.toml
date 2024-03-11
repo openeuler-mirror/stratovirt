@@ -1,0 +1,29 @@
+[[events]]
+name = "pci_read_config"
+args = "dev_name: &str, addr: usize, data: &[u8]"
+message = "dev name: {} addr: 0x{:#X} data: 0x{:X?}"
+enabled = true
+
+[[events]]
+name = "pci_write_config"
+args = "dev_name: &str, addr: usize, data: &[u8]"
+message = "dev name: {} addr: 0x{:#X} data: 0x{:X?}"
+enabled = true
+
+[[events]]
+name = "msix_write_config"
+args = "dev_id: u16, masked: bool, enabled: bool"
+message = "dev id: {} masked: {} enabled: {}"
+enabled = true
+
+[[events]]
+name = "pci_update_mappings_add"
+args = "bar_id: usize, addr: u64, size: u64"
+message = "bar id: {} addr: 0x{:#X} size: {}"
+enabled = true
+
+[[events]]
+name = "pci_update_mappings_del"
+args = "bar_id: usize, addr: u64, size: u64"
+message = "bar id: {} addr: 0x{:#X} size: {}"
+enabled = true
