@@ -339,3 +339,129 @@ name = "usb_keyboard_set_report"
 args = "led_state: &dyn fmt::Debug"
 message = "led_state={:?}"
 enabled = true
+
+[[events]]
+name = "usb_host_open_started"
+args = "bus_num: u8, addr: u8"
+message = "dev bus 0x{:X} addr 0x{:X}"
+enabled = true
+
+[[events]]
+name = "usb_host_close"
+args = "bus_num: u8, addr: u8"
+message = "dev bus 0x{:X} addr 0x{:X}"
+enabled = true
+
+[[events]]
+name = "usb_host_open_success"
+args = "bus_num: u8, addr: u8"
+message = "dev bus 0x{:X} addr 0x{:X}"
+enabled = true
+ 
+[[events]]
+name = "usb_host_reset"
+args = "bus_num: u8, addr: u8"
+message = "dev bus 0x{:X} addr 0x{:X} reset"
+enabled = true
+
+[[events]]
+name = "usb_host_attach_kernel"
+args = "bus_num: u8, addr: u8, interface: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, interface {}"
+enabled = true
+
+[[events]]
+name = "usb_host_detach_kernel"
+args = "bus_num: u8, addr: u8, interface: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, interface {}"
+enabled = true
+
+[[events]]
+name = "usb_host_set_interface"
+args = "bus_num: u8, addr: u8, iface: u16, alt: u16"
+message = "dev bus 0x{:X} addr 0x{:X}, set interface {}, alt {}"
+enabled = true
+
+[[events]]
+name = "usb_host_set_config"
+args = "bus_num: u8, addr: u8, config: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, set config {}"
+enabled = true
+
+[[events]]
+name = "usb_host_set_address"
+args = "bus_num: u8, addr: u8, address: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, set address {}"
+enabled = true
+
+[[events]]
+name = "usb_host_claim_interface"
+args = "bus_num: u8, addr: u8, interface: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, claim interface {}"
+enabled = true
+
+[[events]]
+name = "usb_host_release_interface"
+args = "bus_num: u8, addr: u8, interface: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, release interface {}"
+enabled = true
+
+[[events]]
+name = "usb_host_parse_config"
+args = "bus_num: u8, addr: u8, value: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, parse config value {}"
+enabled = true
+
+[[events]]
+name = "usb_host_parse_interface"
+args = "bus_num: u8, addr: u8, num: u8, alt: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, parse interface num {} alt {}"
+enabled = true
+
+[[events]]
+name = "usb_host_parse_error"
+args = "bus_num: u8, addr: u8, msg: &str"
+message = "dev bus 0x{:X} addr 0x{:X}, msg {}"
+enabled = true
+
+[[events]]
+name = "usb_host_parse_endpoint"
+args = "bus_num: u8, addr: u8, ep: u8, dir: &dyn fmt::Debug, ep_type: &dyn fmt::Debug"
+message = "dev bus 0x{:X} addr 0x{:X}, parse endpoint {} dir {:?} ep_type {:?}"
+enabled = true
+
+[[events]]
+name = "usb_host_req_control"
+args = "bus_num: u8, addr: u8, request: &dyn fmt::Debug"
+message = "dev bus 0x{:X} addr 0x{:X}, request {:?}"
+enabled = true
+
+[[events]]
+name = "usb_host_req_data"
+args = "bus_num: u8, addr: u8, packet: u64, pid: u32, ep_num: u8, iov_len: usize"
+message = "dev bus 0x{:X} addr 0x{:X}, packet 0x{:#X}, pid {} ep_number {} iov len {}"
+enabled = true
+
+[[events]]
+name = "usb_host_iso_start"
+args = "bus_num: u8, addr: u8, ep_number: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, endpoint {}"
+enabled = true
+
+[[events]]
+name = "usb_host_iso_stop"
+args = "bus_num: u8, addr: u8, ep_number: u8"
+message = "dev bus 0x{:X} addr 0x{:X}, endpoint {}"
+enabled = true
+
+[[events]]
+name = "usb_host_req_emulated"
+args = "bus_num: u8, addr: u8, packet: u64, status: &dyn fmt::Debug"
+message = "dev bus 0x{:X} addr 0x{:X}, packet 0x{:#X}, status {:?}"
+enabled = true
+
+[[events]]
+name = "usb_host_req_complete"
+args = "bus_num: u8, addr: u8, packet: u64, status: &dyn fmt::Debug, actual_length: usize"
+message = "dev bus 0x{:X} addr 0x{:X}, packet 0x{:#X}, status {:?} actual length {}"
+enabled = true
