@@ -69,6 +69,8 @@ struct InterfaceStatus {
 }
 
 pub struct UsbHostRequest {
+    pub hostbus: u8,
+    pub hostaddr: u8,
     pub requests: Weak<Mutex<List<UsbHostRequest>>>,
     pub packet: Arc<Mutex<UsbPacket>>,
     pub host_transfer: *mut libusb_transfer,
@@ -79,12 +81,16 @@ pub struct UsbHostRequest {
 
 impl UsbHostRequest {
     pub fn new(
+        hostbus: u8,
+        hostaddr: u8,
         requests: Weak<Mutex<List<UsbHostRequest>>>,
         packet: Arc<Mutex<UsbPacket>>,
         host_transfer: *mut libusb_transfer,
         is_control: bool,
     ) -> Self {
         Self {
+            hostbus,
+            hostaddr,
             requests,
             packet,
             host_transfer,
@@ -121,6 +127,13 @@ impl UsbHostRequest {
         if locked_packet.is_async {
             locked_packet.status = UsbPacketStatus::NoDev;
             locked_packet.is_async = false;
+            trace::usb_host_req_complete(
+                self.hostbus,
+                self.hostaddr,
+                &*locked_packet as *const UsbPacket as u64,
+                &locked_packet.status,
+                locked_packet.actual_length as usize,
+            );
             cancel_host_transfer(self.host_transfer)
                 .unwrap_or_else(|e| warn!("usb-host cancel host transfer is error: {:?}", e));
 
@@ -261,6 +274,8 @@ unsafe impl Sync for IsoTransfer {}
 unsafe impl Send for IsoTransfer {}
 
 pub struct IsoQueue {
+    hostbus: u8,
+    hostaddr: u8,
     ep_number: u8,
     unused: LinkedList<Arc<Mutex<IsoTransfer>>>,
     inflight: LinkedList<Arc<Mutex<IsoTransfer>>>,
@@ -268,8 +283,10 @@ pub struct IsoQueue {
 }
 
 impl IsoQueue {
-    pub fn new(ep_number: u8) -> Self {
+    pub fn new(hostbus: u8, hostaddr: u8, ep_number: u8) -> Self {
         Self {
+            hostbus,
+            hostaddr,
             ep_number,
             unused: LinkedList::new(),
             inflight: LinkedList::new(),
@@ -513,6 +530,7 @@ impl UsbHost {
             } {
                 continue;
             }
+            trace::usb_host_detach_kernel(self.config.hostbus, self.config.hostaddr, i);
             self.handle
                 .as_mut()
                 .unwrap()
@@ -538,6 +556,7 @@ impl UsbHost {
             if !self.ifs[i as usize].detached {
                 continue;
             }
+            trace::usb_host_attach_kernel(self.config.hostbus, self.config.hostaddr, i);
             self.handle
                 .as_mut()
                 .unwrap()
@@ -554,6 +573,7 @@ impl UsbHost {
             Err(_) => return,
         };
 
+        trace::usb_host_parse_config(self.config.hostbus, self.config.hostaddr, conf.number());
         for (i, intf) in conf.interfaces().enumerate() {
             // The usb_deviec.altsetting indexes alternate settings by the interface number.
             // Get the 0th alternate setting first so that we can grap the interface number,
@@ -575,8 +595,13 @@ impl UsbHost {
                 intf_desc = intf.descriptors().nth(alt as usize);
             }
 
+            trace::usb_host_parse_interface(
+                self.config.hostbus,
+                self.config.hostaddr,
+                intf_desc.as_ref().unwrap().interface_number(),
+                intf_desc.as_ref().unwrap().setting_number(),
+            );
             for ep in intf_desc.as_ref().unwrap().endpoint_descriptors() {
-                let addr = ep.address();
                 let pid = match ep.direction() {
                     Direction::In => USB_TOKEN_IN,
                     Direction::Out => USB_TOKEN_OUT,
@@ -584,14 +609,30 @@ impl UsbHost {
                 let ep_num = ep.number();
                 let ep_type = ep.transfer_type() as u8;
                 if ep_num == 0 {
-                    error!("Invalid endpoint address {}", addr);
+                    trace::usb_host_parse_error(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        "invalid endpoint address",
+                    );
                     return;
                 }
                 let in_direction = pid == USB_TOKEN_IN;
                 if self.base.get_endpoint(in_direction, ep_num).ep_type != USB_ENDPOINT_ATTR_INVALID
                 {
-                    error!("duplicate endpoint address")
+                    trace::usb_host_parse_error(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        "duplicate endpoint address",
+                    );
                 }
+
+                trace::usb_host_parse_endpoint(
+                    self.config.hostbus,
+                    self.config.hostaddr,
+                    ep_num,
+                    &ep.direction(),
+                    &ep.transfer_type(),
+                );
                 let usb_ep = self.base.get_mut_endpoint(in_direction, ep_num);
                 usb_ep.set_max_packet_size(ep.max_packet_size());
                 usb_ep.ep_type = ep_type;
@@ -603,6 +644,9 @@ impl UsbHost {
 
     fn open_and_init(&mut self) -> Result<()> {
         self.handle = Some(self.libdev.as_ref().unwrap().open()?);
+        self.config.hostbus = self.libdev.as_ref().unwrap().bus_number();
+        self.config.hostaddr = self.libdev.as_ref().unwrap().address();
+        trace::usb_host_open_started(self.config.hostbus, self.config.hostaddr);
 
         self.detach_kernel()?;
 
@@ -611,6 +655,8 @@ impl UsbHost {
         self.ep_update();
 
         self.base.speed = self.libdev.as_ref().unwrap().speed() as u32 - 1;
+        trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
+
         Ok(())
     }
 
@@ -632,6 +678,7 @@ impl UsbHost {
             if !self.ifs[i as usize].claimed {
                 continue;
             }
+            trace::usb_host_release_interface(self.config.hostbus, self.config.hostaddr, i);
             self.handle
                 .as_mut()
                 .unwrap()
@@ -660,6 +707,7 @@ impl UsbHost {
 
         let mut claimed = 0;
         for i in 0..self.ifs_num {
+            trace::usb_host_claim_interface(self.config.hostbus, self.config.hostaddr, i);
             if self.handle.as_mut().unwrap().claim_interface(i).is_ok() {
                 self.ifs[i as usize].claimed = true;
                 claimed += 1;
@@ -677,6 +725,7 @@ impl UsbHost {
     }
 
     fn set_config(&mut self, config: u8, packet: &mut UsbPacket) {
+        trace::usb_host_set_config(self.config.hostbus, self.config.hostaddr, config);
         self.release_interfaces();
 
         if self.ddesc.is_some() && self.ddesc.as_ref().unwrap().num_configurations() != 1 {
@@ -703,6 +752,7 @@ impl UsbHost {
     }
 
     fn set_interface(&mut self, iface: u16, alt: u16, packet: &mut UsbPacket) {
+        trace::usb_host_set_interface(self.config.hostbus, self.config.hostaddr, iface, alt);
         self.clear_iso_queues();
 
         if iface > USB_MAX_INTERFACES as u16 {
@@ -742,6 +792,8 @@ impl UsbHost {
         if self.handle.is_none() {
             return;
         }
+
+        trace::usb_host_close(self.config.hostbus, self.config.hostaddr);
 
         self.abort_host_transfers()
             .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
@@ -806,7 +858,11 @@ impl UsbHost {
         let iso_queue = if self.find_iso_queue(locked_packet.ep_number).is_some() {
             self.find_iso_queue(locked_packet.ep_number).unwrap()
         } else {
-            let iso_queue = Arc::new(Mutex::new(IsoQueue::new(locked_packet.ep_number)));
+            let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
+                self.config.hostbus,
+                self.config.hostaddr,
+                locked_packet.ep_number,
+            )));
             let cloned_iso_queue = iso_queue.clone();
             let ep = self
                 .base
@@ -866,6 +922,13 @@ impl UsbHost {
             let mut locked_iso_queue = iso_queue.lock().unwrap();
             match submit_host_transfer(host_transfer) {
                 Ok(()) => {
+                    if locked_iso_queue.inflight.is_empty() {
+                        trace::usb_host_iso_start(
+                            self.config.hostbus,
+                            self.config.hostaddr,
+                            ep.ep_number,
+                        );
+                    }
                     locked_iso_queue
                         .inflight
                         .push_back(iso_transfer.unwrap().clone());
@@ -894,20 +957,28 @@ impl UsbHost {
         host_transfer: *mut libusb_transfer,
         packet: &Arc<Mutex<UsbPacket>>,
     ) {
+        let mut locked_packet = packet.lock().unwrap();
         match submit_host_transfer(host_transfer) {
             Ok(()) => {}
             Err(Error::NoDevice) => {
-                packet.lock().unwrap().status = UsbPacketStatus::NoDev;
+                locked_packet.status = UsbPacketStatus::NoDev;
+                trace::usb_host_req_complete(
+                    self.config.hostbus,
+                    self.config.hostaddr,
+                    &*locked_packet as *const UsbPacket as u64,
+                    &locked_packet.status,
+                    locked_packet.actual_length as usize,
+                );
                 return;
             }
             _ => {
-                packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                locked_packet.status = UsbPacketStatus::Stall;
                 self.reset();
                 return;
             }
         };
 
-        packet.lock().unwrap().is_async = true;
+        locked_packet.is_async = true;
     }
 }
 
@@ -955,6 +1026,7 @@ impl UsbDevice for UsbHost {
             bail!("Invalid USB host config: {:?}", self.config);
         }
 
+        info!("Open and init usbhost device: {:?}", self.config);
         self.open_and_init()?;
 
         let usbhost = Arc::new(Mutex::new(self));
@@ -981,6 +1053,8 @@ impl UsbDevice for UsbHost {
 
         self.clear_iso_queues();
 
+        trace::usb_host_reset(self.config.hostbus, self.config.hostaddr);
+
         self.handle
             .as_mut()
             .unwrap()
@@ -999,30 +1073,66 @@ impl UsbDevice for UsbHost {
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
+        trace::usb_host_req_control(self.config.hostbus, self.config.hostaddr, device_req);
         let mut locked_packet = packet.lock().unwrap();
         if self.handle.is_none() {
             locked_packet.status = UsbPacketStatus::NoDev;
+            trace::usb_host_req_emulated(
+                self.config.hostbus,
+                self.config.hostaddr,
+                &*locked_packet as *const UsbPacket as u64,
+                &locked_packet.status,
+            );
             return;
         }
         match device_req.request_type {
             USB_DEVICE_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_SET_ADDRESS {
                     self.base.addr = device_req.value as u8;
+                    trace::usb_host_set_address(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        self.base.addr,
+                    );
+                    trace::usb_host_req_emulated(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        &*locked_packet as *const UsbPacket as u64,
+                        &locked_packet.status,
+                    );
                     return;
                 } else if device_req.request == USB_REQUEST_SET_CONFIGURATION {
                     self.set_config(device_req.value as u8, &mut locked_packet);
+                    trace::usb_host_req_emulated(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        &*locked_packet as *const UsbPacket as u64,
+                        &locked_packet.status,
+                    );
                     return;
                 }
             }
             USB_INTERFACE_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_SET_INTERFACE {
                     self.set_interface(device_req.index, device_req.value, &mut locked_packet);
+                    trace::usb_host_req_emulated(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        &*locked_packet as *const UsbPacket as u64,
+                        &locked_packet.status,
+                    );
                     return;
                 }
             }
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE && device_req.value == 0 {
                     self.clear_halt(locked_packet.pid as u8, device_req.index as u8);
+                    trace::usb_host_req_emulated(
+                        self.config.hostbus,
+                        self.config.hostaddr,
+                        &*locked_packet as *const UsbPacket as u64,
+                        &locked_packet.status,
+                    );
                     return;
                 }
             }
@@ -1032,6 +1142,8 @@ impl UsbDevice for UsbHost {
 
         let host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
         let mut node = Box::new(Node::new(UsbHostRequest::new(
+            self.config.hostbus,
+            self.config.hostaddr,
             Arc::downgrade(&self.requests),
             packet.clone(),
             host_transfer,
@@ -1059,8 +1171,23 @@ impl UsbDevice for UsbHost {
         let cloned_packet = packet.clone();
         let mut locked_packet = packet.lock().unwrap();
 
+        trace::usb_host_req_data(
+            self.config.hostbus,
+            self.config.hostaddr,
+            &*locked_packet as *const UsbPacket as u64,
+            locked_packet.pid,
+            locked_packet.ep_number,
+            locked_packet.iovecs.len(),
+        );
+
         if self.handle.is_none() {
             locked_packet.status = UsbPacketStatus::NoDev;
+            trace::usb_host_req_emulated(
+                self.config.hostbus,
+                self.config.hostaddr,
+                &*locked_packet as *const UsbPacket as u64,
+                &locked_packet.status,
+            );
             return;
         }
         let in_direction = locked_packet.pid as u8 == USB_TOKEN_IN;
@@ -1070,6 +1197,12 @@ impl UsbDevice for UsbHost {
             .halted
         {
             locked_packet.status = UsbPacketStatus::Stall;
+            trace::usb_host_req_emulated(
+                self.config.hostbus,
+                self.config.hostaddr,
+                &*locked_packet as *const UsbPacket as u64,
+                &locked_packet.status,
+            );
             return;
         }
 
@@ -1081,6 +1214,8 @@ impl UsbDevice for UsbHost {
             USB_ENDPOINT_ATTR_BULK => {
                 host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
                 let mut node = Box::new(Node::new(UsbHostRequest::new(
+                    self.config.hostbus,
+                    self.config.hostaddr,
                     Arc::downgrade(&self.requests),
                     cloned_packet,
                     host_transfer,
@@ -1103,6 +1238,8 @@ impl UsbDevice for UsbHost {
             USB_ENDPOINT_ATTR_INT => {
                 host_transfer = alloc_host_transfer(NON_ISO_PACKETS_NUMS);
                 let mut node = Box::new(Node::new(UsbHostRequest::new(
+                    self.config.hostbus,
+                    self.config.hostaddr,
                     Arc::downgrade(&self.requests),
                     cloned_packet,
                     host_transfer,
@@ -1128,10 +1265,26 @@ impl UsbDevice for UsbHost {
                 } else {
                     self.handle_iso_data_out(packet.clone());
                 }
+                let locked_packet = packet.lock().unwrap();
+                trace::usb_host_req_complete(
+                    self.config.hostbus,
+                    self.config.hostaddr,
+                    &*locked_packet as *const UsbPacket as u64,
+                    &locked_packet.status,
+                    locked_packet.actual_length as usize,
+                );
                 return;
             }
             _ => {
                 packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                let locked_packet = packet.lock().unwrap();
+                trace::usb_host_req_complete(
+                    self.config.hostbus,
+                    self.config.hostaddr,
+                    &*locked_packet as *const UsbPacket as u64,
+                    &locked_packet.status,
+                    locked_packet.actual_length as usize,
+                );
                 return;
             }
         };
