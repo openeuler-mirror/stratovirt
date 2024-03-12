@@ -566,8 +566,10 @@ impl MachineOps for StdMachine {
 
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
     fn get_ohui_fb(&self) -> Option<FileBackend> {
-        let server = self.ohui_server.as_ref()?;
-        server.get_ohui_fb()
+        match &self.ohui_server {
+            Some(server) => server.get_ohui_fb(),
+            None => None,
+        }
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
