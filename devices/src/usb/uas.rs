@@ -14,7 +14,7 @@ use std::array;
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info, warn};
@@ -272,7 +272,7 @@ static DESC_DEVICE_UAS_SUPER: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bMaxPower: 50,
             },
             iad_desc: vec![],
-            interfaces: vec![DESC_IFACE_UAS_SUPER.clone()],
+            interfaces: vec![DESC_IFACE_EMPTY.clone(), DESC_IFACE_UAS_SUPER.clone()],
         })],
     })
 });
@@ -283,7 +283,7 @@ static DESC_IFACE_UAS_SUPER: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bLength: USB_DT_INTERFACE_SIZE,
             bDescriptorType: USB_DT_INTERFACE,
             bInterfaceNumber: 0,
-            bAlternateSetting: 0,
+            bAlternateSetting: 1,
             bNumEndpoints: 4,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
             bInterfaceSubClass: USB_SUBCLASS_SCSI,
@@ -439,7 +439,7 @@ static DESC_DEVICE_UAS_HIGH: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 bConfigurationValue: 1,
                 iConfiguration: UsbUasStringId::ConfigHigh as u8,
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
-                bMaxPower: 0xFA,
+                bMaxPower: 50,
             },
             iad_desc: vec![],
             interfaces: vec![DESC_IFACE_EMPTY.clone(), DESC_IFACE_UAS_HIGH.clone()],
@@ -550,14 +550,18 @@ static DESC_IFACE_EMPTY: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 0,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            ..Default::default()
+            bInterfaceSubClass: USB_SUBCLASS_SCSI,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_BOT,
+            iInterface: 0,
         },
         other_desc: vec![],
         endpoints: vec![],
     })
 });
 
-fn complete_async_packet(locked_packet: MutexGuard<'_, UsbPacket>) {
+fn complete_async_packet(packet: &Arc<Mutex<UsbPacket>>) {
+    let locked_packet = packet.lock().unwrap();
+
     if let Some(xfer_ops) = locked_packet.xfer_ops.as_ref() {
         if let Some(xfer_ops) = xfer_ops.clone().upgrade() {
             drop(locked_packet);
@@ -940,8 +944,11 @@ impl UsbUas {
             }
         }
 
-        if locked_status.is_async {
-            complete_async_packet(locked_status);
+        let status_async = locked_status.is_async;
+        drop(locked_status);
+
+        if status_async {
+            complete_async_packet(&status);
         }
 
         self.data_ready_sent = true;
@@ -982,10 +989,7 @@ impl UsbUas {
         };
 
         self.data_ready_sent = false;
-
-        if !self.streams_enabled() {
-            self.try_start_next_transfer(0);
-        }
+        self.try_start_next_transfer(stream);
 
         match result {
             Ok(result) => result,
@@ -1099,7 +1103,7 @@ impl UsbDevice for UsbUas {
         trace::usb_uas_handle_data(self.device_id(), ep_number, stream);
         drop(locked_packet);
 
-        if self.streams_enabled() && stream > UAS_MAX_STREAMS {
+        if self.streams_enabled() && (stream > UAS_MAX_STREAMS || stream == 0) {
             warn!("UAS {} device invalid stream {}.", self.device_id(), stream);
             packet.lock().unwrap().status = UsbPacketStatus::Stall;
             return;
@@ -1218,22 +1222,23 @@ impl UasRequest {
     }
 
     fn complete(&mut self) {
-        let locked_status = self.status.lock().unwrap();
+        let status = &self.status;
+        let status_async = status.lock().unwrap().is_async;
 
         // NOTE: Due to the specifics of this device, it waits for all of the required USB packets
         // to arrive before starting an actual transfer. Therefore, some packets may arrive earlier
         // than others, and they won't be completed right away (except for command packets) but
         // rather queued asynchronously. A certain packet may also be async if it was the last to
         // arrive and UasRequest didn't complete right away.
-        if locked_status.is_async {
-            complete_async_packet(locked_status);
+        if status_async {
+            complete_async_packet(status);
         }
 
         if let Some(data) = &self.data {
-            let locked_data = data.lock().unwrap();
+            let data_async = data.lock().unwrap().is_async;
 
-            if locked_data.is_async {
-                complete_async_packet(locked_data);
+            if data_async {
+                complete_async_packet(data);
             }
         }
 
