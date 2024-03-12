@@ -203,6 +203,14 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
     };
 
+    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
+    if !cmd_args.is_present("disable-seccomp") {
+        vm.lock()
+            .unwrap()
+            .register_seccomp(balloon_switch_on)
+            .with_context(|| "Failed to register seccomp rules.")?;
+    }
+
     for socket in sockets {
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
@@ -212,14 +220,6 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     }
 
     machine::vm_run(&vm, cmd_args).with_context(|| "Failed to start VM.")?;
-
-    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
-    if !cmd_args.is_present("disable-seccomp") {
-        vm.lock()
-            .unwrap()
-            .register_seccomp(balloon_switch_on)
-            .with_context(|| "Failed to register seccomp rules.")?;
-    }
 
     EventLoop::loop_run().with_context(|| "MainLoop exits unexpectedly: error occurs")?;
     EventLoop::loop_clean();
