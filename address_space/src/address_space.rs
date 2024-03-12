@@ -627,26 +627,33 @@ impl AddressSpace {
         let view = self.flat_view.load();
 
         if !*self.hyp_ioevtfd_enabled.get_or_init(|| false) {
-            for evtfd in self.ioeventfds.lock().unwrap().iter() {
-                if addr != evtfd.addr_range.base || count != evtfd.addr_range.size {
-                    continue;
-                }
-                if !evtfd.data_match {
-                    evtfd.fd.write(1).unwrap();
-                    return Ok(());
-                }
-
-                let mut buf = Vec::new();
-                src.read_to_end(&mut buf).unwrap();
-
-                if buf.len() <= 8 {
-                    let data = u64::from_bytes(buf.as_slice()).unwrap();
-                    if *data == evtfd.data {
-                        evtfd.fd.write(1).unwrap();
+            let ioeventfds = self.ioeventfds.lock().unwrap();
+            if let Ok(index) = ioeventfds
+                .as_slice()
+                .binary_search_by(|ioevtfd| ioevtfd.addr_range.base.cmp(&addr))
+            {
+                let evtfd = &ioeventfds[index];
+                if count == evtfd.addr_range.size || evtfd.addr_range.size == 0 {
+                    if !evtfd.data_match {
+                        if let Err(e) = evtfd.fd.write(1) {
+                            error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
+                        }
                         return Ok(());
                     }
+
+                    let mut buf = Vec::new();
+                    src.read_to_end(&mut buf).unwrap();
+
+                    if buf.len() <= 8 {
+                        let data = u64::from_bytes(buf.as_slice()).unwrap();
+                        if *data == evtfd.data {
+                            if let Err(e) = evtfd.fd.write(1) {
+                                error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
+                            }
+                            return Ok(());
+                        }
+                    }
                 }
-                view.write(&mut buf.as_slice(), addr, count)?;
             }
         }
 
