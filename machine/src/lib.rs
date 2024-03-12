@@ -58,12 +58,12 @@ use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
+use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
-use devices::usb::{
-    keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
-    UsbDevice,
-};
+use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
+use devices::usb::{storage::UsbStorage, UsbDevice};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
@@ -76,6 +76,7 @@ use machine_manager::config::parse_demo_dev;
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
+use machine_manager::config::parse_usb_storage;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -84,9 +85,6 @@ use machine_manager::config::{
     BootSource, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
     NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
-};
-use machine_manager::config::{
-    parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{MachineInterface, VmState};
@@ -1579,8 +1577,8 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - XHCI Configuration.
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let device_cfg = parse_xhci(cfg_args)?;
+        let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
         let pcidev = XhciPciDevice::new(&device_cfg, devfn, parent_bus, self.get_sys_mem());
@@ -1721,17 +1719,15 @@ pub trait MachineOps {
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match parse_device_type(cfg_args)?.as_str() {
             "usb-kbd" => {
-                let device_cfg = parse_usb_keyboard(cfg_args)?;
-                // SAFETY: id is already checked not none in parse_usb_keyboard().
-                let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
+                let config = UsbKeyboardConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let keyboard = UsbKeyboard::new(config);
                 keyboard
                     .realize()
                     .with_context(|| "Failed to realize usb keyboard device")?
             }
             "usb-tablet" => {
-                let device_cfg = parse_usb_tablet(cfg_args)?;
-                // SAFETY: id is already checked not none in parse_usb_tablet().
-                let tablet = UsbTablet::new(device_cfg.id.unwrap());
+                let config = UsbTabletConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let tablet = UsbTablet::new(config);
                 tablet
                     .realize()
                     .with_context(|| "Failed to realize usb tablet device")?
