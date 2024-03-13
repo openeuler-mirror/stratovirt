@@ -40,7 +40,6 @@ mod ramfb;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
-mod scsi;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
 mod tls_creds;
@@ -73,7 +72,6 @@ pub use ramfb::*;
 pub use rng::*;
 #[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
-pub use scsi::*;
 pub use smbios::*;
 #[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
@@ -112,6 +110,10 @@ pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
 /// Default virtqueue size for virtio devices excepts virtio-fs.
 pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi should be larger than 2.
+pub const MIN_QUEUE_SIZE_SCSI: u64 = 2;
+// Max size of each virtqueue for virtio-scsi.
+pub const MAX_QUEUE_SIZE_SCSI: u64 = 1024;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
@@ -793,6 +795,25 @@ pub fn str_slip_to_clap(
 pub fn valid_id(id: &str) -> Result<String> {
     check_arg_too_long(id, "id")?;
     Ok(id.to_string())
+}
+
+// Virtio queue size must be power of 2 and in range [min_size, max_size].
+pub fn valid_virtqueue_size(size: u64, min_size: u64, max_size: u64) -> Result<()> {
+    if size < min_size || size > max_size {
+        return Err(anyhow!(ConfigError::IllegalValue(
+            "virtqueue size".to_string(),
+            min_size,
+            true,
+            max_size,
+            true
+        )));
+    }
+
+    if size & (size - 1) != 0 {
+        bail!("Virtqueue size should be power of 2!");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
