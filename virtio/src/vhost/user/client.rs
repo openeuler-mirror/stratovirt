@@ -96,6 +96,9 @@ impl ClientInternal {
 }
 
 fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
+    if !client.lock().unwrap().reconnecting {
+        return;
+    }
     let cloned_client = client.clone();
     let func = Box::new(move || {
         vhost_user_reconnect(&cloned_client);
@@ -635,6 +638,11 @@ impl VhostUserClient {
 
     /// Delete the socket event in ClientInternal.
     pub fn delete_event(&mut self) -> Result<()> {
+        if self.reconnecting {
+            self.reconnecting = false;
+            // The socket event has been deleted before try to reconnect so let's just return.
+            return Ok(());
+        }
         unregister_event_helper(None, &mut self.delete_evts)
     }
 
