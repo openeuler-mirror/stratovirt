@@ -81,10 +81,10 @@ use machine_manager::config::parse_pvpanic;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_scsi_controller, parse_vfio, parse_vhost_user_blk, parse_virtio_serial,
-    parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig,
-    DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
-    NumaNodes, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    parse_root_port, parse_vfio, parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport,
+    parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
+    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
+    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -104,7 +104,7 @@ use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
     BlockState, Rng, RngState,
-    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
+    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
@@ -1094,26 +1094,28 @@ pub trait MachineOps {
         cfg_args: &str,
         hotplug: bool,
     ) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
-        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
-            0,
-            vm_config.machine_config.nr_cpus,
-            MAX_VIRTIO_QUEUE,
-        ));
-        let device_cfg = parse_scsi_controller(cfg_args, queues_auto)?;
+        let mut device_cfg =
+            ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
+        let multi_func = device_cfg.multifunction.unwrap_or_default();
+        if device_cfg.num_queues.is_none() {
+            let queues_auto = VirtioPciDevice::virtio_pci_auto_queues_num(
+                0,
+                vm_config.machine_config.nr_cpus,
+                MAX_VIRTIO_QUEUE,
+            );
+            device_cfg.num_queues = Some(queues_auto as u32);
+        }
         let device = Arc::new(Mutex::new(ScsiCntlr::new(device_cfg.clone())));
 
         let bus_name = format!("{}.0", device_cfg.id);
         scsi_cntlr_create_scsi_bus(&bus_name, &device)?;
 
-        let pci_dev = self
-            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)
             .with_context(|| "Failed to add virtio scsi controller")?;
         if !hotplug {
             self.reset_bus(&device_cfg.id)?;
         }
-        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
         Ok(())
     }
 
@@ -1140,6 +1142,7 @@ pub trait MachineOps {
             .get_pci_dev_by_id_and_type(vm_config, Some(&cntlr), "virtio-scsi-pci")
             .with_context(|| format!("Can not find scsi controller from pci bus {}", cntlr))?;
         let locked_pcidev = pci_dev.lock().unwrap();
+        let prefix = locked_pcidev.get_dev_path().unwrap();
         let virtio_pcidev = locked_pcidev
             .as_any()
             .downcast_ref::<VirtioPciDevice>()
@@ -1172,7 +1175,6 @@ pub trait MachineOps {
             //   |             |  |   channel(unused, fixed 0).
             //   |         PCI slot,[function] holding SCSI controller.
             //  PCI root as system bus port.
-            let prefix = cntlr.config.boot_prefix.as_ref().unwrap();
             let dev_path =
                 format! {"{}/channel@0/disk@{:x},{:x}", prefix, device_cfg.target, device_cfg.lun};
             self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
