@@ -129,6 +129,15 @@ impl ByteCode for LedstateEvent {}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct GreetEvent {
+    pad: [u32; 6],
+    pub token_id: u64,
+}
+
+impl ByteCode for GreetEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct FocusEvent {
     pub state: u32,
 }
@@ -183,6 +192,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::FrameBufferDirty => size_of::<FrameBufferDirtyEvent>(),
         EventType::CursorDefine => size_of::<HWCursorEvent>(),
         EventType::Ledstate => size_of::<LedstateEvent>(),
+        EventType::Greet => size_of::<GreetEvent>(),
         _ => 0,
     }
 }
