@@ -233,6 +233,36 @@ message = "{:?}"
 enabled = true
 
 [[events]]
+name = "usb_xhci_set_state"
+args = "ep_id: u32, new_state: u32"
+message = "Endpoint {} set new state {}."
+enabled = true
+
+[[events]]
+name = "usb_xhci_update_dequeue"
+args = "ep_id: u32, dequeue: u64, stream_id: u32"
+message = "Endpoint {} update dequeue {} on Stream ID {}."
+enabled = true
+
+[[events]]
+name = "usb_xhci_reset_streams"
+args = "ep_id: u32"
+message = "Resetting streams on Endpoint {}."
+enabled = true
+
+[[events]]
+name = "usb_xhci_get_ring"
+args = "ep_id: u32, stream_id: u32"
+message = "Found Transfer ring on Endpoint {} Stream ID {}."
+enabled = true
+
+[[events]]
+name = "usb_xhci_get_stream"
+args = "stream_id: u32, ep_id: u32"
+message = "Found Stream Context {} for Endpoint {}."
+enabled = true
+
+[[events]]
 name = "usb_handle_control"
 args = "device: &str, req: &dyn fmt::Debug"
 message = "device {} handle control request {:?}."
