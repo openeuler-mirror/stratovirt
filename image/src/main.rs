@@ -13,21 +13,36 @@
 mod cmdline;
 mod img;
 
-use std::env;
+use std::{
+    env,
+    process::{ExitCode, Termination},
+};
+
+use anyhow::{bail, Result};
 
 use crate::img::{image_check, image_create, image_snapshot, print_help};
 
 const BINARY_NAME: &str = "stratovirt-img";
 
-fn main() {
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    match run(args) {
+        Ok(ret) => ret.report(),
+        Err(e) => {
+            println!("{:?}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(args: Vec<String>) -> Result<()> {
     if args.len() < 2 {
-        println!(
+        bail!(
             "{0}: Not enough arguments\n\
             Try '{0} --help' for more information",
             BINARY_NAME
         );
-        return;
     }
 
     let opt = args[1].clone();
@@ -35,17 +50,17 @@ fn main() {
     match opt.as_str() {
         "create" => {
             if let Err(e) = image_create(args[2..].to_vec()) {
-                println!("{}: {:?}", BINARY_NAME, e);
+                bail!("{}: {:?}", BINARY_NAME, e);
             }
         }
         "check" => {
             if let Err(e) = image_check(args[2..].to_vec()) {
-                println!("{}: {:?}", BINARY_NAME, e);
+                bail!("{}: {:?}", BINARY_NAME, e);
             }
         }
         "snapshot" => {
             if let Err(e) = image_snapshot(args[2..].to_vec()) {
-                println!("{}: {:?}", BINARY_NAME, e);
+                bail!("{}: {:?}", BINARY_NAME, e);
             }
         }
         "-v" | "--version" => {
@@ -60,7 +75,7 @@ fn main() {
             print_help();
         }
         _ => {
-            println!(
+            bail!(
                 "{}: Command not found: {}\n\
                 Try 'stratovirt-img --help' for more information.",
                 BINARY_NAME,
@@ -68,4 +83,6 @@ fn main() {
             );
         }
     }
+
+    Ok(())
 }
