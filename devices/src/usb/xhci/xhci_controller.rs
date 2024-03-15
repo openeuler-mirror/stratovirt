@@ -375,6 +375,7 @@ impl XhciEpContext {
         dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
         self.flush_dequeue_to_memory(stream_id)?;
         self.set_ep_state(state);
+        trace::usb_xhci_set_state(self.epid, state);
         Ok(())
     }
 
@@ -390,6 +391,7 @@ impl XhciEpContext {
             })?;
             ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
             ring.set_cycle_bit((dequeue & EP_CTX_DCS) == EP_CTX_DCS);
+            trace::usb_xhci_update_dequeue(self.epid, dequeue, stream_id);
         }
 
         self.flush_dequeue_to_memory(Some(stream_id))?;
@@ -463,6 +465,7 @@ impl XhciEpContext {
         let stream_context = &pstreams[stream_id as usize];
         let mut locked_context = stream_context.lock().unwrap();
         locked_context.try_refresh()?;
+        trace::usb_xhci_get_stream(stream_id, self.epid);
         Ok(Arc::clone(stream_context))
     }
 
@@ -484,6 +487,7 @@ impl XhciEpContext {
                 )
             })?;
             let locked_stream = stream.lock().unwrap();
+            trace::usb_xhci_get_ring(self.epid, stream_id);
             Ok(Arc::clone(&locked_stream.ring))
         }
     }
@@ -497,6 +501,7 @@ impl XhciEpContext {
             )
         })?;
         stream_arr.reset();
+        trace::usb_xhci_reset_streams(self.epid);
         Ok(())
     }
 }
