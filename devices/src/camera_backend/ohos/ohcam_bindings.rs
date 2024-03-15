@@ -25,7 +25,7 @@ pub struct ProfileRecorder {
     pub fps: i32,
 }
 
-#[link(name = "camera_wrapper.z")]
+#[link(name = "hwf_adapter")]
 extern "C" {
     pub fn OhcamCreateCtx() -> *mut c_void;
     pub fn OhcamCreateSession(ctx: *mut c_void) -> c_int;
