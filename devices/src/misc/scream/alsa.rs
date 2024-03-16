@@ -86,12 +86,14 @@ impl AlsaStreamData {
             // Set the latency in microseconds.
             hwp.set_buffer_time_near(self.latency * 1000, ValueOr::Nearest)?;
             pcm.hw_params(&hwp)?;
+            trace::scream_setup_alsa_hwp(&self.app_name, &hwp);
 
             // Set software parameters of the stream.
             let hwp = pcm.hw_params_current()?;
             let swp = pcm.sw_params_current()?;
             swp.set_start_threshold(hwp.get_buffer_size().unwrap())?;
             pcm.sw_params(&swp)?;
+            trace::scream_setup_alsa_swp(&self.app_name, &swp);
         }
         self.pcm = Some(pcm);
         Ok(())
@@ -200,6 +202,7 @@ impl AudioInterface for AlsaStreamData {
                     };
                 }
                 Ok(n) => {
+                    trace::scream_alsa_send_frames(frames, offset, end);
                     frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
                 }
             }
@@ -246,6 +249,7 @@ impl AudioInterface for AlsaStreamData {
                     };
                 }
                 Ok(n) => {
+                    trace::scream_alsa_receive_frames(frames, offset, end);
                     frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
 
                     // During the host headset switchover, io.read is blocked for a long time.

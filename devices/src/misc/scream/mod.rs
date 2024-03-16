@@ -71,7 +71,7 @@ pub enum ScreamDirection {
 
 /// Audio stream header information in the shared memory.
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct ShmemStreamHeader {
     /// Whether audio is started.
     pub is_started: u32,
@@ -128,7 +128,7 @@ pub struct ShmemHeader {
 
 /// Audio stream format in the shared memory.
 #[repr(C)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct ShmemStreamFmt {
     /// Indicates whether the audio format is changed.
     pub fmt_generation: u32,
@@ -202,6 +202,7 @@ impl StreamData {
             ScreamDirection::Playback => &header.play,
             ScreamDirection::Record => &header.capt,
         };
+        trace::scream_init(&dir, &stream_header);
 
         loop {
             if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
