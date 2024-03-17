@@ -28,7 +28,7 @@ use vmm_sys_util::epoll::EventSet;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{PathInfo, PTY_PATH};
 use machine_manager::{
-    config::{ChardevConfig, ChardevType},
+    config::{ChardevConfig, ChardevType, SocketType},
     temp_cleaner::TempCleaner,
 };
 use util::file::clear_file;
@@ -90,8 +90,8 @@ pub struct Chardev {
 impl Chardev {
     pub fn new(chardev_cfg: ChardevConfig) -> Self {
         Chardev {
-            id: chardev_cfg.id,
-            backend: chardev_cfg.backend,
+            id: chardev_cfg.id(),
+            backend: chardev_cfg.classtype,
             listener: None,
             input: None,
             output: None,
@@ -105,12 +105,12 @@ impl Chardev {
 
     pub fn realize(&mut self) -> Result<()> {
         match &self.backend {
-            ChardevType::Stdio => {
+            ChardevType::Stdio { .. } => {
                 set_termi_raw_mode().with_context(|| "Failed to set terminal to raw mode")?;
                 self.input = Some(Arc::new(Mutex::new(std::io::stdin())));
                 self.output = Some(Arc::new(Mutex::new(std::io::stdout())));
             }
-            ChardevType::Pty => {
+            ChardevType::Pty { .. } => {
                 let (master, path) =
                     set_pty_raw_mode().with_context(|| "Failed to set pty to raw mode")?;
                 info!("Pty path is: {:?}", path);
@@ -125,58 +125,43 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::UnixSocket {
-                path,
-                server,
-                nowait,
-            } => {
+            ChardevType::Socket { server, nowait, .. } => {
                 if !*server || !*nowait {
                     bail!(
                         "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
                         &self.id
                     );
                 }
+                let socket_type = self.backend.socket_type()?;
+                if let SocketType::Tcp { host, port } = socket_type {
+                    let listener = SocketListener::bind_by_tcp(&host, port).with_context(|| {
+                        format!(
+                            "Failed to bind socket for chardev \'{}\', address: {}:{}",
+                            &self.id, host, port
+                        )
+                    })?;
+                    self.listener = Some(listener);
+                } else if let SocketType::Unix { path } = socket_type {
+                    clear_file(path.clone())?;
+                    let listener = SocketListener::bind_by_uds(&path).with_context(|| {
+                        format!(
+                            "Failed to bind socket for chardev \'{}\', path: {}",
+                            &self.id, path
+                        )
+                    })?;
+                    self.listener = Some(listener);
 
-                clear_file(path.clone())?;
-                let listener = SocketListener::bind_by_uds(path).with_context(|| {
-                    format!(
-                        "Failed to bind socket for chardev \'{}\', path: {}",
-                        &self.id, path
-                    )
-                })?;
-                self.listener = Some(listener);
-
-                // add file to temporary pool, so it could be cleaned when vm exit.
-                TempCleaner::add_path(path.clone());
-                limit_permission(path).with_context(|| {
-                    format!(
-                        "Failed to change file permission for chardev \'{}\', path: {}",
-                        &self.id, path
-                    )
-                })?;
-            }
-            ChardevType::TcpSocket {
-                host,
-                port,
-                server,
-                nowait,
-            } => {
-                if !*server || !*nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        &self.id
-                    );
+                    // add file to temporary pool, so it could be cleaned when vm exit.
+                    TempCleaner::add_path(path.clone());
+                    limit_permission(&path).with_context(|| {
+                        format!(
+                            "Failed to change file permission for chardev \'{}\', path: {}",
+                            &self.id, path
+                        )
+                    })?;
                 }
-
-                let listener = SocketListener::bind_by_tcp(host, *port).with_context(|| {
-                    format!(
-                        "Failed to bind socket for chardev \'{}\', address: {}:{}",
-                        &self.id, host, port
-                    )
-                })?;
-                self.listener = Some(listener);
             }
-            ChardevType::File(path) => {
+            ChardevType::File { path, .. } => {
                 let file = Arc::new(Mutex::new(
                     OpenOptions::new()
                         .read(true)
@@ -510,11 +495,10 @@ impl EventNotifierHelper for Chardev {
         let notifier = {
             let backend = chardev.lock().unwrap().backend.clone();
             match backend {
-                ChardevType::Stdio => get_terminal_notifier(chardev),
-                ChardevType::Pty => get_terminal_notifier(chardev),
-                ChardevType::UnixSocket { .. } => get_socket_notifier(chardev),
-                ChardevType::TcpSocket { .. } => get_socket_notifier(chardev),
-                ChardevType::File(_) => None,
+                ChardevType::Stdio { .. } => get_terminal_notifier(chardev),
+                ChardevType::Pty { .. } => get_terminal_notifier(chardev),
+                ChardevType::Socket { .. } => get_socket_notifier(chardev),
+                ChardevType::File { .. } => None,
             }
         };
         notifier.map_or(Vec::new(), |value| vec![value])

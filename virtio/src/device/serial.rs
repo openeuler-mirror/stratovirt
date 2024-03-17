@@ -357,7 +357,10 @@ impl SerialPort {
     pub fn new(port_cfg: VirtioSerialPort) -> Self {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
-        let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
+        let mut host_connected = port_cfg.is_console;
+        if let ChardevType::Pty { .. } = port_cfg.chardev.classtype {
+            host_connected = true;
+        }
 
         SerialPort {
             name: Some(port_cfg.id),
