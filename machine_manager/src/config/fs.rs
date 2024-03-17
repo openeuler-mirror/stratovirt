@@ -12,10 +12,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::error::ConfigError;
+use super::{error::ConfigError, SocketType};
 use crate::config::{
-    pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_SOCK_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_TAG_LENGTH,
+    pci_args_check, CmdParser, ConfigCheck, VmConfig, MAX_SOCK_PATH_LENGTH, MAX_STRING_LENGTH,
+    MAX_TAG_LENGTH,
 };
 
 /// Config struct for `fs`.
@@ -90,26 +90,22 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
         ..Default::default()
     };
 
-    if let Some(name) = cmd_parser.get_value::<String>("chardev")? {
-        if let Some(char_dev) = vm_config.chardev.remove(&name) {
-            match &char_dev.backend {
-                ChardevType::UnixSocket { path, .. } => {
-                    fs_cfg.sock = path.clone();
-                }
-                _ => {
-                    bail!("Chardev {:?} backend should be unix-socket type.", &name);
-                }
-            }
-        } else {
-            bail!("Chardev {:?} not found or is in use", &name);
+    let name = cmd_parser
+        .get_value::<String>("chardev")?
+        .with_context(|| {
+            ConfigError::FieldIsMissing("chardev".to_string(), "virtio-fs".to_string())
+        })?;
+    let char_dev = vm_config
+        .chardev
+        .remove(&name)
+        .with_context(|| format!("Chardev {:?} not found or is in use", &name))?;
+    match char_dev.classtype.socket_type()? {
+        SocketType::Unix { path } => {
+            fs_cfg.sock = path;
         }
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "chardev".to_string(),
-            "virtio-fs".to_string()
-        )));
-    }
-    fs_cfg.check()?;
+        _ => bail!("Chardev {:?} backend should be unix-socket type.", &name),
+    };
 
+    fs_cfg.check()?;
     Ok(fs_cfg)
 }

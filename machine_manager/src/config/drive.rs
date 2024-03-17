@@ -20,12 +20,12 @@ use clap::{ArgAction, Parser};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::valid_id;
 use super::{error::ConfigError, pci_args_check, M};
+use super::{valid_id, valid_path};
 use crate::config::{
     check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, parse_bool,
-    str_slip_to_clap, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    str_slip_to_clap, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH,
+    MAX_VIRTIO_QUEUE,
 };
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
 
@@ -177,16 +177,6 @@ fn valid_refcount_cache_size(s: &str) -> Result<u64> {
         )));
     }
     Ok(size)
-}
-
-fn valid_path(path: &str) -> Result<String> {
-    if path.len() > MAX_PATH_LENGTH {
-        return Err(anyhow!(ConfigError::StringLengthTooLong(
-            "Drive device path".to_string(),
-            MAX_PATH_LENGTH,
-        )));
-    }
-    Ok(path.to_string())
 }
 
 /// Config struct for `drive`, including `block drive` and `pflash drive`.

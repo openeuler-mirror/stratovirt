@@ -490,8 +490,9 @@ mod test {
     fn test_methods_of_serial() {
         // test new method
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
         let mut usart = Serial::new(SerialConfig {
             chardev: chardev_cfg.clone(),
@@ -545,8 +546,9 @@ mod test {
     #[test]
     fn test_serial_migration_interface() {
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
         let mut usart = Serial::new(SerialConfig {
             chardev: chardev_cfg,

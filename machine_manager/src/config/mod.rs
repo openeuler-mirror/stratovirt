@@ -80,7 +80,7 @@ pub use vfio::*;
 pub use vnc::*;
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{canonicalize, File};
 use std::io::Read;
 use std::str::FromStr;
 
@@ -179,12 +179,12 @@ impl VmConfig {
 
         let mut stdio_count = 0;
         if let Some(serial) = self.serial.as_ref() {
-            if serial.chardev.backend == ChardevType::Stdio {
+            if let ChardevType::Stdio { .. } = serial.chardev.classtype {
                 stdio_count += 1;
             }
         }
         for (_, char_dev) in self.chardev.clone() {
-            if char_dev.backend == ChardevType::Stdio {
+            if let ChardevType::Stdio { .. } = char_dev.classtype {
                 stdio_count += 1;
             }
         }
@@ -814,6 +814,31 @@ pub fn valid_virtqueue_size(size: u64, min_size: u64, max_size: u64) -> Result<(
     }
 
     Ok(())
+}
+
+pub fn valid_path(path: &str) -> Result<String> {
+    if path.len() > MAX_PATH_LENGTH {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "path".to_string(),
+            MAX_PATH_LENGTH,
+        )));
+    }
+
+    let canonical_path = canonicalize(path).map_or(path.to_string(), |pathbuf| {
+        String::from(pathbuf.to_str().unwrap())
+    });
+
+    Ok(canonical_path)
+}
+
+pub fn valid_socket_path(sock_path: &str) -> Result<String> {
+    if sock_path.len() > MAX_SOCK_PATH_LENGTH {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "socket path".to_string(),
+            MAX_SOCK_PATH_LENGTH,
+        )));
+    }
+    valid_path(sock_path)
 }
 
 #[cfg(test)]
