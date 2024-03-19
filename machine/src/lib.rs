@@ -1807,7 +1807,6 @@ pub trait MachineOps {
             let id = parse_device_id(cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
-            #[cfg(feature = "scream")]
             let token_id = self.get_token_id();
 
             create_device_add_matches!(
