@@ -768,7 +768,10 @@ impl MachineOps for StdMachine {
 
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
     fn get_token_id(&self) -> Option<Arc<RwLock<u64>>> {
-        self.ohui_server.as_ref().map(|srv| srv.token_id.clone())
+        match &self.ohui_server {
+            Some(srv) => Some(srv.token_id.clone()),
+            None => None,
+        }
     }
 }
 
