@@ -29,7 +29,7 @@ pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
 #[cfg(target_env = "ohos")]
-pub mod ohos_binding;
+pub mod ohos;
 #[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod seccomp;
