@@ -29,7 +29,7 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
@@ -1595,12 +1595,7 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - scream configuration.
     #[cfg(feature = "scream")]
-    fn add_ivshmem_scream(
-        &mut self,
-        vm_config: &mut VmConfig,
-        cfg_args: &str,
-        token_id: Option<Arc<RwLock<u64>>>,
-    ) -> Result<()> {
+    fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
         let bdf = PciBdf {
             bus: config.bus.clone(),
@@ -1623,7 +1618,7 @@ pub trait MachineOps {
             bail!("Object for share config is not on");
         }
 
-        let scream = Scream::new(mem_cfg.size, config, token_id);
+        let scream = Scream::new(mem_cfg.size, config);
         scream
             .realize(devfn, parent_bus)
             .with_context(|| "Failed to realize scream device")
@@ -1807,8 +1802,6 @@ pub trait MachineOps {
             let id = parse_device_id(cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
-            #[cfg(feature = "scream")]
-            let token_id = self.get_token_id();
 
             create_device_add_matches!(
                 dev.0.as_str(); self;
@@ -1837,17 +1830,13 @@ pub trait MachineOps {
                 #[cfg(feature = "demo_device")]
                 ("pcie-demo-dev", add_demo_dev, vm_config, cfg_args),
                 #[cfg(feature = "scream")]
-                ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args, token_id),
+                ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args),
                 #[cfg(feature = "pvpanic")]
                 ("pvpanic", add_pvpanic, cfg_args)
             );
         }
 
         Ok(())
-    }
-
-    fn get_token_id(&self) -> Option<Arc<RwLock<u64>>> {
-        None
     }
 
     fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
