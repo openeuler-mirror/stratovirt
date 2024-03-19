@@ -45,7 +45,7 @@ use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-use util::ohos_binding::misc::{get_firstcaller_tokenid, set_firstcaller_tokenid};
+use util::ohos::misc::{get_firstcaller_tokenid, set_firstcaller_tokenid};
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
