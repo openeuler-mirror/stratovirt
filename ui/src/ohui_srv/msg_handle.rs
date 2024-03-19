@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 use log::{error, warn};
@@ -135,7 +135,7 @@ impl OhUiMsgHandler {
         }
     }
 
-    pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {
+    pub fn handle_msg(&self) -> Result<()> {
         let mut reader = self.reader.lock().unwrap();
         if !reader.recv(&self.channel)? {
             return Ok(());
@@ -189,11 +189,6 @@ impl OhUiMsgHandler {
             EventType::Ledstate => {
                 let body = LedstateEvent::from_bytes(&body_bytes[..]).unwrap();
                 self.handle_ledstate(body);
-                Ok(())
-            }
-            EventType::Greet => {
-                let body = GreetEvent::from_bytes(&body_bytes[..]).unwrap();
-                *token_id.write().unwrap() = body.token_id;
                 Ok(())
             }
             _ => {
