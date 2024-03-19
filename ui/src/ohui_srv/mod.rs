@@ -105,8 +105,6 @@ pub struct OhUiServer {
     framebuffer: u64,
     // framebuffer file backend
     fb_file: Option<FileBackend>,
-    // tokenID of OHUI client
-    pub token_id: Arc<RwLock<u64>>,
 }
 
 impl OhUiServer {
@@ -174,7 +172,6 @@ impl OhUiServer {
             cursorbuffer,
             framebuffer,
             fb_file,
-            token_id: Arc::new(RwLock::new(0)),
         })
     }
 
@@ -198,7 +195,7 @@ impl OhUiServer {
         if !self.connected() {
             return Err(anyhow!("connection has not establish".to_string()));
         }
-        self.msg_handler.handle_msg(self.token_id.clone())
+        self.msg_handler.handle_msg()
     }
 
     fn raw_update_dirty_area(

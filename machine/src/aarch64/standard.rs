@@ -14,8 +14,6 @@ pub use crate::error::MachineError;
 
 use std::mem::size_of;
 use std::ops::Deref;
-#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -764,14 +762,6 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
-    }
-
-    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-    fn get_token_id(&self) -> Option<Arc<RwLock<u64>>> {
-        match &self.ohui_server {
-            Some(srv) => Some(srv.token_id.clone()),
-            None => None,
-        }
     }
 }
 
