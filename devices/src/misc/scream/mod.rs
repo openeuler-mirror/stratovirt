@@ -23,7 +23,7 @@ use std::{
     str::FromStr,
     sync::{
         atomic::{fence, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex, RwLock, Weak,
     },
     thread,
 };
@@ -44,6 +44,8 @@ use machine_manager::config::{get_pci_df, valid_id};
 use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+use util::ohos_binding::misc::{get_firstcaller_tokenid, set_firstcaller_tokenid};
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
@@ -334,6 +336,16 @@ impl StreamData {
     }
 }
 
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+fn bound_tokenid(token_id: u64) -> Result<()> {
+    if token_id == 0 {
+        bail!("UI token ID not passed.");
+    } else if token_id != get_firstcaller_tokenid()? {
+        set_firstcaller_tokenid(token_id)?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 enum ScreamInterface {
     #[cfg(feature = "scream_alsa")]
@@ -386,14 +398,16 @@ pub struct Scream {
     hva: u64,
     size: u64,
     config: ScreamConfig,
+    token_id: Option<Arc<RwLock<u64>>>,
 }
 
 impl Scream {
-    pub fn new(size: u64, config: ScreamConfig) -> Self {
+    pub fn new(size: u64, config: ScreamConfig, token_id: Option<Arc<RwLock<u64>>>) -> Self {
         Self {
             hva: 0,
             size,
             config,
+            token_id,
         }
     }
 
@@ -443,6 +457,7 @@ impl Scream {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
+        let _ti = self.token_id.clone();
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -457,6 +472,11 @@ impl Scream {
                         hva,
                     );
 
+                    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+                    if let Some(token_id) = &_ti {
+                        bound_tokenid(*token_id.read().unwrap())
+                            .unwrap_or_else(|e| error!("bound token ID failed: {}", e));
+                    }
                     capt_data.capture_trans(hva, shmem_size, clone_interface.clone());
                 }
             })
