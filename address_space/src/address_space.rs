@@ -653,6 +653,8 @@ impl AddressSpace {
                             return Ok(());
                         }
                     }
+                    view.write(&mut buf.as_slice(), addr, count)?;
+                    return Ok(());
                 }
             }
         }
