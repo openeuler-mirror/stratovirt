@@ -1855,6 +1855,7 @@ dependencies = [
  "address_space",
  "anyhow",
  "byteorder",
+ "clap",
  "devices",
  "hypervisor",
  "kvm-bindings",

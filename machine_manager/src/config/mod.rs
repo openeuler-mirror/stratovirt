@@ -43,7 +43,6 @@ mod sasl_auth;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
 mod tls_creds;
-mod vfio;
 
 pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
@@ -75,7 +74,6 @@ pub use sasl_auth::*;
 pub use smbios::*;
 #[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
-pub use vfio::*;
 #[cfg(feature = "vnc")]
 pub use vnc::*;
 

@@ -81,10 +81,10 @@ use machine_manager::config::parse_pvpanic;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_vfio, parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport,
-    parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
+    parse_root_port, parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport, parse_vsock,
+    str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
     MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
-    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -96,7 +96,7 @@ use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
-use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+use vfio::{VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
@@ -1274,49 +1274,32 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn create_vfio_pci_device(
-        &mut self,
-        id: &str,
-        bdf: &PciBdf,
-        host: &str,
-        sysfsdev: &str,
-        multifunc: bool,
-    ) -> Result<()> {
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
-        let path = if !host.is_empty() {
-            format!("/sys/bus/pci/devices/{}", host)
+    fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
+        let hypervisor = self.get_hypervisor();
+        let locked_hypervisor = hypervisor.lock().unwrap();
+        *KVM_DEVICE_FD.lock().unwrap() = locked_hypervisor.create_vfio_device();
+
+        let device_cfg = VfioConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
+        let multi_func = device_cfg.multifunction.unwrap_or_default();
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let path = if device_cfg.host.is_some() {
+            format!("/sys/bus/pci/devices/{}", device_cfg.host.unwrap())
         } else {
-            sysfsdev.to_string()
+            device_cfg.sysfsdev.unwrap()
         };
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .with_context(|| "Failed to create vfio device.")?;
         let vfio_pci = VfioPciDevice::new(
             device,
             devfn,
-            id.to_string(),
+            device_cfg.id.to_string(),
             parent_bus,
-            multifunc,
+            multi_func,
             self.get_sys_mem().clone(),
         );
         VfioPciDevice::realize(vfio_pci).with_context(|| "Failed to realize vfio-pci device.")?;
-        Ok(())
-    }
 
-    fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
-        let hypervisor = self.get_hypervisor();
-        let locked_hypervisor = hypervisor.lock().unwrap();
-        *KVM_DEVICE_FD.lock().unwrap() = locked_hypervisor.create_vfio_device();
-
-        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multifunc = get_multi_function(cfg_args)?;
-        self.create_vfio_pci_device(
-            &device_cfg.id,
-            &bdf,
-            &device_cfg.host,
-            &device_cfg.sysfsdev,
-            multifunc,
-        )?;
         if !hotplug {
             self.reset_bus(&device_cfg.id)?;
         }
