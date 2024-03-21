@@ -11,37 +11,29 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{anyhow, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use super::error::ConfigError;
-use crate::config::{check_arg_too_long, CmdParser, ConfigCheck, VmConfig};
+use super::{error::ConfigError, str_slip_to_clap, valid_id};
+use crate::config::VmConfig;
 
 const MAX_IOTHREAD_NUM: usize = 8;
 
 /// Config structure for iothread.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct IothreadConfig {
+    #[arg(long, value_parser = ["iothread"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
-}
-
-impl ConfigCheck for IothreadConfig {
-    fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "iothread id")
-    }
 }
 
 impl VmConfig {
     /// Add new iothread device to `VmConfig`.
     pub fn add_iothread(&mut self, iothread_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("iothread");
-        cmd_parser.push("").push("id");
-        cmd_parser.parse(iothread_config)?;
-
-        let mut iothread = IothreadConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            iothread.id = id;
-        }
-        iothread.check()?;
+        let iothread =
+            IothreadConfig::try_parse_from(str_slip_to_clap(iothread_config, true, false))?;
 
         if self.iothreads.is_some() {
             if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {

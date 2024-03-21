@@ -1541,6 +1541,7 @@ mod tests {
 
         // spawn io thread
         let io_conf = IothreadConfig {
+            classtype: "iothread".to_string(),
             id: thread_name.clone(),
         };
         EventLoop::object_init(&Some(vec![io_conf])).unwrap();
