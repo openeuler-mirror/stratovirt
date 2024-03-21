@@ -42,6 +42,7 @@ use std::{
 };
 
 use anyhow::{bail, Result};
+use clap::Parser;
 use log::error;
 
 use crate::pci::demo_device::{
@@ -57,7 +58,30 @@ use crate::pci::{
 use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
 use crate::{Device, DeviceBase};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
-use machine_manager::config::DemoDevConfig;
+use machine_manager::config::{get_pci_df, valid_id};
+
+/// Config struct for `demo_dev`.
+/// Contains demo_dev device's attr.
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct DemoDevConfig {
+    #[arg(long, value_parser = ["pcie-demo-dev"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    // Different device implementations can be configured based on this parameter
+    #[arg(long, alias = "device_type")]
+    pub device_type: Option<String>,
+    #[arg(long, alias = "bar_num", default_value = "0")]
+    pub bar_num: u8,
+    // Every bar has the same size just for simplification.
+    #[arg(long, alias = "bar_size", default_value = "0")]
+    pub bar_size: u64,
+}
 
 pub struct DemoDev {
     base: PciDevBase,
@@ -71,14 +95,15 @@ impl DemoDev {
     pub fn new(
         cfg: DemoDevConfig,
         devfn: u8,
-        _sys_mem: Arc<AddressSpace>,
+        sys_mem: Arc<AddressSpace>,
         parent_bus: Weak<Mutex<PciBus>>,
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
-        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
-            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem, cfg.id.clone()))),
-            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
-            "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(_sys_mem))),
+        let device_type = cfg.device_type.clone().unwrap_or_default();
+        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match device_type.as_str() {
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(sys_mem, cfg.id.clone()))),
+            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(sys_mem))),
+            "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(sys_mem))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };
         DemoDev {
@@ -233,4 +258,30 @@ pub trait DeviceTypeOperation: Send {
     fn write(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
     fn realize(&mut self) -> Result<()>;
     fn unrealize(&mut self) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+    #[test]
+    fn test_parse_demo_dev() {
+        // Test1: Right.
+        let demo_cmd1 = "pcie-demo-dev,bus=pcie.0,addr=0x4,id=test_0,device_type=demo-gpu,bar_num=3,bar_size=4096";
+        let result = DemoDevConfig::try_parse_from(str_slip_to_clap(demo_cmd1, true, false));
+        assert!(result.is_ok());
+        let demo_cfg = result.unwrap();
+        assert_eq!(demo_cfg.id, "test_0".to_string());
+        assert_eq!(demo_cfg.device_type, Some("demo-gpu".to_string()));
+        assert_eq!(demo_cfg.bar_num, 3);
+        assert_eq!(demo_cfg.bar_size, 4096);
+
+        // Test2: Default bar_num/bar_size.
+        let demo_cmd2 = "pcie-demo-dev,bus=pcie.0,addr=4.0,id=test_0,device_type=demo-gpu";
+        let result = DemoDevConfig::try_parse_from(str_slip_to_clap(demo_cmd2, true, false));
+        assert!(result.is_ok());
+        let demo_cfg = result.unwrap();
+        assert_eq!(demo_cfg.bar_num, 0);
+        assert_eq!(demo_cfg.bar_size, 0);
+    }
 }

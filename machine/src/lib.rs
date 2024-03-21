@@ -51,7 +51,7 @@ use devices::misc::pvpanic::PvPanicPci;
 #[cfg(feature = "scream")]
 use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
-use devices::pci::demo_device::DemoDev;
+use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
@@ -72,8 +72,6 @@ use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
-#[cfg(feature = "demo_device")]
-use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
@@ -1805,7 +1803,7 @@ pub trait MachineOps {
                 #[cfg(feature = "ramfb")]
                 ("ramfb", add_ramfb, cfg_args),
                 #[cfg(feature = "demo_device")]
-                ("pcie-demo-dev", add_demo_dev, vm_config, cfg_args),
+                ("pcie-demo-dev", add_demo_dev, cfg_args),
                 #[cfg(feature = "scream")]
                 ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args, token_id),
                 #[cfg(feature = "pvpanic")]
@@ -1833,15 +1831,13 @@ pub trait MachineOps {
     }
 
     #[cfg(feature = "demo_device")]
-    fn add_demo_dev(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-
-        let demo_cfg = parse_demo_dev(vm_config, cfg_args.to_string())
+    fn add_demo_dev(&mut self, cfg_args: &str) -> Result<()> {
+        let config = DemoDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))
             .with_context(|| "failed to parse cmdline for demo dev.")?;
-
+        let bdf = PciBdf::new(config.bus.clone(), config.addr);
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem().clone();
-        let demo_dev = DemoDev::new(demo_cfg, devfn, sys_mem, parent_bus);
+        let demo_dev = DemoDev::new(config, devfn, sys_mem, parent_bus);
 
         demo_dev.realize()
     }

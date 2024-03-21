@@ -20,8 +20,6 @@ pub mod vnc;
 
 mod boot_source;
 mod chardev;
-#[cfg(feature = "demo_device")]
-mod demo_dev;
 mod devices;
 mod drive;
 mod fs;
@@ -48,8 +46,6 @@ pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
 pub use chardev::*;
-#[cfg(feature = "demo_device")]
-pub use demo_dev::*;
 pub use devices::*;
 #[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub use display::*;
