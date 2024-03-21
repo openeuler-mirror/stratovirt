@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::{ArgAction, Parser};
 use drm_fourcc::DrmFourcc;
 use log::error;
 
@@ -24,6 +25,7 @@ use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
+use machine_manager::config::valid_id;
 use machine_manager::event_loop::EventLoop;
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
@@ -38,6 +40,17 @@ const HEIGHT_MAX: u32 = 12_000;
 const INSTALL_CHECK_INTERVEL_MS: u64 = 500;
 const INSTALL_RELEASE_INTERVEL_MS: u64 = 200;
 const INSTALL_PRESS_INTERVEL_MS: u64 = 100;
+
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct RamfbConfig {
+    #[arg(long, value_parser = ["ramfb"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, default_value = "false", action = ArgAction::Append)]
+    pub install: bool,
+}
 
 #[repr(packed)]
 struct RamfbCfg {
@@ -315,5 +328,27 @@ fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
         );
     } else {
         install.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_ramfb_config_cmdline_parser() {
+        // Test1: install.
+        let ramfb_cmd1 = "ramfb,id=ramfb0,install=true";
+        let ramfb_config =
+            RamfbConfig::try_parse_from(str_slip_to_clap(ramfb_cmd1, true, false)).unwrap();
+        assert_eq!(ramfb_config.id, "ramfb0");
+        assert_eq!(ramfb_config.install, true);
+
+        // Test2: Default.
+        let ramfb_cmd2 = "ramfb,id=ramfb0";
+        let ramfb_config =
+            RamfbConfig::try_parse_from(str_slip_to_clap(ramfb_cmd2, true, false)).unwrap();
+        assert_eq!(ramfb_config.install, false);
     }
 }

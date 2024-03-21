@@ -53,5 +53,5 @@ pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
 pub use pl031::{PL031, RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
-pub use ramfb::Ramfb;
+pub use ramfb::{Ramfb, RamfbConfig};
 pub use serial::{Serial, SERIAL_ADDR};

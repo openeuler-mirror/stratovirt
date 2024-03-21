@@ -33,8 +33,6 @@ mod numa;
 mod pci;
 #[cfg(feature = "pvpanic")]
 mod pvpanic_pci;
-#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
-mod ramfb;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
@@ -62,8 +60,6 @@ pub use numa::*;
 pub use pci::*;
 #[cfg(feature = "pvpanic")]
 pub use pvpanic_pci::*;
-#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
-pub use ramfb::*;
 pub use rng::*;
 #[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
