@@ -47,7 +47,7 @@ use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
-use devices::misc::pvpanic::PvPanicPci;
+use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
 #[cfg(feature = "scream")]
 use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
@@ -72,8 +72,6 @@ use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
-#[cfg(feature = "pvpanic")]
-use machine_manager::config::parse_pvpanic;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
@@ -1031,11 +1029,10 @@ pub trait MachineOps {
 
     #[cfg(feature = "pvpanic")]
     fn add_pvpanic(&mut self, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let device_cfg = parse_pvpanic(cfg_args)?;
-
+        let config = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let bdf = PciBdf::new(config.bus.clone(), config.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let pcidev = PvPanicPci::new(&device_cfg, devfn, parent_bus);
+        let pcidev = PvPanicPci::new(&config, devfn, parent_bus);
         pcidev
             .realize()
             .with_context(|| "Failed to realize pvpanic device")?;
