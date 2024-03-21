@@ -15,11 +15,11 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
+use devices::misc::pvpanic::{PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 use devices::pci::config::{
     PCI_CLASS_SYSTEM_OTHER, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
     PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET,
 };
-use machine_manager::config::{PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 use mod_test::{
     libdriver::{machine::TestStdMachine, pci::*},
     libtest::{test_init, TestState, MACHINE_TYPE_ARG},

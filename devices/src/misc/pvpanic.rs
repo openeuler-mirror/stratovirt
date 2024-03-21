@@ -16,7 +16,9 @@ use std::sync::{
 };
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 
 use crate::pci::{
     config::{
@@ -29,7 +31,7 @@ use crate::pci::{
 };
 use crate::{Device, DeviceBase};
 use address_space::{GuestAddress, Region, RegionOps};
-use machine_manager::config::{PvpanicDevConfig, PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
+use machine_manager::config::{get_pci_df, valid_id};
 
 const PVPANIC_PCI_REVISION_ID: u8 = 1;
 const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
@@ -39,6 +41,33 @@ const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const PVPANIC_REG_BAR_SIZE: u64 = 0x4;
 #[cfg(target_arch = "x86_64")]
 const PVPANIC_REG_BAR_SIZE: u64 = 0x1;
+
+pub const PVPANIC_PANICKED: u32 = 1 << 0;
+pub const PVPANIC_CRASHLOADED: u32 = 1 << 1;
+
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
+pub struct PvpanicDevConfig {
+    #[arg(long, value_parser = ["pvpanic"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, alias = "supported-features", default_value = "3", value_parser = valid_supported_features)]
+    pub supported_features: u32,
+}
+
+fn valid_supported_features(f: &str) -> Result<u32> {
+    let features = f.parse::<u32>()?;
+    let supported_features = match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED) {
+        0 => features,
+        _ => bail!("Unsupported pvpanic device features {}", features),
+    };
+    Ok(supported_features)
+}
 
 #[derive(Copy, Clone)]
 pub struct PvPanicState {
@@ -244,6 +273,7 @@ impl PciDevOps for PvPanicPci {
 mod tests {
     use super::*;
     use crate::pci::{host::tests::create_pci_host, le_read_u16, PciHost};
+    use machine_manager::config::str_slip_to_clap;
 
     fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
         let pci_host = create_pci_host();
@@ -253,6 +283,9 @@ mod tests {
         let config = PvpanicDevConfig {
             id: dev_id.to_string(),
             supported_features,
+            classtype: "".to_string(),
+            bus: "pcie.0".to_string(),
+            addr: (3, 0),
         };
         let pvpanic_dev = PvPanicPci::new(&config, devfn, root_bus.clone());
         assert_eq!(pvpanic_dev.base.base.id, "pvpanic_test".to_string());
@@ -262,6 +295,24 @@ mod tests {
         drop(locked_pci_host);
 
         pci_host
+    }
+
+    #[test]
+    fn test_pvpanic_cmdline_parser() {
+        // Test1: Right.
+        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert_eq!(result.unwrap().supported_features, 0);
+
+        // Test2: Default value.
+        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert_eq!(result.unwrap().supported_features, 3);
+
+        // Test3: Illegal value.
+        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=4";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert!(result.is_err());
     }
 
     #[test]

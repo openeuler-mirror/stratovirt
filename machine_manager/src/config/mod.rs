@@ -28,8 +28,6 @@ mod machine_config;
 mod network;
 mod numa;
 mod pci;
-#[cfg(feature = "pvpanic")]
-mod pvpanic_pci;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
@@ -52,8 +50,6 @@ pub use machine_config::*;
 pub use network::*;
 pub use numa::*;
 pub use pci::*;
-#[cfg(feature = "pvpanic")]
-pub use pvpanic_pci::*;
 pub use rng::*;
 #[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
