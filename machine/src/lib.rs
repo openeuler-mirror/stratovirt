@@ -78,7 +78,7 @@ use machine_manager::config::parse_gpu;
 use machine_manager::config::parse_pvpanic;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
-    parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
+    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
     parse_root_port, parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport, parse_vsock,
     str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
     MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
@@ -847,29 +847,36 @@ pub trait MachineOps {
     /// * 'vm_config' - VM configuration.
     /// * 'cfg_args' - Device configuration arguments.
     fn add_virtio_fs(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let dev_cfg = parse_fs(vm_config, cfg_args)?;
-        let id_clone = dev_cfg.id.clone();
+        let dev_cfg =
+            vhost::user::FsConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let char_dev = vm_config
+            .chardev
+            .remove(&dev_cfg.chardev)
+            .with_context(|| format!("Chardev {:?} not found or is in use", &dev_cfg.chardev))?;
         let sys_mem = self.get_sys_mem().clone();
 
         if !vm_config.machine_config.mem_config.mem_share {
             bail!("When configuring the vhost-user-fs-device or vhost-user-fs-pci device, the memory must be shared.");
         }
 
-        match parse_device_type(cfg_args)?.as_str() {
+        let device = Arc::new(Mutex::new(vhost::user::Fs::new(
+            dev_cfg.clone(),
+            char_dev,
+            sys_mem.clone(),
+        )));
+        match dev_cfg.classtype.as_str() {
             "vhost-user-fs-device" => {
-                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
                 let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
                 self.realize_virtio_mmio_device(virtio_mmio_device)
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
-                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem)));
-                let bdf = get_pci_bdf(cfg_args)?;
-                let multi_func = get_multi_function(cfg_args)?;
+                let bdf = PciBdf::new(dev_cfg.bus.clone().unwrap(), dev_cfg.addr.unwrap());
+                let multi_func = dev_cfg.multifunction.unwrap_or_default();
                 let root_bus = self.get_pci_host()?.lock().unwrap().root_bus.clone();
                 let msi_irq_manager = root_bus.lock().unwrap().msi_irq_manager.clone();
                 let need_irqfd = msi_irq_manager.as_ref().unwrap().irqfd_enable();
-                self.add_virtio_pci_device(&id_clone, &bdf, device, multi_func, need_irqfd)
+                self.add_virtio_pci_device(&dev_cfg.id, &bdf, device, multi_func, need_irqfd)
                     .with_context(|| "Failed to add pci fs device")?;
             }
         }
