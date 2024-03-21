@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -36,7 +37,7 @@ use crate::{
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
 use address_space::{AddressSpace, FileBackend, GuestAddress};
-use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
+use machine_manager::config::{get_pci_df, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration_derive::ByteCode;
 use ui::console::{
@@ -71,6 +72,49 @@ const VIRTIO_GPU_RES_WIN_FRAMEBUF: u32 = 0x80000000;
 /// The flag indicates that the frame buffer only used in special bios phase for windows.
 const VIRTIO_GPU_RES_EFI_FRAMEBUF: u32 = 0x40000000;
 const VIRTIO_GPU_RES_FRAMEBUF: u32 = VIRTIO_GPU_RES_WIN_FRAMEBUF | VIRTIO_GPU_RES_EFI_FRAMEBUF;
+
+/// The maximum number of outputs.
+const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
+/// The default maximum memory 256M.
+const VIRTIO_GPU_DEFAULT_MAX_HOSTMEM: u64 = 0x10000000;
+
+#[derive(Parser, Clone, Debug, Default)]
+#[command(no_binary_name(true))]
+pub struct GpuDevConfig {
+    #[arg(long, value_parser = ["virtio-gpu-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, alias = "max_outputs", default_value="1", value_parser = clap::value_parser!(u32).range(1..=VIRTIO_GPU_MAX_OUTPUTS as i64))]
+    pub max_outputs: u32,
+    #[arg(long, default_value="true", action = ArgAction::Append)]
+    pub edid: bool,
+    #[arg(long, default_value = "1024")]
+    pub xres: u32,
+    #[arg(long, default_value = "768")]
+    pub yres: u32,
+    // The default max_hostmem is 256M.
+    #[arg(long, alias = "max_hostmem", default_value="268435456", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_hostmem: u64,
+    #[arg(long, alias = "enable_bar0", default_value="false", action = ArgAction::Append)]
+    pub enable_bar0: bool,
+}
+
+impl GpuDevConfig {
+    pub fn check(&self) {
+        if self.max_hostmem < VIRTIO_GPU_DEFAULT_MAX_HOSTMEM {
+            warn!(
+                "max_hostmem should >= {}, allocating less than it may cause \
+                the GPU to fail to start or refresh.",
+                VIRTIO_GPU_DEFAULT_MAX_HOSTMEM
+            );
+        }
+    }
+}
 
 #[derive(Debug)]
 struct GpuResource {
@@ -1841,5 +1885,52 @@ impl VirtioDevice for Gpu {
         let result = unregister_event_helper(None, &mut self.base.deactivate_evts);
         info!("virtio-gpu deactivate {:?}", result);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_parse_virtio_gpu_pci_cmdline() {
+        // Test1: Right.
+        let gpu_cmd = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=5,edid=false,\
+            xres=2048,yres=800,enable_bar0=true,max_hostmem=268435457";
+        let gpu_cfg = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd, true, false)).unwrap();
+        assert_eq!(gpu_cfg.id, "gpu_1");
+        assert_eq!(gpu_cfg.bus, "pcie.0");
+        assert_eq!(gpu_cfg.addr, (4, 0));
+        assert_eq!(gpu_cfg.max_outputs, 5);
+        assert_eq!(gpu_cfg.xres, 2048);
+        assert_eq!(gpu_cfg.yres, 800);
+        assert_eq!(gpu_cfg.edid, false);
+        assert_eq!(gpu_cfg.max_hostmem, 268435457);
+        assert_eq!(gpu_cfg.enable_bar0, true);
+
+        // Test2: Default.
+        let gpu_cmd2 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0";
+        let gpu_cfg =
+            GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd2, true, false)).unwrap();
+        assert_eq!(gpu_cfg.max_outputs, 1);
+        assert_eq!(gpu_cfg.xres, 1024);
+        assert_eq!(gpu_cfg.yres, 768);
+        assert_eq!(gpu_cfg.edid, true);
+        assert_eq!(gpu_cfg.max_hostmem, VIRTIO_GPU_DEFAULT_MAX_HOSTMEM);
+        assert_eq!(gpu_cfg.enable_bar0, false);
+
+        // Test3/4: max_outputs is illegal.
+        let gpu_cmd3 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=17";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd3, true, false));
+        assert!(result.is_err());
+        let gpu_cmd4 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=0";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd4, true, false));
+        assert!(result.is_err());
+
+        // Test5: max_hostmem is illegal.
+        let gpu_cmd5 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_hostmem=0";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd5, true, false));
+        assert!(result.is_err());
     }
 }

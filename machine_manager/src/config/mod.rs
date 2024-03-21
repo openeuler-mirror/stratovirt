@@ -22,8 +22,6 @@ mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
-#[cfg(feature = "virtio_gpu")]
-mod gpu;
 mod incoming;
 mod iothread;
 mod machine_config;
@@ -48,8 +46,6 @@ pub use devices::*;
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
-#[cfg(feature = "virtio_gpu")]
-pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;
 pub use machine_config::*;
@@ -101,6 +97,8 @@ pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
 pub const MIN_QUEUE_SIZE_SCSI: u64 = 2;
 // Max size of each virtqueue for virtio-scsi.
 pub const MAX_QUEUE_SIZE_SCSI: u64 = 1024;
+/// The bar0 size of enable_bar0 features
+pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
