@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::{ArgAction, Parser};
 use log::error;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
@@ -43,11 +44,32 @@ use devices::pci::{
     pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{pci::MsiVector, Device, DeviceBase};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
 
 const PCI_NUM_BARS: u8 = 6;
 const PCI_ROM_SLOT: u8 = 6;
+
+#[derive(Parser, Default, Debug)]
+#[command(no_binary_name(true))]
+#[clap(group = clap::ArgGroup::new("path").args(&["host", "sysfsdev"]).multiple(false).required(true))]
+pub struct VfioConfig {
+    #[arg(long, value_parser = ["vfio-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, value_parser = valid_id)]
+    pub host: Option<String>,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long)]
+    pub sysfsdev: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+}
 
 struct MsixTable {
     table_bar: u8,
@@ -1008,4 +1030,39 @@ fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute], start: u32, count: u32) -> Vec
         }
     }
     rawfds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_vfio_config_cmdline_parser() {
+        // Test1: right.
+        let vfio_cmd1 = "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x5,multifunction=on";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd1, true, false));
+        assert!(result.is_ok());
+        let vfio_config = result.unwrap();
+        assert_eq!(vfio_config.host, Some("0000:1a:00.3".to_string()));
+        assert_eq!(vfio_config.id, "net");
+        assert_eq!(vfio_config.bus, "pcie.0");
+        assert_eq!(vfio_config.addr, (5, 0));
+        assert_eq!(vfio_config.multifunction, Some(true));
+
+        // Test2: Missing bus/addr.
+        let vfio_cmd2 = "vfio-pci,host=0000:1a:00.3,id=net";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd2, true, false));
+        assert!(result.is_err());
+
+        // Test3: `host` conflicts with `sysfsdev`.
+        let vfio_cmd3 = "vfio-pci,host=0000:1a:00.3,sysfsdev=/sys/bus/pci/devices/0000:00:02.0,id=net,bus=pcie.0,addr=0x5";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd3, true, false));
+        assert!(result.is_err());
+
+        // Test4: Missing host/sysfsdev.
+        let vfio_cmd4 = "vfio-pci,id=net,bus=pcie.0,addr=0x1.0x2";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd4, true, false));
+        assert!(result.is_err());
+    }
 }
