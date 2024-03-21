@@ -72,8 +72,6 @@ use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
-#[cfg(feature = "virtio_gpu")]
-use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
 use machine_manager::config::{
@@ -95,8 +93,6 @@ use util::{
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
-#[cfg(feature = "virtio_gpu")]
-use virtio::Gpu;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
@@ -106,6 +102,8 @@ use virtio::{
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
+#[cfg(feature = "virtio_gpu")]
+use virtio::{Gpu, GpuDevConfig};
 
 /// Machine structure include base members.
 pub struct MachineBase {
@@ -1321,10 +1319,10 @@ pub trait MachineOps {
 
     #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
-        let device_cfg = parse_gpu(cfg_args)?;
-        let device = Arc::new(Mutex::new(Gpu::new(device_cfg.clone())));
+        let config = GpuDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        config.check();
+        let bdf = PciBdf::new(config.bus.clone(), config.addr);
+        let device = Arc::new(Mutex::new(Gpu::new(config.clone())));
 
         #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
         if device.lock().unwrap().device_quirk() == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0)
@@ -1334,7 +1332,7 @@ pub trait MachineOps {
             device.lock().unwrap().set_bar0_fb(self.get_ohui_fb());
         }
 
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)?;
+        self.add_virtio_pci_device(&config.id, &bdf, device, false, false)?;
         Ok(())
     }
 
