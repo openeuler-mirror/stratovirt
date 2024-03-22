@@ -28,7 +28,7 @@ pub use error::PciError;
 pub use host::PciHost;
 pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, MsiVector};
-pub use root_port::RootPort;
+pub use root_port::{RootPort, RootPortConfig};
 
 use std::{
     mem::size_of,

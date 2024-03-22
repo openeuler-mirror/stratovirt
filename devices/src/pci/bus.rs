@@ -275,7 +275,7 @@ mod tests {
     use crate::pci::bus::PciBus;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
     use crate::pci::root_port::RootPort;
-    use crate::pci::{PciDevBase, PciHost};
+    use crate::pci::{PciDevBase, PciHost, RootPortConfig};
     use crate::{Device, DeviceBase};
     use address_space::{AddressSpace, Region};
 
@@ -372,8 +372,12 @@ mod tests {
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
         let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
-
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
+        let root_port_config = RootPortConfig {
+            addr: (1, 0),
+            id: "pcie.1".to_string(),
+            ..Default::default()
+        };
+        let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
         // Test device is attached to the root bus.
@@ -421,7 +425,12 @@ mod tests {
         let locked_pci_host = pci_host.lock().unwrap();
         let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
 
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
+        let root_port_config = RootPortConfig {
+            id: "pcie.1".to_string(),
+            addr: (1, 0),
+            ..Default::default()
+        };
+        let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
         let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();

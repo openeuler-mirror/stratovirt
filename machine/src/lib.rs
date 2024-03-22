@@ -52,7 +52,7 @@ use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
 use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
-use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
+use devices::pci::{PciBus, PciDevOps, PciHost, RootPort, RootPortConfig};
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
@@ -74,10 +74,10 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
-    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_root_port,
-    parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap,
-    BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
-    NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_vhost_user_blk,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
+    BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
@@ -1352,21 +1352,15 @@ pub trait MachineOps {
     }
 
     fn add_pci_root_port(&mut self, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let device_cfg = parse_root_port(cfg_args)?;
+        let dev_cfg = RootPortConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let bdf = PciBdf::new(dev_cfg.bus.clone(), dev_cfg.addr);
+        let (_, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
-        if PciBus::find_bus_by_name(&bus, &device_cfg.id).is_some() {
-            bail!("ID {} already exists.", &device_cfg.id);
+        if PciBus::find_bus_by_name(&bus, &dev_cfg.id).is_some() {
+            bail!("ID {} already exists.", &dev_cfg.id);
         }
-        let rootport = RootPort::new(
-            device_cfg.id,
-            devfn,
-            device_cfg.port,
-            parent_bus,
-            device_cfg.multifunction,
-        );
+        let rootport = RootPort::new(dev_cfg, parent_bus);
         rootport
             .realize()
             .with_context(|| "Failed to add pci root port")?;
