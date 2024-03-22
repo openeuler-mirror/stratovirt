@@ -66,6 +66,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::error;
 use serde::{Deserialize, Serialize};
 
@@ -209,13 +210,13 @@ impl VmConfig {
                     .with_context(|| "Failed to add iothread")?;
             }
             "rng-random" => {
-                let rng_cfg = parse_rng_obj(object_args)?;
+                let rng_cfg =
+                    RngObjConfig::try_parse_from(str_slip_to_clap(object_args, true, false))?;
                 let id = rng_cfg.id.clone();
-                if self.object.rng_object.get(&id).is_none() {
-                    self.object.rng_object.insert(id, rng_cfg);
-                } else {
+                if self.object.rng_object.get(&id).is_some() {
                     bail!("Object: {} has been added", id);
                 }
+                self.object.rng_object.insert(id, rng_cfg);
             }
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
                 self.add_mem_zone(object_args, device_type)?;

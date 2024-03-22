@@ -18,7 +18,8 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -30,7 +31,7 @@ use crate::{
 };
 use address_space::AddressSpace;
 use machine_manager::{
-    config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE},
+    config::{get_pci_df, valid_id, ConfigError, RngObjConfig, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -45,6 +46,62 @@ use util::loop_context::{
 
 const QUEUE_NUM_RNG: usize = 1;
 const RNG_SIZE_MAX: u32 = 1 << 20;
+
+const MIN_BYTES_PER_SEC: u64 = 64;
+const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
+
+/// Config structure for virtio-rng.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct RngConfig {
+    #[arg(long, value_parser = ["virtio-rng-device", "virtio-rng-pci"])]
+    pub classtype: String,
+    #[arg(long, default_value = "", value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub rng: String,
+    #[arg(long, alias = "max-bytes")]
+    pub max_bytes: Option<u64>,
+    #[arg(long)]
+    pub period: Option<u64>,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long)]
+    pub multifunction: Option<bool>,
+}
+
+impl RngConfig {
+    pub fn bytes_per_sec(&self) -> Result<Option<u64>> {
+        if self.max_bytes.is_some() != self.period.is_some() {
+            bail!("\"max_bytes\" and \"period\" should be configured or not configured Simultaneously.");
+        }
+
+        if let Some(max) = self.max_bytes {
+            let peri = self.period.unwrap();
+            let mul = max
+                .checked_mul(1000)
+                .with_context(|| format!("Illegal max-bytes arguments: {:?}", max))?;
+            let bytes_per_sec = mul
+                .checked_div(peri)
+                .with_context(|| format!("Illegal period arguments: {:?}", peri))?;
+
+            if !(MIN_BYTES_PER_SEC..=MAX_BYTES_PER_SEC).contains(&bytes_per_sec) {
+                return Err(anyhow!(ConfigError::IllegalValue(
+                    "The bytes per second of rng device".to_string(),
+                    MIN_BYTES_PER_SEC,
+                    true,
+                    MAX_BYTES_PER_SEC,
+                    true,
+                )));
+            }
+
+            return Ok(Some(bytes_per_sec));
+        }
+        Ok(None)
+    }
+}
 
 fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
     let mut size = 0_u32;
@@ -216,34 +273,37 @@ pub struct RngState {
 pub struct Rng {
     /// Virtio device base property.
     base: VirtioBase,
-    /// Configuration of virtio rng device
+    /// Configuration of virtio rng device.
     rng_cfg: RngConfig,
+    /// Configuration of rng-random.
+    rngobj_cfg: RngObjConfig,
     /// The file descriptor of random number generator
     random_file: Option<File>,
 }
 
 impl Rng {
-    pub fn new(rng_cfg: RngConfig) -> Self {
+    pub fn new(rng_cfg: RngConfig, rngobj_cfg: RngObjConfig) -> Self {
         Rng {
             base: VirtioBase::new(VIRTIO_TYPE_RNG, QUEUE_NUM_RNG, DEFAULT_VIRTQUEUE_SIZE),
             rng_cfg,
+            rngobj_cfg,
             ..Default::default()
         }
     }
 
     fn check_random_file(&self) -> Result<()> {
-        let path = Path::new(&self.rng_cfg.random_file);
+        let path = Path::new(&self.rngobj_cfg.filename);
         if !path.exists() {
             bail!(
                 "The path of random file {} is not existed",
-                self.rng_cfg.random_file
+                self.rngobj_cfg.filename
             );
         }
 
         if !path.metadata().unwrap().file_type().is_char_device() {
             bail!(
                 "The type of random file {} is not a character special file",
-                self.rng_cfg.random_file
+                self.rngobj_cfg.filename
             );
         }
 
@@ -263,7 +323,7 @@ impl VirtioDevice for Rng {
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
             .with_context(|| "Failed to check random file")?;
-        let file = File::open(&self.rng_cfg.random_file)
+        let file = File::open(&self.rngobj_cfg.filename)
             .with_context(|| "Failed to open file of random number generator")?;
         self.random_file = Some(file);
         self.init_config_features()?;
@@ -308,7 +368,7 @@ impl VirtioDevice for Rng {
                 .unwrap()
                 .try_clone()
                 .with_context(|| "Failed to clone random file for virtio rng")?,
-            leak_bucket: match self.rng_cfg.bytes_per_sec {
+            leak_bucket: match self.rng_cfg.bytes_per_sec()? {
                 Some(bps) => Some(LeakBucket::new(bps)?),
                 None => None,
             },
@@ -361,7 +421,7 @@ mod tests {
     use super::*;
     use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE};
+    use machine_manager::config::{str_slip_to_clap, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
@@ -394,20 +454,59 @@ mod tests {
     }
 
     #[test]
+    fn test_rng_config_cmdline_parse() {
+        // Test1: Right rng-random.
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rngobj_cfg = vm_config.object.rng_object.remove("objrng0").unwrap();
+        assert_eq!(rngobj_cfg.filename, "/path/to/random_file");
+
+        // Test2: virtio-rng-device
+        let rng_cmd = "virtio-rng-device,rng=objrng0";
+        let rng_config = RngConfig::try_parse_from(str_slip_to_clap(rng_cmd, true, false)).unwrap();
+        assert_eq!(rng_config.bytes_per_sec().unwrap(), None);
+        assert_eq!(rng_config.multifunction, None);
+
+        // Test3: virtio-rng-pci.
+        let rng_cmd = "virtio-rng-pci,bus=pcie.0,addr=0x1,rng=objrng0,max-bytes=1234,period=1000";
+        let rng_config = RngConfig::try_parse_from(str_slip_to_clap(rng_cmd, true, false)).unwrap();
+        assert_eq!(rng_config.bytes_per_sec().unwrap(), Some(1234));
+        assert_eq!(rng_config.bus.unwrap(), "pcie.0");
+        assert_eq!(rng_config.addr.unwrap(), (1, 0));
+
+        // Test4: Illegal max-bytes/period.
+        let rng_cmd = "virtio-rng-device,rng=objrng0,max-bytes=63,period=1000";
+        let rng_config = RngConfig::try_parse_from(str_slip_to_clap(rng_cmd, true, false)).unwrap();
+        assert!(rng_config.bytes_per_sec().is_err());
+
+        let rng_cmd = "virtio-rng-device,rng=objrng0,max-bytes=1000000001,period=1000";
+        let rng_config = RngConfig::try_parse_from(str_slip_to_clap(rng_cmd, true, false)).unwrap();
+        assert!(rng_config.bytes_per_sec().is_err());
+    }
+
+    #[test]
     fn test_rng_init() {
-        let file = TempFile::new().unwrap();
-        let random_file = file.as_path().to_str().unwrap().to_string();
-        let rng_config = RngConfig {
-            id: "".to_string(),
-            random_file: random_file.clone(),
-            bytes_per_sec: Some(64),
+        let rngobj_config = RngObjConfig {
+            classtype: "rng-random".to_string(),
+            id: "rng0".to_string(),
+            filename: "".to_string(),
         };
-        let rng = Rng::new(rng_config);
+        let rng_config = RngConfig {
+            classtype: "virtio-rng-pci".to_string(),
+            rng: "rng0".to_string(),
+            max_bytes: Some(64),
+            period: Some(1000),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((3, 0)),
+            ..Default::default()
+        };
+        let rng = Rng::new(rng_config, rngobj_config);
         assert!(rng.random_file.is_none());
         assert_eq!(rng.base.driver_features, 0_u64);
         assert_eq!(rng.base.device_features, 0_u64);
-        assert_eq!(rng.rng_cfg.random_file, random_file);
-        assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
+        assert_eq!(rng.rng_cfg.bytes_per_sec().unwrap().unwrap(), 64);
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
         assert_eq!(rng.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
@@ -416,18 +515,9 @@ mod tests {
 
     #[test]
     fn test_rng_features() {
-        let random_file = TempFile::new()
-            .unwrap()
-            .as_path()
-            .to_str()
-            .unwrap()
-            .to_string();
-        let rng_config = RngConfig {
-            id: "".to_string(),
-            random_file,
-            bytes_per_sec: Some(64),
-        };
-        let mut rng = Rng::new(rng_config);
+        let rng_config = RngConfig::default();
+        let rngobj_cfg = RngObjConfig::default();
+        let mut rng = Rng::new(rng_config, rngobj_cfg);
 
         // If the device feature is 0, all driver features are not supported.
         rng.base.device_features = 0;

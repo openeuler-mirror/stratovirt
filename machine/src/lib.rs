@@ -74,11 +74,11 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
-    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport, parse_vsock,
-    str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
-    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
-    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_root_port,
+    parse_vhost_user_blk, parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap,
+    BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
+    NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -95,7 +95,7 @@ use vfio::{VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
-    BlockState, Rng, RngState,
+    BlockState, Rng, RngConfig, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
@@ -810,19 +810,25 @@ pub trait MachineOps {
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration arguments.
     fn add_virtio_rng(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let rng_cfg = parse_rng_dev(vm_config, cfg_args)?;
+        let rng_cfg = RngConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        rng_cfg.bytes_per_sec()?;
+        let rngobj_cfg = vm_config
+            .object
+            .rng_object
+            .remove(&rng_cfg.rng)
+            .with_context(|| "Object for rng-random device not found")?;
         let sys_mem = self.get_sys_mem();
-        let rng_dev = Arc::new(Mutex::new(Rng::new(rng_cfg.clone())));
+        let rng_dev = Arc::new(Mutex::new(Rng::new(rng_cfg.clone(), rngobj_cfg)));
 
-        match parse_device_type(cfg_args)?.as_str() {
+        match rng_cfg.classtype.as_str() {
             "virtio-rng-device" => {
                 let device = VirtioMmioDevice::new(sys_mem, rng_dev.clone());
                 self.realize_virtio_mmio_device(device)
                     .with_context(|| "Failed to add virtio mmio rng device")?;
             }
             _ => {
-                let bdf = get_pci_bdf(cfg_args)?;
-                let multi_func = get_multi_function(cfg_args)?;
+                let bdf = PciBdf::new(rng_cfg.bus.clone().unwrap(), rng_cfg.addr.unwrap());
+                let multi_func = rng_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&rng_cfg.id, &bdf, rng_dev.clone(), multi_func, false)
                     .with_context(|| "Failed to add pci rng device")?;
             }
