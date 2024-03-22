@@ -62,6 +62,7 @@ pub use vnc::*;
 use std::collections::HashMap;
 use std::fs::{canonicalize, File};
 use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -820,6 +821,14 @@ pub fn valid_socket_path(sock_path: &str) -> Result<String> {
         )));
     }
     valid_path(sock_path)
+}
+
+pub fn valid_dir(d: &str) -> Result<String> {
+    let dir = String::from(d);
+    if !Path::new(&dir).is_dir() {
+        return Err(anyhow!(ConfigError::DirNotExist(dir)));
+    }
+    Ok(dir)
 }
 
 #[cfg(test)]
