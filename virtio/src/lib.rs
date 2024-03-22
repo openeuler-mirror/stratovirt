@@ -37,7 +37,7 @@ pub use device::block::{Block, BlockState, VirtioBlkConfig};
 #[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
 pub use device::net::*;
-pub use device::rng::{Rng, RngState};
+pub use device::rng::{Rng, RngConfig, RngState};
 pub use device::scsi_cntlr as ScsiCntlr;
 pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
 pub use error::VirtioError;
