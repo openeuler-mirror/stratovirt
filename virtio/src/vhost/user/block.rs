@@ -167,10 +167,8 @@ impl VirtioDevice for Block {
             | 1_u64 << VIRTIO_BLK_F_FLUSH
             | 1_u64 << VIRTIO_BLK_F_DISCARD
             | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
-            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        if self.blk_cfg.read_only {
-            self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
-        };
+            | 1_u64 << VIRTIO_BLK_F_SEG_MAX
+            | 1_u64 << VIRTIO_BLK_F_RO;
         if self.blk_cfg.queues > 1 {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
