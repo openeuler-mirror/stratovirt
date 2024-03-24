@@ -41,6 +41,7 @@ ramfb = ["machine/ramfb"]
 virtio_gpu = ["machine/virtio_gpu"]
 trace_to_logger = ["trace/trace_to_logger"]
 trace_to_ftrace = ["trace/trace_to_ftrace"]
+trace_to_hitrace = ["trace/trace_to_hitrace"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

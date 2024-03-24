@@ -13,7 +13,14 @@
 use std::{
     fs::{File, OpenOptions},
     io::{prelude::Write, BufRead, BufReader},
+    sync::Mutex,
 };
+
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref TRACE_MARKER_FD: Mutex<File> = Mutex::new(open_trace_marker());
+}
 
 pub(crate) fn open_trace_marker() -> File {
     let mounts_path: &str = "/proc/mounts";
@@ -56,4 +63,8 @@ pub(crate) fn open_trace_marker() -> File {
         .write(true)
         .open(&trace_marker_path)
         .unwrap_or_else(|e| panic!("Failed to open {}: {:?}", trace_marker_path, e))
+}
+
+pub fn write_trace_marker(buf: &str) {
+    let _result = TRACE_MARKER_FD.lock().unwrap().write_all(buf.as_bytes());
 }

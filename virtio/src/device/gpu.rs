@@ -843,6 +843,7 @@ impl GpuIoHandler {
     }
 
     fn update_cursor(&mut self, info_cursor: &VirtioGpuUpdateCursor, hdr_type: u32) -> Result<()> {
+        trace::trace_scope_start!(update_cursor);
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         match &mut scanout.mouse {
             None => {
