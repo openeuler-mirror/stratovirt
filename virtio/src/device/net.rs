@@ -1596,9 +1596,9 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
-        if let Some(conf) = dev_config {
-            self.net_cfg = conf
+    fn update_config(&mut self, dev_config: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
+        if !dev_config.is_empty() {
+            self.net_cfg = dev_config[0]
                 .as_any()
                 .downcast_ref::<NetworkInterfaceConfig>()
                 .unwrap()

@@ -20,23 +20,15 @@ use clap::{ArgAction, Parser};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check, M};
+use super::{error::ConfigError, M};
 use super::{valid_id, valid_path};
 use crate::config::{
-    check_arg_too_long, get_chardev_socket_path, memory_unit_conversion, parse_bool,
-    str_slip_to_clap, CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH,
-    MAX_VIRTIO_QUEUE,
+    memory_unit_conversion, parse_bool, str_slip_to_clap, ConfigCheck, VmConfig, MAX_STRING_LENGTH,
 };
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
 
-const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
-
-// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-blk should be larger than 2.
-const MIN_QUEUE_SIZE_BLK: u16 = 2;
-// Max size of each virtqueue for virtio-blk.
-const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
 // L2 Cache max size is 32M.
 pub const MAX_L2_CACHE_SIZE: u64 = 32 * (1 << 20);
@@ -63,59 +55,11 @@ pub struct DriveFile {
     pub buf_align: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BlkDevConfig {
-    pub id: String,
-    pub path_on_host: String,
-    pub read_only: bool,
-    pub direct: bool,
-    pub serial_num: Option<String>,
-    pub iothread: Option<String>,
-    pub iops: Option<u64>,
-    pub queues: u16,
-    pub boot_index: Option<u8>,
-    pub chardev: Option<String>,
-    pub socket_path: Option<String>,
-    pub aio: AioEngine,
-    pub queue_size: u16,
-    pub discard: bool,
-    pub write_zeroes: WriteZeroesState,
-    pub format: DiskFormat,
-    pub l2_cache_size: Option<u64>,
-    pub refcount_cache_size: Option<u64>,
-}
-
 #[derive(Debug, Clone)]
 pub struct BootIndexInfo {
     pub boot_index: u8,
     pub id: String,
     pub dev_path: String,
-}
-
-impl Default for BlkDevConfig {
-    fn default() -> Self {
-        BlkDevConfig {
-            id: "".to_string(),
-            path_on_host: "".to_string(),
-            read_only: false,
-            direct: true,
-            serial_num: None,
-            iothread: None,
-            iops: None,
-            queues: 1,
-            boot_index: None,
-            chardev: None,
-            socket_path: None,
-            aio: AioEngine::Native,
-            queue_size: DEFAULT_VIRTQUEUE_SIZE,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            format: DiskFormat::Raw,
-            l2_cache_size: None,
-            refcount_cache_size: None,
-        }
-    }
 }
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,192 +271,6 @@ impl ConfigCheck for DriveConfig {
     }
 }
 
-impl ConfigCheck for BlkDevConfig {
-    fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "drive device id")?;
-        if self.serial_num.is_some() && self.serial_num.as_ref().unwrap().len() > MAX_SERIAL_NUM {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "drive serial number".to_string(),
-                MAX_SERIAL_NUM,
-            )));
-        }
-
-        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "iothread name".to_string(),
-                MAX_STRING_LENGTH,
-            )));
-        }
-
-        if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "number queues of block device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64,
-                true,
-            )));
-        }
-
-        if self.queue_size <= MIN_QUEUE_SIZE_BLK || self.queue_size > MAX_QUEUE_SIZE_BLK {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "queue size of block device".to_string(),
-                MIN_QUEUE_SIZE_BLK as u64,
-                false,
-                MAX_QUEUE_SIZE_BLK as u64,
-                true
-            )));
-        }
-
-        if self.queue_size & (self.queue_size - 1) != 0 {
-            bail!("Queue size should be power of 2!");
-        }
-
-        let fake_drive = DriveConfig {
-            id: self.id.clone(),
-            path_on_host: self.path_on_host.clone(),
-            direct: self.direct,
-            iops: self.iops,
-            aio: self.aio,
-            media: "disk".to_string(),
-            ..Default::default()
-        };
-        fake_drive.check()?;
-        #[cfg(not(test))]
-        if self.chardev.is_none() {
-            fake_drive.check_path()?;
-        }
-
-        Ok(())
-    }
-}
-
-pub fn parse_blk(
-    vm_config: &mut VmConfig,
-    drive_config: &str,
-    queues_auto: Option<u16>,
-) -> Result<BlkDevConfig> {
-    let mut cmd_parser = CmdParser::new("virtio-blk");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("bus")
-        .push("addr")
-        .push("multifunction")
-        .push("drive")
-        .push("bootindex")
-        .push("serial")
-        .push("iothread")
-        .push("num-queues")
-        .push("queue-size");
-
-    cmd_parser.parse(drive_config)?;
-
-    pci_args_check(&cmd_parser)?;
-
-    let mut blkdevcfg = BlkDevConfig::default();
-    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
-        blkdevcfg.boot_index = Some(boot_index);
-    }
-
-    let blkdrive = cmd_parser
-        .get_value::<String>("drive")?
-        .with_context(|| ConfigError::FieldIsMissing("drive".to_string(), "blk".to_string()))?;
-
-    if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
-        blkdevcfg.iothread = Some(iothread);
-    }
-
-    if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
-        blkdevcfg.serial_num = Some(serial);
-    }
-
-    blkdevcfg.id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| "No id configured for blk device")?;
-
-    if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
-        blkdevcfg.queues = queues;
-    } else if let Some(queues) = queues_auto {
-        blkdevcfg.queues = queues;
-    }
-
-    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
-        blkdevcfg.queue_size = queue_size;
-    }
-
-    let drive_arg = &vm_config
-        .drives
-        .remove(&blkdrive)
-        .with_context(|| "No drive configured matched for blk device")?;
-    blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
-    blkdevcfg.read_only = drive_arg.readonly;
-    blkdevcfg.direct = drive_arg.direct;
-    blkdevcfg.iops = drive_arg.iops;
-    blkdevcfg.aio = drive_arg.aio;
-    blkdevcfg.discard = drive_arg.discard;
-    blkdevcfg.write_zeroes = drive_arg.write_zeroes;
-    blkdevcfg.format = drive_arg.format;
-    blkdevcfg.l2_cache_size = drive_arg.l2_cache_size;
-    blkdevcfg.refcount_cache_size = drive_arg.refcount_cache_size;
-    blkdevcfg.check()?;
-    Ok(blkdevcfg)
-}
-
-pub fn parse_vhost_user_blk(
-    vm_config: &mut VmConfig,
-    drive_config: &str,
-    queues_auto: Option<u16>,
-) -> Result<BlkDevConfig> {
-    let mut cmd_parser = CmdParser::new("vhost-user-blk-pci");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("bus")
-        .push("addr")
-        .push("num-queues")
-        .push("chardev")
-        .push("queue-size")
-        .push("bootindex");
-
-    cmd_parser.parse(drive_config)?;
-
-    pci_args_check(&cmd_parser)?;
-
-    let mut blkdevcfg = BlkDevConfig::default();
-
-    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
-        blkdevcfg.boot_index = Some(boot_index);
-    }
-
-    blkdevcfg.chardev = cmd_parser
-        .get_value::<String>("chardev")?
-        .map(Some)
-        .with_context(|| {
-            ConfigError::FieldIsMissing("chardev".to_string(), "vhost-user-blk-pci".to_string())
-        })?;
-
-    blkdevcfg.id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| "No id configured for blk device")?;
-
-    if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
-        blkdevcfg.queues = queues;
-    } else if let Some(queues) = queues_auto {
-        blkdevcfg.queues = queues;
-    }
-
-    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
-        blkdevcfg.queue_size = size;
-    }
-
-    if let Some(chardev) = &blkdevcfg.chardev {
-        blkdevcfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
-    }
-    blkdevcfg.check()?;
-    Ok(blkdevcfg)
-}
-
 impl VmConfig {
     /// Add '-drive ...' drive config to `VmConfig`, including `block drive` and `pflash drive`.
     pub fn add_drive(&mut self, drive_config: &str) -> Result<DriveConfig> {
@@ -582,77 +340,6 @@ impl VmConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::get_pci_bdf;
-
-    #[test]
-    fn test_drive_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_drive(
-                "id=rootfs,file=/path/to/rootfs,readonly=off,direct=on,throttling.iops-total=200"
-            )
-            .is_ok());
-        let blk_cfg_res = parse_blk(
-            &mut vm_config,
-            "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111,num-queues=4",
-            None,
-        );
-        assert!(blk_cfg_res.is_ok());
-        let blk_device_config = blk_cfg_res.unwrap();
-        assert_eq!(blk_device_config.id, "rootfs");
-        assert_eq!(blk_device_config.path_on_host, "/path/to/rootfs");
-        assert_eq!(blk_device_config.direct, true);
-        assert_eq!(blk_device_config.read_only, false);
-        assert_eq!(blk_device_config.serial_num, Some(String::from("111111")));
-        assert_eq!(blk_device_config.queues, 4);
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
-            .is_ok());
-        let blk_cfg_res = parse_blk(
-            &mut vm_config,
-            "virtio-blk-device,drive=rootfs1,id=rootfs1,iothread=iothread1,iops=200,serial=111111",
-            None,
-        );
-        assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
-    }
-
-    #[test]
-    fn test_pci_block_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
-            .is_ok());
-        let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=4";
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
-        assert!(blk_cfg_res.is_ok());
-        let drive_configs = blk_cfg_res.unwrap();
-        assert_eq!(drive_configs.id, "rootfs");
-        assert_eq!(drive_configs.path_on_host, "/path/to/rootfs");
-        assert_eq!(drive_configs.direct, true);
-        assert_eq!(drive_configs.read_only, false);
-        assert_eq!(drive_configs.serial_num, Some(String::from("111111")));
-        assert_eq!(drive_configs.queues, 4);
-
-        let pci_bdf = get_pci_bdf(blk_cfg);
-        assert!(pci_bdf.is_ok());
-        let pci = pci_bdf.unwrap();
-        assert_eq!(pci.bus, "pcie.0".to_string());
-        assert_eq!(pci.addr, (1, 2));
-
-        //  drive "rootfs" has been removed.
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
-        assert!(blk_cfg_res.is_err());
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
-            .is_ok());
-        let blk_cfg =
-            "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
-        assert!(parse_blk(&mut vm_config, blk_cfg, None).is_ok());
-    }
 
     #[test]
     fn test_pflash_drive_config_cmdline_parser() {

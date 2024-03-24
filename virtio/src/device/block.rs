@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::Parser;
 use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -40,7 +41,10 @@ use block_backend::{
     create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
     BlockProperty, BlockStatus,
 };
-use machine_manager::config::{BlkDevConfig, ConfigCheck, DriveFile, VmConfig};
+use machine_manager::config::{
+    get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, ConfigCheck, ConfigError,
+    DriveConfig, DriveFile, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
+};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
     migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
@@ -76,6 +80,8 @@ const MAX_NUM_MERGE_BYTES: u64 = i32::MAX as u64;
 const MAX_ITERATION_PROCESS_QUEUE: u16 = 10;
 /// Max number sectors of per request.
 const MAX_REQUEST_SECTORS: u32 = u32::MAX >> SECTOR_SHIFT;
+/// Max length of serial number.
+const MAX_SERIAL_NUM_LEN: usize = 20;
 
 type SenderConfig = (
     Option<Arc<Mutex<dyn BlockDriverOps<AioCompleteCb>>>>,
@@ -85,6 +91,70 @@ type SenderConfig = (
     Option<String>,
     bool,
 );
+
+fn valid_serial(s: &str) -> Result<String> {
+    if s.len() > MAX_SERIAL_NUM_LEN {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "device serial number".to_string(),
+            MAX_SERIAL_NUM_LEN,
+        )));
+    }
+    Ok(s.to_string())
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct VirtioBlkDevConfig {
+    #[arg(long, value_parser = ["virtio-blk-pci", "virtio-blk-device"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool)]
+    pub multifunction: Option<bool>,
+    #[arg(long)]
+    pub drive: String,
+    #[arg(long)]
+    pub bootindex: Option<u8>,
+    #[arg(long, alias = "num-queues", value_parser = clap::value_parser!(u16).range(1..=MAX_VIRTIO_QUEUE as i64))]
+    pub num_queues: Option<u16>,
+    #[arg(long)]
+    pub iothread: Option<String>,
+    #[arg(long, alias = "queue-size", default_value = "256", value_parser = valid_block_device_virtqueue_size)]
+    pub queue_size: u16,
+    #[arg(long, value_parser = valid_serial)]
+    pub serial: Option<String>,
+}
+
+impl Default for VirtioBlkDevConfig {
+    fn default() -> Self {
+        Self {
+            classtype: "".to_string(),
+            id: "".to_string(),
+            bus: None,
+            addr: None,
+            multifunction: None,
+            drive: "".to_string(),
+            num_queues: Some(1),
+            bootindex: None,
+            iothread: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            serial: None,
+        }
+    }
+}
+
+impl ConfigCheck for VirtioBlkDevConfig {
+    fn check(&self) -> Result<()> {
+        if self.serial.is_some() {
+            valid_serial(&self.serial.clone().unwrap())?;
+        }
+        Ok(())
+    }
+}
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -955,7 +1025,9 @@ pub struct Block {
     /// Virtio device base property.
     base: VirtioBase,
     /// Configuration of the block device.
-    blk_cfg: BlkDevConfig,
+    blk_cfg: VirtioBlkDevConfig,
+    /// Configuration of the block device's drive.
+    drive_cfg: DriveConfig,
     /// Config space of the block device.
     config_space: VirtioBlkConfig,
     /// BLock backend opened by the block device.
@@ -978,14 +1050,16 @@ pub struct Block {
 
 impl Block {
     pub fn new(
-        blk_cfg: BlkDevConfig,
+        blk_cfg: VirtioBlkDevConfig,
+        drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Block {
-        let queue_num = blk_cfg.queues as usize;
+        let queue_num = blk_cfg.num_queues.unwrap_or(1) as usize;
         let queue_size = blk_cfg.queue_size;
         Self {
             base: VirtioBase::new(VIRTIO_TYPE_BLOCK, queue_num, queue_size),
             blk_cfg,
+            drive_cfg,
             req_align: 1,
             buf_align: 1,
             drive_files,
@@ -999,11 +1073,11 @@ impl Block {
         // seg_max = queue_size - 2: 32bits
         self.config_space.seg_max = self.queue_size_max() as u32 - 2;
 
-        if self.blk_cfg.queues > 1 {
-            self.config_space.num_queues = self.blk_cfg.queues;
+        if self.blk_cfg.num_queues.unwrap_or(1) > 1 {
+            self.config_space.num_queues = self.blk_cfg.num_queues.unwrap_or(1);
         }
 
-        if self.blk_cfg.discard {
+        if self.drive_cfg.discard {
             // Just support one segment per request.
             self.config_space.max_discard_seg = 1;
             // The default discard alignment is 1 sector.
@@ -1011,7 +1085,7 @@ impl Block {
             self.config_space.max_discard_sectors = MAX_REQUEST_SECTORS;
         }
 
-        if self.blk_cfg.write_zeroes != WriteZeroesState::Off {
+        if self.drive_cfg.write_zeroes != WriteZeroesState::Off {
             // Just support one segment per request.
             self.config_space.max_write_zeroes_seg = 1;
             self.config_space.max_write_zeroes_sectors = MAX_REQUEST_SECTORS;
@@ -1058,35 +1132,36 @@ impl VirtioDevice for Block {
             );
         }
 
-        if !self.blk_cfg.path_on_host.is_empty() {
+        if !self.drive_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
-            let file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
-            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.blk_cfg.path_on_host)?;
+            let file = VmConfig::fetch_drive_file(&drive_files, &self.drive_cfg.path_on_host)?;
+            let alignments =
+                VmConfig::fetch_drive_align(&drive_files, &self.drive_cfg.path_on_host)?;
             self.req_align = alignments.0;
             self.buf_align = alignments.1;
-            let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
+            let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
 
             let mut thread_pool = None;
-            if self.blk_cfg.aio != AioEngine::Off {
+            if self.drive_cfg.aio != AioEngine::Off {
                 thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
             }
             let aio = Aio::new(
                 Arc::new(BlockIoHandler::complete_func),
-                self.blk_cfg.aio,
+                self.drive_cfg.aio,
                 thread_pool,
             )?;
 
             let conf = BlockProperty {
                 id: drive_id,
-                format: self.blk_cfg.format,
+                format: self.drive_cfg.format,
                 iothread: self.blk_cfg.iothread.clone(),
-                direct: self.blk_cfg.direct,
+                direct: self.drive_cfg.direct,
                 req_align: self.req_align,
                 buf_align: self.buf_align,
-                discard: self.blk_cfg.discard,
-                write_zeroes: self.blk_cfg.write_zeroes,
-                l2_cache_size: self.blk_cfg.l2_cache_size,
-                refcount_cache_size: self.blk_cfg.refcount_cache_size,
+                discard: self.drive_cfg.discard,
+                write_zeroes: self.drive_cfg.write_zeroes,
+                l2_cache_size: self.drive_cfg.l2_cache_size,
+                refcount_cache_size: self.drive_cfg.refcount_cache_size,
             };
             let backend = create_block_backend(file, aio, conf)?;
             let disk_size = backend.lock().unwrap().disk_size()?;
@@ -1110,16 +1185,16 @@ impl VirtioDevice for Block {
             | 1_u64 << VIRTIO_F_RING_EVENT_IDX
             | 1_u64 << VIRTIO_BLK_F_FLUSH
             | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        if self.blk_cfg.read_only {
+        if self.drive_cfg.readonly {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
-        if self.blk_cfg.queues > 1 {
+        if self.blk_cfg.num_queues.unwrap_or(1) > 1 {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
-        if self.blk_cfg.discard {
+        if self.drive_cfg.discard {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_DISCARD;
         }
-        if self.blk_cfg.write_zeroes != WriteZeroesState::Off {
+        if self.drive_cfg.write_zeroes != WriteZeroesState::Off {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
         }
         self.build_device_config_space();
@@ -1130,7 +1205,7 @@ impl VirtioDevice for Block {
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
         let drive_files = self.drive_files.lock().unwrap();
-        let drive_id = VmConfig::get_drive_id(&drive_files, &self.blk_cfg.path_on_host)?;
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
         remove_block_backend(&drive_id);
         Ok(())
     }
@@ -1176,20 +1251,20 @@ impl VirtioDevice for Block {
                 req_align: self.req_align,
                 buf_align: self.buf_align,
                 disk_sectors: self.disk_sectors,
-                direct: self.blk_cfg.direct,
-                serial_num: self.blk_cfg.serial_num.clone(),
+                direct: self.drive_cfg.direct,
+                serial_num: self.blk_cfg.serial.clone(),
                 driver_features,
                 receiver,
                 update_evt: update_evt.clone(),
                 device_broken: self.base.broken.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
-                leak_bucket: match self.blk_cfg.iops {
+                leak_bucket: match self.drive_cfg.iops {
                     Some(iops) => Some(LeakBucket::new(iops)?),
                     None => None,
                 },
-                discard: self.blk_cfg.discard,
-                write_zeroes: self.blk_cfg.write_zeroes,
+                discard: self.drive_cfg.discard,
+                write_zeroes: self.drive_cfg.write_zeroes,
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1236,18 +1311,28 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
-        let is_plug = dev_config.is_some();
-        if let Some(conf) = dev_config {
-            self.blk_cfg = conf
+    // configs[0]: DriveConfig. configs[1]: VirtioBlkDevConfig.
+    fn update_config(&mut self, configs: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
+        let mut is_plug = false;
+        if configs.len() == 2 {
+            self.drive_cfg = configs[0]
                 .as_any()
-                .downcast_ref::<BlkDevConfig>()
+                .downcast_ref::<DriveConfig>()
+                .unwrap()
+                .clone();
+            self.blk_cfg = configs[1]
+                .as_any()
+                .downcast_ref::<VirtioBlkDevConfig>()
                 .unwrap()
                 .clone();
             // microvm type block device don't support multiple queue.
-            self.blk_cfg.queues = QUEUE_NUM_BLK as u16;
-        } else {
+            self.blk_cfg.num_queues = Some(QUEUE_NUM_BLK as u16);
+            is_plug = true;
+        } else if configs.is_empty() {
             self.blk_cfg = Default::default();
+            self.drive_cfg = Default::default();
+        } else {
+            bail!("Invalid update configs.");
         }
 
         if !is_plug {
@@ -1296,8 +1381,8 @@ impl VirtioDevice for Block {
                     self.req_align,
                     self.buf_align,
                     self.disk_sectors,
-                    self.blk_cfg.serial_num.clone(),
-                    self.blk_cfg.direct,
+                    self.blk_cfg.serial.clone(),
+                    self.drive_cfg.direct,
                 ))
                 .with_context(|| VirtioError::ChannelSend("image fd".to_string()))?;
         }
@@ -1354,7 +1439,9 @@ mod tests {
     use super::*;
     use crate::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
+    use machine_manager::config::{
+        str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    };
 
     const QUEUE_NUM_BLK: usize = 1;
     const CONFIG_SPACE_SIZE: usize = 60;
@@ -1390,9 +1477,34 @@ mod tests {
 
     fn init_default_block() -> Block {
         Block::new(
-            BlkDevConfig::default(),
+            VirtioBlkDevConfig::default(),
+            DriveConfig::default(),
             Arc::new(Mutex::new(HashMap::new())),
         )
+    }
+
+    #[test]
+    fn test_virtio_block_config_cmdline_parser() {
+        // Test1: Right.
+        let blk_cmd1 = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=4";
+        let blk_config =
+            VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(blk_cmd1, true, false)).unwrap();
+        assert_eq!(blk_config.id, "rootfs");
+        assert_eq!(blk_config.bus.unwrap(), "pcie.0");
+        assert_eq!(blk_config.addr.unwrap(), (1, 2));
+        assert_eq!(blk_config.serial.unwrap(), "111111");
+        assert_eq!(blk_config.num_queues.unwrap(), 4);
+
+        // Test2: Default values.
+        assert_eq!(blk_config.queue_size, DEFAULT_VIRTQUEUE_SIZE);
+
+        // Test3: Illegal values.
+        let blk_cmd3 = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=33";
+        let result = VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(blk_cmd3, true, false));
+        assert!(result.is_err());
+        let blk_cmd3 = "virtio-blk-pci,id=rootfs,drive=rootfs,serial=111111111111111111111111111111111111111111111111111111111111111111111";
+        let result = VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(blk_cmd3, true, false));
+        assert!(result.is_err());
     }
 
     // Use different input parameters to verify block `new()` and `realize()` functionality.
@@ -1410,16 +1522,16 @@ mod tests {
         assert!(block.senders.is_empty());
 
         // Realize block device: create TempFile as backing file.
-        block.blk_cfg.read_only = true;
-        block.blk_cfg.direct = false;
+        block.drive_cfg.readonly = true;
+        block.drive_cfg.direct = false;
         let f = TempFile::new().unwrap();
-        block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
+        block.drive_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
             "",
-            &block.blk_cfg.path_on_host,
-            block.blk_cfg.read_only,
-            block.blk_cfg.direct,
+            &block.drive_cfg.path_on_host,
+            block.drive_cfg.readonly,
+            block.drive_cfg.direct,
         )
         .unwrap();
         assert!(block.realize().is_ok());
@@ -1548,19 +1660,19 @@ mod tests {
 
         let mut block = init_default_block();
         let file = TempFile::new().unwrap();
-        block.blk_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
-        block.blk_cfg.direct = false;
+        block.drive_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
+        block.drive_cfg.direct = false;
 
         // config iothread and iops
         block.blk_cfg.iothread = Some(thread_name);
-        block.blk_cfg.iops = Some(100);
+        block.drive_cfg.iops = Some(100);
 
         VmConfig::add_drive_file(
             &mut block.drive_files.lock().unwrap(),
             "",
-            &block.blk_cfg.path_on_host,
-            block.blk_cfg.read_only,
-            block.blk_cfg.direct,
+            &block.drive_cfg.path_on_host,
+            block.drive_cfg.readonly,
+            block.drive_cfg.direct,
         )
         .unwrap();
 
