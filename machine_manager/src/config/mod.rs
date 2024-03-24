@@ -91,10 +91,10 @@ pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_NODES: u32 = 128;
 /// Default virtqueue size for virtio devices excepts virtio-fs.
 pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
-// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi should be larger than 2.
-pub const MIN_QUEUE_SIZE_SCSI: u64 = 2;
-// Max size of each virtqueue for virtio-scsi.
-pub const MAX_QUEUE_SIZE_SCSI: u64 = 1024;
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi/virtio-blk should be larger than 2.
+pub const MIN_QUEUE_SIZE_BLOCK_DEVICE: u64 = 2;
+// Max size of each virtqueue for virtio-scsi/virtio-blk.
+pub const MAX_QUEUE_SIZE_BLOCK_DEVICE: u64 = 1024;
 /// The bar0 size of enable_bar0 features
 pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
@@ -830,6 +830,17 @@ pub fn valid_dir(d: &str) -> Result<String> {
         return Err(anyhow!(ConfigError::DirNotExist(dir)));
     }
     Ok(dir)
+}
+
+pub fn valid_block_device_virtqueue_size(s: &str) -> Result<u16> {
+    let size: u64 = s.parse()?;
+    valid_virtqueue_size(
+        size,
+        MIN_QUEUE_SIZE_BLOCK_DEVICE + 1,
+        MAX_QUEUE_SIZE_BLOCK_DEVICE,
+    )?;
+
+    Ok(size as u16)
 }
 
 #[cfg(test)]

@@ -296,7 +296,11 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
     netdevinterfacecfg.queues = netcfg.queues;
     if let Some(chardev) = &netcfg.chardev {
-        netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
+        let char_dev = vm_config
+            .chardev
+            .remove(chardev)
+            .with_context(|| format!("Chardev: {:?} not found for character device", chardev))?;
+        netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(char_dev)?);
     }
 
     netdevinterfacecfg.check()?;

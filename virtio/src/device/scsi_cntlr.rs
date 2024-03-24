@@ -34,8 +34,7 @@ use devices::ScsiBus::{
     EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
 };
 use machine_manager::config::{
-    get_pci_df, parse_bool, valid_id, valid_virtqueue_size, MAX_QUEUE_SIZE_SCSI, MAX_VIRTIO_QUEUE,
-    MIN_QUEUE_SIZE_SCSI,
+    get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::aio::Iovec;
@@ -113,15 +112,8 @@ pub struct ScsiCntlrConfig {
     pub num_queues: Option<u32>,
     #[arg(long)]
     pub iothread: Option<String>,
-    #[arg(long, alias = "queue-size", default_value = "256", value_parser = valid_scsi_cntlr_queue_size)]
+    #[arg(long, alias = "queue-size", default_value = "256", value_parser = valid_block_device_virtqueue_size)]
     pub queue_size: u16,
-}
-
-fn valid_scsi_cntlr_queue_size(s: &str) -> Result<u16> {
-    let size: u64 = s.parse()?;
-    valid_virtqueue_size(size, MIN_QUEUE_SIZE_SCSI + 1, MAX_QUEUE_SIZE_SCSI)?;
-
-    Ok(size as u16)
 }
 
 #[repr(C, packed)]

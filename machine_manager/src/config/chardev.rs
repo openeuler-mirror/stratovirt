@@ -199,22 +199,17 @@ pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<Charde
 /// # Arguments
 ///
 /// * `char_dev` - ChardevConfig struct reference.
-/// * `vm_config` - mutable VmConfig struct reference.
-pub fn get_chardev_socket_path(chardev: &str, vm_config: &mut VmConfig) -> Result<String> {
-    let char_dev = vm_config
-        .chardev
-        .remove(chardev)
-        .with_context(|| format!("Chardev: {:?} not found for character device", chardev))?;
+pub fn get_chardev_socket_path(chardev: ChardevConfig) -> Result<String> {
+    let id = chardev.id();
     if let ChardevType::Socket {
         path,
         server,
         nowait,
         ..
-    } = char_dev.classtype
+    } = chardev.classtype
     {
-        path.clone().with_context(|| {
-            format!("Chardev {:?} backend should be unix-socket type.", chardev)
-        })?;
+        path.clone()
+            .with_context(|| format!("Chardev {:?} backend should be unix-socket type.", id))?;
         if server || nowait {
             bail!(
                 "Argument \'server\' or \'nowait\' is not need for chardev \'{}\'",
@@ -223,7 +218,7 @@ pub fn get_chardev_socket_path(chardev: &str, vm_config: &mut VmConfig) -> Resul
         }
         return Ok(path.unwrap());
     }
-    bail!("Chardev {:?} backend should be unix-socket type.", chardev);
+    bail!("Chardev {:?} backend should be unix-socket type.", id);
 }
 
 pub fn parse_virtserialport(

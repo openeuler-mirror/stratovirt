@@ -18,7 +18,7 @@ mod message;
 mod net;
 mod sock;
 
-pub use self::block::Block;
+pub use self::block::{Block, VhostUserBlkDevConfig};
 pub use self::client::*;
 pub use self::fs::*;
 pub use self::message::*;

@@ -73,12 +73,11 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
-    parse_device_type, parse_net, parse_numa_distance, parse_numa_mem, parse_vhost_user_blk,
-    parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
-    BootSource, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
-    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_device_id, parse_device_type,
+    parse_net, parse_numa_distance, parse_numa_mem, parse_virtio_serial, parse_virtserialport,
+    parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
+    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
+    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -97,8 +96,8 @@ use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
     BlockState, Rng, RngConfig, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
-    Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
-    VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    Serial, SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
+    VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
@@ -1052,26 +1051,37 @@ pub trait MachineOps {
         cfg_args: &str,
         hotplug: bool,
     ) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
-        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
-            0,
-            vm_config.machine_config.nr_cpus,
-            MAX_VIRTIO_QUEUE,
-        ));
-        let device_cfg = parse_blk(vm_config, cfg_args, queues_auto)?;
-        if let Some(bootindex) = device_cfg.boot_index {
+        let mut device_cfg =
+            VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+        let multi_func = device_cfg.multifunction.unwrap_or_default();
+        if device_cfg.num_queues.is_none() {
+            let queues_auto = VirtioPciDevice::virtio_pci_auto_queues_num(
+                0,
+                vm_config.machine_config.nr_cpus,
+                MAX_VIRTIO_QUEUE,
+            );
+            device_cfg.num_queues = Some(queues_auto);
+        }
+        if let Some(bootindex) = device_cfg.bootindex {
             self.check_bootindex(bootindex)
                 .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
         }
+
+        let drive_cfg = vm_config
+            .drives
+            .remove(&device_cfg.drive)
+            .with_context(|| "No drive configured matched for blk device")?;
+
         let device = Arc::new(Mutex::new(Block::new(
             device_cfg.clone(),
+            drive_cfg,
             self.get_drive_files(),
         )));
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio pci device")?;
-        if let Some(bootindex) = device_cfg.boot_index {
+        if let Some(bootindex) = device_cfg.bootindex {
             // Eg: OpenFirmware device path(virtio-blk disk):
             // /pci@i0cf8/scsi@6[,3]/disk@0,0
             //   |             |  |       | |
@@ -1233,27 +1243,42 @@ pub trait MachineOps {
         cfg_args: &str,
         hotplug: bool,
     ) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
-        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
-            0,
-            vm_config.machine_config.nr_cpus,
-            MAX_VIRTIO_QUEUE,
-        ));
-        let device_cfg = parse_vhost_user_blk(vm_config, cfg_args, queues_auto)?;
+        let mut device_cfg = VhostUser::VhostUserBlkDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+        if device_cfg.num_queues.is_none() {
+            let queues_auto = VirtioPciDevice::virtio_pci_auto_queues_num(
+                0,
+                vm_config.machine_config.nr_cpus,
+                MAX_VIRTIO_QUEUE,
+            );
+            device_cfg.num_queues = Some(queues_auto);
+        }
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user blk",
+                    &device_cfg.chardev
+                )
+            })?;
+
         let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
             &device_cfg,
+            chardev_cfg,
             self.get_sys_mem(),
         )));
         let pci_dev = self
-            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, true)
+            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), false, true)
             .with_context(|| {
                 format!(
                     "Failed to add virtio pci device, device id: {}",
                     &device_cfg.id
                 )
             })?;
-        if let Some(bootindex) = device_cfg.boot_index {
+        if let Some(bootindex) = device_cfg.bootindex {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
                 self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
@@ -1269,9 +1294,21 @@ pub trait MachineOps {
         vm_config: &mut VmConfig,
         cfg_args: &str,
     ) -> Result<()> {
-        let device_cfg = parse_vhost_user_blk(vm_config, cfg_args, None)?;
+        let device_cfg = VhostUser::VhostUserBlkDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user blk",
+                    &device_cfg.chardev
+                )
+            })?;
         let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
             &device_cfg,
+            chardev_cfg,
             self.get_sys_mem(),
         )));
         let virtio_mmio_device = VirtioMmioDevice::new(self.get_sys_mem(), device);

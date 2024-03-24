@@ -38,6 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::{error, info};
 
 #[cfg(target_arch = "aarch64")]
@@ -48,7 +49,7 @@ use crate::{MachineBase, MachineError, MachineOps};
 use cpu::CpuLifecycleState;
 use devices::sysbus::{IRQ_BASE, IRQ_MAX};
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, ConfigCheck, DiskFormat, MigrateMode,
+    parse_incoming_uri, parse_net, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
     NetworkInterfaceConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
 };
 use machine_manager::event;
@@ -61,8 +62,8 @@ use machine_manager::qmp::{
     qmp_channel::QmpChannel, qmp_response::Response, qmp_schema, qmp_schema::UpdateRegionArgument,
 };
 use migration::MigrationManager;
-use util::aio::WriteZeroesState;
 use util::{loop_context::EventLoopManager, num_ops::str_to_num, set_termi_canon_mode};
+use virtio::device::block::VirtioBlkDevConfig;
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VhostUser,
     VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
@@ -78,8 +79,8 @@ const MMIO_REPLACEABLE_NET_NR: usize = 2;
 struct MmioReplaceableConfig {
     // Device id.
     id: String,
-    // The dev_config of the related backend device.
-    dev_config: Arc<dyn ConfigCheck>,
+    // The config of the related backend device. Eg: Drive config of virtio mmio device.
+    back_config: Arc<dyn ConfigCheck>,
 }
 
 // The device information of replaceable device.
@@ -158,7 +159,8 @@ impl LightMachine {
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::new(
-                BlkDevConfig::default(),
+                VirtioBlkDevConfig::default(),
+                DriveConfig::default(),
                 self.get_drive_files(),
             )));
             let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, block.clone());
@@ -217,7 +219,7 @@ impl LightMachine {
     pub(crate) fn fill_replaceable_device(
         &mut self,
         id: &str,
-        dev_config: Arc<dyn ConfigCheck>,
+        dev_config: Vec<Arc<dyn ConfigCheck>>,
         index: usize,
     ) -> Result<()> {
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
@@ -232,14 +234,14 @@ impl LightMachine {
                 .device
                 .lock()
                 .unwrap()
-                .update_config(Some(dev_config.clone()))
+                .update_config(dev_config.clone())
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
 
-        self.add_replaceable_config(id, dev_config)
+        self.add_replaceable_config(id, dev_config[0].clone())
     }
 
-    fn add_replaceable_config(&self, id: &str, dev_config: Arc<dyn ConfigCheck>) -> Result<()> {
+    fn add_replaceable_config(&self, id: &str, back_config: Arc<dyn ConfigCheck>) -> Result<()> {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         let limit = MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR;
         if configs_lock.len() >= limit {
@@ -254,7 +256,7 @@ impl LightMachine {
 
         let config = MmioReplaceableConfig {
             id: id.to_string(),
-            dev_config,
+            back_config,
         };
 
         trace::mmio_replaceable_config(&config);
@@ -262,21 +264,28 @@ impl LightMachine {
         Ok(())
     }
 
-    fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
+    fn add_replaceable_device(
+        &self,
+        args: Box<qmp_schema::DeviceAddArgument>,
+        slot: usize,
+    ) -> Result<()> {
+        let id = args.id;
+        let driver = args.driver;
+
         // Find the configuration by id.
         let configs_lock = self.replaceable_info.configs.lock().unwrap();
-        let mut dev_config = None;
+        let mut configs = Vec::new();
         for config in configs_lock.iter() {
             if config.id == id {
-                dev_config = Some(config.dev_config.clone());
+                configs.push(config.back_config.clone());
             }
         }
-        if dev_config.is_none() {
+        if configs.is_empty() {
             bail!("Failed to find device configuration.");
         }
 
         // Sanity check for config, driver and slot.
-        let cfg_any = dev_config.as_ref().unwrap().as_any();
+        let cfg_any = configs[0].as_any();
         let index = if driver.contains("net") {
             if slot >= MMIO_REPLACEABLE_NET_NR {
                 return Err(anyhow!(MachineError::RplDevLmtErr(
@@ -295,9 +304,19 @@ impl LightMachine {
                     MMIO_REPLACEABLE_BLK_NR
                 )));
             }
-            if cfg_any.downcast_ref::<BlkDevConfig>().is_none() {
+            if cfg_any.downcast_ref::<DriveConfig>().is_none() {
                 return Err(anyhow!(MachineError::DevTypeErr("blk".to_string())));
             }
+            let dev_config = VirtioBlkDevConfig {
+                classtype: driver,
+                id: id.clone(),
+                drive: args.drive.with_context(|| "No drive set")?,
+                bootindex: args.boot_index,
+                iothread: args.iothread,
+                serial: args.serial_num,
+                ..Default::default()
+            };
+            configs.push(Arc::new(dev_config));
             slot
         } else {
             bail!("Unsupported replaceable device type.");
@@ -316,7 +335,7 @@ impl LightMachine {
                 .device
                 .lock()
                 .unwrap()
-                .update_config(dev_config)
+                .update_config(configs)
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
         Ok(())
@@ -328,8 +347,10 @@ impl LightMachine {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         for (index, config) in configs_lock.iter().enumerate() {
             if config.id == id {
-                if let Some(blkconf) = config.dev_config.as_any().downcast_ref::<BlkDevConfig>() {
-                    self.unregister_drive_file(&blkconf.path_on_host)?;
+                if let Some(drive_config) =
+                    config.back_config.as_any().downcast_ref::<DriveConfig>()
+                {
+                    self.unregister_drive_file(&drive_config.path_on_host)?;
                 }
                 configs_lock.remove(index);
                 is_exist = true;
@@ -347,7 +368,7 @@ impl LightMachine {
                     .device
                     .lock()
                     .unwrap()
-                    .update_config(None)
+                    .update_config(Vec::new())
                     .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
             }
         }
@@ -387,7 +408,11 @@ impl LightMachine {
                     MMIO_REPLACEABLE_NET_NR
                 );
             }
-            self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+            self.fill_replaceable_device(
+                &device_cfg.id,
+                vec![Arc::new(device_cfg.clone())],
+                index,
+            )?;
             self.replaceable_info.net_count += 1;
         }
         Ok(())
@@ -398,7 +423,12 @@ impl LightMachine {
         vm_config: &mut VmConfig,
         cfg_args: &str,
     ) -> Result<()> {
-        let device_cfg = parse_blk(vm_config, cfg_args, None)?;
+        let device_cfg =
+            VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let drive_cfg = vm_config
+            .drives
+            .remove(&device_cfg.drive)
+            .with_context(|| "No drive configured matched for blk device")?;
         if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
             bail!(
                 "A maximum of {} block replaceable devices are supported.",
@@ -406,7 +436,9 @@ impl LightMachine {
             );
         }
         let index = self.replaceable_info.block_count;
-        self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+        let configs: Vec<Arc<dyn ConfigCheck>> =
+            vec![Arc::new(drive_cfg), Arc::new(device_cfg.clone())];
+        self.fill_replaceable_device(&device_cfg.id, configs, index)?;
         self.replaceable_info.block_count += 1;
         Ok(())
     }
@@ -668,7 +700,7 @@ impl DeviceInterface for LightMachine {
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;
-        if let Some(addr) = args.addr {
+        if let Some(addr) = args.addr.clone() {
             if let Ok(num) = str_to_num::<usize>(&addr) {
                 slot = num;
             } else {
@@ -684,7 +716,7 @@ impl DeviceInterface for LightMachine {
             slot = lun + 1;
         }
 
-        match self.add_replaceable_device(&args.id, &args.driver, slot) {
+        match self.add_replaceable_device(args.clone(), slot) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
@@ -719,32 +751,22 @@ impl DeviceInterface for LightMachine {
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        let read_only = args.read_only.unwrap_or(false);
+        let readonly = args.read_only.unwrap_or(false);
         let mut direct = true;
         if args.cache.is_some() && !args.cache.unwrap().direct.unwrap_or(true) {
             direct = false;
         }
 
-        let config = BlkDevConfig {
+        let config = DriveConfig {
             id: args.node_name.clone(),
+            drive_type: "none".to_string(),
             path_on_host: args.file.filename.clone(),
-            read_only,
+            readonly,
             direct,
-            serial_num: None,
-            iothread: None,
-            iops: None,
-            queues: 1,
-            boot_index: None,
-            chardev: None,
-            socket_path: None,
             aio: args.file.aio,
-            queue_size: DEFAULT_VIRTQUEUE_SIZE,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            format: DiskFormat::Raw,
-            l2_cache_size: None,
-            refcount_cache_size: None,
+            ..Default::default()
         };
+
         if let Err(e) = config.check() {
             error!("{:?}", e);
             return Response::create_error_response(
@@ -753,7 +775,7 @@ impl DeviceInterface for LightMachine {
             );
         }
         // Register drive backend file for hotplugged drive.
-        if let Err(e) = self.register_drive_file(&config.id, &args.file.filename, read_only, direct)
+        if let Err(e) = self.register_drive_file(&config.id, &args.file.filename, readonly, direct)
         {
             error!("{:?}", e);
             return Response::create_error_response(
