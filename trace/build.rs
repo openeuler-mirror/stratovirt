@@ -12,7 +12,7 @@
 
 fn main() {
     println!(
-        "cargo:rerun-if-changed={}/trace_event",
+        "cargo:rerun-if-changed={}/trace_info",
         std::env::var("CARGO_MANIFEST_DIR").unwrap()
     );
 }
