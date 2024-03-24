@@ -1187,7 +1187,7 @@ One property can be set:
 * events: file lists events to trace.
 
 ```shell
--trace events=<file>
+-trace file=<file>
 ```
 
 ## 4. Seccomp
