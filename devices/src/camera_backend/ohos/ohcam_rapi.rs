@@ -15,7 +15,7 @@ use std::ptr;
 
 use anyhow::{bail, Result};
 
-use super::ohcam_bindings as capi;
+use util::ohos_binding::hwf_adapter as capi;
 
 // OH camera framework's related definitions
 #[allow(unused)]
@@ -28,9 +28,9 @@ pub const CAMERA_FORMAT_MJPEG: i32 = 2000;
 // camera path is actually the specified camera ID.
 pub fn check_cam_idx(idx: u8) -> Result<()> {
     // SAFETY: We call related API sequentially for specified ctx.
-    let mut ctx = unsafe { capi::OhcamCreateCtx() };
+    let mut ctx = unsafe { capi::ohcam_create_ctx() };
     // SAFETY: We call related API sequentially for specified ctx.
-    let n = unsafe { capi::OhcamInitCameras(ctx) };
+    let n = unsafe { capi::ohcam_init_cameras(ctx) };
     if n < 0 {
         ohcam_drop_ctx(ptr::addr_of_mut!(ctx));
         bail!("OHCAM WRAPPER: failed to init cameras");
@@ -44,17 +44,17 @@ pub fn check_cam_idx(idx: u8) -> Result<()> {
 
 pub fn ohcam_init() -> Result<*mut c_void> {
     // SAFETY: We call related API sequentially for specified ctx.
-    let mut ctx = unsafe { capi::OhcamCreateCtx() };
+    let mut ctx = unsafe { capi::ohcam_create_ctx() };
     if ctx.is_null() {
         bail!("OHCAM WRAPPER: create camera ctx failed");
     }
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        if capi::OhcamInitCameras(ctx) < 0 {
+        if capi::ohcam_init_cameras(ctx) < 0 {
             ohcam_drop_ctx(ptr::addr_of_mut!(ctx));
             bail!("OHCAM WRAPPER: failed to init cameras");
         }
-        if capi::OhcamInitProfiles(ctx) < 0 {
+        if capi::ohcam_init_profiles(ctx) < 0 {
             ohcam_drop_ctx(ptr::addr_of_mut!(ctx));
             bail!("OHCAM WRAPPER: failed to init profiles");
         }
@@ -64,7 +64,7 @@ pub fn ohcam_init() -> Result<*mut c_void> {
 
 pub fn ohcam_get_fmt_nums(ctx: *mut c_void, idx: c_int) -> Result<c_int> {
     // SAFETY: We call related API sequentially for specified ctx.
-    let ret = unsafe { capi::OhcamGetProfileSize(ctx, idx) };
+    let ret = unsafe { capi::ohcam_get_profile_size(ctx, idx) };
     if ret < 0 {
         bail!("OHCAM WRAPPER: invalid camera idx {}", idx);
     }
@@ -73,17 +73,17 @@ pub fn ohcam_get_fmt_nums(ctx: *mut c_void, idx: c_int) -> Result<c_int> {
 
 pub fn ohcam_release_camera(ctx: *mut c_void) {
     // SAFETY: We call related API sequentially for specified ctx.
-    unsafe { capi::OhcamRelease(ctx) };
+    unsafe { capi::ohcam_release(ctx) };
 }
 
 pub fn ohcam_drop_ctx(p_ctx: *mut *mut c_void) {
     // SAFETY: We call related API sequentially for specified ctx.
-    unsafe { capi::OhcamDestroyCtx(p_ctx) };
+    unsafe { capi::ohcma_destroy_ctx(p_ctx) };
 }
 
 pub fn ohcam_set_fmt(ctx: *mut c_void, cam_idx: c_int, profile_idx: c_int) -> Result<()> {
     // SAFETY: We call related API sequentially for specified ctx.
-    let ret = unsafe { capi::OhcamSetProfile(ctx, cam_idx, profile_idx) };
+    let ret = unsafe { capi::ohcam_set_profile(ctx, cam_idx, profile_idx) };
     if ret < 0 {
         bail!("OHCAM WRAPPER: Failed to ohcam_set_profile");
     }
@@ -97,10 +97,10 @@ pub fn ohcam_start_stream(
 ) -> Result<()> {
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        if capi::OhcamPreStart(ctx, buffer_proc, broken_process) != 0 {
+        if capi::ohcam_pre_start(ctx, buffer_proc, broken_process) != 0 {
             bail!("OHCAM WRAPPER: Pre start failed");
         }
-        if capi::OhcamStart(ctx) != 0 {
+        if capi::ohcam_start(ctx) != 0 {
             bail!("OHCAM WRAPPER: Start failed");
         }
     }
@@ -110,17 +110,17 @@ pub fn ohcam_start_stream(
 pub fn ohcam_reset_cam(ctx: *mut c_void) {
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        capi::OhcamCreateSession(ctx);
-        capi::OhcamInitCameras(ctx);
-        capi::OhcamInitProfiles(ctx);
+        capi::ohcam_create_session(ctx);
+        capi::ohcam_init_cameras(ctx);
+        capi::ohcam_init_profiles(ctx);
     }
 }
 
 pub fn ohcam_stop_stream(ctx: *mut c_void) {
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        capi::OhcamStopOutput(ctx);
-        capi::OhcamReleaseSession(ctx);
+        capi::ohcam_stop_output(ctx);
+        capi::ohcam_release_session(ctx);
     }
 }
 
@@ -136,7 +136,7 @@ pub fn ohcam_get_profile(
     let profile_recorder = capi::ProfileRecorder::default();
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        let ret = capi::OhcamGetProfile(
+        let ret = capi::ohcam_get_profile(
             ctx,
             cam_idx,
             profile_idx,
@@ -156,6 +156,6 @@ pub fn ohcam_get_profile(
 pub fn ohcam_next_frame(ctx: *mut c_void) {
     // SAFETY: We call related API sequentially for specified ctx.
     unsafe {
-        capi::OhcamAllowNextFrame(ctx);
+        capi::ohcam_allow_next_frame(ctx);
     }
 }
