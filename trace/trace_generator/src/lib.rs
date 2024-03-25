@@ -216,6 +216,11 @@ pub fn gen_trace_scope_func(_input: TokenStream) -> TokenStream {
             }
         };
 
+        let func_decl = match desc.enabled {
+            true => quote!(pub fn #func_name(asyn: bool, #func_args) -> trace_scope::Scope),
+            false => quote!(pub fn #func_name(asyn: bool, #func_args)),
+        };
+
         let message_args = match desc.args.is_empty() {
             true => quote!(),
             false => {
@@ -258,7 +263,7 @@ pub fn gen_trace_scope_func(_input: TokenStream) -> TokenStream {
                 all(target_env = "ohos", feature = "trace_to_hitrace")
             ))]
             #[inline(always)]
-            pub fn #func_name(asyn: bool, #func_args) -> trace_scope::Scope {
+            #func_decl {
                 #func_body
             }
 
