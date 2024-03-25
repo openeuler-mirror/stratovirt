@@ -12,13 +12,12 @@
 
 #[cfg(feature = "usb_camera")]
 pub mod camera;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub mod display;
 pub mod error;
 #[cfg(feature = "vnc")]
 pub mod vnc;
 
-mod balloon;
 mod boot_source;
 mod chardev;
 #[cfg(feature = "demo_device")]
@@ -39,16 +38,15 @@ mod pvpanic_pci;
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 mod ramfb;
 mod rng;
+#[cfg(feature = "vnc_auth")]
 mod sasl_auth;
-#[cfg(feature = "scream")]
-pub mod scream;
 mod scsi;
 mod smbios;
+#[cfg(feature = "vnc_auth")]
 mod tls_creds;
 mod usb;
 mod vfio;
 
-pub use balloon::*;
 pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
@@ -56,7 +54,7 @@ pub use chardev::*;
 #[cfg(feature = "demo_device")]
 pub use demo_dev::*;
 pub use devices::*;
-#[cfg(feature = "gtk")]
+#[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
@@ -74,9 +72,11 @@ pub use pvpanic_pci::*;
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 pub use ramfb::*;
 pub use rng::*;
+#[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
 pub use scsi::*;
 pub use smbios::*;
+#[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
@@ -97,7 +97,7 @@ use trace::set_state_by_pattern;
 use util::device_tree::{self, FdtBuilder};
 use util::{
     file::{get_file_alignment, open_file},
-    num_ops::str_to_usize,
+    num_ops::str_to_num,
     test_helper::is_test_enabled,
     AsAny,
 };
@@ -119,7 +119,9 @@ pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
 pub struct ObjectConfig {
     pub rng_object: HashMap<String, RngObjConfig>,
     pub mem_object: HashMap<String, MemZoneConfig>,
+    #[cfg(feature = "vnc_auth")]
     pub tls_object: HashMap<String, TlsCredObjConfig>,
+    #[cfg(feature = "vnc_auth")]
     pub sasl_object: HashMap<String, SaslAuthObjConfig>,
 }
 
@@ -144,7 +146,7 @@ pub struct VmConfig {
     pub incoming: Option<Incoming>,
     #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
-    #[cfg(feature = "gtk")]
+    #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
     pub display: Option<DisplayConfig>,
     #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
@@ -236,9 +238,11 @@ impl VmConfig {
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
                 self.add_mem_zone(object_args, device_type)?;
             }
+            #[cfg(feature = "vnc_auth")]
             "tls-creds-x509" => {
                 self.add_tlscred(object_args)?;
             }
+            #[cfg(feature = "vnc_auth")]
             "authz-simple" => {
                 self.add_saslauth(object_args)?;
             }
@@ -613,6 +617,14 @@ impl From<ExBool> for bool {
     }
 }
 
+pub fn parse_bool(s: &str) -> Result<bool> {
+    match s {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(anyhow!("Unknow bool value {s}")),
+    }
+}
+
 fn enable_trace_events(path: &str) -> Result<()> {
     let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
     let mut buf = String::new();
@@ -652,8 +664,8 @@ impl FromStr for UnsignedInteger {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let value = str_to_usize(s.to_string())
-            .map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
+        let value =
+            str_to_num::<usize>(s).map_err(|e| error!("Invalid value {}, error is {:?}", s, e))?;
         Ok(UnsignedInteger(value))
     }
 }
@@ -722,6 +734,25 @@ pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Resu
     arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
 
     Ok(())
+}
+
+/// Configure StratoVirt parameters in clap format.
+pub fn str_slip_to_clap(args: &str) -> Vec<String> {
+    let args_vecs = args.split([',', '=']).collect::<Vec<&str>>();
+    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len());
+    for (cnt, param) in args_vecs.iter().enumerate() {
+        if cnt % 2 == 1 {
+            itr.push(format!("--{}", param));
+        } else {
+            itr.push(param.to_string());
+        }
+    }
+    itr
+}
+
+pub fn valid_id(id: &str) -> Result<String> {
+    check_arg_too_long(id, "id")?;
+    Ok(id.to_string())
 }
 
 #[cfg(test)]

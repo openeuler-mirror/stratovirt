@@ -25,7 +25,7 @@ use log::{debug, error, warn};
 
 use super::{
     AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData, AUDIO_SAMPLE_RATE_44KHZ,
-    AUDIO_SAMPLE_RATE_48KHZ, TARGET_LATENCY_MS, WINDOWS_SAMPLE_BASE_RATE,
+    TARGET_LATENCY_MS,
 };
 
 const MAX_CHANNELS: u8 = 8;
@@ -86,12 +86,14 @@ impl AlsaStreamData {
             // Set the latency in microseconds.
             hwp.set_buffer_time_near(self.latency * 1000, ValueOr::Nearest)?;
             pcm.hw_params(&hwp)?;
+            trace::scream_setup_alsa_hwp(&self.app_name, &hwp);
 
             // Set software parameters of the stream.
             let hwp = pcm.hw_params_current()?;
             let swp = pcm.sw_params_current()?;
             swp.set_start_threshold(hwp.get_buffer_size().unwrap())?;
             pcm.sw_params(&swp)?;
+            trace::scream_setup_alsa_swp(&self.app_name, &swp);
         }
         self.pcm = Some(pcm);
         Ok(())
@@ -106,11 +108,7 @@ impl AlsaStreamData {
 
         // If audio format changed, reconfigure.
         self.stream_fmt = recv_data.fmt;
-        self.rate = if recv_data.fmt.rate >= WINDOWS_SAMPLE_BASE_RATE {
-            AUDIO_SAMPLE_RATE_44KHZ
-        } else {
-            AUDIO_SAMPLE_RATE_48KHZ
-        } * (recv_data.fmt.rate % WINDOWS_SAMPLE_BASE_RATE) as u32;
+        self.rate = recv_data.fmt.get_rate();
 
         match recv_data.fmt.size {
             16 => {
@@ -204,16 +202,17 @@ impl AudioInterface for AlsaStreamData {
                     };
                 }
                 Ok(n) => {
+                    trace::scream_alsa_send_frames(frames, offset, end);
                     frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
                 }
             }
         }
     }
 
-    fn receive(&mut self, recv_data: &StreamData) -> bool {
+    fn receive(&mut self, recv_data: &StreamData) -> i32 {
         if !self.check_fmt_update(recv_data) {
             self.destroy();
-            return false;
+            return 0;
         }
 
         let mut frames = 0;
@@ -250,6 +249,7 @@ impl AudioInterface for AlsaStreamData {
                     };
                 }
                 Ok(n) => {
+                    trace::scream_alsa_receive_frames(frames, offset, end);
                     frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
 
                     // During the host headset switchover, io.read is blocked for a long time.
@@ -266,7 +266,7 @@ impl AudioInterface for AlsaStreamData {
                 }
             }
         }
-        true
+        1
     }
 
     fn destroy(&mut self) {

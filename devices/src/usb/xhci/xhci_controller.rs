@@ -21,6 +21,7 @@ use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
 
+use super::xhci_pci::XhciConfig;
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::xhci_trb::{
@@ -31,7 +32,6 @@ use super::xhci_trb::{
 use crate::usb::{config::*, TransferOps};
 use crate::usb::{UsbDevice, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus};
 use address_space::{AddressSpace, GuestAddress};
-use machine_manager::config::XhciConfig;
 use machine_manager::event_loop::EventLoop;
 
 const INVALID_SLOT_ID: u32 = 0;

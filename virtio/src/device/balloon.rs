@@ -21,6 +21,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use clap::{ArgAction, Parser};
 use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
@@ -33,7 +34,8 @@ use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use machine_manager::{
-    config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
+    config::{get_pci_df, parse_bool, DEFAULT_VIRTQUEUE_SIZE},
+    config::{valid_id, ConfigCheck, ConfigError},
     event,
     event_loop::{register_event_helper, unregister_event_helper},
     qmp::qmp_channel::QmpChannel,
@@ -64,6 +66,11 @@ const IN_IOVEC: bool = true;
 const OUT_IOVEC: bool = false;
 const BITS_OF_TYPE_U64: u64 = 64;
 
+const MEM_BUFFER_PERCENT_MIN: u32 = 20;
+const MEM_BUFFER_PERCENT_MAX: u32 = 80;
+const MONITOR_INTERVAL_SECOND_MIN: u32 = 5;
+const MONITOR_INTERVAL_SECOND_MAX: u32 = 300;
+
 static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
 
 /// IO vector, used to find memory segments.
@@ -76,31 +83,29 @@ struct GuestIovec {
 }
 
 #[derive(Clone, Copy, Default)]
-#[allow(dead_code)]
 #[repr(packed(1))]
 struct BalloonStat {
     _tag: u16,
-    val: u64,
+    _val: u64,
 }
 
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
-#[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
-    num_pages: u32,
+    _num_pages: u32,
     /// Number of pages we've actually got in balloon device.
-    actual: u32,
+    _actual: u32,
     _reserved: u32,
     _reserved1: u32,
     /// Buffer percent is a percentage of memory actually needed by
     /// the applications and services running inside the virtual machine.
     /// This parameter takes effect only when VIRTIO_BALLOON_F_MESSAGE_VQ is supported.
     /// Recommended value range: [20, 80] and default is 50.
-    membuf_percent: u32,
+    _membuf_percent: u32,
     /// Monitor interval(second) host wants to adjust VM memory size.
     /// Recommended value range: [5, 300] and default is 10.
-    monitor_interval: u32,
+    _monitor_interval: u32,
 }
 
 impl ByteCode for BalloonStat {}
@@ -703,7 +708,7 @@ impl BalloonIoHandler {
                         let ram_size = (balloon_dev.mem_info.lock().unwrap().get_ram_size()
                             >> VIRTIO_BALLOON_PFN_SHIFT)
                             as u32;
-                        balloon_dev.set_num_pages(cmp::min(stat.val as u32, ram_size));
+                        balloon_dev.set_num_pages(cmp::min(stat._val as u32, ram_size));
                     }
                 }
                 balloon_dev
@@ -876,6 +881,60 @@ impl EventNotifierHelper for BalloonIoHandler {
     }
 }
 
+#[derive(Parser, Debug, Clone, Default)]
+#[command(name = "balloon")]
+pub struct BalloonConfig {
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+    #[arg(long, default_value = "false", action = ArgAction::Append)]
+    deflate_on_oom: bool,
+    #[arg(long, default_value = "false", action = ArgAction::Append)]
+    free_page_reporting: bool,
+    #[arg(long, default_value = "false", action = ArgAction::Append)]
+    auto_balloon: bool,
+    #[arg(long, default_value = "50")]
+    membuf_percent: u32,
+    #[arg(long, default_value = "10")]
+    monitor_interval: u32,
+}
+
+impl ConfigCheck for BalloonConfig {
+    fn check(&self) -> Result<()> {
+        if !self.auto_balloon {
+            return Ok(());
+        }
+        if self.membuf_percent > MEM_BUFFER_PERCENT_MAX
+            || self.membuf_percent < MEM_BUFFER_PERCENT_MIN
+        {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "balloon membuf-percent".to_string(),
+                MEM_BUFFER_PERCENT_MIN as u64,
+                false,
+                MEM_BUFFER_PERCENT_MAX as u64,
+                false,
+            )));
+        }
+        if self.monitor_interval > MONITOR_INTERVAL_SECOND_MAX
+            || self.monitor_interval < MONITOR_INTERVAL_SECOND_MIN
+        {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "balloon monitor-interval".to_string(),
+                MONITOR_INTERVAL_SECOND_MIN as u64,
+                false,
+                MONITOR_INTERVAL_SECOND_MAX as u64,
+                false,
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// A balloon device with some necessary information.
 pub struct Balloon {
     /// Virtio device base property.
@@ -902,7 +961,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
+    pub fn new(bln_cfg: BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
         let mut queue_num = QUEUE_NUM_BALLOON;
         if bln_cfg.free_page_reporting {
             queue_num += 1;
@@ -913,7 +972,7 @@ impl Balloon {
 
         Balloon {
             base: VirtioBase::new(VIRTIO_TYPE_BALLOON, queue_num, DEFAULT_VIRTQUEUE_SIZE),
-            bln_cfg: bln_cfg.clone(),
+            bln_cfg,
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
@@ -998,6 +1057,7 @@ impl VirtioDevice for Balloon {
     }
 
     fn realize(&mut self) -> Result<()> {
+        self.bln_cfg.check()?;
         self.mem_space
             .register_listener(self.mem_info.clone())
             .with_context(|| "Failed to register memory listener defined by balloon device.")?;
@@ -1021,12 +1081,12 @@ impl VirtioDevice for Balloon {
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
-            num_pages: self.num_pages,
-            actual: self.actual.load(Ordering::Acquire),
+            _num_pages: self.num_pages,
+            _actual: self.actual.load(Ordering::Acquire),
             _reserved: 0_u32,
             _reserved1: 0_u32,
-            membuf_percent: self.bln_cfg.membuf_percent,
-            monitor_interval: self.bln_cfg.monitor_interval,
+            _membuf_percent: self.bln_cfg.membuf_percent,
+            _monitor_interval: self.bln_cfg.monitor_interval,
         };
 
         let config_len =
@@ -1233,14 +1293,11 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
 
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(bln_cfg, mem_space);
 
         // Test realize function.
         bln.realize().unwrap();
@@ -1284,14 +1341,11 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space);
+        let balloon = Balloon::new(bln_cfg, mem_space);
         let ret_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -1306,14 +1360,11 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space);
+        let balloon = Balloon::new(bln_cfg, mem_space);
         let ret_data = [1, 0, 0, 0, 0, 0, 0, 0];
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr = 0x4;
@@ -1328,14 +1379,11 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space);
+        let balloon = Balloon::new(bln_cfg, mem_space);
         let mut read_data: Vec<u8> = vec![0; 8];
         let addr: u64 = 0xffff_ffff_ffff_ffff;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1349,14 +1397,11 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
 
         let mem_space = address_space_init();
-        let mut balloon = Balloon::new(&bln_cfg, mem_space);
+        let mut balloon = Balloon::new(bln_cfg, mem_space);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1370,12 +1415,9 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
         bln.realize().unwrap();
         let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
         let blninfo = BlnMemInfo::new();
@@ -1554,12 +1596,9 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
-            free_page_reporting: Default::default(),
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
         bln.base.queues = queues;
         assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_err());
     }
@@ -1624,12 +1663,10 @@ mod tests {
             id: "bln".to_string(),
             deflate_on_oom: true,
             free_page_reporting: true,
-            auto_balloon: false,
-            membuf_percent: 0,
-            monitor_interval: 0,
+            ..Default::default()
         };
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(bln_cfg, mem_space);
 
         // Test realize function.
         bln.realize().unwrap();

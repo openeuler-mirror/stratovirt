@@ -100,17 +100,13 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let mut xsdt_entries = Vec::new();
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
-                .with_context(|| "Failed to build ACPI FACS table")?;
-            xsdt_entries.push(facs_addr);
-        }
+        let facs_addr = Self::build_facs_table(&acpi_tables)
+            .with_context(|| "Failed to build ACPI FACS table")?;
 
         let dsdt_addr = self
             .build_dsdt_table(&acpi_tables, &mut loader)
             .with_context(|| "Failed to build ACPI DSDT table")?;
-        let fadt_addr = Self::build_fadt_table(&acpi_tables, &mut loader, dsdt_addr)
+        let fadt_addr = Self::build_fadt_table(&acpi_tables, &mut loader, facs_addr, dsdt_addr)
             .with_context(|| "Failed to build ACPI FADT table")?;
         xsdt_entries.push(fadt_addr);
 
@@ -343,7 +339,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = shutdown_req.read();
-            if clone_vm.lock().unwrap().destroy() {
+            if StdMachine::handle_destroy_request(&clone_vm).is_ok() {
                 Some(gen_delete_notifiers(&[shutdown_req_fd]))
             } else {
                 None
@@ -572,10 +568,12 @@ pub(crate) trait AcpiBuilder {
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
     /// `loader` - ACPI table loader.
+    /// `facs_addr` - Offset of ACPI FACS table in `acpi_data`.
     /// `dsdt_addr` - Offset of ACPI DSDT table in `acpi_data`.
     fn build_fadt_table(
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
+        facs_addr: u64,
         dsdt_addr: u64,
     ) -> Result<u64>
     where
@@ -604,8 +602,8 @@ pub(crate) trait AcpiBuilder {
         fadt.set_field(91, 4);
         #[cfg(target_arch = "aarch64")]
         {
-            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
-            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            // FADT flag: enable HW_REDUCED_ACPI and LOW_POWER_S0_IDLE_CAPABLE bit on aarch64 plantform.
+            fadt.set_field(112, 1 << 21 | 1 << 20 | 1 << 10 | 1 << 8);
             // ARM Boot Architecture Flags
             fadt.set_field(129, 0x3_u16);
         }
@@ -650,6 +648,18 @@ pub(crate) trait AcpiBuilder {
         let fadt_end = locked_acpi_data.len() as u32;
         drop(locked_acpi_data);
 
+        // FACS address field's offset in FADT.
+        let facs_offset = 36_u32;
+        // Size of FACS address.
+        let facs_size = 4_u8;
+        loader.add_pointer_entry(
+            ACPI_TABLE_FILE,
+            fadt_begin + facs_offset,
+            facs_size,
+            ACPI_TABLE_FILE,
+            facs_addr as u32,
+        )?;
+
         // xDSDT address field's offset in FADT.
         let xdsdt_offset = 140_u32;
         // Size of xDSDT address.
@@ -677,9 +687,7 @@ pub(crate) trait AcpiBuilder {
     /// # Arguments
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
-    /// `loader` - ACPI table loader.
-    #[cfg(target_arch = "x86_64")]
-    fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>, loader: &mut TableLoader) -> Result<u64>
+    fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>) -> Result<u64>
     where
         Self: Sized,
     {
@@ -695,15 +703,7 @@ pub(crate) trait AcpiBuilder {
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let facs_begin = locked_acpi_data.len() as u32;
         locked_acpi_data.extend(facs_data);
-        let facs_end = locked_acpi_data.len() as u32;
         drop(locked_acpi_data);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            facs_begin + TABLE_CHECKSUM_OFFSET,
-            facs_begin,
-            facs_end - facs_begin,
-        )?;
 
         Ok(facs_begin as u64)
     }

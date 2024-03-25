@@ -10,15 +10,23 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "gtk")]
 use std::sync::Arc;
 
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use anyhow::Context;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "gtk")]
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::config::{CmdParser, ExBool, VmConfig};
 
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+static DEFAULT_UI_PATH: &str = "/tmp/";
+
 /// Event fd related to power button in gtk.
+#[cfg(feature = "gtk")]
 pub struct UiContext {
     /// Name of virtual machine.
     pub vm_name: String,
@@ -32,7 +40,18 @@ pub struct UiContext {
     pub resume_req: Option<Arc<EventFd>>,
 }
 
-/// GTK related configuration.
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OhuiConfig {
+    /// Use OHUI.
+    pub ohui: bool,
+    /// Create the OHUI thread.
+    pub iothread: Option<String>,
+    /// Confirm related files' path.
+    pub path: String,
+}
+
+/// GTK and OHUI related configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DisplayConfig {
     /// Create the GTK thread.
@@ -41,17 +60,31 @@ pub struct DisplayConfig {
     pub app_name: Option<String>,
     /// Keep the window fill the desktop.
     pub full_screen: bool,
+    /// Used for OHUI
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    pub ohui_config: OhuiConfig,
+}
+
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+impl DisplayConfig {
+    pub fn get_ui_path(&self) -> String {
+        self.ohui_config.path.clone()
+    }
 }
 
 impl VmConfig {
     pub fn add_display(&mut self, vm_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("display");
         cmd_parser.push("").push("full-screen").push("app-name");
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        cmd_parser.push("iothread").push("socks-path");
         cmd_parser.parse(vm_config)?;
         let mut display_config = DisplayConfig::default();
         if let Some(str) = cmd_parser.get_value::<String>("")? {
             match str.as_str() {
                 "gtk" => display_config.gtk = true,
+                #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+                "ohui" => display_config.ohui_config.ohui = true,
                 _ => bail!("Unsupported device: {}", str),
             }
         }
@@ -60,6 +93,34 @@ impl VmConfig {
         }
         if let Some(default) = cmd_parser.get_value::<ExBool>("full-screen")? {
             display_config.full_screen = default.into();
+        }
+
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        if display_config.ohui_config.ohui {
+            if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
+                display_config.ohui_config.iothread = Some(iothread);
+            }
+
+            if let Some(path) = cmd_parser.get_value::<String>("socks-path")? {
+                let path = std::fs::canonicalize(path.clone()).with_context(|| {
+                    format!("Failed to get real directory path: {:?}", path.clone())
+                })?;
+                if !path.exists() {
+                    bail!(
+                        "The defined directory {:?} path doesn't exist",
+                        path.as_os_str()
+                    );
+                }
+                if !path.is_dir() {
+                    bail!(
+                        "The defined socks-path {:?} is not directory",
+                        path.as_os_str()
+                    );
+                }
+                display_config.ohui_config.path = path.to_str().unwrap().to_string();
+            } else {
+                display_config.ohui_config.path = DEFAULT_UI_PATH.to_string();
+            }
         }
 
         self.display = Some(display_config);

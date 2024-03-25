@@ -26,9 +26,9 @@ use v4l2_sys_mit::{
 };
 use vmm_sys_util::epoll::EventSet;
 
-use super::{PIXFMT_MJPG, PIXFMT_RGB565, PIXFMT_YUYV};
+use super::{PIXFMT_MJPG, PIXFMT_NV12, PIXFMT_RGB565, PIXFMT_YUYV};
 use crate::camera_backend::{
-    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
+    check_path, CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType, INTERVALS_PER_SEC,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -80,9 +80,10 @@ pub struct V4l2CameraBackend {
 impl V4l2CameraBackend {
     pub fn new(id: String, path: String, iothread: Option<String>) -> Result<Self> {
         let backend = V4l2Backend::new(path.clone(), BUFFER_CNT)?;
+        let checked_path = check_path(path.as_str())?;
         let cam = V4l2CameraBackend {
             id,
-            dev_path: path,
+            dev_path: checked_path,
             sample: Arc::new(Mutex::new(Sample::default())),
             backend: Some(Arc::new(backend)),
             running: false,
@@ -232,7 +233,10 @@ impl V4l2CameraBackend {
     }
 
     fn is_pixfmt_supported(&self, pixelformat: u32) -> bool {
-        pixelformat == PIXFMT_MJPG || pixelformat == PIXFMT_RGB565 || pixelformat == PIXFMT_YUYV
+        pixelformat == PIXFMT_MJPG
+            || pixelformat == PIXFMT_RGB565
+            || pixelformat == PIXFMT_YUYV
+            || pixelformat == PIXFMT_NV12
     }
 }
 
@@ -440,6 +444,7 @@ fn cam_fmt_to_v4l2(t: &FmtType) -> u32 {
         FmtType::Yuy2 => PIXFMT_YUYV,
         FmtType::Rgb565 => PIXFMT_RGB565,
         FmtType::Mjpg => PIXFMT_MJPG,
+        FmtType::Nv12 => PIXFMT_NV12,
     }
 }
 
@@ -448,6 +453,7 @@ fn cam_fmt_from_v4l2(t: u32) -> Result<FmtType> {
         PIXFMT_YUYV => FmtType::Yuy2,
         PIXFMT_RGB565 => FmtType::Rgb565,
         PIXFMT_MJPG => FmtType::Mjpg,
+        PIXFMT_NV12 => FmtType::Nv12,
         _ => bail!("Invalid v4l2 type {}", t),
     };
     Ok(fmt)

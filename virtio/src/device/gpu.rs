@@ -35,7 +35,7 @@ use crate::{
     VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY, VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, FileBackend, GuestAddress};
 use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration_derive::ByteCode;
@@ -310,6 +310,7 @@ impl HardWareOperations for GpuOpts {
         }
         let width = locked_con.width;
         let height = locked_con.height;
+        trace::virtio_gpu_console_hw_update(locked_con.con_id, width, height);
         drop(locked_con);
         display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, width, height)
             .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
@@ -334,6 +335,10 @@ impl HardWareOperations for GpuOpts {
         if self.interrupt_cb.is_none() {
             return;
         }
+        info!(
+            "virtio-gpu receive resize request, con {} will be resize to {} {}.",
+            con_id, width, height
+        );
         let interrupt_cb = self.interrupt_cb.as_ref().unwrap();
         if let Err(e) = (interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
@@ -698,6 +703,7 @@ impl GpuIoHandler {
         {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| "Failed to trigger interrupt(gpu ctrl)")?;
+            trace::virtqueue_send_interrupt("Gpu", &*queue_lock as *const _ as u64);
         }
 
         Ok(())
@@ -875,6 +881,17 @@ impl GpuIoHandler {
             );
             return Ok(());
         }
+        trace::virtio_gpu_update_cursor(
+            info_cursor.pos.scanout_id,
+            info_cursor.pos.x_coord,
+            info_cursor.pos.y_coord,
+            info_cursor.resource_id,
+            if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
+                "move"
+            } else {
+                "update"
+            },
+        );
 
         let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
         if req.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
@@ -940,6 +957,7 @@ impl GpuIoHandler {
             );
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
         }
+        trace::virtio_gpu_get_edid(edid_req.scanouts);
 
         let mut edid_resp = VirtioGpuRespEdid::default();
         edid_resp.header.hdr_type = VIRTIO_GPU_RESP_OK_EDID;
@@ -962,6 +980,12 @@ impl GpuIoHandler {
     fn cmd_resource_create_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_create_2d = VirtioGpuResourceCreate2d::default();
         self.get_request(req, &mut info_create_2d)?;
+        trace::virtio_gpu_resource_create_2d(
+            info_create_2d.resource_id,
+            info_create_2d.format,
+            info_create_2d.width,
+            info_create_2d.height,
+        );
 
         if info_create_2d.resource_id == 0 {
             error!("GuestError: resource id 0 is not allowed.");
@@ -1041,6 +1065,7 @@ impl GpuIoHandler {
     fn cmd_resource_unref(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_resource_unref = VirtioGpuResourceUnref::default();
         self.get_request(req, &mut info_resource_unref)?;
+        trace::virtio_gpu_resource_unref(info_resource_unref.resource_id);
 
         if let Some(res_index) = self.get_resource_idx(info_resource_unref.resource_id) {
             self.resource_destroy(res_index);
@@ -1057,6 +1082,14 @@ impl GpuIoHandler {
     fn cmd_set_scanout(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_set_scanout = VirtioGpuSetScanout::default();
         self.get_request(req, &mut info_set_scanout)?;
+        trace::virtio_gpu_set_scanout(
+            info_set_scanout.scanout_id,
+            info_set_scanout.resource_id,
+            info_set_scanout.rect.width,
+            info_set_scanout.rect.height,
+            info_set_scanout.rect.x_coord,
+            info_set_scanout.rect.y_coord,
+        );
 
         if info_set_scanout.scanout_id >= self.num_scanouts {
             error!(
@@ -1154,6 +1187,13 @@ impl GpuIoHandler {
     fn cmd_resource_flush(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_res_flush = VirtioGpuResourceFlush::default();
         self.get_request(req, &mut info_res_flush)?;
+        trace::virtio_gpu_resource_flush(
+            info_res_flush.resource_id,
+            info_res_flush.rect.width,
+            info_res_flush.rect.height,
+            info_res_flush.rect.x_coord,
+            info_res_flush.rect.y_coord,
+        );
 
         let res_index = self.get_resource_idx(info_res_flush.resource_id);
         if res_index.is_none() {
@@ -1323,6 +1363,7 @@ impl GpuIoHandler {
     fn cmd_transfer_to_host_2d(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_transfer = VirtioGpuTransferToHost2d::default();
         self.get_request(req, &mut info_transfer)?;
+        trace::virtio_gpu_xfer_toh_2d(info_transfer.resource_id);
 
         let (res_idx, error) = self.cmd_transfer_to_host_2d_params_check(&info_transfer);
         if res_idx.is_none() {
@@ -1336,6 +1377,7 @@ impl GpuIoHandler {
     fn cmd_resource_attach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_attach_backing = VirtioGpuResourceAttachBacking::default();
         self.get_request(req, &mut info_attach_backing)?;
+        trace::virtio_gpu_resource_attach_backing(info_attach_backing.resource_id);
 
         let res_idx = self.get_resource_idx(info_attach_backing.resource_id);
         if res_idx.is_none() {
@@ -1412,6 +1454,7 @@ impl GpuIoHandler {
     fn cmd_resource_detach_backing(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_detach_backing = VirtioGpuResourceDetachBacking::default();
         self.get_request(req, &mut info_detach_backing)?;
+        trace::virtio_gpu_resource_detach_backing(info_detach_backing.resource_id);
 
         let (res_idx, error) = self.get_backed_resource_idx(
             info_detach_backing.resource_id,
@@ -1523,6 +1566,7 @@ impl GpuIoHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("gpu cursor", VirtioInterruptType::Vring)
                     })?;
+                trace::virtqueue_send_interrupt("Cursor", &*queue as *const _ as u64);
             }
         }
 
@@ -1602,6 +1646,8 @@ pub struct Gpu {
     output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Each console corresponds to a display.
     consoles: Vec<Option<Weak<Mutex<DisplayConsole>>>>,
+    /// bar0 file backend which is set by ohui server
+    bar0_fb: Option<FileBackend>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1615,6 +1661,18 @@ impl Gpu {
             cfg,
             ..Default::default()
         }
+    }
+
+    pub fn set_bar0_fb(&mut self, fb: Option<FileBackend>) {
+        if !self.cfg.enable_bar0 {
+            self.bar0_fb = None;
+            return;
+        }
+        self.bar0_fb = fb;
+    }
+
+    pub fn get_bar0_fb(&self) -> Option<FileBackend> {
+        self.bar0_fb.as_ref().cloned()
     }
 
     fn build_device_config_space(&mut self) {
@@ -1683,6 +1741,7 @@ impl VirtioDevice for Gpu {
 
         self.base.device_features |= 1 << VIRTIO_GPU_F_MONOCHROME;
 
+        trace::virtio_gpu_init_config_features(self.base.device_features);
         self.build_device_config_space();
         Ok(())
     }

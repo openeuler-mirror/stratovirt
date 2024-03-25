@@ -14,6 +14,8 @@ pub use crate::error::MachineError;
 
 use std::mem::size_of;
 use std::ops::Deref;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -34,6 +36,8 @@ use acpi::{
     ARCH_GIC_MAINT_IRQ, ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
     ROOT_COMPLEX_ENTRY_SIZE,
 };
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use address_space::FileBackend;
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 
@@ -60,7 +64,6 @@ use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
     MigrateInterface, VmState,
@@ -69,6 +72,8 @@ use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use ui::ohui_srv::{ohui_init, OhUiServer};
 #[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
@@ -149,6 +154,9 @@ pub struct StdMachine {
     dtb_vec: Vec<u8>,
     /// List contains the boot order of boot devices.
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// OHUI server
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    ohui_server: Option<Arc<OhUiServer>>,
 }
 
 impl StdMachine {
@@ -196,6 +204,8 @@ impl StdMachine {
             ),
             dtb_vec: Vec::new(),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+            ohui_server: None,
         })
     }
 
@@ -207,13 +217,10 @@ impl StdMachine {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
-            cpu.set_to_boot_state();
+            cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
             if cpu_index == 0 {
                 fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
             }
-            cpu.hypervisor_cpu()
-                .vcpu_init()
-                .with_context(|| "Failed to init vcpu")?;
         }
 
         locked_vm
@@ -244,6 +251,25 @@ impl StdMachine {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
+
+        Ok(())
+    }
+
+    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let locked_vm = vm.lock().unwrap();
+        let vmstate = {
+            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
+            *state
+        };
+
+        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if locked_vm.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
+        }
+
+        info!("vm destroy");
 
         Ok(())
     }
@@ -326,6 +352,17 @@ impl StdMachine {
             return value;
         }
         None
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn add_ohui_server(&mut self, vm_config: &VmConfig) -> Result<()> {
+        if let Some(dpy) = vm_config.display.as_ref() {
+            if !dpy.ohui_config.ohui {
+                return Ok(());
+            }
+            self.ohui_server = Some(Arc::new(OhUiServer::new(dpy.get_ui_path())?));
+        }
+        Ok(())
     }
 }
 
@@ -524,6 +561,19 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn update_ohui_srv(&mut self, passthru: bool) {
+        self.ohui_server.as_ref().unwrap().set_passthru(passthru);
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn get_ohui_fb(&self) -> Option<FileBackend> {
+        match &self.ohui_server {
+            Some(server) => server.get_ohui_fb(),
+            None => None,
+        }
+    }
+
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
@@ -556,21 +606,9 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config =
-            if migrate.0 == MigrateMode::Unknown {
-                Some(locked_vm.load_boot_source(
-                    fwcfg.as_ref(),
-                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-                )?)
-            } else {
-                None
-            };
-        let cpu_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_cpu_features(vm_config)?)
-        } else {
-            None
-        };
+        let boot_config = locked_vm
+            .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
@@ -587,41 +625,40 @@ impl MachineOps for StdMachine {
 
         locked_vm.cpu_post_init(&cpu_config)?;
 
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        locked_vm.add_ohui_server(vm_config)?;
+
         locked_vm
             .add_devices(vm_config)
             .with_context(|| "Failed to add devices")?;
 
-        if let Some(boot_cfg) = boot_config {
-            let mut fdt_helper = FdtBuilder::new();
-            locked_vm
-                .generate_fdt_node(&mut fdt_helper)
-                .with_context(|| MachineError::GenFdtErr)?;
-            let fdt_vec = fdt_helper.finish()?;
-            locked_vm.dtb_vec = fdt_vec.clone();
-            locked_vm
-                .base
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr),
-                    fdt_vec.len() as u64,
-                )
-                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
-        }
+        let mut fdt_helper = FdtBuilder::new();
+        locked_vm
+            .generate_fdt_node(&mut fdt_helper)
+            .with_context(|| MachineError::GenFdtErr)?;
+        let fdt_vec = fdt_helper.finish()?;
+        locked_vm.dtb_vec = fdt_vec.clone();
+        locked_vm
+            .base
+            .sys_mem
+            .write(
+                &mut fdt_vec.as_slice(),
+                GuestAddress(boot_config.fdt_addr),
+                fdt_vec.len() as u64,
+            )
+            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
-        if migrate.0 == MigrateMode::Unknown {
-            if let Some(fw_cfg) = fwcfg {
-                let mut mem_array = Vec::new();
-                let mem_size = vm_config.machine_config.mem_config.mem_size;
-                mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-                locked_vm
-                    .build_acpi_tables(&fw_cfg)
-                    .with_context(|| "Failed to create ACPI tables")?;
-                locked_vm
-                    .build_smbios(&fw_cfg, mem_array)
-                    .with_context(|| "Failed to create smbios tables")?;
-            }
+        if let Some(fw_cfg) = fwcfg {
+            let mut mem_array = Vec::new();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
+            locked_vm
+                .build_acpi_tables(&fw_cfg)
+                .with_context(|| "Failed to create ACPI tables")?;
+            locked_vm
+                .build_smbios(&fw_cfg, mem_array)
+                .with_context(|| "Failed to create smbios tables")?;
         }
 
         locked_vm
@@ -678,8 +715,9 @@ impl MachineOps for StdMachine {
     #[allow(unused_variables)]
     fn display_init(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         // GTK display init.
-        #[cfg(feature = "gtk")]
+        #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
         match vm_config.display {
+            #[cfg(feature = "gtk")]
             Some(ref ds_cfg) if ds_cfg.gtk => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
@@ -690,6 +728,12 @@ impl MachineOps for StdMachine {
                 };
                 gtk_display_init(ds_cfg, ui_context)
                     .with_context(|| "Failed to init GTK display!")?;
+            }
+            // OHUI server init.
+            #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+            Some(ref ds_cfg) if ds_cfg.ohui_config.ohui => {
+                ohui_init(self.ohui_server.as_ref().unwrap().clone(), ds_cfg)
+                    .with_context(|| "Failed to init OH UI server!")?;
             }
             _ => {}
         };
@@ -720,6 +764,11 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn get_token_id(&self) -> Option<Arc<RwLock<u64>>> {
+        self.ohui_server.as_ref().map(|srv| srv.token_id.clone())
     }
 }
 
@@ -768,6 +817,8 @@ impl AcpiBuilder for StdMachine {
         let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
         gtdt.set_table_len(96);
 
+        // Counter control block physical address
+        gtdt.set_field(36, 0xFFFF_FFFF_FFFF_FFFF_u64);
         // Secure EL1 interrupt
         gtdt.set_field(48, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ + INTERRUPT_PPIS_COUNT);
         // Secure EL1 flags
@@ -787,6 +838,8 @@ impl AcpiBuilder for StdMachine {
         gtdt.set_field(72, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ + INTERRUPT_PPIS_COUNT);
         // Non secure EL2 flags
         gtdt.set_field(76, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+        // Counter read block physical address
+        gtdt.set_field(80, 0xFFFF_FFFF_FFFF_FFFF_u64);
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
@@ -881,7 +934,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> Result<u64> {
-        let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
+        let mut iort = AcpiTable::new(*b"IORT", 3, *b"STRATO", *b"VIRTIORT", 1);
         iort.set_table_len(128);
 
         // Number of IORT nodes is 2: ITS group node and Root Complex Node.
@@ -893,6 +946,8 @@ impl AcpiBuilder for StdMachine {
         iort.set_field(48, ACPI_IORT_NODE_ITS_GROUP);
         // ITS node length
         iort.set_field(49, 24_u16);
+        // ITS node revision
+        iort.set_field(51, 1_u8);
         // ITS count
         iort.set_field(64, 1_u32);
 
@@ -901,6 +956,10 @@ impl AcpiBuilder for StdMachine {
         // Length of Root Complex node
         let len = ROOT_COMPLEX_ENTRY_SIZE + ID_MAPPING_ENTRY_SIZE;
         iort.set_field(73, len);
+        // Revision of Root Complex node
+        iort.set_field(75, 3_u8);
+        // Identifier of Root Complex node
+        iort.set_field(76, 1_u32);
         // Mapping counts of Root Complex Node
         iort.set_field(80, 1_u32);
         // Mapping offset of Root Complex Node
@@ -909,6 +968,8 @@ impl AcpiBuilder for StdMachine {
         iort.set_field(88, 1_u32);
         // Memory flags of coherent device
         iort.set_field(95, 3_u8);
+        // Memory address size limit
+        iort.set_field(104, 0x40_u8);
         // Identity RID mapping
         iort.set_field(112, 0xffff_u32);
         // Without SMMU, id mapping is the first node in ITS group node
@@ -942,7 +1003,7 @@ impl AcpiBuilder for StdMachine {
         for dev in self.base.sysbus.devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as u32;
+                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as _;
                 break;
             }
         }
@@ -1152,21 +1213,10 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn destroy(&self) -> bool {
-        let vmstate = {
-            let state = self.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
-            warn!("Failed to destroy guest, destroy continue.");
-            if self.shutdown_req.write(1).is_err() {
-                error!("Failed to send shutdown request.")
-            }
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
             return false;
         }
-
-        info!("vm destroy");
-        EventLoop::get_ctx(None).unwrap().kick();
 
         true
     }

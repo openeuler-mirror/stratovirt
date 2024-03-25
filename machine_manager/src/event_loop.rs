@@ -164,6 +164,14 @@ impl EventLoop {
             }
         }
     }
+
+    pub fn loop_clean() {
+        // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
+        // accessing.
+        unsafe {
+            GLOBAL_EVENT_LOOP = None;
+        }
+    }
 }
 
 pub fn register_event_helper(

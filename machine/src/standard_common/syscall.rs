@@ -24,10 +24,9 @@ use util::v4l2::{
     VIDIOC_STREAMON, VIDIOC_S_FMT, VIDIOC_S_PARM,
 };
 use vfio::{
-    VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_IRQ_INFO,
-    VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION,
-    VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS, VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA,
-    VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
+    VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET,
+    VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION, VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS,
+    VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA, VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
 };
 use virtio::VhostKern::*;
 
@@ -108,7 +107,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_exit),
         BpfRule::new(libc::SYS_exit_group),
         BpfRule::new(libc::SYS_rt_sigreturn),
-        #[cfg(target_env = "musl")]
+        #[cfg(any(target_env = "musl", target_env = "ohos"))]
         BpfRule::new(libc::SYS_tkill),
         BpfRule::new(libc::SYS_newfstatat),
         #[cfg(target_env = "gnu")]
@@ -226,26 +225,27 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETQUEUE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_SET_IRQS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_STATUS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_CHECK_EXTENSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_SET_CONTAINER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_SET_IOMMU() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_CREATE_DEVICE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_IOMMU_MAP_DMA() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_IOMMU_UNMAP_DMA() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_DEVICE_FD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_INFO() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_RESET() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_REGION_INFO() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_IRQ_INFO() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_CREATE_DEVICE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32);
 
     #[cfg(feature = "usb_camera_v4l2")]
     let bpf_rule = bpf_rule
@@ -267,7 +267,7 @@ fn ioctl_allow_list() -> BpfRule {
 }
 
 fn madvise_rule() -> BpfRule {
-    #[cfg(target_env = "musl")]
+    #[cfg(any(target_env = "musl", target_env = "ohos"))]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
@@ -283,7 +283,7 @@ fn madvise_rule() -> BpfRule {
 }
 
 fn futex_rule() -> BpfRule {
-    #[cfg(target_env = "musl")]
+    #[cfg(any(target_env = "musl", target_env = "ohos"))]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_PRIVATE)

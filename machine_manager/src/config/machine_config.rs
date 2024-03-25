@@ -138,10 +138,18 @@ impl Default for MachineMemConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CpuConfig {
     pub pmu: PmuConfig,
+    pub sve: SveConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum PmuConfig {
+    On,
+    #[default]
+    Off,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SveConfig {
     On,
     #[default]
     Off,
@@ -400,7 +408,9 @@ impl VmConfig {
         let mut cmd_parser = CmdParser::new("cpu");
         cmd_parser.push("");
         cmd_parser.push("pmu");
+        cmd_parser.push("sve");
         cmd_parser.parse(features)?;
+
         // Check PMU when actually enabling PMU.
         if let Some(k) = cmd_parser.get_value::<String>("pmu")? {
             self.machine_config.cpu_config.pmu = match k.as_ref() {
@@ -409,6 +419,15 @@ impl VmConfig {
                 _ => bail!("Invalid PMU option,must be one of \'on\" or \"off\"."),
             }
         }
+
+        if let Some(k) = cmd_parser.get_value::<String>("sve")? {
+            self.machine_config.cpu_config.sve = match k.as_ref() {
+                "on" => SveConfig::On,
+                "off" => SveConfig::Off,
+                _ => bail!("Invalid SVE option, must be one of \"on\" or \"off\"."),
+            }
+        }
+
         Ok(())
     }
 
@@ -1132,5 +1151,9 @@ mod tests {
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
         vm_config.add_cpu_feature("pmu=on").unwrap();
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
+        vm_config.add_cpu_feature("sve=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.sve == SveConfig::On);
+        vm_config.add_cpu_feature("sve=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.sve == SveConfig::Off);
     }
 }

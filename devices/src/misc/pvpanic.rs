@@ -20,8 +20,10 @@ use log::{debug, error, info};
 
 use crate::pci::{
     config::{
-        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, PCI_CONFIG_SPACE_SIZE,
-        PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
+        PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
+        PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
+        PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
+        SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
@@ -29,9 +31,8 @@ use crate::{Device, DeviceBase};
 use address_space::{GuestAddress, Region, RegionOps};
 use machine_manager::config::{PvpanicDevConfig, PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 
-const PCI_CLASS_SYSTEM_OTHER: u16 = 0x0880;
-const PCI_CLASS_PI: u16 = 0x09;
-const PCI_REVISION_ID_PVPANIC: u8 = 1;
+const PVPANIC_PCI_REVISION_ID: u8 = 1;
+const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 
 #[cfg(target_arch = "aarch64")]
 // param size in Region::init_io_region must greater than 4
@@ -52,6 +53,7 @@ impl PvPanicState {
     fn handle_event(&self, event: u32) -> Result<()> {
         if (event & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)) != 0 {
             error!("pvpanic: unknown event 0x{:X}", event);
+            bail!("pvpanic: unknown event 0x{:X}", event);
         }
 
         if (event & PVPANIC_PANICKED) == PVPANIC_PANICKED
@@ -142,14 +144,6 @@ impl Device for PvPanicPci {
     fn device_base_mut(&mut self) -> &mut DeviceBase {
         &mut self.base.base
     }
-
-    fn hotpluggable(&self) -> bool {
-        false
-    }
-
-    fn name(&self) -> String {
-        "PvPanic".to_string()
-    }
 }
 
 impl PciDevOps for PvPanicPci {
@@ -176,7 +170,7 @@ impl PciDevOps for PvPanicPci {
             PCI_DEVICE_ID_REDHAT_PVPANIC,
         )?;
 
-        self.base.config.config[REVISION_ID] = PCI_REVISION_ID_PVPANIC;
+        self.base.config.config[REVISION_ID] = PVPANIC_PCI_REVISION_ID;
 
         le_write_u16(
             &mut self.base.config.config,
@@ -184,7 +178,19 @@ impl PciDevOps for PvPanicPci {
             PCI_CLASS_SYSTEM_OTHER,
         )?;
 
-        self.base.config.config[PCI_CLASS_PI as usize] = 0x00;
+        le_write_u16(
+            &mut self.base.config.config,
+            SUBSYSTEM_VENDOR_ID,
+            PVPANIC_PCI_VENDOR_ID,
+        )?;
+
+        le_write_u16(
+            &mut self.base.config.config,
+            SUBSYSTEM_ID,
+            PCI_SUBDEVICE_ID_QEMU,
+        )?;
+
+        self.base.config.config[CLASS_PI as usize] = 0x00;
 
         self.base.config.config[HEADER_TYPE as usize] = 0x00;
 
@@ -215,6 +221,10 @@ impl PciDevOps for PvPanicPci {
         Ok(())
     }
 
+    fn unrealize(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
@@ -227,5 +237,203 @@ impl PciDevOps for PvPanicPci {
             Some(&locked_parent_bus.io_region),
             Some(&locked_parent_bus.mem_region),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pci::{host::tests::create_pci_host, le_read_u16, PciHost};
+
+    fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let config = PvpanicDevConfig {
+            id: dev_id.to_string(),
+            supported_features,
+        };
+        let pvpanic_dev = PvPanicPci::new(&config, devfn, root_bus.clone());
+        assert_eq!(pvpanic_dev.base.base.id, "pvpanic_test".to_string());
+
+        pvpanic_dev.realize().unwrap();
+        drop(root_bus);
+        drop(locked_pci_host);
+
+        pci_host
+    }
+
+    #[test]
+    fn test_pvpanic_attached() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus.upgrade().unwrap().lock().unwrap().get_device(0, 7);
+        assert!(pvpanic_dev.is_some());
+        assert_eq!(
+            pvpanic_dev.unwrap().lock().unwrap().pci_base().base.id,
+            "pvpanic_test".to_string()
+        );
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "pvpanic_test");
+        assert!(info.is_some());
+        let (bus, dev) = info.unwrap();
+        assert_eq!(bus.lock().unwrap().name, "pcie.0");
+        assert_eq!(dev.lock().unwrap().name(), "pvpanic_test");
+    }
+
+    #[test]
+    fn test_pvpanic_config() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_device(0, 7)
+            .unwrap();
+
+        let info = le_read_u16(
+            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            VENDOR_ID as usize,
+        )
+        .unwrap_or_else(|_| 0);
+        assert_eq!(info, PCI_VENDOR_ID_REDHAT);
+
+        let info = le_read_u16(
+            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            DEVICE_ID as usize,
+        )
+        .unwrap_or_else(|_| 0);
+        assert_eq!(info, PCI_DEVICE_ID_REDHAT_PVPANIC);
+
+        let info = le_read_u16(
+            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            SUB_CLASS_CODE as usize,
+        )
+        .unwrap_or_else(|_| 0);
+        assert_eq!(info, PCI_CLASS_SYSTEM_OTHER);
+
+        let info = le_read_u16(
+            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            SUBSYSTEM_VENDOR_ID,
+        )
+        .unwrap_or_else(|_| 0);
+        assert_eq!(info, PVPANIC_PCI_VENDOR_ID);
+
+        let info = le_read_u16(
+            &pvpanic_dev.lock().unwrap().pci_base_mut().config.config,
+            SUBSYSTEM_ID,
+        )
+        .unwrap_or_else(|_| 0);
+        assert_eq!(info, PCI_SUBDEVICE_ID_QEMU);
+    }
+
+    #[test]
+    fn test_pvpanic_read_features() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_device(0, 7)
+            .unwrap();
+
+        // test read supported_features
+        let mut data_read = [0xffu8; 1];
+        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+            .region
+            .as_ref()
+            .unwrap()
+            .read(&mut data_read.as_mut(), GuestAddress(0), 0, 1);
+        assert!(result.is_ok());
+        assert_eq!(
+            data_read.to_vec(),
+            vec![PVPANIC_PANICKED as u8 | PVPANIC_CRASHLOADED as u8]
+        );
+    }
+
+    #[test]
+    fn test_pvpanic_write_panicked() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_device(0, 7)
+            .unwrap();
+
+        // test write panicked event
+        let data_write = [PVPANIC_PANICKED as u8; 1];
+        let count = data_write.len() as u64;
+        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+            .region
+            .as_ref()
+            .unwrap()
+            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pvpanic_write_crashload() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_device(0, 7)
+            .unwrap();
+
+        // test write crashload event
+        let data_write = [PVPANIC_CRASHLOADED as u8; 1];
+        let count = data_write.len() as u64;
+        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+            .region
+            .as_ref()
+            .unwrap()
+            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pvpanic_write_unknown() {
+        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let pvpanic_dev = root_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_device(0, 7)
+            .unwrap();
+
+        // test write unknown event
+        let data_write = [100u8; 1];
+        let count = data_write.len() as u64;
+        let result = &pvpanic_dev.lock().unwrap().pci_base_mut().config.bars[0]
+            .region
+            .as_ref()
+            .unwrap()
+            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+        assert!(result.is_err());
     }
 }

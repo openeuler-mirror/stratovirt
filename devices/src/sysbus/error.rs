@@ -19,9 +19,4 @@ pub enum SysBusError {
         #[from]
         source: address_space::error::AddressSpaceError,
     },
-    #[error("KvmIoctl")]
-    KvmIoctl {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
 }

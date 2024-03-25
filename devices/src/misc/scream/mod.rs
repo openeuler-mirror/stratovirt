@@ -13,19 +13,23 @@
 #[cfg(feature = "scream_alsa")]
 mod alsa;
 mod audio_demo;
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+mod ohos;
 #[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
 use std::{
     mem,
+    str::FromStr,
     sync::{
         atomic::{fence, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex, RwLock, Weak,
     },
     thread,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use core::time;
 use log::{error, warn};
 
@@ -35,9 +39,13 @@ use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
-use machine_manager::config::scream::{ScreamConfig, ScreamInterface};
+use machine_manager::config::{get_pci_df, valid_id};
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+use ohos::ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+use util::ohos_binding::misc::{get_firstcaller_tokenid, set_firstcaller_tokenid};
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
@@ -63,7 +71,7 @@ pub enum ScreamDirection {
 
 /// Audio stream header information in the shared memory.
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct ShmemStreamHeader {
     /// Whether audio is started.
     pub is_started: u32,
@@ -120,7 +128,7 @@ pub struct ShmemHeader {
 
 /// Audio stream format in the shared memory.
 #[repr(C)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct ShmemStreamFmt {
     /// Indicates whether the audio format is changed.
     pub fmt_generation: u32,
@@ -147,6 +155,17 @@ impl Default for ShmemStreamFmt {
             channel_map: 0x03,
             pad2: 0,
         }
+    }
+}
+
+impl ShmemStreamFmt {
+    pub fn get_rate(&self) -> u32 {
+        let sample_rate = if self.rate >= WINDOWS_SAMPLE_BASE_RATE {
+            AUDIO_SAMPLE_RATE_44KHZ
+        } else {
+            AUDIO_SAMPLE_RATE_48KHZ
+        };
+        sample_rate * (self.rate % WINDOWS_SAMPLE_BASE_RATE) as u32
     }
 }
 
@@ -183,6 +202,7 @@ impl StreamData {
             ScreamDirection::Playback => &header.play,
             ScreamDirection::Record => &header.capt,
         };
+        trace::scream_init(&dir, &stream_header);
 
         loop {
             if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
@@ -294,14 +314,18 @@ impl StreamData {
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
+        let addr = hva + capt.offset as u64;
+        let mut locked_interface = interface.lock().unwrap();
 
+        locked_interface.pre_receive(addr, capt);
         while capt.is_started != 0 {
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
 
-            if interface.lock().unwrap().receive(self) {
-                self.chunk_idx = (self.chunk_idx + 1) % capt.max_chunks;
+            let recv_chunks_cnt = locked_interface.receive(self);
+            if recv_chunks_cnt > 0 {
+                self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
 
                 // Make sure chunk_idx write does not bypass audio chunk write.
                 fence(Ordering::SeqCst);
@@ -312,37 +336,94 @@ impl StreamData {
     }
 }
 
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+fn bound_tokenid(token_id: u64) -> Result<()> {
+    if token_id == 0 {
+        bail!("UI token ID not passed.");
+    } else if token_id != get_firstcaller_tokenid()? {
+        set_firstcaller_tokenid(token_id)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+enum ScreamInterface {
+    #[cfg(feature = "scream_alsa")]
+    Alsa,
+    #[cfg(feature = "scream_pulseaudio")]
+    PulseAudio,
+    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+    OhAudio,
+    Demo,
+}
+
+impl FromStr for ScreamInterface {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            #[cfg(feature = "scream_alsa")]
+            "ALSA" => Ok(ScreamInterface::Alsa),
+            #[cfg(feature = "scream_pulseaudio")]
+            "PulseAudio" => Ok(ScreamInterface::PulseAudio),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            "OhAudio" => Ok(ScreamInterface::OhAudio),
+            "Demo" => Ok(ScreamInterface::Demo),
+            _ => Err(anyhow!("Unknown scream interface")),
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "ivshmem_scream")]
+pub struct ScreamConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long)]
+    pub memdev: String,
+    #[arg(long)]
+    interface: ScreamInterface,
+    #[arg(long, default_value = "")]
+    playback: String,
+    #[arg(long, default_value = "")]
+    record: String,
+}
+
 /// Scream sound card device structure.
 pub struct Scream {
     hva: u64,
     size: u64,
-    interface: ScreamInterface,
-    playback: String,
-    record: String,
+    config: ScreamConfig,
+    token_id: Option<Arc<RwLock<u64>>>,
 }
 
 impl Scream {
-    pub fn new(size: u64, dev_cfg: &ScreamConfig) -> Self {
+    pub fn new(size: u64, config: ScreamConfig, token_id: Option<Arc<RwLock<u64>>>) -> Self {
         Self {
             hva: 0,
             size,
-            interface: dev_cfg.interface,
-            playback: dev_cfg.playback.clone(),
-            record: dev_cfg.record.clone(),
+            config,
+            token_id,
         }
     }
 
     #[allow(unused_variables)]
     fn interface_init(&self, name: &str, dir: ScreamDirection) -> Arc<Mutex<dyn AudioInterface>> {
-        match self.interface {
+        match self.config.interface {
             #[cfg(feature = "scream_alsa")]
             ScreamInterface::Alsa => Arc::new(Mutex::new(AlsaStreamData::init(name, dir))),
             #[cfg(feature = "scream_pulseaudio")]
             ScreamInterface::PulseAudio => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            ScreamInterface::OhAudio => Arc::new(Mutex::new(OhAudio::init(dir))),
             ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
-                self.playback.clone(),
-                self.record.clone(),
+                self.config.playback.clone(),
+                self.config.record.clone(),
             ))),
         }
     }
@@ -376,6 +457,7 @@ impl Scream {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
+        let _ti = self.token_id.clone();
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -390,6 +472,11 @@ impl Scream {
                         hva,
                     );
 
+                    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+                    if let Some(token_id) = &_ti {
+                        bound_tokenid(*token_id.read().unwrap())
+                            .unwrap_or_else(|e| error!("bound token ID failed: {}", e));
+                    }
                     capt_data.capture_trans(hva, shmem_size, clone_interface.clone());
                 }
             })
@@ -430,6 +517,9 @@ impl Scream {
 
 pub trait AudioInterface: Send {
     fn send(&mut self, recv_data: &StreamData);
-    fn receive(&mut self, recv_data: &StreamData) -> bool;
+    // For OHOS's audio task. It confirms shmem info.
+    #[allow(unused_variables)]
+    fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
+    fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
 }

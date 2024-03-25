@@ -271,6 +271,7 @@ impl VhostUserVringState {
 
 /// The configuration for the address of virtual ring.
 #[repr(C)]
+#[derive(Debug)]
 pub struct VhostUserVringAddr {
     /// Index for virtual ring.
     pub index: u32,

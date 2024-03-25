@@ -255,6 +255,8 @@ impl SysBusDevOps for PciHost {
         match self.find_device(bus_num, devfn) {
             Some(dev) => {
                 let addr: usize = (offset & ECAM_OFFSET_MASK) as usize;
+                let dev_name = &dev.lock().unwrap().pci_base().base.id.clone();
+                trace::pci_read_config(dev_name, addr, data);
                 dev.lock().unwrap().read_config(addr, data);
             }
             None => {
@@ -272,6 +274,8 @@ impl SysBusDevOps for PciHost {
         match self.find_device(bus_num, devfn) {
             Some(dev) => {
                 let addr: usize = (offset & ECAM_OFFSET_MASK) as usize;
+                let dev_name = &dev.lock().unwrap().pci_base().base.id.clone();
+                trace::pci_write_config(dev_name, addr, data);
                 dev.lock().unwrap().write_config(addr, data);
                 true
             }
@@ -447,6 +451,8 @@ impl AmlBuilder for PciHost {
             // CCA: Cache Coherency Attribute, which determines whether
             // guest supports DMA features in pci host on aarch64 platform.
             pci_host_bridge.append_child(AmlNameDecl::new("_CCA", AmlOne));
+            // SEG: The PCI segment number.
+            pci_host_bridge.append_child(AmlNameDecl::new("_SEG", AmlZero));
         }
 
         build_osc_for_aml(&mut pci_host_bridge);

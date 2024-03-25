@@ -32,7 +32,7 @@ use rusb::{Context, DeviceHandle, Error, Result, TransferType, UsbContext};
 use vmm_sys_util::epoll::EventSet;
 
 use super::{IsoTransfer, UsbHost, UsbHostRequest};
-use crate::usb::{UsbPacketStatus, USB_TOKEN_IN};
+use crate::usb::{UsbPacket, UsbPacketStatus, USB_TOKEN_IN};
 use util::{
     link_list::Node,
     loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
@@ -217,16 +217,24 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
         return;
     }
 
-    let actual_length = get_length_from_transfer(host_transfer);
+    let actual_length = get_length_from_transfer(host_transfer) as usize;
     let transfer_status = get_status_from_transfer(host_transfer);
     locked_packet.status = map_packet_status(transfer_status);
 
     if request.is_control {
-        request.ctrl_transfer_packet(&mut locked_packet, actual_length as usize);
+        request.ctrl_transfer_packet(&mut locked_packet, actual_length);
     } else if locked_packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
-        let data = get_buffer_from_transfer(host_transfer, actual_length as usize);
-        locked_packet.transfer_packet(data, actual_length as usize);
+        let data = get_buffer_from_transfer(host_transfer, actual_length);
+        locked_packet.transfer_packet(data, actual_length);
     }
+
+    trace::usb_host_req_complete(
+        request.hostbus,
+        request.hostaddr,
+        &*locked_packet as *const UsbPacket as u64,
+        &locked_packet.status,
+        actual_length,
+    );
 
     if let Some(transfer) = locked_packet.xfer_ops.as_ref() {
         if let Some(ops) = transfer.clone().upgrade() {
@@ -253,6 +261,10 @@ extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
         drop(locketd_iso_transfer);
         let mut locked_iso_queue = iso_queue.lock().unwrap();
         let iso_transfer = locked_iso_queue.inflight.pop_front().unwrap();
+        if locked_iso_queue.inflight.is_empty() {
+            let queue = &locked_iso_queue;
+            trace::usb_host_iso_stop(queue.hostbus, queue.hostaddr, queue.ep_number);
+        }
         locked_iso_queue.copy.push_back(iso_transfer);
     }
 }

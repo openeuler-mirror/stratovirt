@@ -14,6 +14,7 @@ use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
+use clap::Parser;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 
@@ -27,6 +28,7 @@ use super::{
     config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint,
     UsbPacket, UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
+use machine_manager::config::valid_id;
 use ui::input::{
     register_pointer, unregister_pointer, Axis, InputEvent, InputType, PointerOpts,
     INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
@@ -111,6 +113,18 @@ const STR_SERIAL_TABLET_INDEX: u8 = 4;
 
 /// String descriptor
 const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
+
+#[derive(Parser, Clone, Debug, Default)]
+#[command(name = "usb_tablet")]
+pub struct UsbTabletConfig {
+    #[arg(long, value_parser = valid_id)]
+    id: String,
+    #[arg(long)]
+    bus: Option<String>,
+    #[arg(long)]
+    port: Option<String>,
+}
+
 /// USB tablet device.
 pub struct UsbTablet {
     base: UsbDeviceBase,
@@ -120,9 +134,9 @@ pub struct UsbTablet {
 }
 
 impl UsbTablet {
-    pub fn new(id: String) -> Self {
+    pub fn new(config: UsbTabletConfig) -> Self {
         Self {
-            base: UsbDeviceBase::new(id, USB_DEVICE_BUFFER_DEFAULT_LEN),
+            base: UsbDeviceBase::new(config.id, USB_DEVICE_BUFFER_DEFAULT_LEN),
             hid: Hid::new(HidType::Tablet),
             cntlr: None,
         }

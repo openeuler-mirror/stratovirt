@@ -22,42 +22,45 @@ mod listener;
 pub mod vm_state;
 
 #[cfg(target_arch = "aarch64")]
-pub use self::aarch64::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
-#[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv2::KvmGICv2;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
 
 use std::collections::HashMap;
-use std::sync::atomic::{fence, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::anyhow;
+use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
-use kvm_ioctls::DeviceFd;
-use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd, VmFd};
+#[cfg(not(test))]
+use kvm_ioctls::VcpuExit;
+use kvm_ioctls::{Cap, DeviceFd, Kvm, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
-use log::{error, info};
+use log::{error, info, warn};
 use vmm_sys_util::{
-    eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
-    signal::register_signal_handler,
+    eventfd::EventFd,
+    ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+    signal::{register_signal_handler, Killable},
 };
 
 use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
 use crate::HypervisorError;
+#[cfg(target_arch = "aarch64")]
+use aarch64::cpu_caps::ArmCPUCaps as CPUCaps;
 use address_space::{AddressSpace, Listener};
 #[cfg(feature = "boot_time")]
 use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{
-    ArchCPU, CPUBootConfig, CPUCaps, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
-    CpuLifecycleState, RegsIndex, CPU, VCPU_RESET_SIGNAL, VCPU_TASK_SIGNAL,
+    ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUThreadWorker, CpuError,
+    CpuLifecycleState, RegsIndex, CPU, VCPU_TASK_SIGNAL,
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
@@ -71,6 +74,8 @@ use machine_manager::machine::HypervisorType;
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
 use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
 use util::test_helper::is_test_enabled;
+#[cfg(target_arch = "x86_64")]
+use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -92,6 +97,8 @@ ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
 ioctl_iow_nr!(KVM_IRQFD, KVMIO, 0x76, kvm_irqfd);
 ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
 ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
+ioctl_iow_nr!(KVM_SET_MP_STATE, KVMIO, 0x99, kvm_mp_state);
+ioctl_iow_nr!(KVM_SET_VCPU_EVENTS, KVMIO, 0xa0, kvm_vcpu_events);
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
@@ -144,6 +151,10 @@ impl HypervisorOps for KvmHypervisor {
         sys_mem: &Arc<AddressSpace>,
     ) -> Result<()> {
         self.arch_init()?;
+
+        if !is_test_enabled() {
+            sys_mem.set_ioevtfd_enabled(true);
+        }
 
         sys_mem
             .register_listener(self.create_memory_listener())
@@ -224,6 +235,7 @@ impl HypervisorOps for KvmHypervisor {
             .create_vcpu(vcpu_id as u64)
             .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
+            vcpu_id,
             #[cfg(target_arch = "aarch64")]
             self.vm_fd.clone(),
             vcpu_fd,
@@ -353,20 +365,29 @@ impl MigrateOps for KvmHypervisor {
 }
 
 pub struct KvmCpu {
+    id: u8,
     #[cfg(target_arch = "aarch64")]
     vm_fd: Option<Arc<VmFd>>,
     fd: Arc<VcpuFd>,
+    /// The capability of VCPU.
+    caps: CPUCaps,
     #[cfg(target_arch = "aarch64")]
     /// Used to pass vcpu target and supported features to kvm.
     pub kvi: Mutex<kvm_vcpu_init>,
 }
 
 impl KvmCpu {
-    pub fn new(#[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>, vcpu_fd: VcpuFd) -> Self {
+    pub fn new(
+        id: u8,
+        #[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>,
+        vcpu_fd: VcpuFd,
+    ) -> Self {
         Self {
+            id,
             #[cfg(target_arch = "aarch64")]
             vm_fd,
             fd: Arc::new(vcpu_fd),
+            caps: CPUCaps::init_capabilities(),
             #[cfg(target_arch = "aarch64")]
             kvi: Mutex::new(kvm_vcpu_init::default()),
         }
@@ -375,34 +396,20 @@ impl KvmCpu {
     /// Init signal for `CPU` event.
     fn init_signals(&self) -> Result<()> {
         extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
-            match signum {
-                VCPU_TASK_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        vcpu.hypervisor_cpu().kick().unwrap();
-                        // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
-                        vcpu.pause_signal().store(true, Ordering::SeqCst);
-                        fence(Ordering::Release)
-                    });
-                }
-                VCPU_RESET_SIGNAL => {
-                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                        if let Err(e) = vcpu.hypervisor_cpu().reset_vcpu(vcpu.clone()) {
-                            error!("Failed to reset vcpu state: {:?}", e)
-                        }
-                    });
-                }
-                _ => {}
+            if signum == VCPU_TASK_SIGNAL {
+                let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                    vcpu.hypervisor_cpu().set_hypervisor_exit().unwrap()
+                });
             }
         }
 
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
             .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
-        register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
-            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
 
         Ok(())
     }
 
+    #[cfg(not(test))]
     fn kvm_vcpu_exec(&self, cpu: Arc<CPU>) -> Result<bool> {
         let vm = cpu
             .vm()
@@ -503,20 +510,24 @@ impl KvmCpu {
         }
         Ok(true)
     }
+
+    fn kick_vcpu_thread(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()> {
+        let task = task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_TASK_SIGNAL)
+                .with_context(|| CpuError::KickVcpu("Fail to kick vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to kick");
+                Ok(())
+            }
+        }
+    }
 }
 
 impl CPUHypervisorOps for KvmCpu {
     fn get_hypervisor_type(&self) -> HypervisorType {
         HypervisorType::Kvm
-    }
-
-    fn check_extension(&self, cap: Cap) -> bool {
-        let kvm = Kvm::new().unwrap();
-        kvm.check_extension(cap)
-    }
-
-    fn get_msr_index_list(&self) -> Vec<u32> {
-        self.arch_get_msr_index_list()
     }
 
     fn init_pmu(&self) -> Result<()> {
@@ -543,17 +554,18 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_get_one_reg(reg_id)
     }
 
-    fn get_regs(
-        &self,
-        arch_cpu: Arc<Mutex<ArchCPU>>,
-        regs_index: RegsIndex,
-        caps: &CPUCaps,
-    ) -> Result<()> {
-        self.arch_get_regs(arch_cpu, regs_index, caps)
+    fn get_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()> {
+        self.arch_get_regs(arch_cpu, regs_index)
     }
 
     fn set_regs(&self, arch_cpu: Arc<Mutex<ArchCPU>>, regs_index: RegsIndex) -> Result<()> {
         self.arch_set_regs(arch_cpu, regs_index)
+    }
+
+    fn put_register(&self, cpu: Arc<CPU>) -> Result<()> {
+        self.arch_put_register(cpu)?;
+
+        Ok(())
     }
 
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
@@ -575,10 +587,10 @@ impl CPUHypervisorOps for KvmCpu {
             );
         }
 
-        cpu_thread_worker.thread_cpu.set_tid();
+        cpu_thread_worker.thread_cpu.set_tid(None);
 
         #[cfg(not(test))]
-        self.reset_vcpu(cpu_thread_worker.thread_cpu.clone())?;
+        self.put_register(cpu_thread_worker.thread_cpu.clone())?;
 
         // Wait for all vcpu to complete the running
         // environment initialization.
@@ -619,9 +631,99 @@ impl CPUHypervisorOps for KvmCpu {
         Ok(())
     }
 
-    fn kick(&self) -> Result<()> {
+    fn set_hypervisor_exit(&self) -> Result<()> {
         self.fd.set_kvm_immediate_exit(1);
         Ok(())
+    }
+
+    fn pause(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let task = task.lock().unwrap();
+        let (cpu_state, cvar) = &*state;
+
+        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
+            cvar.notify_one()
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused {
+            return Ok(());
+        }
+
+        match task.as_ref() {
+            Some(thread) => {
+                if let Err(e) = thread.kill(VCPU_TASK_SIGNAL) {
+                    return Err(anyhow!(CpuError::StopVcpu(format!("{:?}", e))));
+                }
+            }
+            None => {
+                warn!("vCPU thread not started, no need to stop");
+                return Ok(());
+            }
+        }
+
+        // It shall wait for the vCPU pause state from hypervisor exits.
+        loop {
+            if pause_signal.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resume(
+        &self,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+        pause_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let (cpu_state_locked, cvar) = &*state;
+        let mut cpu_state = cpu_state_locked.lock().unwrap();
+        if *cpu_state == CpuLifecycleState::Running {
+            warn!("vcpu{} in running state, no need to resume", self.id);
+            return Ok(());
+        }
+
+        *cpu_state = CpuLifecycleState::Running;
+        pause_signal.store(false, Ordering::SeqCst);
+        drop(cpu_state);
+        cvar.notify_one();
+        Ok(())
+    }
+
+    fn destroy(
+        &self,
+        task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+        state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
+    ) -> Result<()> {
+        let (cpu_state, cvar) = &*state;
+        let mut locked_cpu_state = cpu_state.lock().unwrap();
+        if *locked_cpu_state == CpuLifecycleState::Running {
+            *locked_cpu_state = CpuLifecycleState::Stopping;
+        } else if *locked_cpu_state == CpuLifecycleState::Stopped
+            || *locked_cpu_state == CpuLifecycleState::Paused
+        {
+            return Ok(());
+        }
+        drop(locked_cpu_state);
+
+        self.kick_vcpu_thread(task)?;
+        let mut locked_cpu_state = cpu_state.lock().unwrap();
+        locked_cpu_state = cvar
+            .wait_timeout(locked_cpu_state, Duration::from_millis(32))
+            .unwrap()
+            .0;
+
+        if *locked_cpu_state == CpuLifecycleState::Stopped {
+            Ok(())
+        } else {
+            Err(anyhow!(CpuError::DestroyVcpu(format!(
+                "VCPU still in {:?} state",
+                *locked_cpu_state
+            ))))
+        }
     }
 }
 
@@ -670,12 +772,10 @@ impl LineIrqManager for KVMInterruptManager {
 
         match trigger_mode {
             TriggerMode::Edge => {
-                self.vm_fd
-                    .register_irqfd(&irq_fd, irq as u32)
-                    .map_err(|e| {
-                        error!("Failed to register irq, error is {:?}", e);
-                        e
-                    })?;
+                self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
+                    error!("Failed to register irq, error is {:?}", e);
+                    e
+                })?;
             }
             _ => {
                 bail!("Unsupported registering irq fd for interrupt of level mode.");
@@ -686,23 +786,29 @@ impl LineIrqManager for KVMInterruptManager {
     }
 
     fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
-        self.vm_fd
-            .unregister_irqfd(&irq_fd, irq as u32)
-            .map_err(|e| {
-                error!("Failed to unregister irq, error is {:?}", e);
-                e
-            })?;
+        self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
+            error!("Failed to unregister irq, error is {:?}", e);
+            e
+        })?;
 
         Ok(())
     }
 
-    fn set_irq_line(&self, gsi: u32, level: bool) -> Result<()> {
+    fn set_level_irq(&self, gsi: u32, level: bool) -> Result<()> {
         let kvm_irq = self.arch_map_irq(gsi);
         self.vm_fd
             .set_irq_line(kvm_irq, level)
-            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, level))?;
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, level))
+    }
 
-        Ok(())
+    fn set_edge_irq(&self, gsi: u32) -> Result<()> {
+        let kvm_irq = self.arch_map_irq(gsi);
+        self.vm_fd
+            .set_irq_line(kvm_irq, true)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, true))?;
+        self.vm_fd
+            .set_irq_line(kvm_irq, false)
+            .with_context(|| format!("Failed to set irq {} level {:?}.", kvm_irq, false))
     }
 
     fn write_irqfd(&self, irq_fd: Arc<EventFd>) -> Result<()> {
@@ -814,7 +920,7 @@ mod test {
     use kvm_bindings::kvm_segment;
 
     #[cfg(target_arch = "x86_64")]
-    use cpu::{ArchCPU, CPUBootConfig, CPUCaps};
+    use cpu::{ArchCPU, CPUBootConfig};
     use machine_manager::machine::{
         MachineAddressInterface, MachineInterface, MachineLifecycle, VmState,
     };
@@ -943,6 +1049,7 @@ mod test {
         vm_fd.create_irq_chip().unwrap();
         let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
+            0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,
@@ -955,8 +1062,8 @@ mod test {
             .is_ok());
 
         // test setup special registers
-        let cpu_caps = CPUCaps::init_capabilities(hypervisor_cpu.clone());
-        assert!(hypervisor_cpu.reset_vcpu(Arc::new(cpu)).is_ok());
+        let cpu_caps = CPUCaps::init_capabilities();
+        assert!(hypervisor_cpu.put_register(Arc::new(cpu)).is_ok());
         let x86_sregs = hypervisor_cpu.fd.get_sregs().unwrap();
         assert_eq!(x86_sregs.cs, code_seg);
         assert_eq!(x86_sregs.ds, data_seg);
@@ -999,6 +1106,7 @@ mod test {
 
         let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
+            0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,

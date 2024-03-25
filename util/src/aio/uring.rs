@@ -17,11 +17,13 @@ use io_uring::{opcode, squeue, types, IoUring};
 use libc;
 use vmm_sys_util::eventfd::EventFd;
 
+use super::threads::ThreadsAioContext;
 use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 
 /// The io-uring context.
 pub(crate) struct IoUringContext {
     ring: IoUring,
+    threads_aio_ctx: ThreadsAioContext,
     events: Vec<AioEvent>,
 }
 
@@ -30,7 +32,11 @@ impl IoUringContext {
         IoUring::new(entries).with_context(|| "Failed to create io_uring instance.")
     }
 
-    pub fn new(entries: u32, eventfd: &EventFd) -> Result<Self> {
+    pub fn new(
+        entries: u32,
+        threads_aio_ctx: ThreadsAioContext,
+        eventfd: &EventFd,
+    ) -> Result<Self> {
         let tmp_entries = entries as i32;
         // Ensure the power of 2.
         if (tmp_entries & -tmp_entries) != tmp_entries || tmp_entries == 0 {
@@ -42,7 +48,11 @@ impl IoUringContext {
             .register_eventfd(eventfd.as_raw_fd())
             .with_context(|| "Failed to register event fd")?;
         let events = Vec::with_capacity(entries as usize);
-        Ok(IoUringContext { ring, events })
+        Ok(IoUringContext {
+            ring,
+            threads_aio_ctx,
+            events,
+        })
     }
 }
 
@@ -86,9 +96,16 @@ impl<T: Clone> AioContext<T> for IoUringContext {
         self.ring.submit().with_context(|| "Failed to submit sqe")
     }
 
+    fn submit_threads_pool(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize> {
+        self.threads_aio_ctx.submit(iocbp)
+    }
+
     fn get_events(&mut self) -> &[AioEvent] {
+        let mut locked_list = self.threads_aio_ctx.complete_list.lock().unwrap();
+        self.events = locked_list.drain(0..).collect();
+        drop(locked_list);
+
         let queue = self.ring.completion();
-        self.events.clear();
         for cqe in queue {
             self.events.push(AioEvent {
                 user_data: cqe.user_data(),

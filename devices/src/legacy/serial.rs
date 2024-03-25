@@ -113,6 +113,8 @@ impl SerialState {
 /// Contain registers status and operation methods of serial.
 pub struct Serial {
     base: SysBusDevBase,
+    /// Whether rx paused
+    paused: bool,
     /// Receiver buffer register.
     rbr: VecDeque<u8>,
     /// State of Device Serial.
@@ -125,6 +127,7 @@ impl Serial {
     pub fn new(cfg: SerialConfig) -> Self {
         Serial {
             base: SysBusDevBase::new(SysBusDevType::Serial),
+            paused: false,
             rbr: VecDeque::new(),
             state: SerialState::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
@@ -161,6 +164,14 @@ impl Serial {
         )
         .with_context(|| LegacyError::RegNotifierErr)?;
         Ok(())
+    }
+
+    fn unpause_rx(&mut self) {
+        if self.paused {
+            trace::serial_unpause_rx();
+            self.paused = false;
+            self.chardev.lock().unwrap().unpause_rx();
+        }
     }
 
     /// Update interrupt identification register,
@@ -200,6 +211,9 @@ impl Serial {
                 if self.state.lcr & UART_LCR_DLAB != 0 {
                     ret = self.state.div as u8;
                 } else {
+                    if self.state.mcr & UART_MCR_LOOP == 0 {
+                        self.unpause_rx();
+                    }
                     if !self.rbr.is_empty() {
                         ret = self.rbr.pop_front().unwrap_or_default();
                     }
@@ -317,6 +331,10 @@ impl Serial {
                 self.state.lcr = data;
             }
             4 => {
+                if data & UART_MCR_LOOP == 0 {
+                    // loopback turned off. Unpause rx
+                    self.unpause_rx();
+                }
                 self.state.mcr = data;
             }
             7 => {
@@ -354,6 +372,11 @@ impl InputReceiver for Serial {
         } else {
             0
         }
+    }
+
+    fn set_paused(&mut self) {
+        trace::serial_pause_rx();
+        self.paused = true;
     }
 }
 
@@ -446,6 +469,7 @@ impl StateTransfer for Serial {
         }
         self.rbr = rbr;
         self.state = serial_state;
+        self.unpause_rx();
 
         Ok(())
     }

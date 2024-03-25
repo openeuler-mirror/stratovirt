@@ -50,7 +50,7 @@ use crate::{
         DEFAULT_SURFACE_WIDTH, DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
     gtk::{draw::set_callback_for_draw_area, menu::GtkMenu},
-    keycode::KeyCode,
+    keycode::{DpyMod, KeyCode},
     pixman::{
         create_pixman_image, get_image_data, get_image_height, get_image_width, ref_pixman_image,
         unref_pixman_image,
@@ -235,7 +235,7 @@ impl GtkDisplay {
             free_scale: true,
         }));
         // Mapping ASCII to keycode.
-        let keysym2keycode = Rc::new(RefCell::new(KeyCode::keysym_to_qkeycode()));
+        let keysym2keycode = Rc::new(RefCell::new(KeyCode::keysym_to_qkeycode(DpyMod::Gtk)));
         Self {
             gtk_menu,
             scale_mode,

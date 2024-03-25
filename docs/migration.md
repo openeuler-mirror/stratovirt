@@ -107,6 +107,7 @@ Some devices and feature don't support to be migration yet:
 - `balloon`
 - `mem-shared`,`backend file of memory`
 - `pmu`
+- `sve`
 - `gic-version=2`
 
 Some device attributes can't be changed:

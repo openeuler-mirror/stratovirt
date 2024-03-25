@@ -59,7 +59,7 @@ use util::loop_context::gen_delete_notifiers;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::str_to_usize;
+use util::num_ops::str_to_num;
 use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
@@ -565,6 +565,7 @@ impl NetCtrlHandler {
             )
             .with_context(|| "Failed to get control header")?;
 
+            trace::virtio_net_handle_ctrl(ctrl_hdr.class, ctrl_hdr.cmd);
             match ctrl_hdr.class {
                 VIRTIO_NET_CTRL_RX => {
                     ack = self
@@ -629,6 +630,7 @@ impl NetCtrlHandler {
                     .with_context(|| {
                         VirtioError::InterruptTrigger("ctrl", VirtioInterruptType::Vring)
                     })?;
+                trace::virtqueue_send_interrupt("Net", &*locked_queue as *const _ as u64);
             }
         }
 
@@ -684,14 +686,16 @@ struct RxVirtio {
     queue_full: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: Arc<EventFd>,
+    recv_evt: Arc<EventFd>,
 }
 
 impl RxVirtio {
-    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
+    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>, recv_evt: Arc<EventFd>) -> Self {
         RxVirtio {
             queue_full: false,
             queue,
             queue_evt,
+            recv_evt,
         }
     }
 }
@@ -859,9 +863,9 @@ impl NetIoHandler {
             rx_packets += 1;
             if rx_packets >= self.queue_size {
                 self.rx
-                    .queue_evt
+                    .recv_evt
                     .write(1)
-                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
+                    .with_context(|| "Failed to trigger tap queue event".to_string())?;
                 break;
             }
         }
@@ -973,6 +977,7 @@ impl NetIoHandler {
         let mut notifiers_fds = vec![
             locked_net_io.update_evt.as_raw_fd(),
             locked_net_io.rx.queue_evt.as_raw_fd(),
+            locked_net_io.rx.recv_evt.as_raw_fd(),
             locked_net_io.tx.queue_evt.as_raw_fd(),
         ];
         if old_tap_fd != -1 {
@@ -1049,6 +1054,16 @@ impl EventNotifierHelper for NetIoHandler {
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+
+            if let Err(ref e) = locked_net_io.rx.recv_evt.write(1) {
+                error!("Failed to trigger tap receive event, {:?}", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    &locked_net_io.device_broken,
+                );
+            }
+
             if let Some(tap) = locked_net_io.tap.as_ref() {
                 if !locked_net_io.is_listening {
                     let notifier = vec![EventNotifier::new(
@@ -1059,6 +1074,7 @@ impl EventNotifierHelper for NetIoHandler {
                         Vec::new(),
                     )];
                     locked_net_io.is_listening = true;
+                    locked_net_io.rx.queue_full = false;
                     return Some(notifier);
                 }
             }
@@ -1118,7 +1134,7 @@ impl EventNotifierHelper for NetIoHandler {
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
-                    if locked_net_io.rx.queue_full {
+                    if locked_net_io.rx.queue_full && locked_net_io.is_listening {
                         let notifier = vec![EventNotifier::new(
                             NotifierOperation::Park,
                             tap.as_raw_fd(),
@@ -1127,7 +1143,6 @@ impl EventNotifierHelper for NetIoHandler {
                             Vec::new(),
                         )];
                         locked_net_io.is_listening = false;
-                        locked_net_io.rx.queue_full = false;
                         return Some(notifier);
                     }
                 }
@@ -1136,6 +1151,13 @@ impl EventNotifierHelper for NetIoHandler {
             let tap_fd = tap.as_raw_fd();
             notifiers.push(build_event_notifier(
                 tap_fd,
+                Some(handler.clone()),
+                NotifierOperation::AddShared,
+                EventSet::IN | EventSet::EDGE_TRIGGERED,
+            ));
+            let recv_evt_fd = locked_net_io.rx.recv_evt.as_raw_fd();
+            notifiers.push(build_event_notifier(
+                recv_evt_fd,
                 Some(handler),
                 NotifierOperation::AddShared,
                 EventSet::IN | EventSet::EDGE_TRIGGERED,
@@ -1266,7 +1288,7 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
     let is_mq = queue_pair > 1;
     let ifr_flag = fs::read_to_string(tap_path)
         .with_context(|| "Failed to read content from tun_flags file")?;
-    let flags = str_to_usize(ifr_flag)? as u16;
+    let flags = str_to_num::<u16>(&ifr_flag)?;
     if (flags & IFF_MULTI_QUEUE != 0) && !is_mq {
         bail!(format!(
             "Tap device supports mq, but command set queue pairs {}.",
@@ -1540,8 +1562,9 @@ impl VirtioDevice for Net {
             }
 
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
+            let recv_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let mut handler = NetIoHandler {
-                rx: RxVirtio::new(rx_queue, rx_queue_evt),
+                rx: RxVirtio::new(rx_queue, rx_queue_evt, recv_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
                 tap: self.taps.as_ref().map(|t| t[index].clone()),
                 tap_fd: -1,
@@ -1675,7 +1698,6 @@ impl MigrationHook for Net {}
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
     pub use super::*;
 
     #[test]

@@ -14,18 +14,26 @@
 //! Backend devices, such as v4l2, usb, or demo device, etc., shall implement trait
 //! CameraBackend.
 
+#[cfg(not(target_env = "ohos"))]
 pub mod demo;
+#[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+pub mod ohos;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
+#[cfg(not(target_env = "ohos"))]
 use self::demo::DemoCameraBackend;
+#[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+use self::ohos::ohcam::OhCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
-use machine_manager::config::{CamBackendType, ConfigError, UsbCameraConfig};
+use crate::usb::camera::UsbCameraConfig;
+use machine_manager::config::{CamBackendType, CameraDevConfig, ConfigError};
 use util::aio::Iovec;
 
 /// Frame interval in 100ns units.
@@ -36,7 +44,7 @@ pub struct CamBasicFmt {
     pub width: u32,
     pub height: u32,
     fps: u32,
-    fmttype: FmtType,
+    pub fmttype: FmtType,
 }
 
 impl CamBasicFmt {
@@ -54,6 +62,7 @@ pub enum FmtType {
     Yuy2 = 0,
     Rgb565,
     Mjpg,
+    Nv12,
 }
 
 #[derive(Clone, Debug)]
@@ -71,16 +80,51 @@ pub struct CameraFormatList {
     pub frame: Vec<CameraFrame>,
 }
 
-pub fn get_video_frame_size(width: u32, height: u32) -> Result<u32> {
-    width
-        .checked_mul(height)
-        .with_context(|| format!("Invalid width {} or height {}", width, height))?
-        .checked_mul(2)
-        .with_context(|| format!("Invalid width {} or height {}", width, height))
+pub fn check_path(path: &str) -> Result<String> {
+    let filepath = path.to_string();
+    if !Path::new(path).exists() {
+        bail!(ConfigError::FileNotExist(filepath));
+    }
+
+    Ok(filepath)
 }
 
-pub fn get_bit_rate(width: u32, height: u32, interval: u32) -> Result<u32> {
-    let fm_size = get_video_frame_size(width, height)?;
+pub fn get_video_frame_size(width: u32, height: u32, fmt: FmtType) -> Result<u32> {
+    let pixel_size = width
+        .checked_mul(height)
+        .with_context(|| format!("Invalid width {} or height {}", width, height))?;
+    if pixel_size % 2 != 0 {
+        bail!("Abnormal width {} or height {}", width, height);
+    }
+    match fmt {
+        // NV12 format: 4 Y values share a pair of UV values, that means every 4 pixels
+        // need 6 bytes. On average, 1 pixel needs 1.5 bytes.
+        FmtType::Nv12 => pixel_size
+            .checked_mul(3)
+            .with_context(|| {
+                format!(
+                    "fmt {:?}, Invalid width {} or height {}",
+                    fmt, width, height
+                )
+            })?
+            .checked_div(2)
+            .with_context(|| {
+                format!(
+                    "fmt {:?}, Invalid width {} or height {}",
+                    fmt, width, height
+                )
+            }),
+        _ => pixel_size.checked_mul(2).with_context(|| {
+            format!(
+                "fmt {:?}, Invalid width {} or height {}",
+                fmt, width, height
+            )
+        }),
+    }
+}
+
+pub fn get_bit_rate(width: u32, height: u32, interval: u32, fmt: FmtType) -> Result<u32> {
+    let fm_size = get_video_frame_size(width, height, fmt)?;
     let size_in_bit = fm_size as u64 * INTERVALS_PER_SEC as u64 * 8;
     let rate = size_in_bit
         .checked_div(interval as u64)
@@ -98,6 +142,7 @@ macro_rules! video_fourcc {
 pub const PIXFMT_RGB565: u32 = video_fourcc!('R', 'G', 'B', 'P');
 pub const PIXFMT_YUYV: u32 = video_fourcc!('Y', 'U', 'Y', 'V');
 pub const PIXFMT_MJPG: u32 = video_fourcc!('M', 'J', 'P', 'G');
+pub const PIXFMT_NV12: u32 = video_fourcc!('N', 'V', '1', '2');
 
 /// Callback function which is called when frame data is coming.
 pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
@@ -143,21 +188,27 @@ pub trait CameraBackend: Send + Sync {
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
 }
 
-pub fn create_cam_backend(config: UsbCameraConfig) -> Result<Arc<Mutex<dyn CameraBackend>>> {
-    let cam: Arc<Mutex<dyn CameraBackend>> = match config.backend {
+#[allow(unused_variables)]
+pub fn create_cam_backend(
+    config: UsbCameraConfig,
+    cameradev: CameraDevConfig,
+) -> Result<Arc<Mutex<dyn CameraBackend>>> {
+    let cam: Arc<Mutex<dyn CameraBackend>> = match cameradev.backend {
         #[cfg(feature = "usb_camera_v4l2")]
         CamBackendType::V4l2 => Arc::new(Mutex::new(V4l2CameraBackend::new(
-            config.drive.id.clone().unwrap(),
-            config.drive.path.clone().with_context(|| {
-                ConfigError::FieldIsMissing("path".to_string(), "V4L2".to_string())
-            })?,
+            cameradev.id,
+            cameradev.path,
             config.iothread,
         )?)),
+        #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
+        CamBackendType::OhCamera => Arc::new(Mutex::new(OhCameraBackend::new(
+            cameradev.id,
+            cameradev.path,
+        )?)),
+        #[cfg(not(target_env = "ohos"))]
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
-            config.id.clone().unwrap(),
-            config.path.with_context(|| {
-                ConfigError::FieldIsMissing("path".to_string(), "Demo".to_string())
-            })?,
+            config.id,
+            cameradev.path,
         )?)),
     };
 

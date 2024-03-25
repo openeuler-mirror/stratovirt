@@ -223,6 +223,22 @@ impl UnixSock {
         Ok(())
     }
 
+    pub fn listen_set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+        self.listener
+            .as_ref()
+            .unwrap()
+            .set_nonblocking(nonblocking)
+            .with_context(|| "couldn't set nonblocking for unix sock listener")
+    }
+
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+        self.sock
+            .as_ref()
+            .unwrap()
+            .set_nonblocking(nonblocking)
+            .with_context(|| "couldn't set nonblocking")
+    }
+
     /// Get Stream's fd from `UnixSock`.
     pub fn get_stream_raw_fd(&self) -> RawFd {
         self.sock.as_ref().unwrap().as_raw_fd()
@@ -248,7 +264,7 @@ impl UnixSock {
     ) -> *mut cmsghdr {
         let next_cmsg = (cmsg_ptr as *mut u8).wrapping_add(
             // SAFETY: Safe to get cmsg_len because the parameter is valid.
-            unsafe { CMSG_LEN(cmsg.cmsg_len as u32) } as usize,
+            unsafe { CMSG_LEN(cmsg.cmsg_len as _) } as usize,
         ) as *mut cmsghdr;
         // Safe to get msg_control because the parameter is valid.
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;
@@ -295,7 +311,7 @@ impl UnixSock {
         if !out_fds.is_empty() {
             let cmsg = cmsghdr {
                 cmsg_len: cmsg_len as _,
-                #[cfg(target_env = "musl")]
+                #[cfg(any(target_env = "musl", target_env = "ohos"))]
                 __pad1: 0,
                 cmsg_level: SOL_SOCKET,
                 cmsg_type: SCM_RIGHTS,

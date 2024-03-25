@@ -29,15 +29,18 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::warn;
 #[cfg(feature = "windows_emu_pid")]
 use vmm_sys_util::eventfd::EventFd;
 
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use address_space::FileBackend;
 use address_space::{create_backend_mem, create_default_mem, AddressSpace, GuestAddress, Region};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -46,7 +49,7 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::PvPanicPci;
 #[cfg(feature = "scream")]
-use devices::misc::scream::Scream;
+use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::DemoDev;
 use devices::pci::{PciBus, PciDevOps, PciHost, RootPort};
@@ -54,39 +57,34 @@ use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
-use devices::usb::camera::UsbCamera;
+use devices::usb::camera::{UsbCamera, UsbCameraConfig};
+use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_host")]
-use devices::usb::usbhost::UsbHost;
-use devices::usb::{
-    keyboard::UsbKeyboard, storage::UsbStorage, tablet::UsbTablet, xhci::xhci_pci::XhciPciDevice,
-    UsbDevice,
-};
+use devices::usb::usbhost::{UsbHost, UsbHostConfig};
+use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
+use devices::usb::{storage::UsbStorage, UsbDevice};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 use hypervisor::{kvm::KvmHypervisor, HypervisorOps};
+#[cfg(feature = "usb_camera")]
+use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "demo_device")]
 use machine_manager::config::parse_demo_dev;
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::parse_gpu;
 #[cfg(feature = "pvpanic")]
 use machine_manager::config::parse_pvpanic;
-#[cfg(feature = "usb_camera")]
-use machine_manager::config::parse_usb_camera;
-#[cfg(feature = "usb_host")]
-use machine_manager::config::parse_usb_host;
-#[cfg(feature = "scream")]
-use machine_manager::config::scream::parse_scream;
+use machine_manager::config::parse_usb_storage;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_blk, parse_device_id,
     parse_device_type, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
     parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio, parse_vhost_user_blk,
-    parse_virtio_serial, parse_virtserialport, parse_vsock, BootIndexInfo, BootSource, DriveFile,
-    Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes,
-    PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
-};
-use machine_manager::config::{
-    parse_usb_keyboard, parse_usb_storage, parse_usb_tablet, parse_xhci,
+    parse_virtio_serial, parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo,
+    BootSource, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
+    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{MachineInterface, VmState};
@@ -101,9 +99,11 @@ use util::{
 use vfio::{VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_gpu")]
 use virtio::Gpu;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use virtio::VirtioDeviceQuirk;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, Block, BlockState, Rng,
-    RngState,
+    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
+    BlockState, Rng, RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr},
     Serial, SerialPort, VhostKern, VhostUser, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
@@ -263,7 +263,7 @@ impl MachineBase {
 macro_rules! create_device_add_matches {
     ( $command:expr; $controller: expr;
         $(($($driver_name:tt)|+, $function_name:tt, $($arg:tt),*)),*;
-        $(#[cfg(feature = $feature: tt)]
+        $(#[cfg($($features: tt)*)]
         ($driver_name1:tt, $function_name1:tt, $($arg1:tt),*)),*
     ) => {
         match $command {
@@ -273,7 +273,7 @@ macro_rules! create_device_add_matches {
                 },
             )*
             $(
-                #[cfg(feature = $feature)]
+                #[cfg($($features)*)]
                 $driver_name1 => {
                     $controller.$function_name1($($arg1),*)?;
                 },
@@ -465,8 +465,8 @@ pub trait MachineOps {
         nr_cpus: u8,
         #[cfg(target_arch = "x86_64")] max_cpus: u8,
         topology: &CPUTopology,
-        boot_cfg: &Option<CPUBootConfig>,
-        #[cfg(target_arch = "aarch64")] vcpu_cfg: &Option<CPUFeatures>,
+        boot_cfg: &CPUBootConfig,
+        #[cfg(target_arch = "aarch64")] vcpu_cfg: &CPUFeatures,
     ) -> Result<Vec<Arc<CPU>>>
     where
         Self: Sized,
@@ -486,21 +486,19 @@ pub trait MachineOps {
             MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
         }
 
-        if let Some(boot_config) = boot_cfg {
-            for (cpu_index, cpu) in cpus.iter().enumerate() {
-                cpu.realize(
-                    boot_config,
-                    topology,
-                    #[cfg(target_arch = "aarch64")]
-                    &vcpu_cfg.unwrap_or_default(),
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
+            cpu.realize(
+                boot_cfg,
+                topology,
+                #[cfg(target_arch = "aarch64")]
+                vcpu_cfg,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to realize arch cpu register/features for CPU {}",
+                    cpu_index
                 )
-                .with_context(|| {
-                    format!(
-                        "Failed to realize arch cpu register/features for CPU {}/KVM",
-                        cpu_index
-                    )
-                })?;
-            }
+            })?;
         }
 
         Ok(cpus)
@@ -512,9 +510,8 @@ pub trait MachineOps {
     ///
     /// * `CPUFeatures` - The features of vcpu.
     #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
-        let features = vcpu_cfg.unwrap_or_default();
-        if features.pmu {
+    fn cpu_post_init(&self, vcpu_cfg: &CPUFeatures) -> Result<()> {
+        if vcpu_cfg.pmu {
             for cpu in self.machine_base().cpus.iter() {
                 cpu.hypervisor_cpu.init_pmu()?;
             }
@@ -663,23 +660,37 @@ pub trait MachineOps {
     }
 
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_balloon(vm_config, cfg_args)?;
+        if vm_config.dev_name.get("balloon").is_some() {
+            bail!("Only one balloon device is supported for each vm.");
+        }
+        let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        vm_config.dev_name.insert("balloon".to_string(), 1);
+
         let sys_mem = self.get_sys_mem();
-        let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
+        let balloon = Arc::new(Mutex::new(Balloon::new(config.clone(), sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         match parse_device_type(cfg_args)?.as_str() {
             "virtio-balloon-device" => {
+                if config.addr.is_some() || config.bus.is_some() || config.multifunction.is_some() {
+                    bail!("virtio balloon device config is error!");
+                }
                 let device = VirtioMmioDevice::new(sys_mem, balloon);
                 self.realize_virtio_mmio_device(device)?;
             }
             _ => {
-                let name = device_cfg.id;
-                let bdf = get_pci_bdf(cfg_args)?;
-                let multi_func = get_multi_function(cfg_args)?;
+                if config.addr.is_none() || config.bus.is_none() {
+                    bail!("virtio balloon pci config is error!");
+                }
+                let bdf = PciBdf {
+                    bus: config.bus.unwrap(),
+                    addr: config.addr.unwrap(),
+                };
+                let multi_func = config.multifunction.unwrap_or_default();
                 let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
                 let sys_mem = self.get_sys_mem().clone();
-                let virtio_pci_device =
-                    VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus, multi_func);
+                let virtio_pci_device = VirtioPciDevice::new(
+                    config.id, devfn, sys_mem, balloon, parent_bus, multi_func,
+                );
                 virtio_pci_device
                     .realize()
                     .with_context(|| "Failed to add virtio pci balloon device")?;
@@ -743,13 +754,7 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
-    /// * `is_console` - Whether this virtio serial port is a console port.
-    fn add_virtio_serial_port(
-        &mut self,
-        vm_config: &mut VmConfig,
-        cfg_args: &str,
-        is_console: bool,
-    ) -> Result<()> {
+    fn add_virtio_serial_port(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let serial_cfg = vm_config
             .virtio_serial
             .as_ref()
@@ -793,6 +798,7 @@ pub trait MachineOps {
         let mut virtio_dev_h = virtio_dev.lock().unwrap();
         let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
 
+        let is_console = matches!(parse_device_type(cfg_args)?.as_str(), "virtconsole");
         let free_port0 = find_port_by_nr(&serial.ports, 0).is_none();
         // Note: port 0 is reserved for a virtconsole.
         let free_nr = get_max_nr(&serial.ports) + 1;
@@ -1348,12 +1354,29 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn update_ohui_srv(&mut self, _passthru: bool) {}
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn get_ohui_fb(&self) -> Option<FileBackend> {
+        None
+    }
+
     #[cfg(feature = "virtio_gpu")]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_gpu(cfg_args)?;
         let device = Arc::new(Mutex::new(Gpu::new(device_cfg.clone())));
+
+        #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+        if device.lock().unwrap().device_quirk() == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0)
+            && self.get_ohui_fb().is_some()
+        {
+            self.update_ohui_srv(true);
+            device.lock().unwrap().set_bar0_fb(self.get_ohui_fb());
+        }
+
         self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)?;
         Ok(())
     }
@@ -1554,8 +1577,8 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - XHCI Configuration.
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let device_cfg = parse_xhci(cfg_args)?;
+        let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
         let pcidev = XhciPciDevice::new(&device_cfg, devfn, parent_bus, self.get_sys_mem());
@@ -1572,21 +1595,27 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - scream configuration.
     #[cfg(feature = "scream")]
-    fn add_ivshmem_scream(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
+    fn add_ivshmem_scream(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        token_id: Option<Arc<RwLock<u64>>>,
+    ) -> Result<()> {
+        let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+        let bdf = PciBdf {
+            bus: config.bus.clone(),
+            addr: config.addr,
+        };
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-
-        let dev_cfg =
-            parse_scream(cfg_args).with_context(|| "Failed to parse cmdline for ivshmem")?;
 
         let mem_cfg = vm_config
             .object
             .mem_object
-            .remove(&dev_cfg.memdev)
+            .remove(&config.memdev)
             .with_context(|| {
                 format!(
                     "Object for memory-backend-ram {} config not found",
-                    dev_cfg.memdev
+                    config.memdev
                 )
             })?;
 
@@ -1594,7 +1623,7 @@ pub trait MachineOps {
             bail!("Object for share config is not on");
         }
 
-        let scream = Scream::new(mem_cfg.size, &dev_cfg);
+        let scream = Scream::new(mem_cfg.size, config, token_id);
         scream
             .realize(devfn, parent_bus)
             .with_context(|| "Failed to realize scream device")
@@ -1695,25 +1724,31 @@ pub trait MachineOps {
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match parse_device_type(cfg_args)?.as_str() {
             "usb-kbd" => {
-                let device_cfg = parse_usb_keyboard(cfg_args)?;
-                // SAFETY: id is already checked not none in parse_usb_keyboard().
-                let keyboard = UsbKeyboard::new(device_cfg.id.unwrap());
+                let config = UsbKeyboardConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let keyboard = UsbKeyboard::new(config);
                 keyboard
                     .realize()
                     .with_context(|| "Failed to realize usb keyboard device")?
             }
             "usb-tablet" => {
-                let device_cfg = parse_usb_tablet(cfg_args)?;
-                // SAFETY: id is already checked not none in parse_usb_tablet().
-                let tablet = UsbTablet::new(device_cfg.id.unwrap());
+                let config = UsbTabletConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let tablet = UsbTablet::new(config);
                 tablet
                     .realize()
                     .with_context(|| "Failed to realize usb tablet device")?
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
-                let device_cfg = parse_usb_camera(vm_config, cfg_args)?;
-                let camera = UsbCamera::new(device_cfg)?;
+                let config = UsbCameraConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let cameradev = get_cameradev_by_id(vm_config, config.cameradev.clone())
+                    .with_context(|| {
+                        format!(
+                            "no cameradev found with id {:?} for usb-camera",
+                            config.cameradev
+                        )
+                    })?;
+
+                let camera = UsbCamera::new(config, cameradev)?;
                 camera
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?
@@ -1727,8 +1762,8 @@ pub trait MachineOps {
             }
             #[cfg(feature = "usb_host")]
             "usb-host" => {
-                let device_cfg = parse_usb_host(cfg_args)?;
-                let usbhost = UsbHost::new(device_cfg)?;
+                let config = UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args))?;
+                let usbhost = UsbHost::new(config)?;
                 usbhost
                     .realize()
                     .with_context(|| "Failed to realize usb host device")?
@@ -1772,6 +1807,8 @@ pub trait MachineOps {
             let id = parse_device_id(cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
+            #[cfg(feature = "scream")]
+            let token_id = self.get_token_id();
 
             create_device_add_matches!(
                 dev.0.as_str(); self;
@@ -1785,7 +1822,7 @@ pub trait MachineOps {
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
-                ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args, true),
+                ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
@@ -1800,13 +1837,17 @@ pub trait MachineOps {
                 #[cfg(feature = "demo_device")]
                 ("pcie-demo-dev", add_demo_dev, vm_config, cfg_args),
                 #[cfg(feature = "scream")]
-                ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args),
+                ("ivshmem-scream", add_ivshmem_scream, vm_config, cfg_args, token_id),
                 #[cfg(feature = "pvpanic")]
                 ("pvpanic", add_pvpanic, cfg_args)
             );
         }
 
         Ok(())
+    }
+
+    fn get_token_id(&self) -> Option<Arc<RwLock<u64>>> {
+        None
     }
 
     fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {

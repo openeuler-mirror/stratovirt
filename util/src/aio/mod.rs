@@ -12,6 +12,7 @@
 
 mod libaio;
 mod raw;
+mod threads;
 mod uring;
 
 pub use raw::*;
@@ -32,8 +33,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
 use crate::num_ops::{round_down, round_up};
+use crate::thread_pool::ThreadPool;
 use crate::unix::host_page_size;
 use libaio::LibaioContext;
+use threads::ThreadsAioContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
@@ -44,6 +47,8 @@ const AIO_OFF: &str = "off";
 const AIO_NATIVE: &str = "native";
 /// Io-uring aio type.
 const AIO_IOURING: &str = "io_uring";
+/// Aio implemented by thread pool.
+const AIO_THREADS: &str = "threads";
 /// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
@@ -56,6 +61,8 @@ pub enum AioEngine {
     Native = 1,
     #[serde(alias = "iouring")]
     IoUring = 2,
+    #[serde(alias = "threads")]
+    Threads = 3,
 }
 
 impl FromStr for AioEngine {
@@ -66,7 +73,19 @@ impl FromStr for AioEngine {
             AIO_OFF => Ok(AioEngine::Off),
             AIO_NATIVE => Ok(AioEngine::Native),
             AIO_IOURING => Ok(AioEngine::IoUring),
+            AIO_THREADS => Ok(AioEngine::Threads),
             _ => Err(()),
+        }
+    }
+}
+
+impl ToString for AioEngine {
+    fn to_string(&self) -> String {
+        match *self {
+            AioEngine::Off => "off".to_string(),
+            AioEngine::Native => "native".to_string(),
+            AioEngine::IoUring => "io_uring".to_string(),
+            AioEngine::Threads => "threads".to_string(),
         }
     }
 }
@@ -122,10 +141,13 @@ pub fn get_iov_size(iovecs: &[Iovec]) -> u64 {
 trait AioContext<T: Clone> {
     /// Submit IO requests to the OS, the nr submitted is returned.
     fn submit(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
+    /// Submit Io requests to the thread pool, the nr submitted is returned.
+    fn submit_threads_pool(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
     /// Get the IO events of the requests submitted earlier.
     fn get_events(&mut self) -> &[AioEvent];
 }
 
+#[derive(Clone)]
 pub struct AioEvent {
     pub user_data: u64,
     pub status: i64,
@@ -185,6 +207,264 @@ impl<T: Clone> AioCb<T> {
         }
         AioReqResult::Done
     }
+
+    pub fn rw_sync(&self) -> i32 {
+        let mut ret = match self.opcode {
+            OpCode::Preadv => raw_readv(self.file_fd, &self.iovec, self.offset),
+            OpCode::Pwritev => raw_writev(self.file_fd, &self.iovec, self.offset),
+            _ => -1,
+        };
+        if ret < 0 {
+            error!("Failed to do sync read/write.");
+        } else if ret as u64 != self.nbytes {
+            error!("Incomplete sync read/write.");
+            ret = -1;
+        }
+        ret as i32
+    }
+
+    fn flush_sync(&self) -> i32 {
+        let ret = raw_datasync(self.file_fd);
+        if ret < 0 {
+            error!("Failed to do sync flush.");
+        }
+        ret as i32
+    }
+
+    fn discard_sync(&self) -> i32 {
+        let ret = raw_discard(self.file_fd, self.offset, self.nbytes);
+        if ret < 0 && ret != -libc::ENOTSUP {
+            error!("Failed to do sync discard.");
+        }
+        ret
+    }
+
+    fn write_zeroes_sync(&mut self) -> i32 {
+        let mut ret;
+        if self.opcode == OpCode::WriteZeroesUnmap {
+            ret = raw_discard(self.file_fd, self.offset, self.nbytes);
+            if ret == 0 {
+                return ret;
+            }
+        }
+        ret = raw_write_zeroes(self.file_fd, self.offset, self.nbytes);
+        if ret == -libc::ENOTSUP && !self.iovec.is_empty() {
+            self.opcode = OpCode::Pwritev;
+            return self.rw_sync();
+        }
+
+        if ret < 0 {
+            error!("Failed to do sync write zeroes.");
+        }
+
+        ret
+    }
+
+    // If the buffer is full with zero and the operation is Pwritev,
+    // It's equal to write zero operation.
+    fn try_convert_to_write_zero(&mut self) {
+        if self.opcode == OpCode::Pwritev
+            && self.write_zeroes != WriteZeroesState::Off
+            && iovec_is_zero(&self.iovec)
+        {
+            self.opcode = OpCode::WriteZeroes;
+            if self.write_zeroes == WriteZeroesState::Unmap && self.discard {
+                self.opcode = OpCode::WriteZeroesUnmap;
+            }
+        }
+    }
+
+    pub fn is_misaligned(&self) -> bool {
+        if self.direct && (self.opcode == OpCode::Preadv || self.opcode == OpCode::Pwritev) {
+            if (self.offset as u64) & (self.req_align as u64 - 1) != 0 {
+                return true;
+            }
+            for iov in self.iovec.iter() {
+                if iov.iov_base & (self.buf_align as u64 - 1) != 0 {
+                    return true;
+                }
+                if iov.iov_len & (self.req_align as u64 - 1) != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn handle_misaligned(&mut self) -> Result<i32> {
+        let max_len = round_down(
+            self.nbytes + self.req_align as u64 * 2,
+            self.req_align as u64,
+        )
+        .with_context(|| "Failed to round down request length.")?;
+        // Set upper limit of buffer length to avoid OOM.
+        let buff_len = std::cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
+        let bounce_buffer =
+        // SAFETY: We allocate aligned memory and free it later. Alignment is set to
+        // host page size to decrease the count of allocated pages.
+        unsafe { libc::memalign(host_page_size() as usize, buff_len as usize) };
+        if bounce_buffer.is_null() {
+            bail!("Failed to alloc memory for misaligned read/write.");
+        }
+
+        let res = match self.handle_misaligned_rw(bounce_buffer, buff_len) {
+            Ok(()) => self.nbytes as i32,
+            Err(e) => {
+                error!("{:?}", e);
+                -1
+            }
+        };
+
+        // SAFETY: the memory is allocated by us and will not be used anymore.
+        unsafe { libc::free(bounce_buffer) };
+        Ok(res)
+    }
+
+    pub fn handle_misaligned_rw(
+        &mut self,
+        bounce_buffer: *mut c_void,
+        buffer_len: u64,
+    ) -> Result<()> {
+        let offset_align = round_down(self.offset as u64, self.req_align as u64)
+            .with_context(|| "Failed to round down request offset.")?;
+        let high = self.offset as u64 + self.nbytes;
+        let high_align = round_up(high, self.req_align as u64)
+            .with_context(|| "Failed to round up request high edge.")?;
+
+        match self.opcode {
+            OpCode::Preadv => {
+                let mut offset = offset_align;
+                let mut iovecs = &mut self.iovec[..];
+                loop {
+                    // Step1: Read file to bounce buffer.
+                    let nbytes = cmp::min(high_align - offset, buffer_len);
+                    let len = raw_read(
+                        self.file_fd,
+                        bounce_buffer as u64,
+                        nbytes as usize,
+                        offset as usize,
+                    );
+                    if len < 0 {
+                        bail!("Failed to do raw read for misaligned read.");
+                    }
+
+                    let real_offset = cmp::max(offset, self.offset as u64);
+                    let real_high = cmp::min(offset + nbytes, high);
+                    let real_nbytes = real_high - real_offset;
+                    if (len as u64) < real_high - offset {
+                        bail!(
+                            "misaligned read len {} less than the nbytes {}",
+                            len,
+                            real_high - offset
+                        );
+                    }
+                    // SAFETY: the memory is allocated by us.
+                    let src = unsafe {
+                        std::slice::from_raw_parts(
+                            (bounce_buffer as u64 + real_offset - offset) as *const u8,
+                            real_nbytes as usize,
+                        )
+                    };
+
+                    // Step2: Copy bounce buffer to iovec.
+                    iov_from_buf_direct(iovecs, src).and_then(|v| {
+                        if v == real_nbytes as usize {
+                            Ok(())
+                        } else {
+                            Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
+                        }
+                    })?;
+
+                    // Step3: Adjust offset and iovec for next loop.
+                    offset += nbytes;
+                    if offset >= high_align {
+                        break;
+                    }
+                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
+                        .with_context(|| "Failed to adjust iovec for misaligned read")?;
+                }
+                Ok(())
+            }
+            OpCode::Pwritev => {
+                // Load the head from file before fill iovec to buffer.
+                let mut head_loaded = false;
+                if self.offset as u64 > offset_align {
+                    let len = raw_read(
+                        self.file_fd,
+                        bounce_buffer as u64,
+                        self.req_align as usize,
+                        offset_align as usize,
+                    );
+                    if len < 0 || len as u32 != self.req_align {
+                        bail!("Failed to load head for misaligned write.");
+                    }
+                    head_loaded = true;
+                }
+                // Is head and tail in the same alignment section?
+                let same_section = (offset_align + self.req_align as u64) >= high;
+                let need_tail = !(same_section && head_loaded) && (high_align > high);
+
+                let mut offset = offset_align;
+                let mut iovecs = &mut self.iovec[..];
+                loop {
+                    // Step1: Load iovec to bounce buffer.
+                    let nbytes = cmp::min(high_align - offset, buffer_len);
+
+                    let real_offset = cmp::max(offset, self.offset as u64);
+                    let real_high = cmp::min(offset + nbytes, high);
+                    let real_nbytes = real_high - real_offset;
+
+                    if real_high == high && need_tail {
+                        let len = raw_read(
+                            self.file_fd,
+                            bounce_buffer as u64 + nbytes - self.req_align as u64,
+                            self.req_align as usize,
+                            (offset + nbytes) as usize - self.req_align as usize,
+                        );
+                        if len < 0 || len as u32 != self.req_align {
+                            bail!("Failed to load tail for misaligned write.");
+                        }
+                    }
+
+                    // SAFETY: the memory is allocated by us.
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (bounce_buffer as u64 + real_offset - offset) as *mut u8,
+                            real_nbytes as usize,
+                        )
+                    };
+                    iov_to_buf_direct(iovecs, 0, dst).and_then(|v| {
+                        if v == real_nbytes as usize {
+                            Ok(())
+                        } else {
+                            Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
+                        }
+                    })?;
+
+                    // Step2: Write bounce buffer to file.
+                    let len = raw_write(
+                        self.file_fd,
+                        bounce_buffer as u64,
+                        nbytes as usize,
+                        offset as usize,
+                    );
+                    if len < 0 || len as u64 != nbytes {
+                        bail!("Failed to do raw write for misaligned write.");
+                    }
+
+                    // Step3: Adjuest offset and iovec for next loop.
+                    offset += nbytes;
+                    if offset >= high_align {
+                        break;
+                    }
+                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
+                        .with_context(|| "Failed to adjust iovec for misaligned write")?;
+                }
+                Ok(())
+            }
+            _ => bail!("Failed to do misaligned rw: unknown cmd type"),
+        }
+    }
 }
 
 pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
@@ -203,7 +483,6 @@ pub struct Aio<T: Clone + 'static> {
 
 pub fn aio_probe(engine: AioEngine) -> Result<()> {
     match engine {
-        AioEngine::Off => {}
         AioEngine::Native => {
             let ctx = LibaioContext::probe(1)?;
             // SAFETY: if no err, ctx is valid.
@@ -212,18 +491,39 @@ pub fn aio_probe(engine: AioEngine) -> Result<()> {
         AioEngine::IoUring => {
             IoUringContext::probe(1)?;
         }
+        _ => {}
     }
     Ok(())
 }
 
 impl<T: Clone + 'static> Aio<T> {
-    pub fn new(func: Arc<AioCompleteFunc<T>>, engine: AioEngine) -> Result<Self> {
+    pub fn new(
+        func: Arc<AioCompleteFunc<T>>,
+        engine: AioEngine,
+        thread_pool: Option<Arc<ThreadPool>>,
+    ) -> Result<Self> {
         let max_events: usize = 128;
         let fd = EventFd::new(libc::EFD_NONBLOCK)?;
-        let ctx: Option<Box<dyn AioContext<T>>> = match engine {
-            AioEngine::Off => None,
-            AioEngine::Native => Some(Box::new(LibaioContext::new(max_events as u32, &fd)?)),
-            AioEngine::IoUring => Some(Box::new(IoUringContext::new(max_events as u32, &fd)?)),
+        let ctx: Option<Box<dyn AioContext<T>>> = if let Some(pool) = thread_pool {
+            let threads_aio_ctx = ThreadsAioContext::new(max_events as u32, &fd, pool);
+            match engine {
+                AioEngine::Native => Some(Box::new(LibaioContext::new(
+                    max_events as u32,
+                    threads_aio_ctx,
+                    &fd,
+                )?)),
+                AioEngine::IoUring => Some(Box::new(IoUringContext::new(
+                    max_events as u32,
+                    threads_aio_ctx,
+                    &fd,
+                )?)),
+                AioEngine::Threads => Some(Box::new(threads_aio_ctx)),
+                _ => bail!("Aio type {:?} does not support thread pools", engine),
+            }
+        } else if engine == AioEngine::Off {
+            None
+        } else {
+            bail!("Aio type {:?} is lack of thread pool context", engine);
         };
 
         Ok(Aio {
@@ -243,62 +543,48 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
-        if self.request_misaligned(&cb) {
-            let max_len = round_down(cb.nbytes + cb.req_align as u64 * 2, cb.req_align as u64)
-                .with_context(|| "Failed to round down request length.")?;
-            // Set upper limit of buffer length to avoid OOM.
-            let buff_len = cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
-            let bounce_buffer =
-                // SAFETY: We allocate aligned memory and free it later. Alignment is set to
-                // host page size to decrease the count of allocated pages.
-                unsafe { libc::memalign(host_page_size() as usize, buff_len as usize) };
-            if bounce_buffer.is_null() {
-                error!("Failed to alloc memory for misaligned read/write.");
-                return (self.complete_func)(&cb, -1);
-            }
+        trace::aio_submit_request(cb.file_fd, &cb.opcode, cb.offset, cb.nbytes);
+        if self.ctx.is_none() {
+            return self.handle_sync_request(cb);
+        }
 
-            let res = match self.handle_misaligned_rw(&mut cb, bounce_buffer, buff_len) {
-                Ok(()) => 0,
+        if cb.is_misaligned() {
+            return self.submit_thread_pool_async(cb);
+        }
+
+        cb.try_convert_to_write_zero();
+
+        if self.engine != AioEngine::Threads
+            && [OpCode::Preadv, OpCode::Pwritev, OpCode::Fdsync].contains(&cb.opcode)
+        {
+            return self.submit_async(cb);
+        }
+
+        self.submit_thread_pool_async(cb)
+    }
+
+    fn handle_sync_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
+        if cb.is_misaligned() {
+            let ret = match cb.handle_misaligned() {
+                Ok(ret) => ret,
                 Err(e) => {
                     error!("{:?}", e);
                     -1
                 }
             };
-
-            // SAFETY: the memory is allocated by us and will not be used anymore.
-            unsafe { libc::free(bounce_buffer) };
-            return (self.complete_func)(&cb, res);
+            return (self.complete_func)(&cb, ret as i64);
         }
 
-        if cb.opcode == OpCode::Pwritev
-            && cb.write_zeroes != WriteZeroesState::Off
-            && iovec_is_zero(&cb.iovec)
-        {
-            cb.opcode = OpCode::WriteZeroes;
-            if cb.write_zeroes == WriteZeroesState::Unmap && cb.discard {
-                cb.opcode = OpCode::WriteZeroesUnmap;
-            }
-        }
+        cb.try_convert_to_write_zero();
 
-        match cb.opcode {
-            OpCode::Preadv | OpCode::Pwritev => {
-                if self.ctx.is_some() {
-                    self.rw_async(cb)
-                } else {
-                    self.rw_sync(cb)
-                }
-            }
-            OpCode::Fdsync => {
-                if self.ctx.is_some() {
-                    self.flush_async(cb)
-                } else {
-                    self.flush_sync(cb)
-                }
-            }
-            OpCode::Discard => self.discard_sync(cb),
-            OpCode::WriteZeroes | OpCode::WriteZeroesUnmap => self.write_zeroes_sync(cb),
-            OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
-        }
+        let ret = match cb.opcode {
+            OpCode::Preadv | OpCode::Pwritev => cb.rw_sync(),
+            OpCode::Fdsync => cb.flush_sync(),
+            OpCode::Discard => cb.discard_sync(),
+            OpCode::WriteZeroes | OpCode::WriteZeroesUnmap => cb.write_zeroes_sync(),
+            OpCode::Noop => return Err(anyhow!("Aio opcode is not specified.")),
+        };
+        (self.complete_func)(&cb, ret as i64)
     }
 
     pub fn flush_request(&mut self) -> Result<()> {
@@ -394,7 +680,20 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    fn rw_async(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn submit_thread_pool_async(&mut self, cb: AioCb<T>) -> Result<()> {
+        let mut node = Box::new(Node::new(cb));
+        node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
+
+        self.ctx
+            .as_mut()
+            .unwrap()
+            .submit_threads_pool(&[&node.value as *const AioCb<T>])?;
+        self.aio_in_flight.add_head(node);
+        self.incomplete_cnt.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn submit_async(&mut self, cb: AioCb<T>) -> Result<()> {
         let mut node = Box::new(Node::new(cb));
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
 
@@ -405,226 +704,6 @@ impl<T: Clone + 'static> Aio<T> {
         }
 
         Ok(())
-    }
-
-    fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let mut ret = match cb.opcode {
-            OpCode::Preadv => raw_readv(cb.file_fd, &cb.iovec, cb.offset),
-            OpCode::Pwritev => raw_writev(cb.file_fd, &cb.iovec, cb.offset),
-            _ => -1,
-        };
-        if ret < 0 {
-            error!("Failed to do sync read/write.");
-        } else if ret as u64 != cb.nbytes {
-            error!("Incomplete sync read/write.");
-            ret = -1;
-        }
-        (self.complete_func)(&cb, ret)
-    }
-
-    fn request_misaligned(&self, cb: &AioCb<T>) -> bool {
-        if cb.direct && (cb.opcode == OpCode::Preadv || cb.opcode == OpCode::Pwritev) {
-            if (cb.offset as u64) & (cb.req_align as u64 - 1) != 0 {
-                return true;
-            }
-            for iov in cb.iovec.iter() {
-                if iov.iov_base & (cb.buf_align as u64 - 1) != 0 {
-                    return true;
-                }
-                if iov.iov_len & (cb.req_align as u64 - 1) != 0 {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn handle_misaligned_rw(
-        &mut self,
-        cb: &mut AioCb<T>,
-        bounce_buffer: *mut c_void,
-        buffer_len: u64,
-    ) -> Result<()> {
-        let offset_align = round_down(cb.offset as u64, cb.req_align as u64)
-            .with_context(|| "Failed to round down request offset.")?;
-        let high = cb.offset as u64 + cb.nbytes;
-        let high_align = round_up(high, cb.req_align as u64)
-            .with_context(|| "Failed to round up request high edge.")?;
-
-        match cb.opcode {
-            OpCode::Preadv => {
-                let mut offset = offset_align;
-                let mut iovecs = &mut cb.iovec[..];
-                loop {
-                    // Step1: Read file to bounce buffer.
-                    let nbytes = cmp::min(high_align - offset, buffer_len);
-                    let len = raw_read(
-                        cb.file_fd,
-                        bounce_buffer as u64,
-                        nbytes as usize,
-                        offset as usize,
-                    );
-                    if len < 0 {
-                        bail!("Failed to do raw read for misaligned read.");
-                    }
-
-                    let real_offset = cmp::max(offset, cb.offset as u64);
-                    let real_high = cmp::min(offset + nbytes, high);
-                    let real_nbytes = real_high - real_offset;
-                    if (len as u64) < real_high - offset {
-                        bail!(
-                            "misaligned read len {} less than the nbytes {}",
-                            len,
-                            real_high - offset
-                        );
-                    }
-                    // SAFETY: the memory is allocated by us.
-                    let src = unsafe {
-                        std::slice::from_raw_parts(
-                            (bounce_buffer as u64 + real_offset - offset) as *const u8,
-                            real_nbytes as usize,
-                        )
-                    };
-
-                    // Step2: Copy bounce buffer to iovec.
-                    iov_from_buf_direct(iovecs, src).and_then(|v| {
-                        if v == real_nbytes as usize {
-                            Ok(())
-                        } else {
-                            Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
-                        }
-                    })?;
-
-                    // Step3: Adjust offset and iovec for next loop.
-                    offset += nbytes;
-                    if offset >= high_align {
-                        break;
-                    }
-                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
-                        .with_context(|| "Failed to adjust iovec for misaligned read")?;
-                }
-                Ok(())
-            }
-            OpCode::Pwritev => {
-                // Load the head from file before fill iovec to buffer.
-                let mut head_loaded = false;
-                if cb.offset as u64 > offset_align {
-                    let len = raw_read(
-                        cb.file_fd,
-                        bounce_buffer as u64,
-                        cb.req_align as usize,
-                        offset_align as usize,
-                    );
-                    if len < 0 || len as u32 != cb.req_align {
-                        bail!("Failed to load head for misaligned write.");
-                    }
-                    head_loaded = true;
-                }
-                // Is head and tail in the same alignment section?
-                let same_section = (offset_align + cb.req_align as u64) >= high;
-                let need_tail = !(same_section && head_loaded) && (high_align > high);
-
-                let mut offset = offset_align;
-                let mut iovecs = &mut cb.iovec[..];
-                loop {
-                    // Step1: Load iovec to bounce buffer.
-                    let nbytes = cmp::min(high_align - offset, buffer_len);
-
-                    let real_offset = cmp::max(offset, cb.offset as u64);
-                    let real_high = cmp::min(offset + nbytes, high);
-                    let real_nbytes = real_high - real_offset;
-
-                    if real_high == high && need_tail {
-                        let len = raw_read(
-                            cb.file_fd,
-                            bounce_buffer as u64 + nbytes - cb.req_align as u64,
-                            cb.req_align as usize,
-                            (offset + nbytes) as usize - cb.req_align as usize,
-                        );
-                        if len < 0 || len as u32 != cb.req_align {
-                            bail!("Failed to load tail for misaligned write.");
-                        }
-                    }
-
-                    // SAFETY: the memory is allocated by us.
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            (bounce_buffer as u64 + real_offset - offset) as *mut u8,
-                            real_nbytes as usize,
-                        )
-                    };
-                    iov_to_buf_direct(iovecs, 0, dst).and_then(|v| {
-                        if v == real_nbytes as usize {
-                            Ok(())
-                        } else {
-                            Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
-                        }
-                    })?;
-
-                    // Step2: Write bounce buffer to file.
-                    let len = raw_write(
-                        cb.file_fd,
-                        bounce_buffer as u64,
-                        nbytes as usize,
-                        offset as usize,
-                    );
-                    if len < 0 || len as u64 != nbytes {
-                        bail!("Failed to do raw write for misaligned write.");
-                    }
-
-                    // Step3: Adjuest offset and iovec for next loop.
-                    offset += nbytes;
-                    if offset >= high_align {
-                        break;
-                    }
-                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
-                        .with_context(|| "Failed to adjust iovec for misaligned write")?;
-                }
-                Ok(())
-            }
-            _ => bail!("Failed to do misaligned rw: unknown cmd type"),
-        }
-    }
-
-    fn flush_async(&mut self, cb: AioCb<T>) -> Result<()> {
-        self.rw_async(cb)
-    }
-
-    fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = raw_datasync(cb.file_fd);
-        if ret < 0 {
-            error!("Failed to do sync flush.");
-        }
-        (self.complete_func)(&cb, ret)
-    }
-
-    fn discard_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
-        if ret < 0 && ret != -libc::ENOTSUP {
-            error!("Failed to do sync discard.");
-        }
-        (self.complete_func)(&cb, ret as i64)
-    }
-
-    fn write_zeroes_sync(&mut self, mut cb: AioCb<T>) -> Result<()> {
-        let mut ret;
-        if cb.opcode == OpCode::WriteZeroesUnmap {
-            ret = raw_discard(cb.file_fd, cb.offset, cb.nbytes);
-            if ret == 0 {
-                return (self.complete_func)(&cb, ret as i64);
-            }
-        }
-        ret = raw_write_zeroes(cb.file_fd, cb.offset, cb.nbytes);
-        if ret == -libc::ENOTSUP && !cb.iovec.is_empty() {
-            cb.opcode = OpCode::Pwritev;
-            cb.write_zeroes = WriteZeroesState::Off;
-            return self.submit_request(cb);
-        }
-
-        if ret < 0 {
-            error!("Failed to do sync write zeroes.");
-        }
-        (self.complete_func)(&cb, ret as i64)
     }
 }
 
@@ -821,6 +900,7 @@ mod tests {
         let mut aio = Aio::new(
             Arc::new(|_: &AioCb<i32>, _: i64| -> Result<()> { Ok(()) }),
             AioEngine::Off,
+            None,
         )
         .unwrap();
         aio.submit_request(aiocb).unwrap();

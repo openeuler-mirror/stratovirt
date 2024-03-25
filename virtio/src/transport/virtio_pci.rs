@@ -18,9 +18,10 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
-use machine_manager::config::M;
 use vmm_sys_util::eventfd::EventFd;
 
+#[cfg(feature = "virtio_gpu")]
+use crate::Gpu;
 use crate::{
     virtio_has_feature, NotifyEventFds, Queue, VirtioBaseState, VirtioDevice, VirtioDeviceQuirk,
     VirtioInterrupt, VirtioInterruptType,
@@ -32,9 +33,9 @@ use crate::{
     VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE,
     VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
-use address_space::{
-    AddressRange, AddressSpace, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
-};
+#[cfg(feature = "virtio_gpu")]
+use address_space::HostMemMapping;
+use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
@@ -46,6 +47,8 @@ use devices::pci::{
     PciBus, PciDevBase, PciDevOps, PciError,
 };
 use devices::{Device, DeviceBase};
+#[cfg(feature = "virtio_gpu")]
+use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -128,17 +131,19 @@ const COMMON_Q_USEDHI_REG: u64 = 0x34;
 ///   1: select feature bits 32 to 63.
 const MAX_FEATURES_SELECT_NUM: u32 = 2;
 
-/// The bar0 size of enable_bar0 features
-const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
+#[cfg(feature = "virtio_gpu")]
+fn init_gpu_bar0(dev: &Arc<Mutex<dyn VirtioDevice>>, config: &mut PciConfig) -> Result<()> {
+    let locked_dev = dev.lock().unwrap();
+    let gpu = locked_dev.as_any().downcast_ref::<Gpu>().unwrap();
+    let fb = gpu.get_bar0_fb();
 
-fn init_gpu_bar0(config: &mut PciConfig) -> Result<()> {
     let host_mmap = Arc::new(HostMemMapping::new(
         GuestAddress(0),
         None,
         VIRTIO_GPU_ENABLE_BAR0_SIZE,
-        None,
+        fb,
         false,
-        false,
+        true,
         false,
     )?);
 
@@ -309,7 +314,7 @@ pub struct VirtioPciDevice {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Multi-Function flag.
     multi_func: bool,
-    /// If the device need to register irqfd to kvm.
+    /// If the device need to register irqfd.
     need_irqfd: bool,
 }
 
@@ -427,6 +432,7 @@ impl VirtioPciDevice {
     }
 
     fn activate_device(&self) -> bool {
+        trace::virtio_tpt_common("activate_device", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
             return true;
@@ -499,6 +505,7 @@ impl VirtioPciDevice {
     }
 
     fn deactivate_device(&self) -> bool {
+        trace::virtio_tpt_common("deactivate_device", &self.base.base.id);
         if self.need_irqfd && self.base.config.msix.is_some() {
             let msix = self.base.config.msix.as_ref().unwrap();
             if msix.lock().unwrap().unregister_irqfd().is_err() {
@@ -532,6 +539,7 @@ impl VirtioPciDevice {
     ///
     /// * `offset` - The offset of common config.
     fn read_common_config(&self, offset: u64) -> Result<u32> {
+        trace::virtio_tpt_read_common_config(&self.base.base.id, offset);
         let locked_device = self.device.lock().unwrap();
         let value = match offset {
             COMMON_DFSELECT_REG => locked_device.hfeatures_sel(),
@@ -602,6 +610,7 @@ impl VirtioPciDevice {
     ///
     /// Returns Error if the offset is out of bound.
     fn write_common_config(&mut self, offset: u64, value: u32) -> Result<()> {
+        trace::virtio_tpt_write_common_config(&self.base.base.id, offset, value);
         let mut locked_device = self.device.lock().unwrap();
         match offset {
             COMMON_DFSELECT_REG => {
@@ -1105,8 +1114,9 @@ impl PciDevOps for VirtioPciDevice {
 
         self.assign_interrupt_cb();
 
+        #[cfg(feature = "virtio_gpu")]
         if device_quirk == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0) {
-            init_gpu_bar0(&mut self.base.config)?;
+            init_gpu_bar0(&self.device, &mut self.base.config)?;
         }
 
         self.device
@@ -1154,6 +1164,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        trace::virtio_tpt_common("unrealize", &self.base.base.id);
         self.device
             .lock()
             .unwrap()
@@ -1170,6 +1181,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
+        trace::virtio_tpt_read_config(&self.base.base.id, offset as u64, data.len());
         self.do_cfg_access(offset, offset + data.len(), false);
         self.base.config.read(offset, data);
     }
@@ -1184,6 +1196,7 @@ impl PciDevOps for VirtioPciDevice {
             );
             return;
         }
+        trace::virtio_tpt_write_config(&self.base.base.id, offset as u64, data);
 
         let parent_bus = self.base.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
@@ -1199,6 +1212,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        trace::virtio_tpt_common("reset", &self.base.base.id);
         self.deactivate_device();
         self.device
             .lock()

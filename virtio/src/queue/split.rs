@@ -556,6 +556,7 @@ impl SplitVring {
 
     /// Set the avail idx to the field of the event index for the available ring.
     fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>, event_idx: u16) -> Result<()> {
+        trace::virtqueue_set_avail_event(self as *const _ as u64, event_idx);
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
 
@@ -828,6 +829,12 @@ impl VringOps for SplitVring {
         self.get_vring_element(sys_mem, features, &mut element)
             .with_context(|| "Failed to get vring element")?;
 
+        trace::virtqueue_pop_avail(
+            &*self as *const _ as u64,
+            element.in_iovec.len(),
+            element.out_iovec.len(),
+        );
+
         Ok(element)
     }
 
@@ -841,6 +848,7 @@ impl VringOps for SplitVring {
         }
 
         let next_used = u64::from(self.next_used.0 % self.actual_size());
+        trace::virtqueue_add_used(&*self as *const _ as u64, next_used, index, len);
         let used_elem_addr =
             self.addr_cache.used_ring_host + VRING_FLAGS_AND_IDX_LEN + next_used * USEDELEM_LEN;
         let used_elem = UsedElem {

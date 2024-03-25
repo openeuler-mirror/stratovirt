@@ -57,10 +57,11 @@ Currently, these options are supported.
 
 * CPU Family: Set the CPU family for VM, default to `host`, and this is the only supported variant currently.
 * pmu: This enables armv8 PMU for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
+* sve: This enables SVE feature for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
 
 ```shell
 # cmdline
--cpu host[,pmu={on|off}]
+-cpu host[,pmu={on|off}][,sve={on|off}]
 ```
 
 ### 1.3 Memory
@@ -969,6 +970,8 @@ It determines the order of bootable devices which firmware will use for booting 
 
 Multiple display methods are supported by stratovirt, including `GTK` and `VNC`, which allows users to interact with virtual machine.
 
+Display on OpenHarmony OS(OHOS) is also supported, while a client program need to be implemented.
+
 #### 2.16.1 GTK
 
 Graphical interface drawn by gtk toolkits. Visit [GTK](https://www.gtk.org) for more details.
@@ -1039,6 +1042,21 @@ Sample Configuration：
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable VNC.
+
+#### 2.16.2 OHUI server
+
+OHUI server support display on OHOS. It relies on UDS for communication with OHUI client. Basically speaking, it works like VNC.
+Client gets keyboard and mouse's action and sends it to server, and also draws VM's image on screen.
+Server processes keyboard and mouse's action, and transfer VM's image.
+
+Sample Configuration：
+
+```shell
+[-object iothread,id=<threadID>]
+-display ohui[,iothread=<threadID>,socks-path=</path/to/dir>]
+```
+
+Note: "socks-path" specifies where UDS file is. It's "/tmp" by default.
 
 ### 2.17 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.

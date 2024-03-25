@@ -87,6 +87,7 @@ Some devices and feature don't support to be snapshot yet:
 - `balloon`
 - `hugepage`,`mem-shared`,`backend file of memory`
 - `pmu`
+- `sve`
 - `gic-version=2`
 
 Some device attributes can't be changed:

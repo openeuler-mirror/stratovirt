@@ -19,7 +19,8 @@ use crate::ScsiBus::{aio_complete_cb, ScsiBus, ScsiCompleteCb};
 use crate::{Device, DeviceBase};
 use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
 use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
-use util::aio::{Aio, WriteZeroesState};
+use machine_manager::event_loop::EventLoop;
+use util::aio::{Aio, AioEngine, WriteZeroesState};
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -176,7 +177,11 @@ impl ScsiDevice {
         self.buf_align = alignments.1;
         let drive_id = VmConfig::get_drive_id(&drive_files, &self.config.path_on_host)?;
 
-        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type)?;
+        let mut thread_pool = None;
+        if self.config.aio_type != AioEngine::Off {
+            thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
+        }
+        let aio = Aio::new(Arc::new(aio_complete_cb), self.config.aio_type, thread_pool)?;
         let conf = BlockProperty {
             id: drive_id,
             format: self.config.format,

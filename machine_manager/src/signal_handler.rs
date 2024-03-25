@@ -27,6 +27,7 @@ use util::set_termi_canon_mode;
 
 pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
+const SYS_SECCOMP: i32 = 1;
 
 static mut RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
@@ -87,13 +88,20 @@ extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void)
 extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {
     set_signal(num);
     // SAFETY: The safety of this function is guaranteed by caller.
-    let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
-    write!(
-        &mut std::io::stderr(),
-        "Received a bad system call, number: {} \r\n",
-        badcall
-    )
-    .expect("Failed to write to stderr");
+    if let Some(sig_info) = unsafe { info.as_ref() } {
+        if SYS_SECCOMP == sig_info.si_code {
+            eprintln!("seccomp violation, Try running with `strace -ff` to identify the cause.");
+        }
+
+        // SAFETY: the pointer is not null.
+        let badcall = unsafe { *(info.cast::<i32>().offset(SYSTEMCALL_OFFSET)) };
+        write!(
+            &mut std::io::stderr(),
+            "Received a bad system call, number: {} \r\n",
+            badcall
+        )
+        .expect("Failed to write to stderr");
+    }
 }
 
 /// Register kill signal handler. Signals supported now are SIGTERM and SIGSYS.

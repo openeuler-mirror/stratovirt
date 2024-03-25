@@ -18,6 +18,8 @@ pub mod gtk;
 pub mod input;
 #[cfg(feature = "keycode")]
 mod keycode;
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+pub mod ohui_srv;
 #[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod utils;

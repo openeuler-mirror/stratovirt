@@ -7,7 +7,6 @@ license = "Mulan PSL v2"
 description = "Emulation machines"
 
 [dependencies]
-kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
 log = "0.4"
 libc = "0.2"
 serde_json = "1.0"
@@ -29,6 +28,7 @@ vfio = { path = "../vfio" }
 block_backend = { path = "../block_backend" }
 ui = { path = "../ui" }
 trace = { path = "../trace" }
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []
@@ -36,13 +36,17 @@ boot_time = ["cpu/boot_time"]
 scream = ["devices/scream", "machine_manager/scream"]
 scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
 scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]
+scream_ohaudio = ["scream", "devices/scream_ohaudio", "machine_manager/scream_ohaudio"]
 pvpanic = ["devices/pvpanic"]
 demo_device = ["devices/demo_device", "machine_manager/demo_device"]
 usb_host = ["devices/usb_host", "machine_manager/usb_host"]
 usb_camera = ["devices/usb_camera", "machine_manager/usb_camera"]
 usb_camera_v4l2 = ["usb_camera", "devices/usb_camera_v4l2", "machine_manager/usb_camera_v4l2", "util/usb_camera_v4l2"]
+usb_camera_oh = ["usb_camera", "devices/usb_camera_oh", "machine_manager/usb_camera_oh"]
 windows_emu_pid = ["ui/console", "machine_manager/windows_emu_pid"]
 gtk = ["windows_emu_pid", "ui/gtk", "machine_manager/gtk"]
 vnc = ["ui/vnc", "machine_manager/vnc"]
+vnc_auth = ["vnc"]
+ohui_srv = ["ui/ohui_srv", "machine_manager/ohui_srv", "virtio/ohui_srv"]
 ramfb = ["devices/ramfb", "machine_manager/ramfb"]
 virtio_gpu = ["virtio/virtio_gpu", "machine_manager/virtio_gpu"]

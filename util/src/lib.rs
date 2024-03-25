@@ -28,6 +28,8 @@ pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
+#[cfg(target_env = "ohos")]
+pub mod ohos_binding;
 #[cfg(feature = "pixman")]
 pub mod pixman;
 pub mod seccomp;
@@ -35,6 +37,7 @@ pub mod socket;
 pub mod syscall;
 pub mod tap;
 pub mod test_helper;
+pub mod thread_pool;
 pub mod time;
 pub mod unix;
 #[cfg(feature = "usb_camera_v4l2")]

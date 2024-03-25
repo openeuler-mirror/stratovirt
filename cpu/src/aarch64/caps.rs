@@ -10,41 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::Arc;
-
-use kvm_ioctls::Cap;
-
-use crate::CPUHypervisorOps;
-use machine_manager::config::{CpuConfig, PmuConfig};
-
-// Capabilities for ARM cpu.
-#[derive(Debug, Clone)]
-pub struct ArmCPUCaps {
-    pub irq_chip: bool,
-    pub ioevent_fd: bool,
-    pub irq_fd: bool,
-    pub user_mem: bool,
-    pub psci02: bool,
-    pub mp_state: bool,
-}
-
-impl ArmCPUCaps {
-    /// Initialize ArmCPUCaps instance.
-    pub fn init_capabilities(hypervisor_cpu: Arc<dyn CPUHypervisorOps>) -> Self {
-        ArmCPUCaps {
-            irq_chip: hypervisor_cpu.check_extension(Cap::Irqchip),
-            ioevent_fd: hypervisor_cpu.check_extension(Cap::Ioeventfd),
-            irq_fd: hypervisor_cpu.check_extension(Cap::Irqfd),
-            user_mem: hypervisor_cpu.check_extension(Cap::UserMemory),
-            psci02: hypervisor_cpu.check_extension(Cap::ArmPsci02),
-            mp_state: hypervisor_cpu.check_extension(Cap::MpState),
-        }
-    }
-}
+use machine_manager::config::{CpuConfig, PmuConfig, SveConfig};
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ArmCPUFeatures {
     pub pmu: bool,
+    pub sve: bool,
 }
 
 impl From<&CpuConfig> for ArmCPUFeatures {
@@ -53,6 +24,10 @@ impl From<&CpuConfig> for ArmCPUFeatures {
             pmu: match &conf.pmu {
                 PmuConfig::On => true,
                 PmuConfig::Off => false,
+            },
+            sve: match &conf.sve {
+                SveConfig::On => true,
+                SveConfig::Off => false,
             },
         }
     }

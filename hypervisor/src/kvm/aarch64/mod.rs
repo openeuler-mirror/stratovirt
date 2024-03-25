@@ -10,58 +10,28 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod cpu_caps;
 pub mod gicv2;
 pub mod gicv3;
+
+mod core_regs;
+mod sys_regs;
 
 use std::mem::forget;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use kvm_bindings::*;
 use kvm_ioctls::DeviceFd;
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
+use self::core_regs::Arm64CoreRegs;
+use self::sys_regs::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
 use crate::kvm::{KvmCpu, KvmHypervisor};
 use cpu::{
-    ArchCPU, Arm64CoreRegs, CPUBootConfig, CPUCaps, CPUFeatures, CpregListEntry, RegsIndex, CPU,
-    PMU_INTR, PPI_BASE,
+    ArchCPU, CPUBootConfig, CPUFeatures, CpregListEntry, RegsIndex, CPU, PMU_INTR, PPI_BASE,
 };
-
-// Arm Architecture Reference Manual defines the encoding of AArch64 system registers:
-// (Ref: ARMv8 ARM, Section: "System instruction class encoding overview")
-// While KVM defines another ID for each AArch64 system register, which is used in calling
-// `KVM_G/SET_ONE_REG` to access a system register of a guest. A mapping exists between the
-// Arm standard encoding and the KVM ID.
-// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/kvm.h#L216
-#[macro_export]
-macro_rules! arm64_sys_reg {
-    ($op0: tt, $op1: tt, $crn: tt, $crm: tt, $op2: tt) => {
-        KVM_REG_SIZE_U64
-            | KVM_REG_ARM64
-            | KVM_REG_ARM64_SYSREG as u64
-            | (((($op0 as u32) << KVM_REG_ARM64_SYSREG_OP0_SHIFT) & KVM_REG_ARM64_SYSREG_OP0_MASK)
-                as u64)
-            | (((($op1 as u32) << KVM_REG_ARM64_SYSREG_OP1_SHIFT) & KVM_REG_ARM64_SYSREG_OP1_MASK)
-                as u64)
-            | (((($crn as u32) << KVM_REG_ARM64_SYSREG_CRN_SHIFT) & KVM_REG_ARM64_SYSREG_CRN_MASK)
-                as u64)
-            | (((($crm as u32) << KVM_REG_ARM64_SYSREG_CRM_SHIFT) & KVM_REG_ARM64_SYSREG_CRM_MASK)
-                as u64)
-            | (((($op2 as u32) << KVM_REG_ARM64_SYSREG_OP2_SHIFT) & KVM_REG_ARM64_SYSREG_OP2_MASK)
-                as u64)
-    };
-}
-
-// The following system register codes can be found at this website:
-// https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h
-
-// MPIDR - Multiprocessor Affinity Register(SYS_MPIDR_EL1).
-pub const KVM_REG_ARM_MPIDR_EL1: u64 = arm64_sys_reg!(3, 0, 0, 0, 5);
-
-// Counter-timer Virtual Count register: Due to the API interface problem, the encode of
-// this register is SYS_CNTV_CVAL_EL0.
-pub const KVM_REG_ARM_TIMER_CNT: u64 = arm64_sys_reg!(3, 3, 14, 3, 2);
 
 pub const KVM_MAX_CPREG_ENTRIES: usize = 500;
 const KVM_NR_REGS: u64 = 31;
@@ -122,10 +92,6 @@ impl KvmHypervisor {
 }
 
 impl KvmCpu {
-    pub fn arch_get_msr_index_list(&self) -> Vec<u32> {
-        Vec::new()
-    }
-
     pub fn arch_init_pmu(&self) -> Result<()> {
         let pmu_attr = kvm_device_attr {
             group: KVM_ARM_VCPU_PMU_V3_CTRL,
@@ -189,7 +155,17 @@ impl KvmCpu {
 
         // Enable PMU from config.
         if vcpu_config.pmu {
+            if !self.caps.pmuv3 {
+                bail!("PMUv3 is not supported by KVM");
+            }
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PMU_V3;
+        }
+        // Enable SVE from config.
+        if vcpu_config.sve {
+            if !self.caps.sve {
+                bail!("SVE is not supported by KVM");
+            }
+            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_SVE;
         }
         drop(kvi);
 
@@ -197,9 +173,13 @@ impl KvmCpu {
 
         self.arch_vcpu_init()?;
 
-        arch_cpu.lock().unwrap().mpidr =
+        if vcpu_config.sve {
             self.fd
-                .get_one_reg(KVM_REG_ARM_MPIDR_EL1)
+                .vcpu_finalize(&(kvm_bindings::KVM_ARM_VCPU_SVE as i32))?;
+        }
+
+        arch_cpu.lock().unwrap().mpidr =
+            self.get_one_reg(KVM_REG_ARM_MPIDR_EL1)
                 .with_context(|| "Failed to get mpidr")? as u64;
 
         arch_cpu.lock().unwrap().features = *vcpu_config;
@@ -207,15 +187,25 @@ impl KvmCpu {
         Ok(())
     }
 
+    fn get_one_reg(&self, reg_id: u64) -> Result<u128> {
+        let mut val = [0_u8; 16];
+        self.fd.get_one_reg(reg_id, &mut val)?;
+        Ok(u128::from_le_bytes(val))
+    }
+
+    fn set_one_reg(&self, reg_id: u64, val: u128) -> Result<()> {
+        self.fd.set_one_reg(reg_id, &val.to_le_bytes())?;
+        Ok(())
+    }
+
     pub fn arch_get_one_reg(&self, reg_id: u64) -> Result<u128> {
-        Ok(self.fd.get_one_reg(reg_id)?)
+        self.get_one_reg(reg_id)
     }
 
     pub fn arch_get_regs(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         regs_index: RegsIndex,
-        _caps: &CPUCaps,
     ) -> Result<()> {
         let mut locked_arch_cpu = arch_cpu.lock().unwrap();
 
@@ -224,34 +214,39 @@ impl KvmCpu {
                 locked_arch_cpu.core_regs = self.get_core_regs()?;
             }
             RegsIndex::MpState => {
-                let mut mp_state = self.fd.get_mp_state()?;
-                if mp_state.mp_state != KVM_MP_STATE_STOPPED {
-                    mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+                if self.caps.mp_state {
+                    let mut mp_state = self.fd.get_mp_state()?;
+                    if mp_state.mp_state != KVM_MP_STATE_STOPPED {
+                        mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+                    }
+                    locked_arch_cpu.mp_state = mp_state;
                 }
-                locked_arch_cpu.mp_state = mp_state;
             }
             RegsIndex::VcpuEvents => {
-                locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                if self.caps.vcpu_events {
+                    locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                }
             }
             RegsIndex::CpregList => {
                 let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES)?;
                 self.fd.get_reg_list(&mut cpreg_list)?;
                 locked_arch_cpu.cpreg_len = 0;
-                for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
+                for cpreg in cpreg_list.as_slice() {
                     let mut cpreg_entry = CpregListEntry {
                         reg_id: *cpreg,
                         value: 0,
                     };
-                    if self.validate(&cpreg_entry) {
-                        self.get_cpreg(&mut cpreg_entry)?;
-                        locked_arch_cpu.cpreg_list[index] = cpreg_entry;
-                        locked_arch_cpu.cpreg_len += 1;
+                    if !self.get_cpreg(&mut cpreg_entry)? {
+                        // We sync these cpreg by hand, such as core regs.
+                        continue;
                     }
+                    let index = locked_arch_cpu.cpreg_len;
+                    locked_arch_cpu.cpreg_list[index] = cpreg_entry;
+                    locked_arch_cpu.cpreg_len += 1;
                 }
             }
             RegsIndex::VtimerCount => {
                 locked_arch_cpu.vtimer_cnt = self
-                    .fd
                     .get_one_reg(KVM_REG_ARM_TIMER_CNT)
                     .with_context(|| "Failed to get virtual timer count")?
                     as u64;
@@ -274,14 +269,18 @@ impl KvmCpu {
                     .with_context(|| format!("Failed to set core register for CPU {}", apic_id))?;
             }
             RegsIndex::MpState => {
-                self.fd
-                    .set_mp_state(locked_arch_cpu.mp_state)
-                    .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
+                if self.caps.mp_state {
+                    self.fd
+                        .set_mp_state(locked_arch_cpu.mp_state)
+                        .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
+                }
             }
             RegsIndex::VcpuEvents => {
-                self.fd
-                    .set_vcpu_events(&locked_arch_cpu.cpu_events)
-                    .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))?;
+                if self.caps.vcpu_events {
+                    self.fd
+                        .set_vcpu_events(&locked_arch_cpu.cpu_events)
+                        .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))?;
+                }
             }
             RegsIndex::CpregList => {
                 for cpreg in locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len].iter() {
@@ -290,8 +289,7 @@ impl KvmCpu {
                 }
             }
             RegsIndex::VtimerCount => {
-                self.fd
-                    .set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
+                self.set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
                     .with_context(|| "Failed to set virtual timer count")?;
             }
         }
@@ -306,37 +304,33 @@ impl KvmCpu {
     /// # Arguments
     ///
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
-    pub fn get_core_regs(&self) -> Result<kvm_regs> {
+    fn get_core_regs(&self) -> Result<kvm_regs> {
         let mut core_regs = kvm_regs::default();
 
-        core_regs.regs.sp = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
-        core_regs.sp_el1 = self.fd.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
-        core_regs.regs.pstate = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
-        core_regs.regs.pc = self.fd.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
-        core_regs.elr_el1 = self.fd.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
+        core_regs.regs.sp = self.get_one_reg(Arm64CoreRegs::UserPTRegSp.into())? as u64;
+        core_regs.sp_el1 = self.get_one_reg(Arm64CoreRegs::KvmSpEl1.into())? as u64;
+        core_regs.regs.pstate = self.get_one_reg(Arm64CoreRegs::UserPTRegPState.into())? as u64;
+        core_regs.regs.pc = self.get_one_reg(Arm64CoreRegs::UserPTRegPc.into())? as u64;
+        core_regs.elr_el1 = self.get_one_reg(Arm64CoreRegs::KvmElrEl1.into())? as u64;
 
         for i in 0..KVM_NR_REGS as usize {
             core_regs.regs.regs[i] =
-                self.fd
-                    .get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
+                self.get_one_reg(Arm64CoreRegs::UserPTRegRegs(i).into())? as u64;
         }
 
         for i in 0..KVM_NR_SPSR as usize {
-            core_regs.spsr[i] = self.fd.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
+            core_regs.spsr[i] = self.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
         }
 
         for i in 0..KVM_NR_FP_REGS as usize {
-            core_regs.fp_regs.vregs[i] = self
-                .fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
+            core_regs.fp_regs.vregs[i] =
+                self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
         }
 
         core_regs.fp_regs.fpsr =
-            self.fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
+            self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpsr.into())? as u32;
         core_regs.fp_regs.fpcr =
-            self.fd
-                .get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
+            self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateFpcr.into())? as u32;
 
         Ok(core_regs)
     }
@@ -349,44 +343,39 @@ impl KvmCpu {
     ///
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
     /// * `core_regs` - kvm_regs state to be written.
-    pub fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
-        self.fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
-        self.fd.set_one_reg(
+    fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
+        self.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
+        self.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
+        self.set_one_reg(
             Arm64CoreRegs::UserPTRegPState.into(),
             core_regs.regs.pstate as u128,
         )?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
-        self.fd
-            .set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
+        self.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
+        self.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
 
         for i in 0..KVM_NR_REGS as usize {
-            self.fd.set_one_reg(
+            self.set_one_reg(
                 Arm64CoreRegs::UserPTRegRegs(i).into(),
                 core_regs.regs.regs[i] as u128,
             )?;
         }
 
         for i in 0..KVM_NR_SPSR as usize {
-            self.fd
-                .set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
+            self.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
         }
 
         for i in 0..KVM_NR_FP_REGS as usize {
-            self.fd.set_one_reg(
+            self.set_one_reg(
                 Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
                 core_regs.fp_regs.vregs[i],
             )?;
         }
 
-        self.fd.set_one_reg(
+        self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
             core_regs.fp_regs.fpsr as u128,
         )?;
-        self.fd.set_one_reg(
+        self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
             core_regs.fp_regs.fpcr as u128,
         )?;
@@ -394,58 +383,46 @@ impl KvmCpu {
         Ok(())
     }
 
-    fn cpreg_tuples_entry(&self, cpreg_list_entry: &CpregListEntry) -> bool {
-        (cpreg_list_entry.reg_id & KVM_REG_ARM_COPROC_MASK as u64) == (KVM_REG_ARM_CORE as u64)
-    }
-
-    pub fn normal_cpreg_entry(&self, cpreg_list_entry: &CpregListEntry) -> bool {
-        if self.cpreg_tuples_entry(cpreg_list_entry) {
-            return false;
+    fn reg_sync_by_cpreg_list(reg_id: u64) -> Result<bool> {
+        let coproc = reg_id as u32 & KVM_REG_ARM_COPROC_MASK;
+        if coproc == KVM_REG_ARM_CORE {
+            return Ok(false);
         }
 
-        ((cpreg_list_entry.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U32)
-            || ((cpreg_list_entry.reg_id & KVM_REG_SIZE_MASK) == KVM_REG_SIZE_U64)
+        let size = reg_id & KVM_REG_SIZE_MASK;
+        if size == KVM_REG_SIZE_U32 || size == KVM_REG_SIZE_U64 {
+            Ok(true)
+        } else {
+            bail!("Can't handle size of register in cpreg list");
+        }
     }
 
-    /// Validate cpreg_list's tuples entry and normal entry.
-    pub fn validate(&self, cpreg_list_entry: &CpregListEntry) -> bool {
-        if self.cpreg_tuples_entry(cpreg_list_entry) {
-            return true;
+    fn get_cpreg(&self, cpreg: &mut CpregListEntry) -> Result<bool> {
+        if !Self::reg_sync_by_cpreg_list(cpreg.reg_id)? {
+            return Ok(false);
         }
-
-        self.normal_cpreg_entry(cpreg_list_entry)
+        cpreg.value = self.get_one_reg(cpreg.reg_id)?;
+        Ok(true)
     }
 
-    pub fn get_cpreg(&self, cpreg_list_entry: &mut CpregListEntry) -> Result<()> {
-        if self.normal_cpreg_entry(cpreg_list_entry) {
-            cpreg_list_entry.value = self.fd.get_one_reg(cpreg_list_entry.reg_id)?;
+    fn set_cpreg(&self, cpreg: &CpregListEntry) -> Result<bool> {
+        if !Self::reg_sync_by_cpreg_list(cpreg.reg_id)? {
+            return Ok(false);
         }
-
-        Ok(())
+        self.set_one_reg(cpreg.reg_id, cpreg.value)?;
+        Ok(true)
     }
 
-    pub fn set_cpreg(&self, cpreg: &CpregListEntry) -> Result<()> {
-        if self.normal_cpreg_entry(cpreg) {
-            self.fd.set_one_reg(cpreg.reg_id, cpreg.value)?;
-        }
-
-        Ok(())
+    pub fn arch_put_register(&self, cpu: Arc<CPU>) -> Result<()> {
+        let arch_cpu = &cpu.arch_cpu;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::MpState)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)
     }
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
-        let locked_arch_cpu = cpu.arch_cpu.lock().unwrap();
-        let apic_id = locked_arch_cpu.apic_id;
-        self.set_core_regs(locked_arch_cpu.core_regs)
-            .with_context(|| format!("Failed to set core register for CPU {}", apic_id))?;
-        self.fd
-            .set_mp_state(locked_arch_cpu.mp_state)
-            .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
-        for cpreg in locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len].iter() {
-            self.set_cpreg(cpreg)
-                .with_context(|| format!("Failed to set cpreg for CPU {}", apic_id))?;
-        }
-        self.fd
-            .set_vcpu_events(&locked_arch_cpu.cpu_events)
-            .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))
+        cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
+        self.arch_vcpu_init()
     }
 }

@@ -10,7 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "vnc_auth")]
 pub mod auth_sasl;
+#[cfg(feature = "vnc_auth")]
 pub mod auth_vencrypt;
 pub mod client_io;
 pub mod encoding;
@@ -35,7 +37,7 @@ use crate::{
         DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
     },
     error::VncError,
-    keycode::KeyCode,
+    keycode::{DpyMod, KeyCode},
     pixman::{
         bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
         get_image_width, ref_pixman_image, unref_pixman_image,
@@ -85,6 +87,16 @@ pub const fn round_up_div(n: u64, d: u64) -> u64 {
 
 pub const fn round_up(n: u64, d: u64) -> u64 {
     round_up_div(n, d) * d
+}
+
+/// Authentication type
+#[derive(Clone, Copy)]
+pub enum AuthState {
+    Invalid = 0,
+    No = 1,
+    Vnc = 2,
+    Vencrypt = 19,
+    Sasl = 20,
 }
 
 #[derive(Default)]
@@ -292,7 +304,7 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         .expect("Set noblocking for vnc socket failed");
 
     // Mapping ASCII to keycode.
-    let keysym2keycode = KeyCode::keysym_to_qkeycode();
+    let keysym2keycode = KeyCode::keysym_to_qkeycode(DpyMod::Vnc);
 
     let vnc_opts = Arc::new(VncInterface::default());
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));

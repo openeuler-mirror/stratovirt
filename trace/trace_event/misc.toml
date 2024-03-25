@@ -1,0 +1,29 @@
+[[events]]
+name = "scream_init"
+args = "dir: &dyn fmt::Debug, header: &dyn fmt::Debug"
+message = "dir: {:?} header: {:?}"
+enabled = true
+
+[[events]]
+name = "scream_alsa_send_frames"
+args = "frame: u32, offset: usize, end: usize"
+message = "frames {} offset {} end {}"
+enabled = true
+
+[[events]]
+name = "scream_alsa_receive_frames"
+args = "frame: u32, offset: usize, end: usize"
+message = "frames {} offset {} end {}"
+enabled = true
+
+[[events]]
+name = "scream_setup_alsa_swp"
+args = "name: &str, swp: &dyn fmt::Debug"
+message = "scream {} setup software parameters: {:?}"
+enabled = true
+
+[[events]]
+name = "scream_setup_alsa_hwp"
+args = "name: &str, hwp: &dyn fmt::Debug"
+message = "scream {} setup hardware parameters: {:?}"
+enabled = true

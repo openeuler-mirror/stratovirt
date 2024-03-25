@@ -20,14 +20,13 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
  "migration",
  "migration_derive",
  "nix 0.26.2",
+ "once_cell",
  "thiserror",
  "util",
  "vmm-sys-util",
@@ -164,6 +163,7 @@ dependencies = [
  "machine_manager",
  "once_cell",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -274,6 +274,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap"
+version = "4.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f13b9c79b5d1dd500d20ef541215a6423c75829ef43117e1b4d17fd8af0b5d76"
+dependencies = [
+ "bitflags",
+ "clap_derive",
+ "clap_lex",
+ "once_cell",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "684a277d672e91966334af371f1a7b5833f9aa00b07c84e92fbce95e00208ce8"
+dependencies = [
+ "heck",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "033f6b7a4acb1f358c742aaca805c939ee73b4c6209ae4318ec7aca81c42e646"
+dependencies = [
+ "os_str_bytes",
+]
+
+[[package]]
 name = "const_format"
 version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -308,7 +342,6 @@ version = "2.3.0"
 dependencies = [
  "anyhow",
  "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
@@ -333,10 +366,9 @@ dependencies = [
  "byteorder",
  "cairo-rs",
  "chardev_backend",
+ "clap",
  "cpu",
  "drm-fourcc",
- "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "libpulse-binding",
  "libpulse-simple-binding",
@@ -783,9 +815,9 @@ dependencies = [
 
 [[package]]
 name = "kvm-ioctls"
-version = "0.13.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8f8dc9c1896e5f144ec5d07169bc29f39a047686d29585a91f30489abfaeb6b"
+checksum = "9bdde2b46ee7b6587ef79f751019c4726c4f2d3e4628df5d69f3f9c5cb6c6bd4"
 dependencies = [
  "kvm-bindings",
  "libc",
@@ -908,10 +940,10 @@ dependencies = [
  "anyhow",
  "block_backend",
  "boot_loader",
+ "clap",
  "cpu",
  "devices",
  "hypervisor",
- "kvm-bindings",
  "libc",
  "log",
  "machine_manager",
@@ -932,8 +964,8 @@ name = "machine_manager"
 version = "2.3.0"
 dependencies = [
  "anyhow",
+ "clap",
  "hex",
- "kvm-bindings",
  "libc",
  "log",
  "once_cell",
@@ -986,7 +1018,6 @@ name = "migration"
 version = "2.3.0"
 dependencies = [
  "anyhow",
- "kvm-bindings",
  "kvm-ioctls",
  "log",
  "machine_manager",
@@ -1026,6 +1057,7 @@ dependencies = [
  "hex",
  "libc",
  "machine",
+ "machine_manager",
  "rand",
  "serde",
  "serde_json",
@@ -1133,6 +1165,12 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "os_str_bytes"
+version = "6.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
 
 [[package]]
 name = "ozone"
@@ -1708,6 +1746,7 @@ dependencies = [
 name = "ui"
 version = "2.3.0"
 dependencies = [
+ "address_space",
  "anyhow",
  "bitintr",
  "cairo-rs",
@@ -1767,13 +1806,13 @@ dependencies = [
  "byteorder",
  "io-uring",
  "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "nix 0.26.2",
  "once_cell",
  "serde",
  "thiserror",
+ "trace",
  "v4l2-sys-mit",
  "vmm-sys-util",
 ]
@@ -1842,8 +1881,8 @@ dependencies = [
  "block_backend",
  "byteorder",
  "chardev_backend",
+ "clap",
  "devices",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",

@@ -15,6 +15,7 @@ pub(crate) mod ftrace;
 
 use std::{
     fmt,
+    os::unix::io::RawFd,
     sync::atomic::{AtomicBool, Ordering},
 };
 #[cfg(feature = "trace_to_ftrace")]

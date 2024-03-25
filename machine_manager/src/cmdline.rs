@@ -114,7 +114,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("cpu")
             .long("cpu")
-            .value_name("host[,pmu=on|off]")
+            .value_name("host[,pmu=on|off][,sve=on|off]")
             .help("set CPU model and features.")
             .can_no_value(false)
             .takes_value(true)
@@ -549,7 +549,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     #[cfg(feature = "vnc")]
     add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
-    #[cfg(feature = "gtk")]
+    #[cfg(any(feature = "gtk", feature = "ohui_srv"))]
     add_args_to_config!((args.value_of("display")), vm_cfg, add_display);
     #[cfg(feature = "windows_emu_pid")]
     add_args_to_config!(

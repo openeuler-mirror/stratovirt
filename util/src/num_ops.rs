@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::num::ParseIntError;
+
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
@@ -409,7 +411,27 @@ pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
     true
 }
 
-///  Parse a string to a number, decimal and heximal numbers supported now.
+pub trait Num {
+    type ParseIntError;
+    fn from_str_radix(s: &str, radix: u32) -> Result<Self, ParseIntError>
+    where
+        Self: Sized;
+}
+
+macro_rules! int_trait_impl {
+    ($name:ident for $($t:ty)*) => ($(
+        impl $name for $t {
+            type ParseIntError = ::core::num::ParseIntError;
+            fn from_str_radix(s: &str, radix: u32) -> Result<Self, ParseIntError> {
+                <$t>::from_str_radix(s, radix)
+            }
+        }
+    )*)
+}
+
+int_trait_impl!(Num for u8 u16 usize);
+
+///  Parse a string to a number, decimal and hexadecimal numbers supported now.
 ///
 /// # Arguments
 ///
@@ -419,26 +441,23 @@ pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
 ///
 /// ```rust
 /// extern crate util;
-/// use util::num_ops::str_to_usize;
+/// use util::num_ops::str_to_num;
 ///
-/// let value = str_to_usize("0x17".to_string()).unwrap();
+/// let value = str_to_num::<usize>("0x17").unwrap();
 /// assert!(value == 0x17);
-/// let value = str_to_usize("0X17".to_string()).unwrap();
+/// let value = str_to_num::<u16>("0X17").unwrap();
 /// assert!(value == 0x17);
-/// let value = str_to_usize("17".to_string()).unwrap();
+/// let value = str_to_num::<u8>("17").unwrap();
 /// assert!(value == 17);
 /// ```
-pub fn str_to_usize(string_in: String) -> Result<usize> {
+pub fn str_to_num<T: Num>(s: &str) -> Result<T> {
     let mut base = 10;
-    if string_in.starts_with("0x") || string_in.starts_with("0X") {
+    if s.starts_with("0x") || s.starts_with("0X") {
         base = 16;
     }
-    let without_prefix = string_in
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    let num = usize::from_str_radix(without_prefix, base)
-        .with_context(|| format!("Invalid num: {}", string_in))?;
+    let without_prefix = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let num =
+        T::from_str_radix(without_prefix, base).with_context(|| format!("Invalid num: {}", s))?;
     Ok(num)
 }
 
@@ -639,12 +658,12 @@ mod test {
     }
 
     #[test]
-    fn test_str_to_usize() {
-        let value = str_to_usize("0x17".to_string()).unwrap();
+    fn test_str_to_num() {
+        let value = str_to_num::<usize>("0x17").unwrap();
         assert!(value == 0x17);
-        let value = str_to_usize("0X17".to_string()).unwrap();
+        let value = str_to_num::<u16>("0X17").unwrap();
         assert!(value == 0x17);
-        let value = str_to_usize("17".to_string()).unwrap();
+        let value = str_to_num::<u8>("17").unwrap();
         assert!(value == 17);
     }
 

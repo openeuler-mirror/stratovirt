@@ -38,16 +38,6 @@ const SASL_DATA_MAX_LEN: u32 = 1024 * 1024;
 /// Minimum supported encryption length of ssf layer in sasl.
 const MIN_SSF_LENGTH: usize = 56;
 
-/// Authentication type
-#[derive(Clone, Copy)]
-pub enum AuthState {
-    Invalid = 0,
-    No = 1,
-    Vnc = 2,
-    Vencrypt = 19,
-    Sasl = 20,
-}
-
 /// Authentication and encryption method.
 #[derive(Debug, Clone, Copy)]
 pub enum SubAuthState {

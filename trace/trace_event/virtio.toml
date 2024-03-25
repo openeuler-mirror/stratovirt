@@ -35,6 +35,24 @@ message = "virtio-serial port is none or disconnected."
 enabled = true
 
 [[events]]
+name = "virtio_serial_pause_rx"
+args = ""
+message = "pause rx."
+enabled = true
+
+[[events]]
+name = "virtio_serial_unpause_chardev_rx"
+args = ""
+message = "unpause rx on chardev."
+enabled = true
+
+[[events]]
+name = "virtio_serial_new_inputqueue_buf"
+args = ""
+message = "new buf appeared in virtio-serial input queue."
+enabled = true
+
+[[events]]
 name = "virtio_rng_write_req_data"
 args = "size: u32"
 message = "size {}"
@@ -86,4 +104,202 @@ enabled = true
 name = "virtio_blk_write_config"
 args = "offset: u64, data: &[u8]"
 message = "offset {}, data {:?}"
+enabled = true
+
+[[events]]
+name = "virtio_gpu_update_cursor"
+args = "scanout: u32, x: u32, y: u32, res: u32, cmd: &str"
+message = "scanout {}, x {}, y {}, resource {}, type {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_get_edid"
+args = "scanout: u32"
+message = "scanout {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_create_2d"
+args = "res: u32, fmt: u32, w: u32, h: u32"
+message = "resource: {}, format {}, width {}, height {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_unref"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_xfer_toh_2d"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_flush"
+args = "res: u32, w: u32, h: u32, x: u32, y: u32"
+message = "resource: {}, width: {}, height: {}, x: {}, y: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_set_scanout"
+args = "res: u32, scanout: u32, w: u32, h: u32, x: u32, y: u32"
+message = "resource: {}, scanout: {}, width: {}, height: {}, x: {}, y: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_attach_backing"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_resource_detach_backing"
+args = "res: u32"
+message = "resource: {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_init_config_features"
+args = "features: u64"
+message = "features is {}."
+enabled = true
+
+[[events]]
+name = "virtio_gpu_console_hw_update"
+args = "con: usize, w: i32, h: i32"
+message = "console {} receive hw update request, update size {} {}."
+enabled = true
+
+[[events]]
+name = "virtio_net_handle_ctrl"
+args = "class: u8, cmd: u8"
+message = "class {}, cmd {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_pop_avail"
+args = "vring: u64, in_num: usize, out_num: usize"
+message = "virtqueue {:#X} pop avail elem, in_iov length {}, out_iov length {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_add_used"
+args = "vring: u64, next_used: u64, index: u16, len: u32"
+message = "virtqueue {:#X} add used elem, used index {}, desc index {}, len {}"
+enabled = true
+
+[[events]]
+name = "virtqueue_set_avail_event"
+args = "vring: u64, event_idx: u16"
+message = "virtqueue {:#X} set avail event idx {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_common"
+args = "func: &str, id: &str"
+message = "{} for device {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_read_common_config"
+args = "id: &str, offset: u64"
+message = "read common config for {}, offset is {:#X}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_write_common_config"
+args = "id: &str, offset: u64, value: u32"
+message = "write common config for {}, offset is {:#X}, value is {:#X}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_read_config"
+args = "id: &str, offset: u64, len: usize"
+message = "read config for {}, offset is {:#X}, len is {}"
+enabled = true
+
+[[events]]
+name = "virtio_tpt_write_config"
+args = "id: &str, offset: u64, data: &[u8]"
+message = "write config for {}, offset is {:#X}, data is {:X?}"
+enabled = true
+
+[[events]]
+name = "vhost_set_owner"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vhost_reset_owner"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "vhost_get_features"
+args = "features: u64"
+message = "features: {:#x}."
+enabled = true
+
+[[events]]
+name = "vhost_set_features"
+args = "features: u64"
+message = "features: {:#x}."
+enabled = true
+
+[[events]]
+name = "vhost_set_mem_table"
+args = "mem: &dyn fmt::Debug"
+message = "mem table: {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_num"
+args = "queue_idx: usize, num: u16"
+message = "set vring {} descriptors num {}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_addr"
+args = "vring_addr: &dyn fmt::Debug"
+message = "vring addr: {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_base"
+args = "queue_idx: usize, num: u16"
+message = "queue_idx {} num {}."
+enabled = true
+
+[[events]]
+name = "vhost_get_vring_base"
+args = "queue_idx: usize, num: u16"
+message = "queue_idx {} num {}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_call"
+args = "queue_idx: usize, event_fd: &dyn fmt::Debug"
+message = "queue_idx {}, event_fd {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_kick"
+args = "queue_idx: usize, event_fd: &dyn fmt::Debug"
+message = "queue_idx {}, event_fd {:?}."
+enabled = true
+
+[[events]]
+name = "vhost_set_vring_enable"
+args = "queue_idx: usize, status: bool"
+message = "set vring {} status {}."
+enabled = true
+
+[[events]]
+name = "vhost_delete_mem_range_failed"
+args = ""
+message = "Vhost: deleting mem region failed: not matched."
 enabled = true

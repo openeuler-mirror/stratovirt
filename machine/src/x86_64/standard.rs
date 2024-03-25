@@ -16,7 +16,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::ich9_lpc;
@@ -48,7 +48,6 @@ use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
     MigrateInterface, VmState,
@@ -184,7 +183,7 @@ impl StdMachine {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
-            cpu.set_to_boot_state();
+            cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
         }
 
         locked_vm
@@ -200,11 +199,28 @@ impl StdMachine {
         }
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.reset()
-                .with_context(|| format!("Failed to reset vcpu{}", cpu_index))?;
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
+
+        Ok(())
+    }
+
+    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let locked_vm = vm.lock().unwrap();
+        let vmstate = {
+            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
+            *state
+        };
+
+        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if locked_vm.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
+        }
+
+        info!("vm destroy");
 
         Ok(())
     }
@@ -357,7 +373,7 @@ impl StdMachineOps for StdMachine {
             )?;
             vcpu.realize(boot_cfg, topology).with_context(|| {
                 format!(
-                    "Failed to realize arch cpu register/features for CPU {}/KVM",
+                    "Failed to realize arch cpu register/features for CPU {}",
                     vcpu_id
                 )
             })?;
@@ -544,19 +560,12 @@ impl MachineOps for StdMachine {
         locked_vm.add_devices(vm_config)?;
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
-
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
-        } else {
-            None
-        };
+        let boot_config = locked_vm.load_boot_source(fwcfg.as_ref())?;
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
-
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -567,32 +576,30 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
+        locked_vm.init_cpu_controller(boot_config, topology, vm.clone())?;
 
-        if migrate.0 == MigrateMode::Unknown {
-            if let Some(fw_cfg) = fwcfg {
-                locked_vm
-                    .build_acpi_tables(&fw_cfg)
-                    .with_context(|| "Failed to create ACPI tables")?;
-                let mut mem_array = Vec::new();
-                let mem_size = vm_config.machine_config.mem_config.mem_size;
-                let below_size =
-                    std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+        if let Some(fw_cfg) = fwcfg {
+            locked_vm
+                .build_acpi_tables(&fw_cfg)
+                .with_context(|| "Failed to create ACPI tables")?;
+            let mut mem_array = Vec::new();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            let below_size =
+                std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+            mem_array.push((
+                MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+                below_size,
+            ));
+            if mem_size > below_size {
                 mem_array.push((
-                    MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
-                    below_size,
+                    MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                    mem_size - below_size,
                 ));
-                if mem_size > below_size {
-                    mem_array.push((
-                        MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
-                        mem_size - below_size,
-                    ));
-                }
-
-                locked_vm
-                    .build_smbios(&fw_cfg, mem_array)
-                    .with_context(|| "Failed to create smbios tables")?;
             }
+
+            locked_vm
+                .build_smbios(&fw_cfg, mem_array)
+                .with_context(|| "Failed to create smbios tables")?;
         }
 
         locked_vm
@@ -736,7 +743,6 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MSRS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SUPPORTED_CPUID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CPUID2() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_SREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_REGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_XSAVE() as u32)
@@ -744,7 +750,6 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_DEBUGREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_LAPIC() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
 }
 
 pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
@@ -772,6 +777,8 @@ pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sched_setattr),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_fadvise64),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rseq),
     ]
 }
 
@@ -988,17 +995,10 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn destroy(&self) -> bool {
-        let vmstate = {
-            let state = self.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
             return false;
         }
-
-        info!("vm destroy");
-        EventLoop::get_ctx(None).unwrap().kick();
 
         true
     }

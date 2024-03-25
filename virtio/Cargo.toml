@@ -10,7 +10,6 @@ description = "Virtio devices emulation"
 byteorder = "1.4.3"
 thiserror = "1.0"
 anyhow = "1.0"
-kvm-ioctls = "0.13.0"
 libc = "0.2"
 log = "0.4"
 serde_json = "1.0"
@@ -27,7 +26,9 @@ block_backend = {path = "../block_backend"}
 chardev_backend = {path = "../chardev_backend" }
 ui = { path = "../ui", features = ["console"], optional = true }
 trace = {path = "../trace"}
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []
 virtio_gpu = ["ui", "machine_manager/virtio_gpu", "util/pixman"]
+ohui_srv = []

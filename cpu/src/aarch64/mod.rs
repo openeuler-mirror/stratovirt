@@ -11,11 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod caps;
-mod core_regs;
 
+pub use self::caps::ArmCPUFeatures;
 pub use self::caps::CpregListEntry;
-pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
-pub use self::core_regs::Arm64CoreRegs;
 
 use std::sync::{Arc, Mutex};
 
@@ -189,23 +187,13 @@ impl ArmCPUState {
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs, &self.caps)?;
-
-        if self.caps.mp_state {
-            self.hypervisor_cpu.get_regs(
-                self.arch_cpu.clone(),
-                ArmRegsIndex::MpState,
-                &self.caps,
-            )?;
-        };
-
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs)?;
         self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CpregList, &self.caps)?;
-        self.hypervisor_cpu.get_regs(
-            self.arch_cpu.clone(),
-            ArmRegsIndex::VcpuEvents,
-            &self.caps,
-        )?;
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::MpState)?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CpregList)?;
+        self.hypervisor_cpu
+            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::VcpuEvents)?;
 
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
@@ -218,13 +206,6 @@ impl StateTransfer for CPU {
         *cpu_state_locked = cpu_state;
         drop(cpu_state_locked);
 
-        self.hypervisor_cpu.vcpu_init()?;
-
-        if cpu_state.features.pmu {
-            self.hypervisor_cpu
-                .init_pmu()
-                .with_context(|| MigrationError::FromBytesError("Failed to init pmu."))?;
-        }
         Ok(())
     }
 

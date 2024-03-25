@@ -21,21 +21,25 @@ once_cell = "1.18.0"
 thiserror = "1.0"
 anyhow = "1.0"
 trace = { path = "../trace" }
-kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
 util = { path = "../util" }
+clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]
 default = []
 scream = []
 scream_alsa = ["scream"]
 scream_pulseaudio = ["scream"]
+scream_ohaudio = ["scream"]
 demo_device = []
 usb_host = []
 usb_camera = []
 usb_camera_v4l2 = ["usb_camera"]
+usb_camera_oh = ["usb_camera"]
 windows_emu_pid = []
+ohui_srv = []
 gtk = []
 vnc = []
+vnc_auth = []
 ramfb = []
 virtio_gpu = []
 pvpanic = []
