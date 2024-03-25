@@ -577,6 +577,21 @@ Receive a file descriptor via SCM rights and assign it a name.
 <- { "return": {} }
  ```
 
+### switch-audio-record
+
+Control if the scream device can use host's microphone record.
+
+#### Arguments
+
+* `authorized` : "on" means scream can use host's microphone record, "off" opposites in meaning.
+
+#### Example
+
+```json
+-> { "execute": "switch-audio-record", "arguments": { "authorized": "on" } }
+<- { "return": {} }
+ ```
+
 ## Event Notification
 
 When some events happen, connected client will receive QMP events.
