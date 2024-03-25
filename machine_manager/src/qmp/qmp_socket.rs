@@ -469,6 +469,7 @@ fn qmp_command_exec(
         (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
+        (switch_audio_record, switch_audio_record, authorized),
         (blockdev_del, blockdev_del, node_name),
         (netdev_del, netdev_del, id),
         (chardev_remove, chardev_remove, id),
