@@ -11,11 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-mod camera;
+pub mod camera;
 
 use std::ffi::OsStr;
-use std::os::raw::{c_int, c_void};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use libloading::Library;
@@ -42,7 +41,7 @@ struct LibHwfAdapter {
     #[allow(unused)]
     library: Library,
     #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-    camera: CamFuncTable,
+    camera: Arc<CamFuncTable>,
 }
 
 impl LibHwfAdapter {
@@ -51,8 +50,9 @@ impl LibHwfAdapter {
             Library::new(library_name).with_context(|| "failed to load hwf_adapter library")?;
 
         #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-        let camera =
-            CamFuncTable::new(&library).with_context(|| "failed to init camera function table")?;
+        let camera = Arc::new(
+            CamFuncTable::new(&library).with_context(|| "failed to init camera function table")?,
+        );
 
         Ok(Self {
             library,
@@ -60,6 +60,16 @@ impl LibHwfAdapter {
             camera,
         })
     }
+
+    #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+    fn get_camera_api(&self) -> Arc<CamFuncTable> {
+        self.camera.clone()
+    }
+}
+
+#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+pub fn hwf_adapter_camera_api() -> Arc<CamFuncTable> {
+    LIB_HWF_ADAPTER.read().unwrap().get_camera_api()
 }
 
 #[macro_export]
@@ -74,151 +84,4 @@ macro_rules! get_libfn {
             })?
             .into_raw()
     };
-}
-
-macro_rules! hwf_call {
-    ( $klass: ident, $fname: ident ( $($x: expr),* ) ) => {
-        (LIB_HWF_ADAPTER.read().unwrap().$klass.$fname)( $($x),* )
-    };
-}
-
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-macro_rules! hwf_camera_call {
-    ( $fname: ident ( $($x: expr),* ) ) => {
-        hwf_call!(camera, $fname( $($x),* ))
-    };
-}
-
-/// Camera APIs in libhwf_adapter.so
-
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub type ProfileRecorder = camera::ProfileRecorder;
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub type BufferProcess = camera::BufferProcessFn;
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub type BrokenProcess = camera::BrokenProcessFn;
-
-/// # Safety
-///
-/// The caller must save returned value for later use.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_create_ctx() -> *mut c_void {
-    hwf_camera_call!(create_ctx())
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_create_session(ctx: *mut c_void) -> c_int {
-    hwf_camera_call!(create_session(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_release_session(ctx: *mut c_void) {
-    hwf_camera_call!(release_session(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_init_cameras(ctx: *mut c_void) -> c_int {
-    hwf_camera_call!(init_cameras(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_init_profiles(ctx: *mut c_void) -> c_int {
-    hwf_camera_call!(init_profiles(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function
-/// and valid profile index.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_get_profile_size(ctx: *mut c_void, idx: c_int) -> c_int {
-    hwf_camera_call!(get_profile_size(ctx, idx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function,
-/// valid profile pointer and valid index of camera and profile.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_get_profile(
-    ctx: *mut c_void,
-    cam_idx: c_int,
-    profile_idx: c_int,
-    profile: *mut c_void,
-) -> c_int {
-    hwf_camera_call!(get_profile(ctx, cam_idx, profile_idx, profile))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function
-/// and valid index of camera and profile.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_set_profile(ctx: *mut c_void, cam_idx: c_int, profile_idx: c_int) -> c_int {
-    hwf_camera_call!(set_profile(ctx, cam_idx, profile_idx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function
-/// and take care about the logic of process callbacks.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_pre_start(
-    ctx: *mut c_void,
-    buffer_proc: BufferProcess,
-    broken_proc: BrokenProcess,
-) -> c_int {
-    hwf_camera_call!(pre_start(ctx, buffer_proc, broken_proc))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_start(ctx: *mut c_void) -> c_int {
-    hwf_camera_call!(start(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_stop_output(ctx: *mut c_void) {
-    hwf_camera_call!(stop_output(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_release(ctx: *mut c_void) {
-    hwf_camera_call!(release(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcma_destroy_ctx(ctx: *mut *mut c_void) {
-    hwf_camera_call!(destroy_ctx(ctx))
-}
-
-/// # Safety
-///
-/// The caller must ensure the ctx is returned from OhcamCreateCtx function.
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
-pub unsafe fn ohcam_allow_next_frame(ctx: *mut c_void) {
-    hwf_camera_call!(allow_next_frame(ctx))
 }
