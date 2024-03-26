@@ -10,18 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::raw::{c_int, c_void};
 use std::sync::RwLock;
 
 use anyhow::{bail, Context, Result};
+use log::error;
 use once_cell::sync::Lazy;
 
-use super::ohcam_rapi::*;
 use crate::camera_backend::{
     CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType,
 };
 use util::aio::Iovec;
+use util::ohos_binding::camera::*;
 
 type OhCamCB = RwLock<OhCamCallBack>;
 static OHCAM_CALLBACK: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(OhCamCallBack::default()));
@@ -81,7 +81,7 @@ pub struct OhCameraBackend {
     id: String,
     camidx: u8,
     profile_cnt: u8,
-    ctx: *mut c_void,
+    ctx: OhCamera,
     fmt_list: Vec<CameraFormatList>,
     selected_profile: u8,
 }
@@ -104,27 +104,19 @@ fn cam_fmt_from_oh(t: i32) -> Result<FmtType> {
 
 impl OhCameraBackend {
     pub fn new(id: String, camid: String) -> Result<Self> {
-        let p_ctx = ohcam_init()?;
         let idx = camid.parse::<u8>().with_context(|| "Invalid PATH format")?;
-        check_cam_idx(idx)?;
+        let ctx = OhCamera::new(idx as i32)?;
 
-        let profile_cnt = ohcam_get_fmt_nums(p_ctx, idx as i32)? as u8;
+        let profile_cnt = ctx.get_fmt_nums(idx as i32)? as u8;
 
         Ok(OhCameraBackend {
             id,
             camidx: idx,
             profile_cnt,
-            ctx: p_ctx,
+            ctx,
             fmt_list: vec![],
             selected_profile: 0,
         })
-    }
-}
-
-impl Drop for OhCameraBackend {
-    fn drop(&mut self) {
-        ohcam_release_camera(self.ctx);
-        ohcam_drop_ctx(std::ptr::addr_of_mut!(self.ctx));
     }
 }
 
@@ -147,7 +139,8 @@ impl CameraBackend for OhCameraBackend {
                 }
 
                 self.selected_profile = fmt.fmt_index - 1;
-                ohcam_set_fmt(self.ctx, self.camidx as i32, self.selected_profile as i32)?;
+                self.ctx
+                    .set_fmt(self.camidx as i32, self.selected_profile as i32)?;
                 return Ok(());
             }
         }
@@ -159,53 +152,43 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn video_stream_on(&mut self) -> Result<()> {
-        ohcam_start_stream(self.ctx, on_buffer_available, on_broken)
+        self.ctx.start_stream(on_buffer_available, on_broken)
     }
 
     fn video_stream_off(&mut self) -> Result<()> {
-        ohcam_stop_stream(self.ctx);
+        self.ctx.stop_stream();
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
         Ok(())
     }
 
     fn list_format(&mut self) -> Result<Vec<CameraFormatList>> {
         let mut fmt_list: Vec<CameraFormatList> = Vec::new();
-        let mut fmt: c_int = 0;
-        let mut w: c_int = 0;
-        let mut h: c_int = 0;
-        let mut fps: c_int = 0;
+
         for idx in 0..self.profile_cnt {
-            if ohcam_get_profile(
-                self.ctx,
-                self.camidx as i32,
-                idx as i32,
-                &mut fmt,
-                &mut w,
-                &mut h,
-                &mut fps,
-            )
-            .is_err()
-            {
-                continue;
+            match self.ctx.get_profile(self.camidx as i32, idx as i32) {
+                Ok((fmt, width, height, mut fps)) => {
+                    if (fmt != CAMERA_FORMAT_YUV420SP) && (fmt != CAMERA_FORMAT_MJPEG) {
+                        continue;
+                    }
+                    // NOTE: windows camera APP doesn't support fps lower than 30, and some OH PC only support 15 fps.
+                    if fps < 30 {
+                        fps = 30;
+                    }
+
+                    let frame = CameraFrame {
+                        width: width as u32,
+                        height: height as u32,
+                        index: 1,
+                        interval: FPS_INTERVAL_TRANS / fps as u32,
+                    };
+                    fmt_list.push(CameraFormatList {
+                        format: cam_fmt_from_oh(fmt)?,
+                        frame: vec![frame],
+                        fmt_index: (idx) + 1,
+                    });
+                }
+                Err(e) => error!("{:?}", e),
             }
-            // NOTE: windows camera APP doesn't support fps lower than 30, and some OH PC only support 15 fps.
-            if fps < 30 {
-                fps = 30;
-            }
-            if (fmt != CAMERA_FORMAT_YUV420SP) && (fmt != CAMERA_FORMAT_MJPEG) {
-                continue;
-            }
-            let frame = CameraFrame {
-                width: w as u32,
-                height: h as u32,
-                index: 1,
-                interval: FPS_INTERVAL_TRANS / fps as u32,
-            };
-            fmt_list.push(CameraFormatList {
-                format: cam_fmt_from_oh(fmt)?,
-                frame: vec![frame],
-                fmt_index: (idx) + 1,
-            });
         }
         self.fmt_list = fmt_list.clone();
         Ok(fmt_list)
@@ -213,7 +196,7 @@ impl CameraBackend for OhCameraBackend {
 
     fn reset(&mut self) {
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
-        ohcam_reset_cam(self.ctx);
+        self.ctx.reset_camera();
     }
 
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
@@ -253,7 +236,7 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn next_frame(&mut self) -> Result<()> {
-        ohcam_next_frame(self.ctx);
+        self.ctx.next_frame();
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
         Ok(())
     }
