@@ -54,6 +54,8 @@ use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
 use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
+#[cfg(feature = "scream")]
+use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
 #[cfg(feature = "usb_camera")]
@@ -1434,6 +1436,22 @@ impl DeviceInterface for StdMachine {
                 None,
             ),
         }
+    }
+
+    #[cfg(feature = "scream")]
+    fn switch_audio_record(&self, authorized: String) -> Response {
+        match authorized.as_str() {
+            "on" => set_record_authority(true),
+            "off" => set_record_authority(false),
+            _ => {
+                let err_str = format!("Failed to set audio capture authority: {:?}", authorized);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_str),
+                    None,
+                );
+            }
+        }
+        Response::create_empty_response()
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
