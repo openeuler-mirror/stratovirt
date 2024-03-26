@@ -30,6 +30,7 @@ use std::{
 
 use anyhow::{Ok, Result};
 use lazy_static::lazy_static;
+use log::warn;
 use regex::Regex;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -37,16 +38,33 @@ use trace_generator::{
     add_trace_state_to, gen_trace_event_func, gen_trace_scope_func, gen_trace_state,
 };
 
+#[derive(PartialEq, Eq)]
+pub enum TraceType {
+    Event,
+    Scope,
+    Unknown,
+}
+
 struct TraceState {
     name: String,
+    trace_type: TraceType,
     get_state: fn() -> bool,
     set_state: fn(bool),
 }
 
 impl TraceState {
-    fn new(name: String, get_state: fn() -> bool, set_state: fn(bool)) -> Self {
+    fn new(name: String, type_str: &str, get_state: fn() -> bool, set_state: fn(bool)) -> Self {
+        let trace_type = match type_str {
+            "event" => TraceType::Event,
+            "scope" => TraceType::Scope,
+            _ => {
+                warn!("The type of {} is Unknown: {}", name, type_str);
+                TraceType::Unknown
+            }
+        };
         TraceState {
             name,
+            trace_type,
             get_state,
             set_state,
         }
@@ -68,6 +86,15 @@ impl TraceStateSet {
         for state in &self.state_list {
             if re.is_match(&state.name) {
                 (state.set_state)(target_state);
+            }
+        }
+        Ok(())
+    }
+
+    fn enable_state_by_type(&self, trace_type: TraceType) -> Result<()> {
+        for state in &self.state_list {
+            if state.trace_type == trace_type {
+                (state.set_state)(true);
             }
         }
         Ok(())
@@ -125,4 +152,8 @@ pub fn get_state_by_pattern(pattern: String) -> Result<Vec<(String, bool)>> {
 
 pub fn set_state_by_pattern(pattern: String, state: bool) -> Result<()> {
     TRACE_STATE_SET.set_state_by_pattern(pattern, state)
+}
+
+pub fn enable_state_by_type(trace_type: TraceType) -> Result<()> {
+    TRACE_STATE_SET.enable_state_by_type(trace_type)
 }

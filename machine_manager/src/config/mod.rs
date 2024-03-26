@@ -70,7 +70,7 @@ use clap::Parser;
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use trace::set_state_by_pattern;
+use trace::{enable_state_by_type, set_state_by_pattern, TraceType};
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::{
@@ -447,7 +447,7 @@ pub fn parse_bool(s: &str) -> Result<bool> {
     }
 }
 
-fn enable_trace_state(path: &str) -> Result<()> {
+fn enable_trace_state_from_file(path: &str) -> Result<()> {
     let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
     let mut buf = String::new();
     file.read_to_string(&mut buf)
@@ -466,16 +466,41 @@ fn enable_trace_state(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn enable_trace_state_from_type(type_str: &str) -> Result<()> {
+    match type_str {
+        "events" => enable_state_by_type(TraceType::Event)?,
+        "scopes" => enable_state_by_type(TraceType::Scope)?,
+        "all" => {
+            enable_state_by_type(TraceType::Event)?;
+            enable_state_by_type(TraceType::Scope)?;
+        }
+        _ => bail!("Unknown trace type {}", type_str),
+    };
+
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(no_binary_name(true))]
 struct TraceConfig {
     #[arg(long)]
-    file: String,
+    file: Option<String>,
+    #[arg(long, alias = "type")]
+    type_str: Option<String>,
 }
 
 pub fn add_trace(opt: &str) -> Result<()> {
     let trace_cfg = TraceConfig::try_parse_from(str_slip_to_clap(opt, false, false))?;
-    enable_trace_state(&trace_cfg.file)?;
+    if trace_cfg.type_str.is_none() && trace_cfg.file.is_none() {
+        bail!("No type or file after -trace");
+    }
+
+    if let Some(type_str) = trace_cfg.type_str {
+        enable_trace_state_from_type(&type_str)?;
+    }
+    if let Some(file) = trace_cfg.file {
+        enable_trace_state_from_file(&file)?;
+    }
     Ok(())
 }
 
@@ -747,9 +772,22 @@ mod tests {
 
     #[test]
     fn test_add_trace() {
+        assert!(std::fs::File::create("/tmp/trace_file").is_ok());
+
+        assert!(add_trace("file=/tmp/trace_file,type=all").is_ok());
         assert!(add_trace("fil=test_trace").is_err());
         assert!(add_trace("file").is_err());
         assert!(add_trace("file=test_trace").is_err());
+
+        assert!(add_trace("type=events").is_ok());
+        assert!(add_trace("type=scopes").is_ok());
+        assert!(add_trace("type=all").is_ok());
+        assert!(add_trace("type=xxxxx").is_err());
+
+        assert!(add_trace("").is_err());
+        assert!(add_trace("file=/tmp/trace_file,type=all").is_ok());
+
+        assert!(std::fs::remove_file("/tmp/trace_file").is_ok());
     }
 
     #[test]

@@ -1181,14 +1181,15 @@ Please see the [4. Build with features](docs/build_guide.md) if you want to enab
 
 ## 3. Trace
 
-Users can specify the configuration file which lists events to trace.
+Users can specify a configuration file which lists the traces that needs to be enabled, or specify the trace type that needs to be enabled. Setting both file and type is also allowed, so that traces with the specified type and traces listed in the file will all be enabled.
 
 One property can be set:
 
-* events: file lists events to trace.
+* file: specify the file containing the traces that needs to be enabled.
+* type: specify the traces type that needs to be enabled.
 
 ```shell
--trace file=<file>
+-trace file=<file>|type=<all|events|scopes>
 ```
 
 ## 4. Seccomp
