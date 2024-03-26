@@ -12,5 +12,4 @@
 
 pub mod ohcam;
 
-mod ohcam_bindings;
 mod ohcam_rapi;

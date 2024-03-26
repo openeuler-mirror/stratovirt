@@ -1807,6 +1807,7 @@ dependencies = [
  "io-uring",
  "kvm-bindings",
  "libc",
+ "libloading",
  "log",
  "nix 0.26.2",
  "once_cell",
