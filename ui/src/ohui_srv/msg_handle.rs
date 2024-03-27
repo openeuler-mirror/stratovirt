@@ -23,7 +23,8 @@ use crate::{
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED, INPUT_BUTTON_WHEEL_DOWN,
-        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP,
+        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK,
+        INPUT_POINT_FORWARD, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
         KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
@@ -211,7 +212,15 @@ impl OhUiMsgHandler {
     }
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
-        let (btn, action) = (mb.button, mb.btn_action);
+        let (msg_btn, action) = (mb.button, mb.btn_action);
+        let btn = match msg_btn {
+            CLIENT_MOUSE_BUTTON_LEFT => INPUT_POINT_LEFT,
+            CLIENT_MOUSE_BUTTON_RIGHT => INPUT_POINT_RIGHT,
+            CLIENT_MOUSE_BUTTON_MIDDLE => INPUT_POINT_MIDDLE,
+            CLIENT_MOUSE_BUTTON_FORWARD => INPUT_POINT_FORWARD,
+            CLIENT_MOUSE_BUTTON_BACK => INPUT_POINT_BACK,
+            _ => bail!("Invalid mouse button number {}", msg_btn),
+        };
         match action {
             CLIENT_PRESS_BTN => self.state.lock().unwrap().press_btn(btn),
             CLIENT_RELEASE_BTN => self.state.lock().unwrap().release_btn(btn),

@@ -30,10 +30,16 @@ use crate::{
     input::{
         self, input_button, input_move_abs, input_point_sync, press_mouse, release_all_key,
         update_key_state, Axis, ABS_MAX, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT,
-        INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
-        INPUT_POINT_RIGHT,
+        INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD,
+        INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
     },
 };
+
+const GTK_INPUT_BUTTON_LEFT: u32 = 1;
+const GTK_INPUT_BUTTON_MIDDLE: u32 = 2;
+const GTK_INPUT_BUTTON_RIGHT: u32 = 3;
+const GTK_INPUT_BUTTON_BACK: u32 = 8;
+const GTK_INPUT_BUTTON_FORWARD: u32 = 9;
 
 pub(crate) fn set_callback_for_draw_area(
     draw_area: &DrawingArea,
@@ -232,25 +238,27 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
 
 fn da_pointer_callback(button_event: &gdk::EventButton) -> Result<()> {
     let button_mask = match button_event.button() {
-        1 => INPUT_POINT_LEFT,
-        2 => INPUT_POINT_RIGHT,
-        3 => INPUT_POINT_MIDDLE,
+        GTK_INPUT_BUTTON_LEFT => INPUT_POINT_LEFT,
+        GTK_INPUT_BUTTON_RIGHT => INPUT_POINT_RIGHT,
+        GTK_INPUT_BUTTON_MIDDLE => INPUT_POINT_MIDDLE,
+        GTK_INPUT_BUTTON_BACK => INPUT_POINT_BACK,
+        GTK_INPUT_BUTTON_FORWARD => INPUT_POINT_FORWARD,
         _ => return Ok(()),
     };
     trace::gtk_pointer_callback(&button_mask);
 
     match button_event.event_type() {
         gdk::EventType::ButtonRelease => {
-            input_button(button_mask as u32, false)?;
+            input_button(button_mask, false)?;
             input_point_sync()
         }
         gdk::EventType::ButtonPress => {
-            input_button(button_mask as u32, true)?;
+            input_button(button_mask, true)?;
             input_point_sync()
         }
         gdk::EventType::DoubleButtonPress => {
-            press_mouse(button_mask as u32)?;
-            press_mouse(button_mask as u32)
+            press_mouse(button_mask)?;
+            press_mouse(button_mask)
         }
         _ => Ok(()),
     }
