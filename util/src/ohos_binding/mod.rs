@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(all(target_env = "ohos", any(feature = "usb_camera_oh")))]
+#[cfg(feature = "usb_camera_oh")]
 pub mod camera;
 pub mod misc;
 
-#[cfg(all(target_env = "ohos", any(feature = "usb_camera_oh")))]
+#[cfg(feature = "usb_camera_oh")]
 mod hwf_adapter;
