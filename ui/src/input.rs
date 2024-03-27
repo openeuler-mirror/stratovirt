@@ -24,14 +24,16 @@ use util::bitmap::Bitmap;
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;
 // Event type of Point.
-pub const INPUT_POINT_LEFT: u8 = 0x01;
-pub const INPUT_POINT_MIDDLE: u8 = 0x02;
-pub const INPUT_POINT_RIGHT: u8 = 0x04;
-pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
-pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
-pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x20;
-pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x40;
-pub const INPUT_BUTTON_MAX_NUM: u32 = 7;
+pub const INPUT_POINT_LEFT: u32 = 0x01;
+pub const INPUT_POINT_RIGHT: u32 = 0x02;
+pub const INPUT_POINT_MIDDLE: u32 = 0x04;
+pub const INPUT_POINT_BACK: u32 = 0x08;
+pub const INPUT_POINT_FORWARD: u32 = 0x10;
+pub const INPUT_BUTTON_WHEEL_UP: u32 = 0x20;
+pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x40;
+pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x80;
+pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x100;
+pub const INPUT_BUTTON_MASK: u32 = 0x1f;
 
 // ASCII value.
 pub const ASCII_A: i32 = 65;

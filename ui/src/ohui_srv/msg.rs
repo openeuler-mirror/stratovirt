@@ -21,6 +21,11 @@ pub const CLIENT_WHEEL_UP: u32 = 0x1;
 pub const CLIENT_WHEEL_DOWN: u32 = 0x2;
 pub const CLIENT_WHEEL_LEFT: u32 = 0x3;
 pub const CLIENT_WHEEL_RIGHT: u32 = 0x4;
+pub const CLIENT_MOUSE_BUTTON_LEFT: u32 = 0x0;
+pub const CLIENT_MOUSE_BUTTON_RIGHT: u32 = 0x1;
+pub const CLIENT_MOUSE_BUTTON_MIDDLE: u32 = 0x2;
+pub const CLIENT_MOUSE_BUTTON_BACK: u32 = 0x3;
+pub const CLIENT_MOUSE_BUTTON_FORWARD: u32 = 0x4;
 pub const EVENT_MSG_HDR_SIZE: u32 = size_of::<EventMsgHdr>() as u32;
 
 #[repr(C)]
