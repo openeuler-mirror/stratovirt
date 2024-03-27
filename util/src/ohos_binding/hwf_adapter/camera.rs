@@ -19,6 +19,12 @@ use libloading::Library;
 use crate::get_libfn;
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct OhCameraCtx {
+    _unused: [u8; 0],
+}
+
+#[repr(C)]
 #[derive(Default)]
 pub struct ProfileRecorder {
     pub fmt: i32,
@@ -30,20 +36,21 @@ pub struct ProfileRecorder {
 pub type BufferProcessFn = unsafe extern "C" fn(src_buffer: u64, length: i32);
 pub type BrokenProcessFn = unsafe extern "C" fn();
 
-type OhcamCreateCtxFn = unsafe extern "C" fn() -> *mut c_void;
-type OhcamCreateSessionFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type OhcamReleaseSessionFn = unsafe extern "C" fn(*mut c_void);
-type OhcamInitCamerasFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type OhcamInitProfilesFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type OhcamGetProfileSizeFn = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
-type OhcamGetProfileFn = unsafe extern "C" fn(*mut c_void, c_int, c_int, *mut c_void) -> c_int;
-type OhcamSetProfileFn = unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int;
-type OhcamPreStartFn = unsafe extern "C" fn(*mut c_void, BufferProcessFn, BrokenProcessFn) -> c_int;
-type OhcamStartFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type OhcamStopOutputFn = unsafe extern "C" fn(*mut c_void);
-type OhcamReleaseFn = unsafe extern "C" fn(*mut c_void);
-type OhcamDestroyCtxFn = unsafe extern "C" fn(*mut *mut c_void);
-type OhcamAllowNextFrameFn = unsafe extern "C" fn(*mut c_void);
+type OhcamCreateCtxFn = unsafe extern "C" fn() -> *mut OhCameraCtx;
+type OhcamCreateSessionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamReleaseSessionFn = unsafe extern "C" fn(*mut OhCameraCtx);
+type OhcamInitCamerasFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamInitProfilesFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamGetProfileSizeFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int) -> c_int;
+type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, c_int, *mut c_void) -> c_int;
+type OhcamSetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, c_int) -> c_int;
+type OhcamPreStartFn =
+    unsafe extern "C" fn(*mut OhCameraCtx, BufferProcessFn, BrokenProcessFn) -> c_int;
+type OhcamStartFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamStopOutputFn = unsafe extern "C" fn(*mut OhCameraCtx);
+type OhcamReleaseFn = unsafe extern "C" fn(*mut OhCameraCtx);
+type OhcamDestroyCtxFn = unsafe extern "C" fn(*mut *mut OhCameraCtx);
+type OhcamAllowNextFrameFn = unsafe extern "C" fn(*mut OhCameraCtx);
 
 pub struct CamFuncTable {
     pub create_ctx: RawSymbol<OhcamCreateCtxFn>,
