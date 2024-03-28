@@ -28,4 +28,5 @@ trace = {path = "../trace"}
 default = []
 usb_camera_v4l2 = ["dep:v4l2-sys-mit"]
 usb_camera_oh = []
+scream_ohaudio = []
 pixman = []
