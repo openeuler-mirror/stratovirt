@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+#[cfg(feature = "usb_camera_oh")]
 pub mod camera;
 
 use std::ffi::OsStr;
@@ -21,7 +21,7 @@ use libloading::Library;
 use log::error;
 use once_cell::sync::Lazy;
 
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+#[cfg(feature = "usb_camera_oh")]
 use camera::CamFuncTable;
 
 static LIB_HWF_ADAPTER: Lazy<RwLock<LibHwfAdapter>> = Lazy::new(||
@@ -40,7 +40,7 @@ static LIB_HWF_ADAPTER: Lazy<RwLock<LibHwfAdapter>> = Lazy::new(||
 struct LibHwfAdapter {
     #[allow(unused)]
     library: Library,
-    #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+    #[cfg(feature = "usb_camera_oh")]
     camera: Arc<CamFuncTable>,
 }
 
@@ -49,25 +49,25 @@ impl LibHwfAdapter {
         let library =
             Library::new(library_name).with_context(|| "failed to load hwf_adapter library")?;
 
-        #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+        #[cfg(feature = "usb_camera_oh")]
         let camera = Arc::new(
             CamFuncTable::new(&library).with_context(|| "failed to init camera function table")?,
         );
 
         Ok(Self {
             library,
-            #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+            #[cfg(feature = "usb_camera_oh")]
             camera,
         })
     }
 
-    #[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+    #[cfg(feature = "usb_camera_oh")]
     fn get_camera_api(&self) -> Arc<CamFuncTable> {
         self.camera.clone()
     }
 }
 
-#[cfg(all(feature = "usb_camera_oh", target_env = "ohos"))]
+#[cfg(feature = "usb_camera_oh")]
 pub fn hwf_adapter_camera_api() -> Arc<CamFuncTable> {
     LIB_HWF_ADAPTER.read().unwrap().get_camera_api()
 }
