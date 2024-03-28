@@ -14,7 +14,7 @@
 pub mod camera;
 
 use std::ffi::OsStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use libloading::Library;
@@ -24,17 +24,15 @@ use once_cell::sync::Lazy;
 #[cfg(feature = "usb_camera_oh")]
 use camera::CamFuncTable;
 
-static LIB_HWF_ADAPTER: Lazy<RwLock<LibHwfAdapter>> = Lazy::new(||
+static LIB_HWF_ADAPTER: Lazy<LibHwfAdapter> = Lazy::new(||
     // SAFETY: The dynamic library should be always existing.
     unsafe {
-        RwLock::new(
-            LibHwfAdapter::new(OsStr::new("/system/lib64/libhwf_adapter.so"))
-                .map_err(|e| {
-                    error!("failed to init LibHwfAdapter with error: {:?}", e);
-                    e
-                })
-                .unwrap()
-        )
+        LibHwfAdapter::new(OsStr::new("/system/lib64/libhwf_adapter.so"))
+            .map_err(|e| {
+                error!("failed to init LibHwfAdapter with error: {:?}", e);
+                e
+            })
+            .unwrap()
     });
 
 struct LibHwfAdapter {
@@ -69,7 +67,7 @@ impl LibHwfAdapter {
 
 #[cfg(feature = "usb_camera_oh")]
 pub fn hwf_adapter_camera_api() -> Arc<CamFuncTable> {
-    LIB_HWF_ADAPTER.read().unwrap().get_camera_api()
+    LIB_HWF_ADAPTER.get_camera_api()
 }
 
 #[macro_export]
