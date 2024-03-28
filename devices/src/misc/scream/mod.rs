@@ -14,7 +14,7 @@
 mod alsa;
 mod audio_demo;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-mod ohos;
+mod ohaudio;
 #[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
@@ -41,7 +41,7 @@ use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-use ohos::ohaudio::OhAudio;
+use ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]

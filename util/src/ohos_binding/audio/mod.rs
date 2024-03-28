@@ -10,13 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod sys;
+
 use std::os::raw::c_void;
 use std::ptr;
 
 use log::error;
 
-use super::ohaudio_bindings as capi;
-use crate::misc::scream::{AUDIO_SAMPLE_RATE_44KHZ, AUDIO_SAMPLE_RATE_48KHZ};
+use sys as capi;
+
+const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
+const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
 
 macro_rules! call_capi {
     ( $f: ident ( $($x: expr),* ) ) => {
@@ -166,6 +170,9 @@ impl Into<capi::OhAudioStreamType> for AudioStreamType {
         }
     }
 }
+
+pub type OhAudioCapturer = sys::OhAudioCapturer;
+pub type OhAudioRenderer = sys::OhAudioRenderer;
 
 pub enum AudioProcessCb {
     CapturerCb(
