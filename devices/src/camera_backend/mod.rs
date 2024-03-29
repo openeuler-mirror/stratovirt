@@ -17,7 +17,7 @@
 #[cfg(not(target_env = "ohos"))]
 pub mod demo;
 #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
-pub mod ohos;
+pub mod ohcam;
 #[cfg(feature = "usb_camera_v4l2")]
 pub mod v4l2;
 
@@ -29,7 +29,7 @@ use anyhow::{bail, Context, Result};
 #[cfg(not(target_env = "ohos"))]
 use self::demo::DemoCameraBackend;
 #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
-use self::ohos::ohcam::OhCameraBackend;
+use self::ohcam::OhCameraBackend;
 #[cfg(feature = "usb_camera_v4l2")]
 use self::v4l2::V4l2CameraBackend;
 use crate::usb::camera::UsbCameraConfig;
