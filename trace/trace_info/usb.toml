@@ -533,12 +533,6 @@ message = "UAS {} device is trying to start next transfer of length {}."
 enabled = true
 
 [[events]]
-name = "usb_uas_fill_data_ready"
-args = "device_id: &str, data_ready_sent: bool"
-message = "UAS {} device set data_ready_sent to {}."
-enabled = true
-
-[[events]]
 name = "usb_uas_start_next_transfer"
 args = "device_id: &str, stream: usize"
 message = "UAS {} device starting a transfer on stream {}."
@@ -596,4 +590,16 @@ enabled = true
 name = "usb_uas_data_queued_async"
 args = "packet_id: u32, device_id: &str"
 message = "USB {} data packet queued async on UAS {} device."
+enabled = true
+
+[[events]]
+name = "usb_uas_handle_iu_task_management"
+args = "device_id: &str, tmf: u8, tag: u16"
+message = "UAS {} device handling TMF {} with tag {}."
+enabled = true
+
+[[events]]
+name = "usb_uas_tmf_abort_task"
+args = "device_id: &str, task_tag: usize"
+message = "UAS {} device aborting task with tag {}."
 enabled = true

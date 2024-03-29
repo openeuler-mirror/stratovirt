@@ -12,7 +12,7 @@
 
 use std::array;
 use std::cmp::min;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -36,9 +36,9 @@ use super::{
 };
 use crate::{
     ScsiBus::{
-        scsi_cdb_xfer, scsi_cdb_xfer_mode, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense,
-        ScsiXferMode, CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
-        SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE, SCSI_SENSE_OVERLAPPED_COMMANDS,
+        scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+        CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
+        SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE,
     },
     ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
@@ -66,11 +66,9 @@ const UAS_IU_ID_COMMAND: u8 = 0x01;
 const UAS_IU_ID_SENSE: u8 = 0x03;
 const UAS_IU_ID_RESPONSE: u8 = 0x04;
 const UAS_IU_ID_TASK_MGMT: u8 = 0x05;
-const UAS_IU_ID_READ_READY: u8 = 0x06;
-const UAS_IU_ID_WRITE_READY: u8 = 0x07;
 
 // UAS Response Codes
-const _UAS_RC_TMF_COMPLETE: u8 = 0x00;
+const UAS_RC_TMF_COMPLETE: u8 = 0x00;
 const _UAS_RC_INVALID_IU: u8 = 0x02;
 const UAS_RC_TMF_NOT_SUPPORTED: u8 = 0x04;
 const _UAS_RC_TMF_FAILED: u8 = 0x05;
@@ -79,7 +77,7 @@ const _UAS_RC_INCORRECT_LUN: u8 = 0x09;
 const _UAS_RC_OVERLAPPED_TAG: u8 = 0x0A;
 
 // UAS Task Management Functions
-const _UAS_TMF_ABORT_TASK: u8 = 0x01;
+const UAS_TMF_ABORT_TASK: u8 = 0x01;
 const _UAS_TMF_ABORT_TASK_SET: u8 = 0x02;
 const _UAS_TMF_CLEAR_TASK_SET: u8 = 0x04;
 const _UAS_TMF_LOGICAL_UNIT_RESET: u8 = 0x08;
@@ -110,23 +108,19 @@ pub struct UsbUas {
     base: UsbDeviceBase,
     scsi_bus: Arc<Mutex<ScsiBus>>,
     scsi_device: Arc<Mutex<ScsiDevice>>,
-    commands_high: VecDeque<UasIU>,
-    statuses_high: VecDeque<Arc<Mutex<UsbPacket>>>,
-    commands_super: [Option<UasIU>; UAS_MAX_STREAMS + 1],
-    statuses_super: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
+    commands: [Option<UasIU>; UAS_MAX_STREAMS + 1],
+    statuses: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
     data: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
-    data_ready_sent: bool,
 }
 
-#[derive(Debug, EnumCount)]
+#[derive(Debug, Default, EnumCount)]
 enum UsbUasStringId {
-    #[allow(unused)]
+    #[default]
     Invalid = 0,
     Manufacturer = 1,
     Product = 2,
     SerialNumber = 3,
-    ConfigHigh = 4,
-    ConfigSuper = 5,
+    Configuration = 4,
 }
 
 const UAS_DESC_STRINGS: [&str; UsbUasStringId::COUNT] = [
@@ -134,7 +128,6 @@ const UAS_DESC_STRINGS: [&str; UsbUasStringId::COUNT] = [
     "StratoVirt",
     "StratoVirt USB Uas",
     "5",
-    "High speed config (usb 2.0)",
     "Super speed config (usb 3.0)",
 ];
 
@@ -153,7 +146,7 @@ impl ScsiRequestOps for UasRequest {
     ) -> Result<()> {
         let tag = u16::from_be(self.iu.header.tag);
         let sense = scsi_sense.unwrap_or(SCSI_SENSE_NO_SENSE);
-        UsbUas::fill_sense(&mut self.status.lock().unwrap(), tag, scsi_status, &sense);
+        UsbUas::fill_sense(&mut self.status.lock().unwrap(), tag, sense, scsi_status);
         self.complete();
         Ok(())
     }
@@ -259,7 +252,7 @@ struct UasIU {
 
 impl ByteCode for UasIU {}
 
-static DESC_DEVICE_UAS_SUPER: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
+static DESC_DEVICE_UAS: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     Arc::new(UsbDescDevice {
         device_desc: UsbDeviceDescriptor {
             bLength: USB_DT_DEVICE_SIZE,
@@ -284,17 +277,17 @@ static DESC_DEVICE_UAS_SUPER: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
                 wTotalLength: 0,
                 bNumInterfaces: 1,
                 bConfigurationValue: 1,
-                iConfiguration: UsbUasStringId::ConfigSuper as u8,
+                iConfiguration: UsbUasStringId::Configuration as u8,
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
                 bMaxPower: 50,
             },
             iad_desc: vec![],
-            interfaces: vec![DESC_IFACE_EMPTY.clone(), DESC_IFACE_UAS_SUPER.clone()],
+            interfaces: vec![DESC_IFACE_BOT.clone(), DESC_IFACE_UAS.clone()],
         })],
     })
 });
 
-static DESC_IFACE_UAS_SUPER: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+static DESC_IFACE_UAS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     Arc::new(UsbDescIface {
         interface_desc: UsbInterfaceDescriptor {
             bLength: USB_DT_INTERFACE_SIZE,
@@ -429,136 +422,10 @@ static DESC_IFACE_UAS_SUPER: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     })
 });
 
-static DESC_DEVICE_UAS_HIGH: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
-    Arc::new(UsbDescDevice {
-        device_desc: UsbDeviceDescriptor {
-            bLength: USB_DT_DEVICE_SIZE,
-            bDescriptorType: USB_DT_DEVICE,
-            bcdUSB: 0x0200,
-            bDeviceClass: 0,
-            bDeviceSubClass: 0,
-            bDeviceProtocol: 0,
-            bMaxPacketSize0: 64,
-            idVendor: USB_VENDOR_ID_STRATOVIRT,
-            idProduct: USB_PRODUCT_ID_UAS,
-            bcdDevice: 0,
-            iManufacturer: UsbUasStringId::Manufacturer as u8,
-            iProduct: UsbUasStringId::Product as u8,
-            iSerialNumber: UsbUasStringId::SerialNumber as u8,
-            bNumConfigurations: 1,
-        },
-        configs: vec![Arc::new(UsbDescConfig {
-            config_desc: UsbConfigDescriptor {
-                bLength: USB_DT_CONFIG_SIZE,
-                bDescriptorType: USB_DT_CONFIGURATION,
-                wTotalLength: 0,
-                bNumInterfaces: 1,
-                bConfigurationValue: 1,
-                iConfiguration: UsbUasStringId::ConfigHigh as u8,
-                bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_SELF_POWER,
-                bMaxPower: 50,
-            },
-            iad_desc: vec![],
-            interfaces: vec![DESC_IFACE_EMPTY.clone(), DESC_IFACE_UAS_HIGH.clone()],
-        })],
-    })
-});
-
-static DESC_IFACE_UAS_HIGH: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
-    Arc::new(UsbDescIface {
-        interface_desc: UsbInterfaceDescriptor {
-            bLength: USB_DT_INTERFACE_SIZE,
-            bDescriptorType: USB_DT_INTERFACE,
-            bInterfaceNumber: 0,
-            bAlternateSetting: 1,
-            bNumEndpoints: 4,
-            bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: USB_SUBCLASS_SCSI,
-            bInterfaceProtocol: USB_IFACE_PROTOCOL_UAS,
-            iInterface: 0,
-        },
-        other_desc: vec![],
-        endpoints: vec![
-            Arc::new(UsbDescEndpoint {
-                endpoint_desc: UsbEndpointDescriptor {
-                    bLength: USB_DT_ENDPOINT_SIZE,
-                    bDescriptorType: USB_DT_ENDPOINT,
-                    bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | UAS_PIPE_ID_COMMAND,
-                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
-                    wMaxPacketSize: 512,
-                    bInterval: 0,
-                },
-                extra: UsbPipeUsageDescriptor {
-                    bLength: USB_DT_PIPE_USAGE_SIZE,
-                    bDescriptorType: USB_DT_PIPE_USAGE,
-                    bPipeId: UAS_PIPE_ID_COMMAND,
-                    bReserved: 0,
-                }
-                .as_bytes()
-                .to_vec(),
-            }),
-            Arc::new(UsbDescEndpoint {
-                endpoint_desc: UsbEndpointDescriptor {
-                    bLength: USB_DT_ENDPOINT_SIZE,
-                    bDescriptorType: USB_DT_ENDPOINT,
-                    bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | UAS_PIPE_ID_STATUS,
-                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
-                    wMaxPacketSize: 512,
-                    bInterval: 0,
-                },
-                extra: UsbPipeUsageDescriptor {
-                    bLength: USB_DT_PIPE_USAGE_SIZE,
-                    bDescriptorType: USB_DT_PIPE_USAGE,
-                    bPipeId: UAS_PIPE_ID_STATUS,
-                    bReserved: 0,
-                }
-                .as_bytes()
-                .to_vec(),
-            }),
-            Arc::new(UsbDescEndpoint {
-                endpoint_desc: UsbEndpointDescriptor {
-                    bLength: USB_DT_ENDPOINT_SIZE,
-                    bDescriptorType: USB_DT_ENDPOINT,
-                    bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | UAS_PIPE_ID_DATA_IN,
-                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
-                    wMaxPacketSize: 512,
-                    bInterval: 0,
-                },
-                extra: UsbPipeUsageDescriptor {
-                    bLength: USB_DT_PIPE_USAGE_SIZE,
-                    bDescriptorType: USB_DT_PIPE_USAGE,
-                    bPipeId: UAS_PIPE_ID_DATA_IN,
-                    bReserved: 0,
-                }
-                .as_bytes()
-                .to_vec(),
-            }),
-            Arc::new(UsbDescEndpoint {
-                endpoint_desc: UsbEndpointDescriptor {
-                    bLength: USB_DT_ENDPOINT_SIZE,
-                    bDescriptorType: USB_DT_ENDPOINT,
-                    bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | UAS_PIPE_ID_DATA_OUT,
-                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
-                    wMaxPacketSize: 512,
-                    bInterval: 0,
-                },
-                extra: UsbPipeUsageDescriptor {
-                    bLength: USB_DT_PIPE_USAGE_SIZE,
-                    bDescriptorType: USB_DT_PIPE_USAGE,
-                    bPipeId: UAS_PIPE_ID_DATA_OUT,
-                    bReserved: 0,
-                }
-                .as_bytes()
-                .to_vec(),
-            }),
-        ],
-    })
-});
-
 // NOTE: Fake BOT interface descriptor is needed here since Windows UASP driver always expects two
 // interfaces: both BOT and UASP. It also anticipates the UASP descriptor to be the second one.
 // Therefore, the first one can be a BOT storage stub.
-static DESC_IFACE_EMPTY: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
+static DESC_IFACE_BOT: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     Arc::new(UsbDescIface {
         interface_desc: UsbInterfaceDescriptor {
             bLength: USB_DT_INTERFACE_SIZE,
@@ -603,86 +470,24 @@ impl UsbUas {
             ..Default::default()
         };
 
-        let mut base = UsbDeviceBase::new(
-            uas_config.id.clone().unwrap(),
-            USB_DEVICE_BUFFER_DEFAULT_LEN,
-        );
-
-        base.speed = match uas_config.speed.as_deref() {
-            Some("super") => USB_SPEED_SUPER,
-            _ => USB_SPEED_HIGH,
-        };
-
         Self {
-            base,
+            base: UsbDeviceBase::new(uas_config.id.unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
             scsi_device: Arc::new(Mutex::new(ScsiDevice::new(
                 scsi_dev_cfg,
                 drive_cfg,
                 drive_files,
             ))),
-            commands_high: VecDeque::new(),
-            commands_super: array::from_fn(|_| None),
-            statuses_high: VecDeque::new(),
-            statuses_super: array::from_fn(|_| None),
+            commands: array::from_fn(|_| None),
+            statuses: array::from_fn(|_| None),
             data: array::from_fn(|_| None),
-            data_ready_sent: false,
         }
-    }
-
-    fn streams_enabled(&self) -> bool {
-        self.base.speed == USB_SPEED_SUPER
     }
 
     fn cancel_io(&mut self) {
-        self.commands_high = VecDeque::new();
-        self.commands_super = array::from_fn(|_| None);
-        self.statuses_high = VecDeque::new();
-        self.statuses_super = array::from_fn(|_| None);
+        self.commands = array::from_fn(|_| None);
+        self.statuses = array::from_fn(|_| None);
         self.data = array::from_fn(|_| None);
-        self.data_ready_sent = false;
-    }
-
-    fn peek_next_status(&self, stream: usize) -> Option<&Arc<Mutex<UsbPacket>>> {
-        match self.streams_enabled() {
-            true => self.statuses_super[stream].as_ref(),
-            false => self.statuses_high.front(),
-        }
-    }
-
-    fn take_next_status(&mut self, stream: usize) -> Arc<Mutex<UsbPacket>> {
-        match self.streams_enabled() {
-            true => self.statuses_super[stream].take().unwrap(),
-            false => self.statuses_high.pop_front().unwrap(),
-        }
-    }
-
-    fn queue_status(&mut self, status: &Arc<Mutex<UsbPacket>>, stream: usize) {
-        match self.streams_enabled() {
-            true => self.statuses_super[stream] = Some(Arc::clone(status)),
-            false => self.statuses_high.push_back(Arc::clone(status)),
-        };
-    }
-
-    fn peek_next_command(&self, stream: usize) -> Option<&UasIU> {
-        match self.streams_enabled() {
-            true => self.commands_super[stream].as_ref(),
-            false => self.commands_high.front(),
-        }
-    }
-
-    fn take_next_command(&mut self, stream: usize) -> UasIU {
-        match self.streams_enabled() {
-            true => self.commands_super[stream].take().unwrap(),
-            false => self.commands_high.pop_front().unwrap(),
-        }
-    }
-
-    fn queue_command(&mut self, command: UasIU, stream: usize) {
-        match self.streams_enabled() {
-            true => self.commands_super[stream] = Some(command),
-            false => self.commands_high.push_back(command),
-        }
     }
 
     fn handle_iu_command(
@@ -690,7 +495,7 @@ impl UsbUas {
         iu: &UasIU,
         mut uas_request: UasRequest,
     ) -> Result<UasPacketStatus> {
-        // SAFETY: iu is guaranteed to be of type command
+        // SAFETY: IU is guaranteed to be of type command.
         let add_cdb_len = unsafe { iu.body.command.add_cdb_len };
         let tag = u16::from_be(iu.header.tag);
 
@@ -698,33 +503,23 @@ impl UsbUas {
             Self::fill_fake_sense(
                 &mut uas_request.status.lock().unwrap(),
                 tag,
-                &SCSI_SENSE_INVALID_PARAM_VALUE,
+                SCSI_SENSE_INVALID_PARAM_VALUE,
             );
             uas_request.complete();
             bail!("additional cdb length is not supported");
         }
 
-        if self.streams_enabled() && tag > UAS_MAX_STREAMS as u16 {
+        if tag > UAS_MAX_STREAMS as u16 {
             Self::fill_fake_sense(
                 &mut uas_request.status.lock().unwrap(),
                 tag,
-                &SCSI_SENSE_INVALID_TAG,
+                SCSI_SENSE_INVALID_TAG,
             );
             uas_request.complete();
             bail!("invalid tag {}", tag);
         }
 
-        if self.streams_enabled() && self.commands_super[tag as usize].is_some() {
-            Self::fill_fake_sense(
-                &mut uas_request.status.lock().unwrap(),
-                tag,
-                &SCSI_SENSE_OVERLAPPED_COMMANDS,
-            );
-            uas_request.complete();
-            bail!("overlapped tag {}", tag);
-        }
-
-        let (scsi_iovec, scsi_iovec_size) = match uas_request.data.as_ref() {
+        let (scsi_iovec, scsi_iovec_size) = match &uas_request.data {
             Some(data) => {
                 let mut locked_data = data.lock().unwrap();
                 let iov_size = locked_data.get_iovecs_size() as u32;
@@ -734,9 +529,9 @@ impl UsbUas {
             None => (Vec::new(), 0),
         };
 
-        // SAFETY: iu is guaranteed to of type command
+        // SAFETY: IU is guaranteed to of type command.
         let cdb = unsafe { iu.body.command.cdb };
-        // SAFETY: iu is guaranteed to of type command
+        // SAFETY: IU is guaranteed to of type command.
         let lun = unsafe { iu.body.command.lun } as u16;
         trace::usb_uas_handle_iu_command(self.device_id(), cdb[0]);
         let uas_request = Box::new(uas_request);
@@ -748,7 +543,7 @@ impl UsbUas {
             Arc::clone(&self.scsi_device),
             uas_request,
         )
-        .with_context(|| "Failed to create SCSI request.")?;
+        .with_context(|| "failed to create SCSI request")?;
 
         if scsi_request.cmd.xfer > scsi_request.datalen
             && scsi_request.cmd.mode != ScsiXferMode::ScsiXferNone
@@ -764,7 +559,7 @@ impl UsbUas {
             EMULATE_SCSI_OPS => scsi_request.emulate_execute(),
             _ => scsi_request.execute(),
         }
-        .with_context(|| "Failed to execute SCSI request.")?;
+        .with_context(|| "failed to execute SCSI request")?;
 
         let upper_request = &mut scsi_request.lock().unwrap().upper_req;
         let uas_request = upper_request
@@ -783,31 +578,34 @@ impl UsbUas {
     ) -> Result<UasPacketStatus> {
         let tag = u16::from_be(iu.header.tag);
 
-        if self.streams_enabled() && tag > UAS_MAX_STREAMS as u16 {
+        if tag > UAS_MAX_STREAMS as u16 {
             Self::fill_fake_sense(
                 &mut uas_request.status.lock().unwrap(),
                 tag,
-                &SCSI_SENSE_INVALID_TAG,
+                SCSI_SENSE_INVALID_TAG,
             );
             uas_request.complete();
             bail!("invalid tag {}", tag);
         }
 
-        if self.streams_enabled() && self.commands_super[tag as usize].is_some() {
-            Self::fill_fake_sense(
-                &mut uas_request.status.lock().unwrap(),
-                tag,
-                &SCSI_SENSE_OVERLAPPED_COMMANDS,
-            );
-            uas_request.complete();
-            bail!("overlapped tag {}", tag);
-        }
-
-        // SAFETY: iu is guaranteed to be of type task management
+        // SAFETY: IU is guaranteed to be of type task management.
         let tmf = unsafe { iu.body.task_management.function };
+        trace::usb_uas_handle_iu_task_management(self.device_id(), tmf, tag);
 
-        #[allow(clippy::match_single_binding)]
         match tmf {
+            UAS_TMF_ABORT_TASK => {
+                // SAFETY: IU is guaranteed to be of type task management.
+                let task_tag = unsafe { iu.body.task_management.task_tag } as usize;
+                self.commands[task_tag] = None;
+                self.statuses[task_tag] = None;
+                self.data[task_tag] = None;
+                trace::usb_uas_tmf_abort_task(self.device_id(), task_tag);
+                Self::fill_response(
+                    &mut uas_request.status.lock().unwrap(),
+                    tag,
+                    UAS_RC_TMF_COMPLETE,
+                );
+            }
             _ => {
                 warn!("UAS {} device unsupported TMF {}.", self.device_id(), tmf);
                 Self::fill_response(
@@ -829,9 +627,28 @@ impl UsbUas {
         Self::fill_packet(packet, &mut iu, iu_len);
     }
 
-    fn fill_sense(packet: &mut UsbPacket, tag: u16, status: u8, sense: &ScsiSense) {
+    fn fill_fake_sense(packet: &mut UsbPacket, tag: u16, sense: ScsiSense) {
         let mut iu = UasIU::new(UAS_IU_ID_SENSE, tag);
-        // SAFETY: iu is guaranteed to be of type status
+        // SAFETY: IU is guaranteed to be of type status.
+        let iu_sense = unsafe { &mut iu.body.sense };
+
+        iu_sense.status = CHECK_CONDITION;
+        iu_sense.status_qualifier = 0_u16.to_be();
+        iu_sense.sense_length = 18_u16.to_be();
+        iu_sense.sense_data[0] = 0x70; // Error code: current errors
+        iu_sense.sense_data[2] = sense.key;
+        iu_sense.sense_data[7] = 10; // Additional sense length: total length - 8
+        iu_sense.sense_data[12] = sense.asc;
+        iu_sense.sense_data[13] = sense.ascq;
+
+        let iu_len = size_of::<UasIUHeader>() + size_of::<UasIUSense>();
+        trace::usb_uas_fill_fake_sense(CHECK_CONDITION, iu_len, iu_sense.sense_length as usize);
+        Self::fill_packet(packet, &mut iu, iu_len);
+    }
+
+    fn fill_sense(packet: &mut UsbPacket, tag: u16, sense: ScsiSense, status: u8) {
+        let mut iu = UasIU::new(UAS_IU_ID_SENSE, tag);
+        // SAFETY: IU is guaranteed to be of type status.
         let iu_sense = unsafe { &mut iu.body.sense };
 
         iu_sense.status = status;
@@ -847,41 +664,10 @@ impl UsbUas {
             iu_sense.sense_data[13] = sense.ascq;
         }
 
-        let sense_len = iu_sense.sense_length as usize;
-        let real_sense_len = size_of::<UasIUSense>() - iu_sense.sense_data.len() + sense_len;
-        let iu_len = size_of::<UasIUHeader>() + real_sense_len;
-        trace::usb_uas_fill_sense(status, iu_len, sense_len);
-        Self::fill_packet(packet, &mut iu, iu_len);
-    }
-
-    fn fill_fake_sense(packet: &mut UsbPacket, tag: u16, sense: &ScsiSense) {
-        let mut iu = UasIU::new(UAS_IU_ID_SENSE, tag);
-        // SAFETY: iu is guaranteed to be of type status
-        let iu_sense = unsafe { &mut iu.body.sense };
-
-        iu_sense.status = CHECK_CONDITION;
-        iu_sense.status_qualifier = 0_u16.to_be();
-        iu_sense.sense_length = 18_u16.to_be();
-        iu_sense.sense_data[0] = 0x70; // Error code: current errors
-        iu_sense.sense_data[2] = sense.key;
-        iu_sense.sense_data[7] = 10; // Additional sense length: total length - 8
-        iu_sense.sense_data[12] = sense.asc;
-        iu_sense.sense_data[13] = sense.ascq;
-
-        let iu_len = size_of::<UasIUHeader>() + size_of::<UasIUSense>();
-        trace::usb_uas_fill_fake_sense(CHECK_CONDITION, iu_len, 18);
-        Self::fill_packet(packet, &mut iu, iu_len);
-    }
-
-    fn fill_read_ready(packet: &mut UsbPacket, tag: u16) {
-        let mut iu = UasIU::new(UAS_IU_ID_READ_READY, tag);
-        let iu_len = size_of::<UasIUHeader>();
-        Self::fill_packet(packet, &mut iu, iu_len);
-    }
-
-    fn fill_write_ready(packet: &mut UsbPacket, tag: u16) {
-        let mut iu = UasIU::new(UAS_IU_ID_WRITE_READY, tag);
-        let iu_len = size_of::<UasIUHeader>();
+        let sense_len =
+            size_of::<UasIUSense>() - iu_sense.sense_data.len() + iu_sense.sense_length as usize;
+        let iu_len = size_of::<UasIUHeader>() + sense_len;
+        trace::usb_uas_fill_sense(status, iu_len, iu_sense.sense_length as usize);
         Self::fill_packet(packet, &mut iu, iu_len);
     }
 
@@ -893,115 +679,52 @@ impl UsbUas {
     }
 
     fn try_start_next_transfer(&mut self, stream: usize) -> UasPacketStatus {
-        let command = self.peek_next_command(stream);
-
-        if let Some(command) = command {
-            // SAFETY: iu is guaranteed to be of type command
-            let cdb = unsafe { &command.body.command.cdb };
-            let xfer_len = scsi_cdb_xfer(cdb, Arc::clone(&self.scsi_device));
-            trace::usb_uas_try_start_next_transfer(self.device_id(), xfer_len);
-
-            if xfer_len > 0 {
-                self.try_start_next_data(stream)
-            } else {
-                self.try_start_next_non_data(stream)
-            }
-        } else {
+        if self.commands[stream].is_none() {
             debug!(
-                "UAS {} device no inflight command when trying to start the next transfer.",
-                self.device_id()
-            );
-            UasPacketStatus::Pending
-        }
-    }
-
-    fn try_start_next_data(&mut self, stream: usize) -> UasPacketStatus {
-        let status = self.peek_next_status(stream);
-
-        if status.is_none() {
-            debug!(
-                "UAS {} device no inflight status when trying to start the next data transfer.",
-                self.device_id()
+                "UAS {} device no inflight command on stream {}.",
+                self.device_id(),
+                stream
             );
             return UasPacketStatus::Pending;
         }
 
-        if !self.data_ready_sent {
-            return self.fill_data_ready(stream);
+        if self.statuses[stream].is_none() {
+            debug!(
+                "UAS {} device no inflight status on stream {}.",
+                self.device_id(),
+                stream
+            );
+            return UasPacketStatus::Pending;
+        }
+
+        // SAFETY: Command was checked to be Some.
+        let command = self.commands[stream].as_ref().unwrap();
+        // SAFETY: IU is guaranteed to be of type command.
+        let cdb = unsafe { &command.body.command.cdb };
+        let xfer_len = scsi_cdb_xfer(cdb, Arc::clone(&self.scsi_device));
+        trace::usb_uas_try_start_next_transfer(self.device_id(), xfer_len);
+
+        if xfer_len == 0 {
+            return self.start_next_transfer(stream);
         }
 
         if self.data[stream].is_some() {
             self.start_next_transfer(stream)
         } else {
             debug!(
-                "UAS {} device no inflight data when trying to start the next data transfer.",
-                self.device_id()
+                "UAS {} device no inflight data on stream {}.",
+                self.device_id(),
+                stream
             );
             UasPacketStatus::Pending
         }
     }
 
-    fn fill_data_ready(&mut self, stream: usize) -> UasPacketStatus {
-        // SAFETY: status must have been checked in try_start_next_data
-        let status = self.take_next_status(stream);
-        let mut locked_status = status.lock().unwrap();
-
-        // SAFETY: command must have been checked in try_start_next_transfer
-        let iu = self.peek_next_command(stream).unwrap();
-        let tag = u16::from_be(iu.header.tag);
-
-        // SAFETY: iu is guaranteed to be of type command
-        let cdb = unsafe { &iu.body.command.cdb };
-        let xfer_mode = scsi_cdb_xfer_mode(cdb);
-
-        match xfer_mode {
-            ScsiXferMode::ScsiXferFromDev => Self::fill_read_ready(&mut locked_status, tag),
-            ScsiXferMode::ScsiXferToDev => Self::fill_write_ready(&mut locked_status, tag),
-            ScsiXferMode::ScsiXferNone => {
-                warn!(
-                    "UAS {} device cannot fill data ready, operation {} is not a data transfer.",
-                    self.device_id(),
-                    cdb[0]
-                );
-                Self::fill_fake_sense(&mut locked_status, tag, &SCSI_SENSE_INVALID_PARAM_VALUE);
-            }
-        }
-
-        let status_async = locked_status.is_async;
-        drop(locked_status);
-
-        if status_async {
-            complete_async_packet(&status);
-        }
-
-        self.data_ready_sent = true;
-        trace::usb_uas_fill_data_ready(self.device_id(), self.data_ready_sent);
-        UasPacketStatus::Completed
-    }
-
-    fn try_start_next_non_data(&mut self, stream: usize) -> UasPacketStatus {
-        let status = self.peek_next_status(stream);
-
-        if status.is_none() {
-            debug!(
-                "UAS {} device no inflight status when trying to start the next non-data transfer.",
-                self.device_id()
-            );
-            return UasPacketStatus::Pending;
-        }
-
-        self.start_next_transfer(stream)
-    }
-
     fn start_next_transfer(&mut self, stream: usize) -> UasPacketStatus {
         trace::usb_uas_start_next_transfer(self.device_id(), stream);
-
-        // SAFETY: status must have been checked in try_start_next_data or try_start_next_non_data
-        let status = self.take_next_status(stream);
-
-        // SAFETY: command must have been checked in try_start_next_transfer
-        let command = self.take_next_command(stream);
-
+        // SAFETY: Status and command must have been checked in try_start_next_transfer.
+        let status = self.statuses[stream].take().unwrap();
+        let command = self.commands[stream].take().unwrap();
         let mut uas_request = UasRequest::new(&status, &command);
         uas_request.data = self.data[stream].take();
 
@@ -1010,9 +733,6 @@ impl UsbUas {
             UAS_IU_ID_TASK_MGMT => self.handle_iu_task_management(&command, uas_request),
             _ => Err(anyhow!("impossible command IU {}", command.header.id)),
         };
-
-        self.data_ready_sent = false;
-        self.try_start_next_transfer(stream);
 
         match result {
             Ok(result) => result,
@@ -1036,21 +756,11 @@ impl UsbDevice for UsbUas {
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         info!("UAS {} device realize.", self.device_id());
         self.base.reset_usb_endpoint();
-        let mut desc_strings: Vec<String> =
-            UAS_DESC_STRINGS.iter().map(|str| str.to_string()).collect();
-        let prefix = &desc_strings[UsbUasStringId::SerialNumber as usize];
-        desc_strings[UsbUasStringId::SerialNumber as usize] =
-            self.base.generate_serial_number(prefix);
-
-        match self.base.speed {
-            USB_SPEED_HIGH => self
-                .base
-                .init_descriptor(DESC_DEVICE_UAS_HIGH.clone(), desc_strings)?,
-            USB_SPEED_SUPER => self
-                .base
-                .init_descriptor(DESC_DEVICE_UAS_SUPER.clone(), desc_strings)?,
-            _ => bail!("USB UAS unsupported device speed {}.", self.base.speed),
-        }
+        self.base.speed = USB_SPEED_SUPER;
+        let mut s: Vec<String> = UAS_DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[UsbUasStringId::SerialNumber as usize];
+        s[UsbUasStringId::SerialNumber as usize] = self.base.generate_serial_number(prefix);
+        self.base.init_descriptor(DESC_DEVICE_UAS.clone(), s)?;
 
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
@@ -1126,7 +836,7 @@ impl UsbDevice for UsbUas {
         trace::usb_uas_handle_data(self.device_id(), ep_number, stream);
         drop(locked_packet);
 
-        if self.streams_enabled() && (stream > UAS_MAX_STREAMS || stream == 0) {
+        if stream > UAS_MAX_STREAMS || ep_number != UAS_PIPE_ID_COMMAND && stream == 0 {
             warn!("UAS {} device invalid stream {}.", self.device_id(), stream);
             packet.lock().unwrap().status = UsbPacketStatus::Stall;
             return;
@@ -1134,7 +844,7 @@ impl UsbDevice for UsbUas {
 
         // NOTE: The architecture of this device is rather simple: it first waits for all of the
         // required USB packets to arrive, and only then creates and sends an actual UAS request.
-        // The number of USB packets differs from 2 to 4 and depends on whether the command involves
+        // The number of USB packets differs from 2 to 3 and depends on whether the command involves
         // data transfers or not. Since the packets arrive in arbitrary order, some of them may be
         // queued asynchronously. Note that the command packet is always completed right away. For
         // all the other types of packets, their asynchronous status is determined by the return
@@ -1142,7 +852,14 @@ impl UsbDevice for UsbUas {
         // completed in scsi_request_complete_cb() callback.
         match ep_number {
             UAS_PIPE_ID_COMMAND => {
-                if self.streams_enabled() && self.commands_super[stream].is_some() {
+                let mut locked_packet = packet.lock().unwrap();
+                let mut iu = UasIU::default();
+                let iov_size = locked_packet.get_iovecs_size() as usize;
+                let iu_len = min(iov_size, size_of::<UasIU>());
+                locked_packet.transfer_packet(iu.as_mut_bytes(), iu_len);
+                let stream = u16::from_be(iu.header.tag) as usize;
+
+                if self.commands[stream].is_some() {
                     warn!(
                         "UAS {} device multiple command packets on stream {}.",
                         self.device_id(),
@@ -1152,19 +869,13 @@ impl UsbDevice for UsbUas {
                     return;
                 }
 
-                let mut locked_packet = packet.lock().unwrap();
-                let mut iu = UasIU::default();
-                let iov_size = locked_packet.get_iovecs_size() as usize;
-                let iu_len = min(iov_size, size_of::<UasIU>());
-                locked_packet.transfer_packet(iu.as_mut_bytes(), iu_len);
-
                 trace::usb_uas_command_received(packet_id, self.device_id());
-                self.queue_command(iu, stream);
+                self.commands[stream] = Some(iu);
                 self.try_start_next_transfer(stream);
                 trace::usb_uas_command_completed(packet_id, self.device_id());
             }
             UAS_PIPE_ID_STATUS => {
-                if self.streams_enabled() && self.statuses_super[stream].is_some() {
+                if self.statuses[stream].is_some() {
                     warn!(
                         "UAS {} device multiple status packets on stream {}.",
                         self.device_id(),
@@ -1175,7 +886,7 @@ impl UsbDevice for UsbUas {
                 }
 
                 trace::usb_uas_status_received(packet_id, self.device_id());
-                self.queue_status(packet, stream);
+                self.statuses[stream] = Some(Arc::clone(packet));
                 let result = self.try_start_next_transfer(stream);
 
                 match result {
@@ -1223,7 +934,7 @@ impl UsbDevice for UsbUas {
         }
     }
 
-    fn set_controller(&mut self, _controller: std::sync::Weak<Mutex<XhciDevice>>) {}
+    fn set_controller(&mut self, _cntlr: std::sync::Weak<Mutex<XhciDevice>>) {}
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         None
@@ -1250,9 +961,9 @@ impl UasRequest {
 
         // NOTE: Due to the specifics of this device, it waits for all of the required USB packets
         // to arrive before starting an actual transfer. Therefore, some packets may arrive earlier
-        // than others, and they won't be completed right away (except for command packets) but
+        // than others, and they won't be completed right away (except for the command packets), but
         // rather queued asynchronously. A certain packet may also be async if it was the last to
-        // arrive and UasRequest didn't complete right away.
+        // arrive, but UasRequest didn't complete right away.
         if status_async {
             complete_async_packet(status);
         }
