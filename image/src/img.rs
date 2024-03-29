@@ -258,6 +258,10 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     }
 }
 
+pub(crate) fn image_resize(_args: Vec<String>) -> Result<()> {
+    todo!()
+}
+
 pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     let mut arg_parser =
         ArgsParse::create(vec!["l", "h", "help"], vec!["f", "c", "d", "a"], vec![]);

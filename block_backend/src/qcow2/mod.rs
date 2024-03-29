@@ -1787,6 +1787,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         self.driver.flush_request()
     }
 
+    fn resize(&mut self, _new_size: u64) -> Result<()> {
+        todo!()
+    }
+
     fn drain_request(&self) {
         trace::block_drain_request(&self.driver.block_prop.id);
         self.driver.drain_request();

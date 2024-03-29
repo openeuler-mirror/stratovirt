@@ -313,6 +313,8 @@ pub trait BlockDriverOps<T: Clone>: Send {
 
     fn flush_request(&mut self) -> Result<()>;
 
+    fn resize(&mut self, new_size: u64) -> Result<()>;
+
     fn drain_request(&self);
 
     fn get_inflight(&self) -> Arc<AtomicU64>;
