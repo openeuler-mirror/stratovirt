@@ -51,20 +51,15 @@ const USB_MAX_ADDRESS: u8 = 127;
 pub const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
 
 /// USB packet return status.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum UsbPacketStatus {
     Success,
+    #[default]
     NoDev,
     Nak,
     Stall,
     Babble,
     IoError,
-}
-
-impl Default for UsbPacketStatus {
-    fn default() -> Self {
-        Self::NoDev
-    }
 }
 
 /// USB request used to transfer to USB device.
@@ -386,7 +381,7 @@ pub trait UsbDevice: Send + Sync {
         locked_packet.status = UsbPacketStatus::Success;
         let ep_nr = locked_packet.ep_number;
         drop(locked_packet);
-        debug!("handle packet endpointer number {}", ep_nr);
+        debug!("handle packet endpoint number {}", ep_nr);
         if ep_nr == 0 {
             if let Err(e) = self.do_parameter(packet) {
                 error!("Failed to handle control packet {:?}", e);
@@ -496,9 +491,9 @@ pub trait TransferOps: Send + Sync {
 /// Usb packet used for device transfer data.
 #[derive(Default)]
 pub struct UsbPacket {
-    /// USB packet unique identifier.
+    /// Unique number for packet tracking.
     pub packet_id: u32,
-    /// USB packet id.
+    /// USB packet id (direction of the transfer).
     pub pid: u32,
     pub is_async: bool,
     pub iovecs: Vec<Iovec>,
