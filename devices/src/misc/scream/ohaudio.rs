@@ -19,9 +19,8 @@ use std::{cmp, ptr, thread, time};
 
 use log::{error, warn};
 
-use super::ohaudio_bindings::{OhAudioCapturer, OhAudioRenderer};
-use super::ohaudio_rapi::{AudioContext, AudioProcessCb, AudioStreamType};
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
+use util::ohos_binding::audio::*;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;

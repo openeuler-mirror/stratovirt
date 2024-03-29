@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "scream_ohaudio")]
+pub mod audio;
 #[cfg(feature = "usb_camera_oh")]
 pub mod camera;
 pub mod misc;
