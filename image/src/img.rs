@@ -628,6 +628,76 @@ mod test {
         }
     }
 
+    struct TestRawImage {
+        path: String,
+    }
+
+    impl TestRawImage {
+        fn create(path: String, img_size: String) -> Self {
+            let create_str = format!("-f raw {} {}", path, img_size);
+            let create_args: Vec<String> = create_str
+                .split(' ')
+                .into_iter()
+                .map(|str| str.to_string())
+                .collect();
+            assert!(image_create(create_args).is_ok());
+
+            Self { path }
+        }
+
+        fn create_driver(&mut self) -> RawDriver<()> {
+            let mut conf = BlockProperty::default();
+            conf.format = DiskFormat::Raw;
+
+            let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+
+            let file = open_file(&self.path, false, false).unwrap();
+            let raw_driver = RawDriver::new(file, aio, conf);
+            raw_driver
+        }
+    }
+
+    impl Drop for TestRawImage {
+        fn drop(&mut self) {
+            assert!(remove_file(self.path.clone()).is_ok());
+        }
+    }
+
+    fn vec_is_fill_with(vec: &Vec<u8>, num: u8) -> bool {
+        for elem in vec {
+            if elem != &num {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn image_write(
+        driver: &mut dyn BlockDriverOps<()>,
+        offset: usize,
+        buf: &Vec<u8>,
+    ) -> Result<()> {
+        driver.write_vectored(
+            vec![Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: buf.len() as u64,
+            }],
+            offset,
+            (),
+        )
+    }
+
+    fn image_read(driver: &mut dyn BlockDriverOps<()>, offset: usize, buf: &Vec<u8>) -> Result<()> {
+        driver.read_vectored(
+            vec![Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: buf.len() as u64,
+            }],
+            offset,
+            (),
+        )
+    }
+
     /// Test the function of creating image.
     /// TestStep:
     ///   1. Create image with different args.
@@ -1533,5 +1603,296 @@ mod test {
         for elem in buf {
             assert_eq!(elem, 2);
         }
+    }
+
+    /// Test the function of resize image.
+    ///
+    /// TestStep:
+    ///   1. Resize the image with different args.
+    /// Expect:
+    ///   1. If the format of args is invalid, the operation return error.
+    #[test]
+    fn test_arg_parse_of_image_resize() {
+        let path = "/tmp/test_arg_parse_of_image_resize.img";
+        let test_case = vec![
+            ("qcow2", "-f qcow2 img_path +1M", true),
+            ("qcow2", "-f raw img_path +1M", true),
+            ("qcow2", "img_path +0M", true),
+            ("qcow2", "img_path +1M", true),
+            ("qcow2", "img_path 10M", true),
+            ("qcow2", "img_path 11M", true),
+            ("qcow2", "img_path 9M", false),
+            ("qcow2", "img_path 1M", false),
+            ("qcow2", "img_path ++1M", false),
+            ("qcow2", "img_path +511", false),
+            ("qcow2", "img_path -1M", false),
+            ("qcow2", "img_path +1M extra_args", false),
+            ("qcow2", "+1M", false),
+            ("qcow2", "", false),
+            ("raw", "img_path +1M", true),
+            ("raw", "img_path 18446744073709551615", false),
+            ("raw", "img_path +511", false),
+            ("raw", "-f raw img_path +1M", true),
+            ("raw", "-f qcow2 img_path +1M", false),
+        ];
+
+        for (img_type, cmd, res) in test_case {
+            assert!(image_create(vec![
+                "-f".to_string(),
+                img_type.to_string(),
+                path.to_string(),
+                "+10M".to_string()
+            ])
+            .is_ok());
+
+            // Apply resize operation.
+            let cmd = cmd.replace("img_path", path);
+            let args: Vec<String> = cmd
+                .split(' ')
+                .into_iter()
+                .map(|str| str.to_string())
+                .collect();
+            assert_eq!(image_resize(args).is_ok(), res);
+
+            assert!(remove_file(path.to_string()).is_ok());
+        }
+    }
+
+    /// Test the function of resize for raw image.
+    ///
+    /// TestStep:
+    /// 1. Create a raw image with size of 10M.
+    /// 2. Write data 1 in the range of [0, 10M]， with expect 1.
+    /// 3. Resize the image with +10M.
+    /// 4. Write data 2 in the range of [10M, 20M], with expect 1.
+    /// 5. Read the data from the image, with expect 2.
+    ///
+    /// Expect:
+    /// 1. Data successfully written to disk.
+    /// 2. The data read from disk meets expectation.
+    #[test]
+    fn test_resize_raw() {
+        // Step 1: Create a raw image with size of 10M.
+        let path = "/tmp/test_resize_raw.raw";
+        let mut test_image = TestRawImage::create(path.to_string(), "10M".to_string());
+
+        // Step 2: Write data 1 in the range of [0, 10M].
+        let mut offset: usize = 0;
+        let buf = vec![1; 10240];
+        let mut driver = test_image.create_driver();
+        while offset < 10 * M as usize {
+            assert!(image_write(&mut driver, offset as usize, &buf).is_ok());
+            offset += 10240;
+        }
+        drop(driver);
+
+        // Step 3: Resize the image with 10M.
+        assert!(image_resize(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            path.to_string(),
+            "+10M".to_string(),
+        ])
+        .is_ok());
+
+        // Step 4: Write data 2 in the range of [10M, 20M]
+        let buf = vec![2; 10240];
+        let mut driver = test_image.create_driver();
+        while offset < (10 + 10) * M as usize {
+            assert!(image_write(&mut driver, offset as usize, &buf).is_ok());
+            offset += 10240;
+        }
+
+        // Step 5: Read the data from the image, the data read from disk meets expectation.
+        let mut offset = 0;
+        let buf = vec![0; 10240];
+        while offset < 10 * M as usize {
+            assert!(image_read(&mut driver, offset, &buf).is_ok());
+            assert!(vec_is_fill_with(&buf, 1));
+            offset += 10240;
+        }
+
+        while offset < (10 + 10) * M as usize {
+            assert!(image_read(&mut driver, offset, &buf).is_ok());
+            assert!(vec_is_fill_with(&buf, 2));
+            offset += 10240;
+        }
+    }
+
+    /// Test the function of resize for qcow2 image.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 10M.
+    /// 2. Write data 1 in the range of [0, 10M]， with expect 1.
+    /// 3. Resize the image with +10M.
+    /// 4. Write data 2 in the range of [10M, 20M], with expect 1.
+    /// 5. Read the data from the image, with expect 2.
+    ///
+    /// Expect:
+    /// 1. Data successfully written to disk.
+    /// 2. The data read from disk meets expectation.
+    #[test]
+    fn test_resize_qcow2() {
+        let path = "/tmp/test_resize_qcow2.qcow2";
+        // Step 1: Create a qcow2 image with size of 10M.
+        let test_image = TestQcow2Image::create(16, 16, path, "+10M");
+
+        // Step 2: Write data of 1 to the disk in the range of [0, 10M]
+        let mut offset = 0;
+        let buf = vec![1; 10240];
+        let mut qcow2_driver = test_image.create_driver();
+        while offset < 10 * M {
+            assert!(image_write(&mut qcow2_driver, offset as usize, &buf).is_ok());
+            offset += 10240;
+        }
+        // If the offset exceed the virtual size, it is expect to be failed.
+        assert!(image_write(&mut qcow2_driver, offset as usize, &buf).is_err());
+        drop(qcow2_driver);
+
+        // Step 3: Resize the image with 10M.
+        assert!(image_resize(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string(),
+        ])
+        .is_ok());
+
+        // Step4: Write data 2 in the range of [10M, 20M]
+        let buf = vec![2; 10240];
+        let mut qcow2_driver = test_image.create_driver();
+        while offset < (10 + 10) * M {
+            assert!(image_write(&mut qcow2_driver, offset as usize, &buf).is_ok());
+            offset += 10240;
+        }
+        assert!(image_write(&mut qcow2_driver, offset as usize, &buf).is_err());
+
+        // Step 5: Read the data from the image.
+        let mut offset = 0;
+        let buf = vec![0; 10240];
+        while offset < 10 * M {
+            assert!(image_read(&mut qcow2_driver, offset as usize, &buf).is_ok());
+            assert!(vec_is_fill_with(&buf, 1));
+            offset += 10240;
+        }
+
+        while offset < (10 + 10) * M {
+            assert!(image_read(&mut qcow2_driver, offset as usize, &buf).is_ok());
+            assert!(vec_is_fill_with(&buf, 2));
+            offset += 10240;
+        }
+        assert!(image_read(&mut qcow2_driver, offset as usize, &buf).is_err());
+    }
+
+    /// Test resize image with snapshot operation.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 1G.
+    /// 2. Perform the operations of snapshot and image resize.
+    #[test]
+    fn test_image_resize_with_snapshot() {
+        let path = "/tmp/test_image_resize_with_snapshot.qcow2";
+        let test_image = TestQcow2Image::create(16, 16, path, "1G");
+        let mut driver = test_image.create_driver();
+        let buf = vec![1; 1024 * 1024];
+        assert!(image_write(&mut driver, 0, &buf).is_ok());
+        assert_eq!(driver.header.size, 1 * G);
+        drop(driver);
+        let quite = false;
+        let fix = FIX_ERRORS | FIX_LEAKS;
+
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "test_snapshot_1G".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![2; 1024 * 1024];
+        assert!(image_write(&mut driver, 0, &buf).is_ok());
+        assert_eq!(driver.header.size, 1 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
+
+        assert!(image_resize(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+20G".to_string(),
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![3; 1024 * 1024];
+        assert!(image_write(&mut driver, 20 * G as usize, &buf).is_ok());
+
+        assert!(image_read(&mut driver, 0, &buf).is_ok());
+        assert!(vec_is_fill_with(&buf, 2));
+        assert_eq!(driver.header.size, 21 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
+
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "test_snapshot_21G".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![4; 1024 * 1024];
+        assert!(image_write(&mut driver, 20 * G as usize, &buf).is_ok());
+        assert_eq!(driver.header.size, 21 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
+
+        assert!(image_resize(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10G".to_string(),
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![5; 1024 * 1024];
+        assert!(image_write(&mut driver, 30 * G as usize, &buf).is_ok());
+
+        assert!(image_read(&mut driver, 20 * G as usize, &buf).is_ok());
+        assert!(vec_is_fill_with(&buf, 4));
+        assert_eq!(driver.header.size, 31 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
+
+        assert!(image_snapshot(vec![
+            "-a".to_string(),
+            "test_snapshot_1G".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![0; 1024 * 1024];
+        assert!(image_read(&mut driver, 0, &buf).is_ok());
+        assert!(vec_is_fill_with(&buf, 1));
+        assert_eq!(driver.header.size, 1 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
+
+        assert!(image_snapshot(vec![
+            "-a".to_string(),
+            "test_snapshot_21G".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert_eq!(test_image.check_image(quite, fix), true);
+        let mut driver = test_image.create_driver();
+        let buf = vec![0; 1024 * 1024];
+        assert!(image_read(&mut driver, 20 * G as usize, &buf).is_ok());
+        assert!(vec_is_fill_with(&buf, 3));
+        assert_eq!(driver.header.size, 21 * G);
+        drop(driver);
+        assert_eq!(test_image.check_image(quite, fix), true);
     }
 }
