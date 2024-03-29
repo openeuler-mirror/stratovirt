@@ -19,7 +19,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 
-use crate::cmdline::ArgsParse;
+use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
     qcow2::{header::QcowHeader, InternalSnapshotOps, Qcow2Driver, SyncAioInfo},
     raw::RawDriver,
@@ -383,6 +383,15 @@ pub(crate) fn create_qcow2_driver_for_check(
         .snapshot
         .set_cluster_size(qcow2_driver.header.cluster_size());
     Ok(qcow2_driver)
+}
+
+pub(crate) fn print_version() {
+    println!(
+        "{} version {}\
+        Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.",
+        BINARY_NAME,
+        util::VERSION,
+    )
 }
 
 pub fn print_help() {
