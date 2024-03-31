@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
@@ -258,8 +258,72 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     }
 }
 
-pub(crate) fn image_resize(_args: Vec<String>) -> Result<()> {
-    todo!()
+pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
+    if args.len() < 2 {
+        bail!("Not enough arguments");
+    }
+    let size_str = args.pop().unwrap();
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f"], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    // Parse the image path.
+    let len = arg_parser.free.len();
+    let img_path = match len {
+        0 => bail!("Expecting image file name and size"),
+        1 => arg_parser.free[0].clone(),
+        _ => bail!("Unexpected argument: {}", arg_parser.free[1]),
+    };
+
+    // If the disk format is specified by user, it will be used firstly,
+    // or it will be detected.
+    let mut disk_fmt = None;
+    if let Some(fmt) = arg_parser.opt_str("f") {
+        disk_fmt = Some(DiskFormat::from_str(&fmt)?);
+    };
+
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
+    let image_file = ImageFile::create(&img_path, false)?;
+    let detect_fmt = image_file.detect_img_format()?;
+    let real_fmt = image_file.check_img_format(disk_fmt, detect_fmt)?;
+
+    let mut conf = BlockProperty::default();
+    conf.format = real_fmt;
+    let mut driver: Box<dyn BlockDriverOps<()>> = match real_fmt {
+        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
+        DiskFormat::Qcow2 => {
+            let mut qocw2_driver =
+                Qcow2Driver::new(image_file.file.try_clone()?, aio, conf.clone())?;
+            qocw2_driver.load_metadata(conf)?;
+            Box::new(qocw2_driver)
+        }
+    };
+
+    let old_size = driver.disk_size()?;
+    // Only expansion is supported currently.
+    let new_size = if size_str.starts_with("+") {
+        let size = memory_unit_conversion(&size_str, 1)?;
+        old_size
+            .checked_add(size)
+            .ok_or_else(|| anyhow!("Disk size is too large for chosen offset"))?
+    } else if size_str.starts_with("-") {
+        bail!("The shrink operation is not supported");
+    } else {
+        let new_size = memory_unit_conversion(&size_str, 1)?;
+        if new_size < old_size {
+            bail!("The shrink operation is not supported");
+        }
+        new_size
+    };
+
+    driver.resize(new_size)?;
+    println!("Image resized.");
+
+    Ok(())
 }
 
 pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
@@ -410,6 +474,7 @@ Stratovirt disk image utility
 Command syntax:
 create [-f fmt] [-o options] filename [size]
 check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
+resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot] filename
 
 Command parameters:
