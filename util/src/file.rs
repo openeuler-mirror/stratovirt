@@ -20,7 +20,7 @@ use nix::fcntl::{fcntl, FcntlArg};
 use nix::unistd::getpid;
 
 const MIN_FILE_ALIGN: u32 = 512;
-const MAX_FILE_ALIGN: u32 = 4096;
+pub const MAX_FILE_ALIGN: u32 = 4096;
 /// Permission to read
 const FILE_LOCK_READ: u64 = 0x01;
 /// Permission to write
