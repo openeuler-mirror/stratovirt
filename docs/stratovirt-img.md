@@ -55,6 +55,26 @@ stratovirt-img check img_path
 
 Note: The command of check is not supported by raw format.
 
+## Resize
+
+Change the virtual size of the disk.
+- `+size`means increase from old size, while `size` means resize to new size.
+
+Command syntax:
+
+```shell
+resize [-f fmt] img_path [+]size
+```
+
+Sample Configuration：
+
+```shell
+stratovirt-img resize -f qcow2 img_path +size
+stratovirt-img resize -f raw img_path +size
+```
+
+Note: Shrink operation is not supported now.
+
 ## Snapshot
 
 Operating internal snapshot for disk, it is only supported by qcow2.
