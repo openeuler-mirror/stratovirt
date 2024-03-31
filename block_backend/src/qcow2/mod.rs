@@ -50,6 +50,7 @@ use crate::{
         table::{Qcow2ClusterType, Qcow2Table},
     },
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
+    SECTOR_SIZE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
@@ -59,6 +60,7 @@ use util::{
         Iovec, OpCode,
     },
     num_ops::{div_round_up, ranges_overlap, round_down, round_up},
+    offset_of,
     time::{get_format_time, gettime},
 };
 
@@ -504,15 +506,21 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &new_l1_table)?;
 
-        // Flush new data to disk.
-        let mut new_header = self.header.clone();
-        new_header.l1_size = new_l1_size as u32;
-        new_header.l1_table_offset = new_l1_table_offset;
+        // Update the message information, includes:
+        // entry size of l1 table and active l1 table offset.
+        // 4 bytes for l1 size and 8 bytes for l1 table offset.
+        let mut buf = vec![0; 12];
+        BigEndian::write_u32(&mut buf[0..4], new_l1_size as u32);
+        BigEndian::write_u64(&mut buf[4..12], new_l1_table_offset);
         self.sync_aio
             .borrow_mut()
-            .write_buffer(0, &new_header.to_vec())?;
-        self.header = new_header;
+            .write_buffer(offset_of!(QcowHeader, l1_size) as u64, &buf)?;
+        self.header.l1_size = new_l1_size as u32;
+        self.header.l1_table_offset = new_l1_table_offset;
+        self.table.l1_size = new_l1_size as u32;
+        self.table.l1_table_offset = new_l1_table_offset;
         self.table.l1_table = new_l1_table;
+
         self.free_cluster(
             old_l1_table_offset,
             old_l1_table_clusters,
@@ -1574,7 +1582,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
             backing_file_offset: 0,
             backing_file_size: 0,
             cluster_bits: qcow2_options.cluster_size.trailing_zeros(),
-            size: qcow2_options.img_size,
+            size: 0,
             crypt_method: 0,
             l1_size: 0,
             l1_table_offset: 0,
@@ -1620,10 +1628,8 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         // Create qcow2 driver.
         self.load_refcount_table()?;
 
-        let l1_entry_size = cluster_size * (cluster_size / ENTRY_SIZE);
-        let l1_size = div_round_up(qcow2_options.img_size, l1_entry_size).unwrap();
-        self.grow_l1_table(l1_size)?;
-        self.flush()?;
+        // Expand image to the new size.
+        self.resize(qcow2_options.img_size)?;
 
         let image_info = format!(
             "fmt=qcow2 cluster_size={} extended_l2=off compression_type=zlib size={} lazy_refcounts=off refcount_bits={}",
@@ -1819,8 +1825,41 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         self.driver.flush_request()
     }
 
-    fn resize(&mut self, _new_size: u64) -> Result<()> {
-        todo!()
+    fn resize(&mut self, new_size: u64) -> Result<()> {
+        if !is_aligned(SECTOR_SIZE, new_size) {
+            bail!(
+                "The new size {} is not aligned to {}",
+                new_size,
+                SECTOR_SIZE
+            );
+        }
+
+        if !self.snapshot.snapshots.is_empty() && self.header.version < 3 {
+            bail!("Can't resize a version 2 image with snapshots");
+        }
+
+        let old_size = self.virtual_disk_size();
+        if new_size == old_size {
+            return Ok(());
+        }
+
+        let cluster_size = self.header.cluster_size();
+        // Number of l1 table entries.
+        let l1_entry_size = cluster_size * (cluster_size / ENTRY_SIZE);
+        let new_l1_size = div_round_up(new_size, l1_entry_size).unwrap();
+
+        self.grow_l1_table(new_l1_size)?;
+
+        // Write the size information back to the disk.
+        // The field of size in header needs 8 bytes.
+        let mut buf = vec![0; 8];
+        BigEndian::write_u64(&mut buf, new_size);
+        self.sync_aio
+            .borrow_mut()
+            .write_buffer(offset_of!(QcowHeader, size) as u64, &buf)?;
+        self.header.size = new_size;
+
+        self.flush()
     }
 
     fn drain_request(&self) {
