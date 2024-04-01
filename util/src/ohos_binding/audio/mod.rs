@@ -360,3 +360,96 @@ impl AudioContext {
             .map_or(false, |_| (self.spec == other))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ohos_binding::audio::sys as capi;
+    use crate::ohos_binding::audio::{AudioSpec, AudioStreamType, OAErr, SampleRate, SampleSize};
+
+    #[test]
+    fn test_err() {
+        assert_eq!("OK", format!("{}", OAErr::Ok));
+        assert_eq!("InvalidParam", format!("{}", OAErr::InvalidParam));
+        assert_eq!("IllegalState", format!("{}", OAErr::IllegalState));
+        assert_eq!("SysErr", format!("{}", OAErr::SysErr));
+        assert_eq!("UnknownErr", format!("{}", OAErr::UnknownErr));
+
+        assert_eq!(
+            OAErr::Ok,
+            OAErr::from(capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_SUCCESS)
+        );
+        assert_eq!(
+            OAErr::InvalidParam,
+            OAErr::from(capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_ERROR_INVALID_PARAM)
+        );
+        assert_eq!(
+            OAErr::IllegalState,
+            OAErr::from(capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_ERROR_ILLEGAL_STATE)
+        );
+        assert_eq!(
+            OAErr::SysErr,
+            OAErr::from(capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_ERROR_SYSTEM)
+        );
+        assert_eq!(
+            OAErr::UnknownErr,
+            OAErr::from(capi::OH_AUDIO_STREAM_SAMPLE_FORMAT_AUDIOSTREAM_SAMPLE_F32_LE)
+        );
+    }
+
+    #[test]
+    fn test_sample_size() {
+        assert_eq!(
+            Ok(SampleSize(
+                capi::OH_AUDIO_STREAM_SAMPLE_FORMAT_AUDIOSTREAM_SAMPLE_S16_LE
+            )),
+            SampleSize::try_from(16)
+        );
+        assert_eq!(
+            Ok(SampleSize(
+                capi::OH_AUDIO_STREAM_SAMPLE_FORMAT_AUDIOSTREAM_SAMPLE_S24_LE
+            )),
+            SampleSize::try_from(24)
+        );
+        assert_eq!(
+            Ok(SampleSize(
+                capi::OH_AUDIO_STREAM_SAMPLE_FORMAT_AUDIOSTREAM_SAMPLE_S32_LE
+            )),
+            SampleSize::try_from(32)
+        );
+        assert_eq!(Err(OAErr::InvalidParam), SampleSize::try_from(18));
+    }
+
+    #[test]
+    fn test_sample_rate() {
+        assert_eq!(SampleRate(44100), SampleRate::default());
+        assert_eq!(Ok(SampleRate(44100)), SampleRate::try_from(44100));
+        assert_eq!(Ok(SampleRate(48000)), SampleRate::try_from(48000));
+        assert_eq!(Err(OAErr::InvalidParam), SampleRate::try_from(54321));
+    }
+
+    #[test]
+    fn test_audio_spec() {
+        let mut spec1 = AudioSpec::default();
+        let spec2 = AudioSpec::default();
+        assert_eq!(spec1, spec2);
+        assert_eq!(Err(OAErr::InvalidParam), spec1.set(15, 16, 3));
+        assert_eq!(Err(OAErr::InvalidParam), spec1.set(16, 16, 3));
+        assert_eq!(Ok(()), spec1.set(32, 48000, 4));
+        assert_ne!(spec1, spec2);
+    }
+
+    #[test]
+    fn test_audio_stream_type() {
+        let oh_audio_stream_type_render: capi::OhAudioStreamType = AudioStreamType::Render.into();
+        assert_eq!(
+            capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER,
+            oh_audio_stream_type_render
+        );
+        let oh_audio_stream_type_capturer: capi::OhAudioStreamType =
+            AudioStreamType::Capturer.into();
+        assert_eq!(
+            capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_CAPTURER,
+            oh_audio_stream_type_capturer
+        );
+    }
+}
