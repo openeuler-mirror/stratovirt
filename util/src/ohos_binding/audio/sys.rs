@@ -143,7 +143,7 @@ pub struct OH_AudioStreamBuilderStruct {
 pub type OhAudioStreamBuilder = OH_AudioStreamBuilderStruct;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct OH_AudioRendererStruct {
     _unused: [u8; 0],
 }
@@ -154,7 +154,7 @@ pub struct OH_AudioRendererStruct {
 pub type OhAudioRenderer = OH_AudioRendererStruct;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct OH_AudioCapturerStruct {
     _unused: [u8; 0],
 }
