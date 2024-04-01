@@ -200,7 +200,7 @@ pub trait DeviceInterface {
     /// Control OH audio's control authority.
     fn switch_audio_record(&self, _authorized: String) -> Response {
         Response::create_response(
-            serde_json::to_value("switch_audi_record not supported for VM".to_string()).unwrap(),
+            serde_json::to_value("switch_audio_record not supported for VM".to_string()).unwrap(),
             None,
         )
     }
