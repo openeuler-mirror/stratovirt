@@ -69,17 +69,3 @@ impl LibHwfAdapter {
 pub fn hwf_adapter_camera_api() -> Arc<CamFuncTable> {
     LIB_HWF_ADAPTER.get_camera_api()
 }
-
-#[macro_export]
-macro_rules! get_libfn {
-    ( $lib: ident, $tname: ident, $fname: ident ) => {
-        $lib.get::<$tname>(stringify!($fname).as_bytes())
-            .with_context(|| {
-                format!(
-                    "failed to get function {} from libhwf_adapter",
-                    stringify!($fname)
-                )
-            })?
-            .into_raw()
-    };
-}
