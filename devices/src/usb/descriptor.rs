@@ -165,11 +165,6 @@ pub struct UsbDescDevice {
     pub configs: Vec<Arc<UsbDescConfig>>,
 }
 
-/// USB device qualifier descriptor.
-pub struct UsbDescDeviceQualifier {
-    pub qualifier_desc: UsbDeviceQualifierDescriptor,
-}
-
 /// USB config descriptor.
 pub struct UsbDescConfig {
     pub config_desc: UsbConfigDescriptor,
@@ -221,7 +216,6 @@ pub struct UsbDescEndpoint {
 /// USB Descriptor.
 pub struct UsbDescriptor {
     pub device_desc: Option<Arc<UsbDescDevice>>,
-    pub device_qualifier_desc: Option<Arc<UsbDescDeviceQualifier>>,
     pub configuration_selected: Option<Arc<UsbDescConfig>>,
     pub interfaces: Vec<Option<Arc<UsbDescIface>>>,
     pub altsetting: Vec<u32>,
@@ -233,7 +227,6 @@ impl UsbDescriptor {
     pub fn new() -> Self {
         Self {
             device_desc: None,
-            device_qualifier_desc: None,
             configuration_selected: None,
             interfaces: vec![None; USB_MAX_INTERFACES as usize],
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
