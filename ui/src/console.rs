@@ -407,8 +407,8 @@ pub fn display_replace_surface(
     if surface.is_none() {
         // Create a place holder message.
         locked_con.surface = create_msg_surface(
-            locked_con.width,
-            locked_con.height,
+            DEFAULT_SURFACE_WIDTH,
+            DEFAULT_SURFACE_HEIGHT,
             "Display is not active.".to_string(),
         );
     } else {
