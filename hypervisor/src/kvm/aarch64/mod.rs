@@ -322,9 +322,12 @@ impl KvmCpu {
             core_regs.spsr[i] = self.get_one_reg(Arm64CoreRegs::KvmSpsr(i).into())? as u64;
         }
 
-        for i in 0..KVM_NR_FP_REGS as usize {
-            core_regs.fp_regs.vregs[i] =
-                self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
+        // State save and restore is not supported for SVE for now, so we just skip it.
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) == 0 {
+            for i in 0..KVM_NR_FP_REGS as usize {
+                core_regs.fp_regs.vregs[i] =
+                    self.get_one_reg(Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
+            }
         }
 
         core_regs.fp_regs.fpsr =
@@ -364,11 +367,14 @@ impl KvmCpu {
             self.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
         }
 
-        for i in 0..KVM_NR_FP_REGS as usize {
-            self.set_one_reg(
-                Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
-                core_regs.fp_regs.vregs[i],
-            )?;
+        // State save and restore is not supported for SVE for now, so we just skip it.
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) == 0 {
+            for i in 0..KVM_NR_FP_REGS as usize {
+                self.set_one_reg(
+                    Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
+                    core_regs.fp_regs.vregs[i],
+                )?;
+            }
         }
 
         self.set_one_reg(
