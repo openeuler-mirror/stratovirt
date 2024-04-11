@@ -557,7 +557,8 @@ impl BlockIoHandler {
     }
 
     fn process_queue_internal(&mut self) -> Result<bool> {
-        let mut req_queue = Vec::new();
+        let queue_size = self.queue.lock().unwrap().vring.actual_size() as usize;
+        let mut req_queue = Vec::with_capacity(queue_size);
         let mut done = false;
 
         loop {
@@ -596,7 +597,7 @@ impl BlockIoHandler {
                 continue;
             }
             // Avoid bogus guest stuck IO thread.
-            if req_queue.len() >= queue.vring.actual_size() as usize {
+            if req_queue.len() >= queue_size {
                 bail!("The front driver may be damaged, avail requests more than queue size");
             }
             req_queue.push(req);
