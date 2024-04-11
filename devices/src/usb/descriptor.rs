@@ -554,6 +554,15 @@ impl UsbDescriptorOps for UsbDeviceBase {
                 let usb_ep = self.get_mut_endpoint(in_direction, ep);
                 usb_ep.ep_type = iface.endpoints[e as usize].endpoint_desc.bmAttributes
                     & USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK;
+                usb_ep
+                    .set_max_packet_size(iface.endpoints[e as usize].endpoint_desc.wMaxPacketSize);
+                let extra = &iface.endpoints[e as usize].extra;
+                if !extra.is_empty()
+                    && extra[1] == USB_DT_ENDPOINT_COMPANION
+                    && extra[0] == USB_DT_SS_EP_COMP_SIZE
+                {
+                    usb_ep.set_max_streams(extra[3]);
+                }
             }
         }
         Ok(())

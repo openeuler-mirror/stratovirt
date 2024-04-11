@@ -148,6 +148,7 @@ pub struct UsbEndpoint {
     pub ifnum: u8,
     pub halted: bool,
     pub max_packet_size: u32,
+    pub max_streams: u32,
 }
 
 impl UsbEndpoint {
@@ -169,6 +170,16 @@ impl UsbEndpoint {
         };
 
         self.max_packet_size = u32::from(size) * micro_frames;
+    }
+
+    pub fn set_max_streams(&mut self, raw: u8) {
+        let max_streams = raw & 0x1f;
+
+        if max_streams != 0 {
+            self.max_streams = 1 << max_streams;
+        } else {
+            self.max_streams = 0;
+        }
     }
 }
 
@@ -430,6 +441,14 @@ pub trait UsbDevice: Send + Sync {
     fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Allocate streams on this device.
+    fn alloc_streams(&mut self, _endpoints: &[UsbEndpoint], _streams_nr: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Free streams on this device.
+    fn free_streams(&mut self, _endpoints: &[UsbEndpoint]) {}
 
     /// Cancel specified USB packet.
     fn cancel_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>);

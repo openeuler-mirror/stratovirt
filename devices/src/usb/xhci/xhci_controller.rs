@@ -19,11 +19,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use super::xhci_pci::XhciConfig;
-use super::xhci_regs::{XhciInterrupter, XhciInterrupterState, XhciOperReg, XhciOperRegState};
+use super::xhci_regs::{
+    XhciInterrupter, XhciInterrupterState, XhciOperReg, XhciOperRegState, XHCI_MAX_STREAMS_EXP,
+};
 use super::xhci_ring::{
     XhciCommandRing, XhciCommandRingState, XhciEventRingSeg, XhciTRB, XhciTransferRing,
     XhciTransferRingState,
@@ -34,7 +36,7 @@ use super::xhci_trb::{
     TRB_TYPE_SHIFT,
 };
 use crate::usb::{config::*, TransferOps};
-use crate::usb::{UsbDevice, UsbDeviceRequest, UsbError, UsbPacket, UsbPacketStatus};
+use crate::usb::{UsbDevice, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus};
 use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 
@@ -1137,6 +1139,7 @@ pub struct XhciDevice {
     pub intrs: Vec<Arc<Mutex<XhciInterrupter>>>,
     pub cmd_ring: XhciCommandRing,
     pub mem_space: Arc<AddressSpace>,
+    pub enable_streams: bool,
     /// Runtime Register.
     mfindex_start: Duration,
     timer_id: Option<u64>,
@@ -1196,6 +1199,12 @@ impl XhciDevice {
             slots.push(XhciSlot::new(mem_space));
         }
 
+        let streams = if cfg!(target_env = "ohos") {
+            config.streams.unwrap_or(false)
+        } else {
+            config.streams.unwrap_or(true)
+        };
+
         let xhci = XhciDevice {
             packet_count: 0,
             oper,
@@ -1206,6 +1215,7 @@ impl XhciDevice {
             intrs,
             cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
+            enable_streams: streams,
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             timer_id: None,
             bme: bme.clone(),
@@ -1754,6 +1764,7 @@ impl XhciDevice {
             error!("Invalid control context {:?}", ictl_ctx);
             return Ok(TRBCCode::TrbError);
         }
+        self.free_slot_streams(slot_id, ictl_ctx.add_flags | ictl_ctx.drop_flags)?;
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         for i in 2..32 {
             if ictl_ctx.drop_flags & (1 << i) == 1 << i {
@@ -1763,6 +1774,15 @@ impl XhciDevice {
                 self.disable_endpoint(slot_id, i)?;
                 self.enable_endpoint(slot_id, i, ictx, octx.raw_value())?;
             }
+        }
+        let res = self.alloc_slot_streams(slot_id, ictl_ctx.add_flags)?;
+        if res != TRBCCode::Success {
+            for i in 2..32 {
+                if ictl_ctx.add_flags & (1 << i) == (1 << i) {
+                    self.disable_endpoint(slot_id, i)?;
+                }
+            }
+            return Ok(res);
         }
         // From section 4.6.6 Configure Endpoint of the spec:
         // If all Endpoints are Disabled:
@@ -1788,6 +1808,135 @@ impl XhciDevice {
         }
         dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
+    }
+
+    fn alloc_slot_streams(&mut self, slot_id: u32, mask: u32) -> Result<TRBCCode> {
+        let (endpoints, ep_ctxs) = self.mask_to_stream_endpoints(slot_id, mask)?;
+        let streams_nr = match self.validate_get_streams_nr(&endpoints, &ep_ctxs) {
+            Ok(0) => return Ok(TRBCCode::Success),
+            Ok(n) => n,
+            Err(e) => {
+                error!("Failed to allocate streams on slot {}: {:?}", slot_id, e);
+                return Ok(TRBCCode::ResourceError);
+            }
+        };
+
+        let dev = self.get_usb_dev(slot_id, 0)?;
+        let mut locked_dev = dev.lock().unwrap();
+        if let Err(err) = locked_dev.alloc_streams(&endpoints, streams_nr) {
+            error!(
+                "XHCI controller failed to allocate streams on slot {}: {:?}",
+                slot_id, err
+            );
+            Ok(TRBCCode::ResourceError)
+        } else {
+            Ok(TRBCCode::Success)
+        }
+    }
+
+    fn validate_get_streams_nr(
+        &self,
+        endpoints: &[UsbEndpoint],
+        contexts: &[&XhciEpContext],
+    ) -> Result<u32> {
+        if !self.enable_streams || endpoints.is_empty() {
+            return Ok(0);
+        }
+
+        let xhci_max_streams = 1 << (XHCI_MAX_STREAMS_EXP + 1);
+        let ctx0_max_streams = 1 << (contexts[0].max_pstreams + 1);
+        let ep0_max_streams = endpoints[0].max_streams;
+
+        if ctx0_max_streams > ep0_max_streams {
+            bail!(
+                "number of streams requested by XHCI ep context ({}) is bigger than the number of \
+                streams supported by device endpoint ({})",
+                ctx0_max_streams,
+                ep0_max_streams
+            );
+        }
+
+        // NOTE: It was previously verified that ctx0_max_streams <= ep0_max_streams,
+        // so don't have to check whether ctx0_max_streams <= xhci_max_streams or not.
+        if ep0_max_streams > xhci_max_streams {
+            bail!(
+                "XHCI supports {} streams, but {} streams have been requested by device",
+                xhci_max_streams,
+                ep0_max_streams
+            );
+        }
+
+        for (ep, ctx) in std::iter::zip(endpoints.iter(), contexts.iter()) {
+            let ep_streams = ep.max_streams;
+            let ctx_streams = 1 << (ctx.max_pstreams + 1);
+
+            // NOTE: Assume all device stream endpoints have the same number of streams.
+            if ep0_max_streams != ep_streams {
+                bail!(
+                    "number of streams differs on device endpoints: {} and {}",
+                    ep0_max_streams,
+                    ep_streams
+                );
+            }
+
+            // NOTE: Assume all XHCI endpoint contexts have the same number of streams.
+            if ctx0_max_streams != ctx_streams {
+                bail!(
+                    "number of streams differs on XHCI ep contexts: {} and {}",
+                    ctx0_max_streams,
+                    ctx_streams
+                );
+            }
+        }
+
+        // NOTE: ctx0_max_streams is the min of 3 values:
+        // ctx0_max_streams, ctx0_max_streams and xhci_max_streams.
+        Ok(ctx0_max_streams)
+    }
+
+    fn free_slot_streams(&mut self, slot_id: u32, mask: u32) -> Result<()> {
+        let (endpoints, _) = self.mask_to_stream_endpoints(slot_id, mask)?;
+        let dev = self.get_usb_dev(slot_id, 0)?;
+        let mut locked_dev = dev.lock().unwrap();
+        locked_dev.free_streams(&endpoints);
+        Ok(())
+    }
+
+    fn mask_to_stream_endpoints(
+        &self,
+        slot_id: u32,
+        mask: u32,
+    ) -> Result<(Vec<UsbEndpoint>, Vec<&XhciEpContext>)> {
+        let mut endpoints = Vec::new();
+        let mut ep_ctxs = Vec::new();
+        let dev = self.get_usb_dev(slot_id, 0)?;
+        let locked_dev = dev.lock().unwrap();
+        let slot = &self.slots[slot_id as usize - 1];
+
+        for i in 2..32 {
+            if mask & (1 << i) != (1 << i) {
+                continue;
+            }
+
+            let epctx = &slot.endpoints[i - 1];
+            let (in_direction, ep_number) = endpoint_id_to_number(epctx.epid as u8);
+            let ep = *locked_dev
+                .usb_device_base()
+                .get_endpoint(in_direction, ep_number);
+
+            if ep.max_streams == 0 || epctx.max_pstreams == 0 {
+                continue;
+            }
+
+            debug!(
+                "Found stream endpoint on slot {}, epctx max_pstreams {}, ep max_streams {}.",
+                slot_id, epctx.max_pstreams, ep.max_streams
+            );
+            ep_ctxs.push(epctx);
+            endpoints.push(ep);
+        }
+
+        Ok((endpoints, ep_ctxs))
     }
 
     fn evaluate_context(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {

@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use log::error;
 use serde::{Deserialize, Serialize};
 use vmm_sys_util::epoll::EventSet;
@@ -43,7 +43,7 @@ use crate::pci::{
 use crate::usb::UsbDevice;
 use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
-use machine_manager::config::{get_pci_df, valid_id};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::event_loop::{register_event_helper, EventLoop};
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
@@ -96,6 +96,8 @@ pub struct XhciConfig {
     pub p3: Option<u8>,
     #[arg(long)]
     pub iothread: Option<String>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub streams: Option<bool>,
 }
 
 /// Registers offset.
