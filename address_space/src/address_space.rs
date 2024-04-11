@@ -501,10 +501,14 @@ impl AddressSpace {
     ///
     /// * `addr` - Guest address.
     /// * `count` - Memory needed length
-    pub fn get_address_map(&self, addr: GuestAddress, count: u64) -> Result<Vec<Iovec>> {
+    pub fn get_address_map(
+        &self,
+        addr: GuestAddress,
+        count: u64,
+        res: &mut Vec<Iovec>,
+    ) -> Result<()> {
         let mut len = count;
         let mut start = addr;
-        let mut hva_iovec = Vec::new();
 
         loop {
             let io_vec = self
@@ -516,14 +520,14 @@ impl AddressSpace {
                 .with_context(|| format!("Map iov base {:x?}, iov len {:?} failed", addr, count))?;
             start = start.unchecked_add(io_vec.iov_len);
             len -= io_vec.iov_len;
-            hva_iovec.push(io_vec);
+            res.push(io_vec);
 
             if len == 0 {
                 break;
             }
         }
 
-        Ok(hva_iovec)
+        Ok(())
     }
 
     /// Return the host address according to the given `GuestAddress` from cache.
