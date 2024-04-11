@@ -1925,10 +1925,8 @@ impl XhciDevice {
                     trb.parameter
                 };
 
-                let mut hvas = self
-                    .mem_space
-                    .get_address_map(GuestAddress(dma_addr), chunk as u64)?;
-                vec.append(&mut hvas);
+                self.mem_space
+                    .get_address_map(GuestAddress(dma_addr), chunk as u64, &mut vec)?;
             }
         }
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);

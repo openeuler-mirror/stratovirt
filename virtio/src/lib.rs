@@ -793,7 +793,8 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
     let mut end: usize = 0;
 
     for iov in iovec {
-        let addr_map = mem_space.get_address_map(iov.addr, iov.len as u64)?;
+        let mut addr_map = Vec::new();
+        mem_space.get_address_map(iov.addr, iov.len as u64, &mut addr_map)?;
         for addr in addr_map.into_iter() {
             end = cmp::min(start + addr.iov_len as usize, buf.len());
             mem_to_buf(&mut buf[start..end], addr.iov_base)?;
@@ -839,11 +840,10 @@ fn gpa_hva_iovec_map(
     mem_space: &AddressSpace,
 ) -> Result<(u64, Vec<Iovec>)> {
     let mut iov_size = 0;
-    let mut hva_iovec = Vec::new();
+    let mut hva_iovec = Vec::with_capacity(gpa_elemiovec.len());
 
     for elem in gpa_elemiovec.iter() {
-        let mut hva_vec = mem_space.get_address_map(elem.addr, elem.len as u64)?;
-        hva_iovec.append(&mut hva_vec);
+        mem_space.get_address_map(elem.addr, elem.len as u64, &mut hva_iovec)?;
         iov_size += elem.len as u64;
     }
 
