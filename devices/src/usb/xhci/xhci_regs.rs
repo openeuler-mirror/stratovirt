@@ -30,6 +30,8 @@ use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, wri
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
 pub(crate) const XHCI_OFF_DOORBELL: u32 = 0x2000;
 pub(crate) const XHCI_OFF_RUNTIME: u32 = 0x1000;
+// XHCI_MAX_STREAMS is calculated as 1 << (XHCI_MAX_STREAMS_EXP + 1)
+pub(crate) const XHCI_MAX_STREAMS_EXP: u32 = 0x5;
 /// Capability Registers.
 /// Capability Register Length.
 const XHCI_CAP_REG_CAPLENGTH: u64 = 0x00;
@@ -460,9 +462,13 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_CAP_REG_HCSPARAMS3 => 0x0,
             XHCI_CAP_REG_HCCPARAMS1 => {
+                let cap_streams = if locked_dev.enable_streams {
+                    XHCI_MAX_STREAMS_EXP << CAP_HCCP_MPSAS_SHIFT
+                } else {
+                    0
+                };
                 // The offset of the first extended capability is (base) + (0x8 << 2)
-                // The primary stream array size is 1 << (0x7 + 1)
-                (0x8 << CAP_HCCP_EXCP_SHIFT) | (0 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
+                (0x8 << CAP_HCCP_EXCP_SHIFT) | cap_streams | CAP_HCCP_AC64
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,

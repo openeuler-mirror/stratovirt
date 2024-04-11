@@ -266,6 +266,7 @@ pub fn fill_transfer_by_type(
     transfer: *mut libusb_transfer,
     handle: Option<&mut DeviceHandle<Context>>,
     ep_number: u8,
+    stream: u32,
     node: *mut Node<UsbHostRequest>,
     transfer_type: TransferType,
 ) {
@@ -298,10 +299,11 @@ pub fn fill_transfer_by_type(
         TransferType::Bulk =>
         // SAFETY: the reason is  as shown above.
         unsafe {
-            libusb1_sys::libusb_fill_bulk_transfer(
+            libusb1_sys::libusb_fill_bulk_stream_transfer(
                 transfer,
                 handle.unwrap().as_raw(),
                 ep_number,
+                stream,
                 buffer_ptr,
                 size as i32,
                 req_complete,

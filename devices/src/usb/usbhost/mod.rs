@@ -25,7 +25,7 @@ use std::{
 
 #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
 use anyhow::Context as anyhowContext;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use libc::{c_int, c_void};
 use libusb1_sys::{
@@ -37,6 +37,8 @@ use rusb::{
     constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
     TransferType, UsbContext,
 };
+
+use super::{USB_DT_ENDPOINT_COMPANION, USB_DT_SS_EP_COMP_SIZE};
 
 use crate::usb::{
     config::{
@@ -664,6 +666,12 @@ impl UsbHost {
                 usb_ep.ep_type = ep_type;
                 usb_ep.ifnum = i as u8;
                 usb_ep.halted = false;
+
+                if let Some(extra) = ep.extra() {
+                    if extra[1] == USB_DT_ENDPOINT_COMPANION && extra[0] == USB_DT_SS_EP_COMP_SIZE {
+                        usb_ep.set_max_streams(extra[3]);
+                    }
+                }
             }
         }
     }
@@ -1057,8 +1065,77 @@ fn register_exit(usbhost: Arc<Mutex<UsbHost>>) {
     );
 }
 
+fn endpoints_to_numbers(endpoints: &[UsbEndpoint]) -> Vec<u8> {
+    let mut ep_numbers = Vec::new();
+
+    for ep in endpoints.iter() {
+        if ep.in_direction {
+            ep_numbers.push(ep.ep_number | USB_DIRECTION_DEVICE_TO_HOST);
+        } else {
+            ep_numbers.push(ep.ep_number);
+        }
+    }
+
+    ep_numbers
+}
+
 impl UsbDevice for UsbHost {
     gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
+
+    fn alloc_streams(&mut self, endpoints: &[UsbEndpoint], streams_nr: u32) -> Result<()> {
+        if self.handle.is_none() {
+            bail!(
+                "USB Host {} device failed to allocate {} streams: device handle is empty.",
+                self.device_id(),
+                streams_nr,
+            );
+        }
+
+        let mut ep_nrs = endpoints_to_numbers(endpoints);
+
+        // SAFETY: Handle was checked to be Some and endpoints slice is guaranteed to outlive the
+        // libusb_alloc_streams function call.
+        let ret = unsafe {
+            libusb1_sys::libusb_alloc_streams(
+                self.handle.as_ref().unwrap().as_raw(),
+                streams_nr,
+                ep_nrs.as_mut_ptr(),
+                ep_nrs.len() as i32,
+            )
+        };
+
+        if ret != streams_nr as i32 {
+            bail!(
+                "USB Host {} device failed to allocate {} streams: libusb error.",
+                self.device_id(),
+                streams_nr
+            );
+        }
+
+        Ok(())
+    }
+
+    fn free_streams(&mut self, endpoints: &[UsbEndpoint]) {
+        if self.handle.is_none() {
+            error!(
+                "USB Host {} device failed to free streams: device handle is empty.",
+                self.device_id(),
+            );
+            return;
+        }
+
+        let mut ep_nrs = endpoints_to_numbers(endpoints);
+
+        // SAFETY: Handle was checked to be Some and endpoints slice is guaranteed to outlive the
+        // libusb_free_streams function call.
+        unsafe {
+            libusb1_sys::libusb_free_streams(
+                self.handle.as_ref().unwrap().as_raw(),
+                ep_nrs.as_mut_ptr(),
+                ep_nrs.len() as i32,
+            );
+        };
+    }
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         info!("Open and init usbhost device: {:?}", self.config);
@@ -1192,6 +1269,7 @@ impl UsbDevice for UsbHost {
             host_transfer,
             self.handle.as_mut(),
             0,
+            0,
             &mut (*node) as *mut Node<UsbHostRequest>,
             TransferType::Control,
         );
@@ -1240,9 +1318,10 @@ impl UsbDevice for UsbHost {
             return;
         }
 
-        drop(locked_packet);
-        let mut ep_number = packet.lock().unwrap().ep_number;
+        let mut ep_number = locked_packet.ep_number;
+        let stream = locked_packet.stream;
         let host_transfer: *mut libusb_transfer;
+        drop(locked_packet);
 
         match self.base.get_endpoint(in_direction, ep_number).ep_type {
             USB_ENDPOINT_ATTR_BULK => {
@@ -1264,6 +1343,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     self.handle.as_mut(),
                     ep_number,
+                    stream,
                     &mut (*node) as *mut Node<UsbHostRequest>,
                     TransferType::Bulk,
                 );
@@ -1288,6 +1368,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     self.handle.as_mut(),
                     ep_number,
+                    stream,
                     &mut (*node) as *mut Node<UsbHostRequest>,
                     TransferType::Interrupt,
                 );
