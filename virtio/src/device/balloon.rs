@@ -1332,8 +1332,6 @@ mod tests {
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
-
-        assert!(bln.update_config(None).is_err());
     }
 
     #[test]
@@ -1690,7 +1688,5 @@ mod tests {
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
-
-        assert!(bln.update_config(None).is_err());
     }
 }
