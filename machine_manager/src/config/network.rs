@@ -13,9 +13,11 @@
 use std::os::unix::io::RawFd;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
 use super::{error::ConfigError, pci_args_check};
+use super::{parse_bool, str_slip_to_clap, valid_id};
 use crate::config::get_chardev_socket_path;
 use crate::config::{
     check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
@@ -30,23 +32,80 @@ pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
 /// Max num of virtqueues.
 const MAX_QUEUE_PAIRS: usize = MAX_VIRTIO_QUEUE / 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct NetDevcfg {
+    #[arg(long, alias="classtype", value_parser = ["tap", "vhost-user"])]
+    pub netdev_type: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
+    #[arg(long, aliases = ["fds", "fd"], use_value_delimiter = true, value_delimiter = ':')]
     pub tap_fds: Option<Vec<i32>>,
-    pub vhost_type: Option<String>,
+    #[arg(long, alias = "vhost", default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
+    pub vhost_kernel: bool,
+    #[arg(long, aliases = ["vhostfds", "vhostfd"], use_value_delimiter = true, value_delimiter = ':')]
     pub vhost_fds: Option<Vec<i32>>,
+    #[arg(long, default_value = "", value_parser = valid_id)]
     pub ifname: String,
+    #[arg(long, default_value = "1", value_parser = parse_queues)]
     pub queues: u16,
+    #[arg(long)]
     pub chardev: Option<String>,
+}
+
+impl NetDevcfg {
+    pub fn vhost_type(&self) -> Option<String> {
+        if self.vhost_kernel {
+            return Some("vhost-kernel".to_string());
+        }
+        if self.netdev_type == "vhost-user" {
+            return Some("vhost-user".to_string());
+        }
+        // Default: virtio net.
+        None
+    }
+
+    fn auto_queues(&mut self) -> Result<()> {
+        if let Some(fds) = &self.tap_fds {
+            let fds_num = fds
+                .len()
+                .checked_mul(2)
+                .with_context(|| format!("Invalid fds number {}", fds.len()))?
+                as u16;
+            if fds_num > self.queues {
+                self.queues = fds_num;
+            }
+        }
+        if let Some(fds) = &self.vhost_fds {
+            let fds_num = fds
+                .len()
+                .checked_mul(2)
+                .with_context(|| format!("Invalid vhostfds number {}", fds.len()))?
+                as u16;
+            if fds_num > self.queues {
+                self.queues = fds_num;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_queues(q: &str) -> Result<u16> {
+    let queues = q
+        .parse::<u16>()?
+        .checked_mul(2)
+        .with_context(|| "Invalid 'queues' value")?;
+    is_netdev_queues_valid(queues)?;
+    Ok(queues)
 }
 
 impl Default for NetDevcfg {
     fn default() -> Self {
         NetDevcfg {
+            netdev_type: "".to_string(),
             id: "".to_string(),
             tap_fds: None,
-            vhost_type: None,
+            vhost_kernel: false,
             vhost_fds: None,
             ifname: "".to_string(),
             queues: 2,
@@ -57,24 +116,18 @@ impl Default for NetDevcfg {
 
 impl ConfigCheck for NetDevcfg {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "id")?;
-        check_arg_too_long(&self.ifname, "ifname")?;
-
-        if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
-                return Err(anyhow!(ConfigError::UnknownVhostType));
-            }
+        if self.vhost_kernel && self.netdev_type == "vhost-user" {
+            bail!("vhost-user netdev does not support 'vhost' option");
         }
 
-        if !is_netdev_queues_valid(self.queues) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )));
+        if self.vhost_fds.is_some() && self.vhost_type().is_none() {
+            bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
         }
+        if self.tap_fds.is_none() && self.ifname.eq("") && self.netdev_type.ne("vhost-user") {
+            bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
+        }
+
+        is_netdev_queues_valid(self.queues)?;
 
         Ok(())
     }
@@ -156,102 +209,6 @@ impl ConfigCheck for NetworkInterfaceConfig {
     }
 }
 
-fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
-    if let Some(fds) = cmd_parser.get_value::<String>(name)? {
-        let mut raw_fds = Vec::new();
-        for fd in fds.split(':').collect::<Vec<&str>>().iter() {
-            raw_fds.push(
-                (*fd)
-                    .parse::<i32>()
-                    .with_context(|| "Failed to parse fds")?,
-            );
-        }
-        Ok(Some(raw_fds))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
-    let mut net = NetDevcfg::default();
-    let netdev_type = cmd_parser.get_value::<String>("")?.unwrap_or_default();
-    if netdev_type.ne("tap") && netdev_type.ne("vhost-user") {
-        bail!("Unsupported netdev type: {:?}", &netdev_type);
-    }
-    net.id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "netdev".to_string()))?;
-    if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
-        net.ifname = ifname;
-    }
-    if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
-        let queues = queue_pairs.checked_mul(2);
-        if queues.is_none() || !is_netdev_queues_valid(queues.unwrap()) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )));
-        }
-
-        net.queues = queues.unwrap();
-    }
-
-    if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
-        net.tap_fds = Some(tap_fd);
-    } else if let Some(tap_fds) = parse_fds(&cmd_parser, "fds")? {
-        net.tap_fds = Some(tap_fds);
-    }
-    if let Some(fds) = &net.tap_fds {
-        let fds_num =
-            fds.len()
-                .checked_mul(2)
-                .with_context(|| format!("Invalid fds number {}", fds.len()))? as u16;
-        if fds_num > net.queues {
-            net.queues = fds_num;
-        }
-    }
-
-    if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
-        if vhost.into() {
-            net.vhost_type = Some(String::from("vhost-kernel"));
-        }
-    } else if netdev_type.eq("vhost-user") {
-        net.vhost_type = Some(String::from("vhost-user"));
-    }
-    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
-        net.chardev = Some(chardev);
-    }
-    if let Some(vhost_fd) = parse_fds(&cmd_parser, "vhostfd")? {
-        net.vhost_fds = Some(vhost_fd);
-    } else if let Some(vhost_fds) = parse_fds(&cmd_parser, "vhostfds")? {
-        net.vhost_fds = Some(vhost_fds);
-    }
-    if let Some(fds) = &net.vhost_fds {
-        let fds_num = fds
-            .len()
-            .checked_mul(2)
-            .with_context(|| format!("Invalid vhostfds number {}", fds.len()))?
-            as u16;
-        if fds_num > net.queues {
-            net.queues = fds_num;
-        }
-    }
-
-    if net.vhost_fds.is_some() && net.vhost_type.is_none() {
-        bail!("Argument \'vhostfd\' is not needed for virtio-net device");
-    }
-    if net.tap_fds.is_none() && net.ifname.eq("") && netdev_type.ne("vhost-user") {
-        bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
-    }
-
-    net.check()?;
-
-    Ok(net)
-}
-
 pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
     let mut cmd_parser = CmdParser::new("virtio-net");
     cmd_parser
@@ -293,7 +250,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
     netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
     netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
-    netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
+    netdevinterfacecfg.vhost_type = netcfg.vhost_type();
     netdevinterfacecfg.queues = netcfg.queues;
     if let Some(chardev) = &netcfg.chardev {
         let char_dev = vm_config
@@ -341,17 +298,12 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         .unwrap_or(1)
         .checked_mul(2)
         .with_context(|| "Invalid 'queues' value")?;
-    if !is_netdev_queues_valid(queues) {
-        bail!(
-            "The 'queues' {} is bigger than max queue num {}",
-            queues / 2,
-            MAX_QUEUE_PAIRS
-        );
-    }
+    is_netdev_queues_valid(queues)?;
     let mut config = NetDevcfg {
+        netdev_type: args.net_type.unwrap_or_default(),
         id: args.id,
         tap_fds: None,
-        vhost_type: None,
+        vhost_kernel: args.vhost.unwrap_or_default(),
         vhost_fds: None,
         ifname: String::new(),
         queues,
@@ -397,65 +349,34 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         config.ifname = if_name;
     }
 
-    // Get net device type.
-    let netdev_type = args.net_type.unwrap_or_default();
-    let vhost = args.vhost.unwrap_or_default();
-    if vhost {
-        if netdev_type.ne("vhost-user") {
-            config.vhost_type = Some(String::from("vhost-kernel"));
-        } else {
-            bail!("vhost-user netdev does not support 'vhost' option");
-        }
-    } else if netdev_type.eq("vhost-user") {
-        config.vhost_type = Some(netdev_type.clone());
-    }
-
-    if config.vhost_fds.is_some() && config.vhost_type.is_none() {
-        bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
-    }
-    if config.tap_fds.is_none() && config.ifname.eq("") && netdev_type.ne("vhost-user") {
-        bail!("Tap device is missing, use 'ifname' or 'fd' to configure a tap device");
-    }
+    config.check()?;
 
     Ok(config)
 }
 
 impl VmConfig {
     pub fn add_netdev(&mut self, netdev_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("netdev");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("fd")
-            .push("fds")
-            .push("vhost")
-            .push("ifname")
-            .push("vhostfd")
-            .push("vhostfds")
-            .push("queues")
-            .push("chardev");
-
-        cmd_parser.parse(netdev_config)?;
-        let drive_cfg = parse_netdev(cmd_parser)?;
-        self.add_netdev_with_config(drive_cfg)
+        let mut netdev_cfg =
+            NetDevcfg::try_parse_from(str_slip_to_clap(netdev_config, true, false))?;
+        netdev_cfg.auto_queues()?;
+        netdev_cfg.check()?;
+        self.add_netdev_with_config(netdev_cfg)
     }
 
     pub fn add_netdev_with_config(&mut self, conf: NetDevcfg) -> Result<()> {
         let netdev_id = conf.id.clone();
-        if self.netdevs.get(&netdev_id).is_none() {
-            self.netdevs.insert(netdev_id, conf);
-        } else {
+        if self.netdevs.get(&netdev_id).is_some() {
             bail!("Netdev {:?} has been added", netdev_id);
         }
+        self.netdevs.insert(netdev_id, conf);
         Ok(())
     }
 
     pub fn del_netdev_by_id(&mut self, id: &str) -> Result<()> {
-        if self.netdevs.get(id).is_some() {
-            self.netdevs.remove(id);
-        } else {
-            bail!("Netdev {} not found", id);
-        }
+        self.netdevs
+            .remove(id)
+            .with_context(|| format!("Netdev {} not found", id))?;
+
         Ok(())
     }
 }
@@ -489,14 +410,24 @@ fn check_mac_address(mac: &str) -> bool {
     true
 }
 
-fn is_netdev_queues_valid(queues: u16) -> bool {
-    queues >= 1 && queues <= MAX_VIRTIO_QUEUE as u16
+fn is_netdev_queues_valid(queues: u16) -> Result<()> {
+    if !(queues >= 2 && queues <= MAX_VIRTIO_QUEUE as u16) {
+        return Err(anyhow!(ConfigError::IllegalValue(
+            "number queues of net device".to_string(),
+            1,
+            true,
+            MAX_QUEUE_PAIRS as u64,
+            true,
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
+    use crate::config::get_pci_bdf;
 
     #[test]
     fn test_network_config_cmdline_parser() {
@@ -662,37 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn test_netdev_config_check() {
-        let mut netdev_conf = NetDevcfg::default();
-        for _ in 0..MAX_STRING_LENGTH {
-            netdev_conf.id += "A";
-        }
-        assert!(netdev_conf.check().is_ok());
-
-        // Overflow
-        netdev_conf.id += "A";
-        assert!(netdev_conf.check().is_err());
-
-        let mut netdev_conf = NetDevcfg::default();
-        for _ in 0..MAX_STRING_LENGTH {
-            netdev_conf.ifname += "A";
-        }
-        assert!(netdev_conf.check().is_ok());
-
-        // Overflow
-        netdev_conf.ifname += "A";
-        assert!(netdev_conf.check().is_err());
-
-        let mut netdev_conf = NetDevcfg::default();
-        netdev_conf.vhost_type = None;
-        assert!(netdev_conf.check().is_ok());
-        netdev_conf.vhost_type = Some(String::from("vhost-kernel"));
-        assert!(netdev_conf.check().is_ok());
-        netdev_conf.vhost_type = Some(String::from("vhost-"));
-        assert!(netdev_conf.check().is_err());
-    }
-
-    #[test]
     fn test_add_netdev_with_different_queues() {
         let mut vm_config = VmConfig::default();
 
@@ -815,9 +715,9 @@ mod tests {
                 ..qmp_schema::NetDevAddArgument::default()
             });
             let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.vhost_type().unwrap(), "vhost-kernel");
             assert_eq!(net_cfg.tap_fds.unwrap()[0], 11);
             assert_eq!(net_cfg.vhost_fds.unwrap()[0], 21);
-            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
         }
 
         // Normal test with 'vhostfds'.
@@ -835,9 +735,9 @@ mod tests {
                 ..qmp_schema::NetDevAddArgument::default()
             });
             let net_cfg = get_netdev_config(netdev).unwrap();
-            assert_eq!(net_cfg.tap_fds.unwrap(), [11, 12, 13, 14]);
-            assert_eq!(net_cfg.vhost_fds.unwrap(), [21, 22, 23, 24]);
-            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
+            assert_eq!(net_cfg.vhost_type().unwrap(), "vhost-kernel");
+            assert_eq!(net_cfg.tap_fds.unwrap(), vec![11, 12, 13, 14]);
+            assert_eq!(net_cfg.vhost_fds.unwrap(), vec![21, 22, 23, 24]);
         }
 
         let err_msgs = [
@@ -863,8 +763,7 @@ mod tests {
             ..qmp_schema::NetDevAddArgument::default()
         });
         let err_msg = format!(
-            "The 'queues' {} is bigger than max queue num {}",
-            MAX_QUEUE_PAIRS + 1,
+            "number queues of net device must >= 1 and <= {}.",
             MAX_QUEUE_PAIRS
         );
         check_err_msg(netdev, &err_msg);
@@ -933,6 +832,7 @@ mod tests {
             fds: Some(fds.to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
+        // number queues of net device
         let err_msg = format!(
             "The num of fd {} is bigger than max queue num {}",
             MAX_QUEUE_PAIRS + 1,
