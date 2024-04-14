@@ -16,19 +16,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check};
-use super::{parse_bool, str_slip_to_clap, valid_id};
-use crate::config::get_chardev_socket_path;
-use crate::config::{
-    check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
-    MAX_PATH_LENGTH, MAX_VIRTIO_QUEUE,
-};
+use super::error::ConfigError;
+use super::{get_pci_df, parse_bool, str_slip_to_clap, valid_id, valid_virtqueue_size};
+use crate::config::{ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE};
 use crate::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
 /// Max virtqueue size of each virtqueue.
-pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
+const MAX_QUEUE_SIZE_NET: u64 = 4096;
 /// Max num of virtqueues.
 const MAX_QUEUE_PAIRS: usize = MAX_VIRTIO_QUEUE / 2;
 
@@ -135,133 +131,71 @@ impl ConfigCheck for NetDevcfg {
 
 /// Config struct for network
 /// Contains network device config, such as `host_dev_name`, `mac`...
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[serde(deny_unknown_fields)]
+#[command(no_binary_name(true))]
 pub struct NetworkInterfaceConfig {
+    #[arg(long, value_parser = ["virtio-net-pci", "virtio-net-device"])]
+    pub classtype: String,
+    #[arg(long, default_value = "", value_parser = valid_id)]
     pub id: String,
-    pub host_dev_name: String,
+    #[arg(long)]
+    pub netdev: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+    #[arg(long, value_parser = valid_mac)]
     pub mac: Option<String>,
-    pub tap_fds: Option<Vec<i32>>,
-    pub vhost_type: Option<String>,
-    pub vhost_fds: Option<Vec<i32>>,
+    #[arg(long)]
     pub iothread: Option<String>,
-    pub queues: u16,
+    #[arg(long, default_value="off", value_parser = parse_bool, action = ArgAction::Append)]
     pub mq: bool,
-    pub socket_path: Option<String>,
-    /// All queues of a net device have the same queue size now.
+    // All queues of a net device have the same queue size now.
+    #[arg(long, default_value = "256", alias = "queue-size", value_parser = valid_network_queue_size)]
     pub queue_size: u16,
+    // MSI-X vectors the this network device has. This member isn't used now in stratovirt.
+    #[arg(long, default_value = "0")]
+    pub vectors: u16,
 }
 
 impl Default for NetworkInterfaceConfig {
     fn default() -> Self {
         NetworkInterfaceConfig {
+            classtype: "".to_string(),
             id: "".to_string(),
-            host_dev_name: "".to_string(),
+            netdev: "".to_string(),
+            bus: None,
+            addr: None,
+            multifunction: None,
             mac: None,
-            tap_fds: None,
-            vhost_type: None,
-            vhost_fds: None,
             iothread: None,
-            queues: 2,
             mq: false,
-            socket_path: None,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            vectors: 0,
         }
     }
+}
+
+fn valid_network_queue_size(s: &str) -> Result<u16> {
+    let size: u64 = s.parse()?;
+    valid_virtqueue_size(size, DEFAULT_VIRTQUEUE_SIZE as u64, MAX_QUEUE_SIZE_NET)?;
+
+    Ok(size as u16)
 }
 
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "id")?;
-        check_arg_too_long(&self.host_dev_name, "host dev name")?;
-
         if self.mac.is_some() && !check_mac_address(self.mac.as_ref().unwrap()) {
             return Err(anyhow!(ConfigError::MacFormatError));
         }
 
-        if self.iothread.is_some() {
-            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
-        }
-
-        if self.socket_path.is_some() && self.socket_path.as_ref().unwrap().len() > MAX_PATH_LENGTH
-        {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "socket path".to_string(),
-                MAX_PATH_LENGTH
-            )));
-        }
-
-        if self.queue_size < DEFAULT_VIRTQUEUE_SIZE || self.queue_size > MAX_QUEUE_SIZE_NET {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "queue size of net device".to_string(),
-                DEFAULT_VIRTQUEUE_SIZE as u64,
-                true,
-                MAX_QUEUE_SIZE_NET as u64,
-                true
-            )));
-        }
-
-        if self.queue_size & (self.queue_size - 1) != 0 {
-            bail!("queue size of net device should be power of 2!");
-        }
+        valid_network_queue_size(&self.queue_size.to_string())?;
 
         Ok(())
     }
-}
-
-pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
-    let mut cmd_parser = CmdParser::new("virtio-net");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("netdev")
-        .push("mq")
-        .push("vectors")
-        .push("bus")
-        .push("addr")
-        .push("multifunction")
-        .push("mac")
-        .push("iothread")
-        .push("queue-size");
-
-    cmd_parser.parse(net_config)?;
-    pci_args_check(&cmd_parser)?;
-    let mut netdevinterfacecfg = NetworkInterfaceConfig::default();
-
-    let netdev = cmd_parser
-        .get_value::<String>("netdev")?
-        .with_context(|| ConfigError::FieldIsMissing("netdev".to_string(), "net".to_string()))?;
-    let netid = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
-
-    if let Some(mq) = cmd_parser.get_value::<ExBool>("mq")? {
-        netdevinterfacecfg.mq = mq.inner;
-    }
-    netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
-    netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
-    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
-        netdevinterfacecfg.queue_size = queue_size;
-    }
-
-    let netcfg = &vm_config
-        .netdevs
-        .remove(&netdev)
-        .with_context(|| format!("Netdev: {:?} not found for net device", &netdev))?;
-    netdevinterfacecfg.id = netid;
-    netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
-    netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
-    netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
-    netdevinterfacecfg.vhost_type = netcfg.vhost_type();
-    netdevinterfacecfg.queues = netcfg.queues;
-    if let Some(chardev) = &netcfg.chardev {
-        let char_dev = vm_config
-            .chardev
-            .remove(chardev)
-            .with_context(|| format!("Chardev: {:?} not found for character device", chardev))?;
-        netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(char_dev)?);
-    }
-
-    netdevinterfacecfg.check()?;
-    Ok(netdevinterfacecfg)
 }
 
 fn get_netdev_fd(fd_name: &str) -> Result<RawFd> {
@@ -381,6 +315,13 @@ impl VmConfig {
     }
 }
 
+fn valid_mac(mac: &str) -> Result<String> {
+    if !check_mac_address(mac) {
+        return Err(anyhow!(ConfigError::MacFormatError));
+    }
+    Ok(mac.to_string())
+}
+
 fn check_mac_address(mac: &str) -> bool {
     if mac.len() != MAC_ADDRESS_LENGTH {
         return false;
@@ -427,169 +368,119 @@ fn is_netdev_queues_valid(queues: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::get_pci_bdf;
 
     #[test]
-    fn test_network_config_cmdline_parser() {
+    fn test_netdev_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
+
+        // Test1: Right.
         assert!(vm_config.add_netdev("tap,id=eth0,ifname=tap0").is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net0");
-        assert_eq!(network_configs.host_dev_name, "tap0");
-        assert_eq!(network_configs.iothread, Some("iothread0".to_string()));
-        assert!(network_configs.mac.is_none());
-        assert!(network_configs.tap_fds.is_none());
-        assert!(network_configs.vhost_type.is_none());
-        assert!(network_configs.vhost_fds.is_none());
+        assert!(vm_config.add_netdev("tap,id=eth0,ifname=tap0").is_err());
+        let netdev_cfg = vm_config.netdevs.get("eth0").unwrap();
+        assert_eq!(netdev_cfg.id, "eth0");
+        assert_eq!(netdev_cfg.ifname, "tap0");
+        assert!(netdev_cfg.tap_fds.is_none());
+        assert_eq!(netdev_cfg.vhost_kernel, false);
+        assert!(netdev_cfg.vhost_fds.is_none());
+        assert_eq!(netdev_cfg.queues, 2);
+        assert!(netdev_cfg.vhost_type().is_none());
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net1,netdev=eth1,mac=12:34:56:78:9A:BC",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "tap1");
-        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fds.is_none());
-        assert_eq!(
-            network_configs.vhost_type,
-            Some(String::from("vhost-kernel"))
-        );
-        assert_eq!(network_configs.vhost_fds, Some(vec![4]));
+        let netdev_cfg = vm_config.netdevs.get("eth1").unwrap();
+        assert_eq!(netdev_cfg.ifname, "tap1");
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-kernel");
+        assert_eq!(netdev_cfg.vhost_fds, Some(vec![4]));
 
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth1");
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "");
-        assert_eq!(network_configs.tap_fds, Some(vec![35]));
+        assert!(vm_config.add_netdev("tap,id=eth2,fd=35").is_ok());
+        let netdev_cfg = vm_config.netdevs.get("eth2").unwrap();
+        assert_eq!(netdev_cfg.tap_fds, Some(vec![35]));
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
+            .add_netdev("tap,id=eth3,ifname=tap0,queues=4")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net1,netdev=eth2,mac=12:34:56:78:9A:BC",
-        );
-        assert!(net_cfg_res.is_err());
+        let netdev_cfg = vm_config.netdevs.get("eth3").unwrap();
+        assert_eq!(netdev_cfg.queues, 8);
 
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth3");
-        assert!(net_cfg_res.is_err());
-
-        // multi queue testcases
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth0,ifname=tap0,queues=4")
+            .add_netdev("tap,id=eth4,fds=34:35:36:37:38")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=on,vectors=6",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 8);
-        assert_eq!(network_configs.mq, true);
+        let netdev_cfg = vm_config.netdevs.get("eth4").unwrap();
+        assert_eq!(netdev_cfg.queues, 10);
+        assert_eq!(netdev_cfg.tap_fds, Some(vec![34, 35, 36, 37, 38]));
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth0,fds=34:35:36:37:38")
+            .add_netdev("tap,id=eth5,fds=34:35:36:37:38,vhost=on,vhostfds=39:40:41:42:43")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 10);
-        assert_eq!(network_configs.tap_fds, Some(vec![34, 35, 36, 37, 38]));
-        assert_eq!(network_configs.mq, false);
+        let netdev_cfg = vm_config.netdevs.get("eth5").unwrap();
+        assert_eq!(netdev_cfg.queues, 10);
+        assert_eq!(netdev_cfg.vhost_fds, Some(vec![39, 40, 41, 42, 43]));
 
-        let mut vm_config = VmConfig::default();
+        // Test2: Missing values
         assert!(vm_config
-            .add_netdev("tap,id=eth0,fds=34:35:36:37:38,vhost=on,vhostfds=39:40:41:42:43")
-            .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 10);
-        assert_eq!(network_configs.vhost_fds, Some(vec![39, 40, 41, 42, 43]));
-        assert_eq!(network_configs.mq, false);
+            .add_netdev("tap,fds=34:35:36:37:38,vhost=on")
+            .is_err());
+
+        // Test3: Illegal values.
+        assert!(vm_config
+            .add_netdev("tap,id=eth10,fds=34:35:36:37:38,vhost=on,vhostfds=39,40,41,42,43")
+            .is_err());
+        assert!(vm_config.add_netdev("tap,id=eth10,queues=0").is_err());
+        assert!(vm_config.add_netdev("tap,id=eth10,queues=17").is_err());
     }
 
     #[test]
-    fn test_pci_network_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-
-        assert!(vm_config
-            .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
-            .is_ok());
-        let net_cfg =
-            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "tap1");
-        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fds.is_none());
-        assert_eq!(
-            network_configs.vhost_type,
-            Some(String::from("vhost-kernel"))
-        );
-        assert_eq!(network_configs.vhost_fds.unwrap()[0], 4);
-        let pci_bdf = get_pci_bdf(net_cfg);
-        assert!(pci_bdf.is_ok());
-        let pci = pci_bdf.unwrap();
-        assert_eq!(pci.bus, "pcie.0".to_string());
-        assert_eq!(pci.addr, (1, 2));
-
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_err());
-
+    fn test_networkinterface_config_cmdline_parser() {
+        // Test1: Right.
         let mut vm_config = VmConfig::default();
         assert!(vm_config
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
+        let net_cmd =
+            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,mq=on,vectors=6,queue-size=2048,multifunction=on";
         let net_cfg =
-            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
-        assert!(parse_net(&mut vm_config, net_cfg).is_ok());
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false)).unwrap();
+        assert_eq!(net_cfg.id, "net1");
+        assert_eq!(net_cfg.netdev, "eth1");
+        assert_eq!(net_cfg.bus.unwrap(), "pcie.0");
+        assert_eq!(net_cfg.addr.unwrap(), (1, 2));
+        assert_eq!(net_cfg.mac.unwrap(), "12:34:56:78:9A:BC");
+        assert_eq!(net_cfg.vectors, 6);
+        assert_eq!(net_cfg.mq, true);
+        assert_eq!(net_cfg.queue_size, 2048);
+        assert_eq!(net_cfg.multifunction, Some(true));
+        let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-kernel");
 
-        // For vhost-user net
+        // Test2: Default values.
+        let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("vhost-user,id=netdevid").is_ok());
-        let net_cfg =
+        let net_cmd =
             "virtio-net-pci,id=netid,netdev=netdevid,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "netid");
-        assert_eq!(network_configs.vhost_type, Some("vhost-user".to_string()));
-        assert_eq!(network_configs.mac, Some("12:34:56:78:9A:BC".to_string()));
-
-        assert!(vm_config
-            .add_netdev("vhost-user,id=netdevid2,chardev=chardevid2")
-            .is_ok());
         let net_cfg =
-            "virtio-net-pci,id=netid2,netdev=netdevid2,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_err());
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false)).unwrap();
+        assert_eq!(net_cfg.queue_size, 256);
+        assert_eq!(net_cfg.mq, false);
+        assert_eq!(net_cfg.vectors, 0);
+        let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-user");
+
+        // Test3: Missing Parameters.
+        let net_cmd = "virtio-net-pci,id=netid";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
+
+        // Test4: Illegal Parameters.
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,mac=1:1:1";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,queue-size=128";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,queue-size=10240";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
     }
 
     #[test]

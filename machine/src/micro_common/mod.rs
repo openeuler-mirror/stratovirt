@@ -49,8 +49,8 @@ use crate::{MachineBase, MachineError, MachineOps};
 use cpu::CpuLifecycleState;
 use devices::sysbus::{IRQ_BASE, IRQ_MAX};
 use machine_manager::config::{
-    parse_incoming_uri, parse_net, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
-    NetworkInterfaceConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    get_chardev_socket_path, parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig,
+    MigrateMode, NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
@@ -79,7 +79,8 @@ const MMIO_REPLACEABLE_NET_NR: usize = 2;
 struct MmioReplaceableConfig {
     // Device id.
     id: String,
-    // The config of the related backend device. Eg: Drive config of virtio mmio device.
+    // The config of the related backend device.
+    // Eg: Drive config of virtio mmio block. Netdev config of virtio mmio net.
     back_config: Arc<dyn ConfigCheck>,
 }
 
@@ -173,7 +174,10 @@ impl LightMachine {
             );
         }
         for id in 0..MMIO_REPLACEABLE_NET_NR {
-            let net = Arc::new(Mutex::new(Net::new(NetworkInterfaceConfig::default())));
+            let net = Arc::new(Mutex::new(Net::new(
+                NetworkInterfaceConfig::default(),
+                NetDevcfg::default(),
+            )));
             let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
 
@@ -293,9 +297,18 @@ impl LightMachine {
                     MMIO_REPLACEABLE_NET_NR
                 )));
             }
-            if cfg_any.downcast_ref::<NetworkInterfaceConfig>().is_none() {
+            if cfg_any.downcast_ref::<NetDevcfg>().is_none() {
                 return Err(anyhow!(MachineError::DevTypeErr("net".to_string())));
             }
+            let net_config = NetworkInterfaceConfig {
+                classtype: driver,
+                id: id.clone(),
+                netdev: args.chardev.with_context(|| "No chardev set")?,
+                mac: args.mac,
+                iothread: args.iothread,
+                ..Default::default()
+            };
+            configs.push(Arc::new(net_config));
             slot + MMIO_REPLACEABLE_BLK_NR
         } else if driver.contains("blk") {
             if slot >= MMIO_REPLACEABLE_BLK_NR {
@@ -384,17 +397,33 @@ impl LightMachine {
         vm_config: &mut VmConfig,
         cfg_args: &str,
     ) -> Result<()> {
-        let device_cfg = parse_net(vm_config, cfg_args)?;
-        if device_cfg.vhost_type.is_some() {
-            let device = if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
+        let net_cfg =
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let netdev_cfg = vm_config
+            .netdevs
+            .remove(&net_cfg.netdev)
+            .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
+        if netdev_cfg.vhost_type().is_some() {
+            let device = if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
                 let net = Arc::new(Mutex::new(VhostKern::Net::new(
-                    &device_cfg,
+                    &net_cfg,
+                    netdev_cfg,
                     &self.base.sys_mem,
                 )));
                 VirtioMmioDevice::new(&self.base.sys_mem, net)
             } else {
+                let chardev = netdev_cfg.chardev.clone().with_context(|| {
+                    format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
+                })?;
+                let chardev_cfg = vm_config
+                    .chardev
+                    .remove(&chardev)
+                    .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
+                let sock_path = get_chardev_socket_path(chardev_cfg)?;
                 let net = Arc::new(Mutex::new(VhostUser::Net::new(
-                    &device_cfg,
+                    &net_cfg,
+                    netdev_cfg,
+                    sock_path,
                     &self.base.sys_mem,
                 )));
                 VirtioMmioDevice::new(&self.base.sys_mem, net)
@@ -408,11 +437,9 @@ impl LightMachine {
                     MMIO_REPLACEABLE_NET_NR
                 );
             }
-            self.fill_replaceable_device(
-                &device_cfg.id,
-                vec![Arc::new(device_cfg.clone())],
-                index,
-            )?;
+            let configs: Vec<Arc<dyn ConfigCheck>> =
+                vec![Arc::new(netdev_cfg), Arc::new(net_cfg.clone())];
+            self.fill_replaceable_device(&net_cfg.id, configs, index)?;
             self.replaceable_info.net_count += 1;
         }
         Ok(())
@@ -805,18 +832,9 @@ impl DeviceInterface for LightMachine {
     }
 
     fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
-        let mut config = NetworkInterfaceConfig {
+        let mut netdev_cfg = NetDevcfg {
             id: args.id.clone(),
-            host_dev_name: "".to_string(),
-            mac: None,
-            tap_fds: None,
-            vhost_type: None,
-            vhost_fds: None,
-            iothread: None,
-            queues: 2,
-            mq: false,
-            socket_path: None,
-            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            ..Default::default()
         };
 
         if let Some(fds) = args.fds {
@@ -828,7 +846,7 @@ impl DeviceInterface for LightMachine {
             };
 
             if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
-                config.tap_fds = Some(vec![fd_num]);
+                netdev_cfg.tap_fds = Some(vec![fd_num]);
             } else {
                 // try to convert string to RawFd
                 let fd_num = match netdev_fd.parse::<i32>() {
@@ -846,10 +864,10 @@ impl DeviceInterface for LightMachine {
                         );
                     }
                 };
-                config.tap_fds = Some(vec![fd_num]);
+                netdev_cfg.tap_fds = Some(vec![fd_num]);
             }
         } else if let Some(if_name) = args.if_name {
-            config.host_dev_name = if_name.clone();
+            netdev_cfg.ifname = if_name.clone();
             if create_tap(None, Some(&if_name), 1).is_err() {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
@@ -860,7 +878,7 @@ impl DeviceInterface for LightMachine {
             }
         }
 
-        match self.add_replaceable_config(&args.id, Arc::new(config)) {
+        match self.add_replaceable_config(&args.id, Arc::new(netdev_cfg)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
