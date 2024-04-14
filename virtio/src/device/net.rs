@@ -46,7 +46,7 @@ use crate::{
 use address_space::{AddressSpace, RegionCache};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
-    config::{ConfigCheck, NetworkInterfaceConfig},
+    config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig},
     event_loop::EventLoop,
 };
 use migration::{
@@ -1190,6 +1190,8 @@ pub struct Net {
     base: VirtioBase,
     /// Configuration of the network device.
     net_cfg: NetworkInterfaceConfig,
+    /// Configuration of the network device.
+    netdev_cfg: NetDevcfg,
     /// Virtio net configurations.
     config_space: Arc<Mutex<VirtioNetConfig>>,
     /// Tap device opened.
@@ -1203,9 +1205,9 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(net_cfg: NetworkInterfaceConfig) -> Self {
+    pub fn new(net_cfg: NetworkInterfaceConfig, netdev_cfg: NetDevcfg) -> Self {
         let queue_num = if net_cfg.mq {
-            (net_cfg.queues + 1) as usize
+            (netdev_cfg.queues + 1) as usize
         } else {
             QUEUE_NUM_NET
         };
@@ -1214,6 +1216,7 @@ impl Net {
         Self {
             base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
             net_cfg,
+            netdev_cfg,
             ..Default::default()
         }
     }
@@ -1397,11 +1400,11 @@ impl VirtioDevice for Net {
             );
         }
 
-        let queue_pairs = self.net_cfg.queues / 2;
-        if !self.net_cfg.host_dev_name.is_empty() {
-            self.taps = create_tap(None, Some(&self.net_cfg.host_dev_name), queue_pairs)
+        let queue_pairs = self.netdev_cfg.queues / 2;
+        if !self.netdev_cfg.ifname.is_empty() {
+            self.taps = create_tap(None, Some(&self.netdev_cfg.ifname), queue_pairs)
                 .with_context(|| "Failed to open tap with file path")?;
-        } else if let Some(fds) = self.net_cfg.tap_fds.as_mut() {
+        } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
             let mut created_fds = 0;
             if let Some(taps) = &self.taps {
                 for (index, tap) in taps.iter().enumerate() {
@@ -1444,7 +1447,7 @@ impl VirtioDevice for Net {
 
         let mut locked_config = self.config_space.lock().unwrap();
 
-        let queue_pairs = self.net_cfg.queues / 2;
+        let queue_pairs = self.netdev_cfg.queues / 2;
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)
@@ -1596,9 +1599,15 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
+    // configs[0]: NetDevcfg. configs[1]: NetworkInterfaceConfig.
     fn update_config(&mut self, dev_config: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         if !dev_config.is_empty() {
-            self.net_cfg = dev_config[0]
+            self.netdev_cfg = dev_config[0]
+                .as_any()
+                .downcast_ref::<NetDevcfg>()
+                .unwrap()
+                .clone();
+            self.net_cfg = dev_config[1]
                 .as_any()
                 .downcast_ref::<NetworkInterfaceConfig>()
                 .unwrap()
@@ -1703,16 +1712,16 @@ mod tests {
     #[test]
     fn test_net_init() {
         // test net new method
-        let mut net = Net::new(NetworkInterfaceConfig::default());
+        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
         assert_eq!(net.base.device_features, 0);
         assert_eq!(net.base.driver_features, 0);
 
         assert_eq!(net.taps.is_none(), true);
         assert_eq!(net.senders.is_none(), true);
         assert_eq!(net.net_cfg.mac.is_none(), true);
-        assert_eq!(net.net_cfg.tap_fds.is_none(), true);
-        assert_eq!(net.net_cfg.vhost_type.is_none(), true);
-        assert_eq!(net.net_cfg.vhost_fds.is_none(), true);
+        assert_eq!(net.netdev_cfg.tap_fds.is_none(), true);
+        assert!(net.netdev_cfg.vhost_type().is_none());
+        assert_eq!(net.netdev_cfg.vhost_fds.is_none(), true);
 
         // test net realize method
         net.realize().unwrap();
@@ -1864,7 +1873,7 @@ mod tests {
 
     #[test]
     fn test_iothread() {
-        let mut net = Net::new(NetworkInterfaceConfig::default());
+        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
         net.net_cfg.iothread = Some("iothread".to_string());
         if let Err(err) = net.realize() {
             let err_msg = format!(

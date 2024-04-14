@@ -73,11 +73,12 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
-    complete_numa_node, get_multi_function, get_pci_bdf, parse_device_id, parse_device_type,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_virtio_serial, parse_virtserialport,
-    parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, Incoming,
-    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
-    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_chardev_socket_path, get_multi_function, get_pci_bdf, parse_device_id,
+    parse_device_type, parse_numa_distance, parse_numa_mem, parse_virtio_serial,
+    parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig,
+    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -1204,35 +1205,52 @@ pub trait MachineOps {
         cfg_args: &str,
         hotplug: bool,
     ) -> Result<()> {
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
-        let device_cfg = parse_net(vm_config, cfg_args)?;
+        let net_cfg =
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let netdev_cfg = vm_config
+            .netdevs
+            .remove(&net_cfg.netdev)
+            .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
+        let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
+        let multi_func = net_cfg.multifunction.unwrap_or_default();
+
         let mut need_irqfd = false;
-        let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
+        let device: Arc<Mutex<dyn VirtioDevice>> = if netdev_cfg.vhost_type().is_some() {
             need_irqfd = true;
-            if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
+            if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
                 Arc::new(Mutex::new(VhostKern::Net::new(
-                    &device_cfg,
+                    &net_cfg,
+                    netdev_cfg,
                     self.get_sys_mem(),
                 )))
             } else {
+                let chardev = netdev_cfg.chardev.clone().with_context(|| {
+                    format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
+                })?;
+                let chardev_cfg = vm_config
+                    .chardev
+                    .remove(&chardev)
+                    .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
+                let sock_path = get_chardev_socket_path(chardev_cfg)?;
                 Arc::new(Mutex::new(VhostUser::Net::new(
-                    &device_cfg,
+                    &net_cfg,
+                    netdev_cfg,
+                    sock_path,
                     self.get_sys_mem(),
                 )))
             }
         } else {
-            let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
+            let device = Arc::new(Mutex::new(virtio::Net::new(net_cfg.clone(), netdev_cfg)));
             MigrationManager::register_device_instance(
                 VirtioNetState::descriptor(),
                 device.clone(),
-                &device_cfg.id,
+                &net_cfg.id,
             );
             device
         };
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, need_irqfd)?;
+        self.add_virtio_pci_device(&net_cfg.id, &bdf, device, multi_func, need_irqfd)?;
         if !hotplug {
-            self.reset_bus(&device_cfg.id)?;
+            self.reset_bus(&net_cfg.id)?;
         }
         Ok(())
     }
