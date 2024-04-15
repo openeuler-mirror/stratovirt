@@ -12,9 +12,10 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+
+use log::{error, info};
 
 static mut GLOBAL_TEMP_CLEANER: Option<TempCleaner> = None;
 
@@ -80,28 +81,15 @@ impl TempCleaner {
         while let Some(path) = self.paths.pop() {
             if Path::new(&path).exists() {
                 if let Err(ref e) = fs::remove_file(&path) {
-                    write!(
-                        &mut std::io::stderr(),
+                    error!(
                         "Failed to delete console / socket file:{} :{} \r\n",
-                        &path,
-                        e
-                    )
-                    .expect("Failed to write to stderr");
+                        &path, e
+                    );
                 } else {
-                    write!(
-                        &mut std::io::stdout(),
-                        "Delete file: {} successfully.\r\n",
-                        &path
-                    )
-                    .expect("Failed to write to stdout");
+                    info!("Delete file: {} successfully.\r\n", &path);
                 }
             } else {
-                write!(
-                    &mut std::io::stdout(),
-                    "file: {} has been removed \r\n",
-                    &path
-                )
-                .expect("Failed to write to stdout");
+                info!("file: {} has been removed \r\n", &path);
             }
         }
     }
