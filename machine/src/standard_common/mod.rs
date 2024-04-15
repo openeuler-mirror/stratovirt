@@ -1141,7 +1141,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
@@ -1930,6 +1930,12 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     if args.cache.is_some() && !args.cache.as_ref().unwrap().direct.unwrap_or(true) {
         config.direct = false;
         config.aio = AioEngine::Off;
+    }
+    if let Some(media) = args.media.as_ref() {
+        match media.as_str() {
+            "disk" | "cdrom" => config.media = media.clone(),
+            _ => bail!("Invalid media argument '{}', expect 'disk | cdrom'", media),
+        }
     }
     if let Some(discard) = args.discard.as_ref() {
         config.discard = discard

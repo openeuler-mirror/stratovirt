@@ -423,6 +423,7 @@ pub struct blockdev_add {
     #[serde(rename = "node-name")]
     pub node_name: String,
     pub file: FileOptions,
+    pub media: Option<String>,
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
