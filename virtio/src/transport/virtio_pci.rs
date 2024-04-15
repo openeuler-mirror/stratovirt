@@ -316,6 +316,8 @@ pub struct VirtioPciDevice {
     multi_func: bool,
     /// If the device need to register irqfd.
     need_irqfd: bool,
+    /// Device activation error
+    activate_err: bool,
 }
 
 impl VirtioPciDevice {
@@ -344,6 +346,7 @@ impl VirtioPciDevice {
             interrupt_cb: None,
             multi_func,
             need_irqfd,
+            activate_err: false,
         }
     }
 
@@ -428,7 +431,7 @@ impl VirtioPciDevice {
         Ok(write_start)
     }
 
-    fn activate_device(&self) -> bool {
+    fn activate_device(&mut self) -> bool {
         info!("func: activate_device, id: {:?}", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
@@ -502,46 +505,47 @@ impl VirtioPciDevice {
             self.interrupt_cb.clone().unwrap(),
             queue_evts,
         ) {
-            error!(
-                "Failed to activate device {}, error is {:?}",
-                self.base.base.id, e
-            );
+            // log only first activation error
+            if !self.activate_err {
+                self.activate_err = true;
+                error!(
+                    "Failed to activate device {}, error is {:?}",
+                    self.base.base.id, e
+                );
+            }
             return false;
         }
+        self.activate_err = false;
 
         locked_dev.set_device_activated(true);
         true
     }
 
-    fn deactivate_device(&self) -> bool {
+    fn deactivate_device(&self) {
         info!("func: deactivate_device, id: {:?}", &self.base.base.id);
         if self.need_irqfd && self.base.config.msix.is_some() {
             let msix = self.base.config.msix.as_ref().unwrap();
             if msix.lock().unwrap().unregister_irqfd().is_err() {
-                return false;
+                warn!("unregister_irqfd failed");
             }
         }
-
+        // call deactivate unconditionally, since device can be
+        // in half initialized state
         let mut locked_dev = self.device.lock().unwrap();
-        if locked_dev.device_activated() {
-            if let Err(e) = locked_dev.deactivate() {
-                error!(
-                    "Failed to deactivate virtio device {}, error is {:?}",
-                    self.base.base.id, e
-                );
-                return false;
-            }
-            locked_dev.virtio_base_mut().reset();
+        if let Err(e) = locked_dev.deactivate() {
+            error!(
+                "Failed to deactivate virtio device {}, error is {:?}",
+                self.base.base.id, e
+            );
         }
+        locked_dev.virtio_base_mut().reset();
 
         if let Some(intx) = &self.base.config.intx {
             intx.lock().unwrap().reset();
         }
         if let Some(msix) = &self.base.config.msix {
             msix.lock().unwrap().clear_pending_vectors();
-        }
-
-        true
+        };
     }
 
     /// Read data from the common config of virtio device.
