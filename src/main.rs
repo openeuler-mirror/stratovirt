@@ -74,6 +74,11 @@ fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
 
     if cmd_args.is_present("mod-test") {
+        let machine = cmd_args.value_of("machine").unwrap_or_default();
+        let accel = cmd_args.value_of("accel").unwrap_or_default();
+        if !machine.contains("accel=test") && accel.ne("test") {
+            bail!("MST can only use test accel!");
+        }
         set_test_enabled();
     }
 
