@@ -2050,9 +2050,9 @@ fn test_xhci_tablet_basic() {
 
     // INPUT_BUTTON_WHEEL_LEFT + INPUT_BUTTON_WHEEL_UP.
     for _ in 0..cnt {
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x28, true);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0xa0, true);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x28, false);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0xa0, false);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
     }
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
@@ -2070,9 +2070,9 @@ fn test_xhci_tablet_basic() {
 
     // INPUT_BUTTON_WHEEL_RIGHT + INPUT_BUTTON_WHEEL_DOWN.
     for _ in 0..cnt {
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x50, true);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x140, true);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
-        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x50, false);
+        qmp_send_pointer_event(test_state.borrow_mut(), 10, 20, 0x140, false);
         xhci.queue_indirect_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
     }
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
@@ -2200,7 +2200,7 @@ fn test_xhci_tablet_invalid_value() {
     let press_evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(press_evt.ccode, TRBCCode::Success as u32);
     let press_buf = xhci.get_transfer_data_indirect(press_evt.ptr, HID_POINTER_LEN);
-    assert_eq!(press_buf, [7, 255, 127, 255, 127, 1, 255]);
+    assert_eq!(press_buf, [31, 255, 127, 255, 127, 1, 255]);
     let release_evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(release_evt.ccode, TRBCCode::Success as u32);
     let release_buf = xhci.get_transfer_data_indirect(release_evt.ptr, HID_POINTER_LEN);
