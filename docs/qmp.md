@@ -78,6 +78,7 @@ Add a block backend.
 
 * `node-name` : the name of the block driver node, must be unique.
 * `file` : the backend file information.
+* `media` : indicate media type of the backend file. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
 * `cache` : if use direct io.
 * `read-only` : if readonly.
 * `driver` : the block image format. Possible values are `raw` or `qcow2`. If not set, default is `raw`.
