@@ -662,9 +662,7 @@ pub fn check_api_channel(
                         path
                     );
                 }
-                sock_paths.push(
-                    QmpSocketPath::new(path).with_context(|| "Failed to parse qmp socket path")?,
-                );
+                sock_paths.push(QmpSocketPath::Unix { path });
             } else if let ChardevType::TcpSocket {
                 host,
                 port,
