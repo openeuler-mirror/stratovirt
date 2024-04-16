@@ -1,0 +1,209 @@
+[[events]]
+name = "kvm_vcpu_run_exit"
+args = "index: u8, reason: &dyn fmt::Debug"
+message = "vcpu index {} exit reason {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_add_ioeventfd"
+args = "fd: &Arc<EventFd>, addr: &dyn fmt::Debug, data_match: bool, size: u64, data: u64"
+message = "fd {:?} addr {:?} data_match {} size {} data {}"
+enabled = true
+
+[[events]]
+name = "kvm_delete_ioeventfd"
+args = "fd: &Arc<EventFd>, addr: &dyn fmt::Debug, data_match: bool, size: u64, data: u64"
+message = "fd {:?} addr {:?} data_match {} size {} data {}"
+enabled = true
+
+[[events]]
+name = "kvm_commit_irq_routing"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "kvm_release_irq"
+args = "irq: u32"
+message = "irq {}"
+enabled = true
+
+[[events]]
+name = "kvm_register_irqfd"
+args = "fd: &EventFd, gsi: u32"
+message = "fd {:?} gsi {}"
+enabled = true
+
+[[events]]
+name = "kvm_unregister_irqfd"
+args = "fd: &EventFd, gsi: u32"
+message = "fd {:?} gsi {}"
+enabled = true
+
+[[events]]
+name = "kvm_trigger_irqfd"
+args = "irq_fd: &EventFd"
+message = "irq_fd {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_signal_msi"
+args = "msi: &dyn fmt::Debug"
+message = "kvm_msi {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_reset_vcpu"
+args = "id: u8"
+message = "vcpu id {}"
+enabled = true
+
+[[events]]
+name = "kvm_get_one_reg"
+args = "id: u8, reg_id: u64, val: u128"
+message = "vcpu id {} reg_id: {} val {}"
+enabled = true
+
+[[events]]
+name = "kvm_set_one_reg"
+args = "id: u8, reg_id: u64, val: u128"
+message = "vcpu id {} reg_id: {} value {}"
+enabled = true
+
+[[events]]
+name = "kvm_get_mp_state"
+args = "id: u8, mp_state: &dyn fmt::Debug"
+message = "vcpu id {} mp_state {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_vcpu_events"
+args = "id: u8, cpu_events: &dyn fmt::Debug"
+message = "vcpu id {} cpu_events {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_reg_list"
+args = "id: u8, cpreg_list: &dyn fmt::Debug"
+message = "vcpu id {} cpreg_list {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_mp_state"
+args = "id: u8, mp_state: &dyn fmt::Debug"
+message = "vcpu id {} mp_state {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_vcpu_events"
+args = "id: u8, event: &dyn fmt::Debug"
+message = "vcpu id {} event {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_regs"
+args = "id: u8, regs: &dyn fmt::Debug"
+message = "vcpu id {} kvm_regs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_sregs"
+args = "id: u8, sregs: &dyn fmt::Debug"
+message = "vcpu id {} sregs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_fpu"
+args = "id: u8, fpu: &dyn fmt::Debug"
+message = "vcpu id {} fpu {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_lapic"
+args = "id: u8, lapic: &dyn fmt::Debug"
+message = "vcpu id {} lapic {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_msrs"
+args = "id: u8, msrs: &dyn fmt::Debug"
+message = "vcpu id {} msrs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_xsave"
+args = "id: u8, xsave: &dyn fmt::Debug"
+message = "vcpu id {} xsave {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_xcrs"
+args = "id: u8, xcrs: &dyn fmt::Debug"
+message = "vcpu id {} xcrs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_get_debug_regs"
+args = "id: u8, debugregs: &dyn fmt::Debug"
+message = "vcpu id {} debugregs: {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_regs"
+args = "id: u8, reg: &dyn fmt::Debug"
+message = "vcpu id {} regs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_sregs"
+args = "id: u8, sregs: &dyn fmt::Debug"
+message = "vcpu id {} sregs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_fpu"
+args = "id: u8, fpu: &dyn fmt::Debug"
+message = "vcpu id {} fpu {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_lapic"
+args = "id: u8, lapic: &dyn fmt::Debug"
+message = "vcpu id {} lapic {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_msrs"
+args = "id: u8, msrs: &dyn fmt::Debug"
+message = "vcpu id {} msrs: {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_xsave"
+args = "id: u8, xsave: &dyn fmt::Debug"
+message = "vcpu id {} xsave {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_xcrs"
+args = "id: u8, xcrs: &dyn fmt::Debug"
+message = "vcpu id {} xcrs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_debug_regs"
+args = "id: u8, debugregs: &dyn fmt::Debug"
+message = "vcpu id {} debugregs {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_setup_cpuid"
+args = "id: u8, cpuid: &dyn fmt::Debug"
+message = "vcpu id {} cpuid {:?}"
+enabled = true
+
+[[events]]
+name = "kvm_set_cpuid2"
+args = "id: u8, cpuid2: &dyn fmt::Debug"
+message = "vcpu id {} cpuid2 {:?}"
+enabled = true

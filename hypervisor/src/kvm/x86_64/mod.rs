@@ -119,42 +119,55 @@ impl KvmCpu {
         match regs_index {
             RegsIndex::Regs => {
                 locked_arch_cpu.regs = self.fd.get_regs()?;
+                trace::kvm_get_regs(self.id, &locked_arch_cpu.regs);
             }
             RegsIndex::Sregs => {
                 locked_arch_cpu.sregs = self.fd.get_sregs()?;
+                trace::kvm_get_sregs(self.id, &locked_arch_cpu.sregs);
             }
             RegsIndex::Fpu => {
                 if !self.caps.has_xsave {
                     locked_arch_cpu.fpu = self.fd.get_fpu()?;
+                    trace::kvm_get_fpu(self.id, &locked_arch_cpu.fpu);
                 }
             }
             RegsIndex::MpState => {
                 locked_arch_cpu.mp_state = self.fd.get_mp_state()?;
+                trace::kvm_get_mp_state(self.id, &locked_arch_cpu.mp_state);
             }
             RegsIndex::LapicState => {
                 locked_arch_cpu.lapic = self.fd.get_lapic()?;
+                trace::kvm_get_lapic(self.id, &locked_arch_cpu.lapic);
             }
             RegsIndex::MsrEntry => {
                 locked_arch_cpu.msr_len = self.fd.get_msrs(&mut msr_entries)?;
                 for (i, entry) in msr_entries.as_slice().iter().enumerate() {
                     locked_arch_cpu.msr_list[i] = *entry;
                 }
+                trace::kvm_get_msrs(
+                    self.id,
+                    &&locked_arch_cpu.msr_list[0..locked_arch_cpu.msr_len],
+                );
             }
             RegsIndex::VcpuEvents => {
                 locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                trace::kvm_get_vcpu_events(self.id, &locked_arch_cpu.cpu_events);
             }
             RegsIndex::Xsave => {
                 if self.caps.has_xsave {
                     locked_arch_cpu.xsave = self.fd.get_xsave()?;
+                    trace::kvm_get_xsave(self.id, &locked_arch_cpu.xsave);
                 }
             }
             RegsIndex::Xcrs => {
                 if self.caps.has_xcrs {
                     locked_arch_cpu.xcrs = self.fd.get_xcrs()?;
+                    trace::kvm_get_xcrs(self.id, &locked_arch_cpu.xcrs);
                 }
             }
             RegsIndex::DebugRegs => {
                 locked_arch_cpu.debugregs = self.fd.get_debug_regs()?;
+                trace::kvm_get_debug_regs(self.id, &locked_arch_cpu.debugregs);
             }
         }
 
@@ -170,31 +183,40 @@ impl KvmCpu {
         let apic_id = locked_arch_cpu.apic_id;
         match regs_index {
             RegsIndex::Regs => {
+                trace::kvm_set_regs(self.id, &locked_arch_cpu.regs);
                 self.fd
                     .set_regs(&locked_arch_cpu.regs)
                     .with_context(|| format!("Failed to set regs for CPU {}", apic_id))?;
             }
             RegsIndex::Sregs => {
+                trace::kvm_set_sregs(self.id, &locked_arch_cpu.sregs);
                 self.fd
                     .set_sregs(&locked_arch_cpu.sregs)
                     .with_context(|| format!("Failed to set sregs for CPU {}", apic_id))?;
             }
             RegsIndex::Fpu => {
+                trace::kvm_set_fpu(self.id, &locked_arch_cpu.fpu);
                 self.fd
                     .set_fpu(&locked_arch_cpu.fpu)
                     .with_context(|| format!("Failed to set fpu for CPU {}", apic_id))?;
             }
             RegsIndex::MpState => {
+                trace::kvm_set_mp_state(self.id, &locked_arch_cpu.mp_state);
                 self.fd
                     .set_mp_state(locked_arch_cpu.mp_state)
                     .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
             }
             RegsIndex::LapicState => {
+                trace::kvm_set_lapic(self.id, &locked_arch_cpu.lapic);
                 self.fd
                     .set_lapic(&locked_arch_cpu.lapic)
                     .with_context(|| format!("Failed to set lapic for CPU {}", apic_id))?;
             }
             RegsIndex::MsrEntry => {
+                trace::kvm_set_msrs(
+                    self.id,
+                    &&locked_arch_cpu.msr_list[0..locked_arch_cpu.msr_len],
+                );
                 self.fd
                     .set_msrs(&Msrs::from_entries(
                         &locked_arch_cpu.msr_list[0..locked_arch_cpu.msr_len],
@@ -202,21 +224,25 @@ impl KvmCpu {
                     .with_context(|| format!("Failed to set msrs for CPU {}", apic_id))?;
             }
             RegsIndex::VcpuEvents => {
+                trace::kvm_set_vcpu_events(self.id, &locked_arch_cpu.cpu_events);
                 self.fd
                     .set_vcpu_events(&locked_arch_cpu.cpu_events)
                     .with_context(|| format!("Failed to set vcpu events for CPU {}", apic_id))?;
             }
             RegsIndex::Xsave => {
+                trace::kvm_set_xsave(self.id, &locked_arch_cpu.xsave);
                 self.fd
                     .set_xsave(&locked_arch_cpu.xsave)
                     .with_context(|| format!("Failed to set xsave for CPU {}", apic_id))?;
             }
             RegsIndex::Xcrs => {
+                trace::kvm_set_xcrs(self.id, &locked_arch_cpu.xcrs);
                 self.fd
                     .set_xcrs(&locked_arch_cpu.xcrs)
                     .with_context(|| format!("Failed to set xcrs for CPU {}", apic_id))?;
             }
             RegsIndex::DebugRegs => {
+                trace::kvm_set_debug_regs(self.id, &locked_arch_cpu.debugregs);
                 self.fd
                     .set_debug_regs(&locked_arch_cpu.debugregs)
                     .with_context(|| format!("Failed to set debug register for CPU {}", apic_id))?;
@@ -241,48 +267,69 @@ impl KvmCpu {
         locked_arch_cpu
             .setup_cpuid(&mut cpuid)
             .with_context(|| format!("Failed to set cpuid for CPU {}", apic_id))?;
+        trace::kvm_setup_cpuid(self.id, &cpuid);
 
         self.fd
             .set_cpuid2(&cpuid)
             .with_context(|| format!("Failed to set cpuid for CPU {}/KVM", apic_id))?;
+        trace::kvm_set_cpuid2(self.id, &cpuid);
 
         self.fd
             .set_mp_state(locked_arch_cpu.mp_state)
             .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
+        trace::kvm_set_mp_state(self.id, &locked_arch_cpu.mp_state);
+
         self.fd
             .set_sregs(&locked_arch_cpu.sregs)
             .with_context(|| format!("Failed to set sregs for CPU {}", apic_id))?;
+        trace::kvm_set_sregs(self.id, &locked_arch_cpu.sregs);
+
         self.fd
             .set_regs(&locked_arch_cpu.regs)
             .with_context(|| format!("Failed to set regs for CPU {}", apic_id))?;
+        trace::kvm_set_regs(self.id, &locked_arch_cpu.regs);
+
         if self.caps.has_xsave {
             self.fd
                 .set_xsave(&locked_arch_cpu.xsave)
                 .with_context(|| format!("Failed to set xsave for CPU {}", apic_id))?;
+            trace::kvm_set_xsave(self.id, &locked_arch_cpu.xsave);
         } else {
             self.fd
                 .set_fpu(&locked_arch_cpu.fpu)
                 .with_context(|| format!("Failed to set fpu for CPU {}", apic_id))?;
+            trace::kvm_set_fpu(self.id, &locked_arch_cpu.fpu);
         }
         if self.caps.has_xcrs {
             self.fd
                 .set_xcrs(&locked_arch_cpu.xcrs)
                 .with_context(|| format!("Failed to set xcrs for CPU {}", apic_id))?;
+            trace::kvm_set_xcrs(self.id, &locked_arch_cpu.xcrs);
         }
         self.fd
             .set_debug_regs(&locked_arch_cpu.debugregs)
             .with_context(|| format!("Failed to set debug register for CPU {}", apic_id))?;
+        trace::kvm_set_debug_regs(self.id, &locked_arch_cpu.debugregs);
+
         self.fd
             .set_lapic(&locked_arch_cpu.lapic)
             .with_context(|| format!("Failed to set lapic for CPU {}", apic_id))?;
+        trace::kvm_set_lapic(self.id, &locked_arch_cpu.lapic);
+
         self.fd
             .set_msrs(&Msrs::from_entries(
                 &locked_arch_cpu.msr_list[0..locked_arch_cpu.msr_len],
             )?)
             .with_context(|| format!("Failed to set msrs for CPU {}", apic_id))?;
+        trace::kvm_set_msrs(
+            self.id,
+            &&locked_arch_cpu.msr_list[0..locked_arch_cpu.msr_len],
+        );
+
         self.fd
             .set_vcpu_events(&locked_arch_cpu.cpu_events)
             .with_context(|| format!("Failed to set vcpu events for CPU {}", apic_id))?;
+        trace::kvm_set_vcpu_events(self.id, &locked_arch_cpu.cpu_events);
 
         Ok(())
     }

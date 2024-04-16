@@ -417,82 +417,85 @@ impl KvmCpu {
             .with_context(|| CpuError::NoMachineInterface)?;
 
         match self.fd.run() {
-            Ok(run) => match run {
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::IoIn(addr, data) => {
-                    vm.lock().unwrap().pio_in(u64::from(addr), data);
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::IoOut(addr, data) => {
-                    #[cfg(feature = "boot_time")]
-                    capture_boot_signal(addr as u64, data);
+            Ok(run) => {
+                trace::kvm_vcpu_run_exit(cpu.id, &run);
+                match run {
+                    #[cfg(target_arch = "x86_64")]
+                    VcpuExit::IoIn(addr, data) => {
+                        vm.lock().unwrap().pio_in(u64::from(addr), data);
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    VcpuExit::IoOut(addr, data) => {
+                        #[cfg(feature = "boot_time")]
+                        capture_boot_signal(addr as u64, data);
 
-                    vm.lock().unwrap().pio_out(u64::from(addr), data);
-                }
-                VcpuExit::MmioRead(addr, data) => {
-                    vm.lock().unwrap().mmio_read(addr, data);
-                }
-                VcpuExit::MmioWrite(addr, data) => {
-                    #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
-                    capture_boot_signal(addr, data);
+                        vm.lock().unwrap().pio_out(u64::from(addr), data);
+                    }
+                    VcpuExit::MmioRead(addr, data) => {
+                        vm.lock().unwrap().mmio_read(addr, data);
+                    }
+                    VcpuExit::MmioWrite(addr, data) => {
+                        #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+                        capture_boot_signal(addr, data);
 
-                    vm.lock().unwrap().mmio_write(addr, data);
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::Hlt => {
-                    info!("Vcpu{} received KVM_EXIT_HLT signal", cpu.id);
-                    return Err(anyhow!(CpuError::VcpuHltEvent(cpu.id)));
-                }
-                #[cfg(target_arch = "x86_64")]
-                VcpuExit::Shutdown => {
-                    info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", cpu.id);
-                    cpu.guest_shutdown()?;
+                        vm.lock().unwrap().mmio_write(addr, data);
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    VcpuExit::Hlt => {
+                        info!("Vcpu{} received KVM_EXIT_HLT signal", cpu.id);
+                        return Err(anyhow!(CpuError::VcpuHltEvent(cpu.id)));
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    VcpuExit::Shutdown => {
+                        info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", cpu.id);
+                        cpu.guest_shutdown()?;
 
-                    return Ok(false);
-                }
-                #[cfg(target_arch = "aarch64")]
-                VcpuExit::SystemEvent(event, flags) => {
-                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
-                        info!(
-                            "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
-                            cpu.id()
-                        );
-                        cpu.guest_shutdown()
-                            .with_context(|| "Some error occurred in guest shutdown")?;
-                        return Ok(true);
-                    } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
-                        info!("Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal", cpu.id());
-                        cpu.guest_reset()
-                            .with_context(|| "Some error occurred in guest reset")?;
-                        return Ok(true);
-                    } else {
-                        error!(
+                        return Ok(false);
+                    }
+                    #[cfg(target_arch = "aarch64")]
+                    VcpuExit::SystemEvent(event, flags) => {
+                        if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
+                            info!(
+                                "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
+                                cpu.id()
+                            );
+                            cpu.guest_shutdown()
+                                .with_context(|| "Some error occurred in guest shutdown")?;
+                            return Ok(true);
+                        } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
+                            info!("Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal", cpu.id());
+                            cpu.guest_reset()
+                                .with_context(|| "Some error occurred in guest reset")?;
+                            return Ok(true);
+                        } else {
+                            error!(
                             "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
                             cpu.id(),
                             event,
                             flags
                         );
+                        }
+                        return Ok(false);
                     }
-                    return Ok(false);
-                }
-                VcpuExit::FailEntry(reason, cpuid) => {
-                    info!(
+                    VcpuExit::FailEntry(reason, cpuid) => {
+                        info!(
                         "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
                         cpuid, reason
                     );
-                    return Ok(false);
+                        return Ok(false);
+                    }
+                    VcpuExit::InternalError => {
+                        info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", cpu.id());
+                        return Ok(false);
+                    }
+                    r => {
+                        return Err(anyhow!(CpuError::VcpuExitReason(
+                            cpu.id(),
+                            format!("{:?}", r)
+                        )));
+                    }
                 }
-                VcpuExit::InternalError => {
-                    info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", cpu.id());
-                    return Ok(false);
-                }
-                r => {
-                    return Err(anyhow!(CpuError::VcpuExitReason(
-                        cpu.id(),
-                        format!("{:?}", r)
-                    )));
-                }
-            },
+            }
             Err(ref e) => {
                 match e.errno() {
                     libc::EAGAIN => {}
@@ -569,6 +572,7 @@ impl CPUHypervisorOps for KvmCpu {
     }
 
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
+        trace::kvm_reset_vcpu(self.id);
         self.arch_reset_vcpu(cpu)?;
 
         Ok(())
@@ -846,6 +850,7 @@ impl MsiIrqManager for KVMInterruptManager {
     fn release_irq(&self, irq: u32) -> Result<()> {
         let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
 
+        trace::kvm_release_irq(irq);
         locked_irq_route_table.release_gsi(irq).map_err(|e| {
             error!("Failed to release gsi, error is {:?}", e);
             e
@@ -853,6 +858,7 @@ impl MsiIrqManager for KVMInterruptManager {
     }
 
     fn register_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
+        trace::kvm_register_irqfd(&irq_fd, irq);
         self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
             error!("Failed to register irq, error is {:?}", e);
             e
@@ -862,6 +868,7 @@ impl MsiIrqManager for KVMInterruptManager {
     }
 
     fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
+        trace::kvm_unregister_irqfd(&irq_fd, irq);
         self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
             error!("Failed to unregister irq, error is {:?}", e);
             e
@@ -872,6 +879,7 @@ impl MsiIrqManager for KVMInterruptManager {
 
     fn trigger(&self, irq_fd: Option<Arc<EventFd>>, vector: MsiVector, dev_id: u32) -> Result<()> {
         if irq_fd.is_some() {
+            trace::kvm_trigger_irqfd(irq_fd.as_ref().unwrap());
             irq_fd.unwrap().write(1)?;
         } else {
             #[cfg(target_arch = "aarch64")]
@@ -888,6 +896,7 @@ impl MsiIrqManager for KVMInterruptManager {
                 pad: [0; 12],
             };
 
+            trace::kvm_signal_msi(&kvm_msi);
             self.vm_fd.signal_msi(kvm_msi)?;
         }
 
