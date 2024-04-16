@@ -765,6 +765,7 @@ dependencies = [
  "migration",
  "migration_derive",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -1729,6 +1730,7 @@ dependencies = [
  "log",
  "regex",
  "trace_generator",
+ "vmm-sys-util",
 ]
 
 [[package]]

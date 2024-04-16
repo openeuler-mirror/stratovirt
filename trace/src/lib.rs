@@ -25,11 +25,13 @@ use std::{
     fmt,
     os::unix::io::RawFd,
     sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
 };
 
 use anyhow::{Ok, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
+use vmm_sys_util::eventfd::EventFd;
 
 use trace_generator::{
     add_trace_state_to, gen_trace_event_func, gen_trace_scope_func, gen_trace_state,
