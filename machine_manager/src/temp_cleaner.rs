@@ -81,15 +81,12 @@ impl TempCleaner {
         while let Some(path) = self.paths.pop() {
             if Path::new(&path).exists() {
                 if let Err(ref e) = fs::remove_file(&path) {
-                    error!(
-                        "Failed to delete console / socket file:{} :{} \r\n",
-                        &path, e
-                    );
+                    error!("Failed to delete console / socket file:{} :{}", &path, e);
                 } else {
-                    info!("Delete file: {} successfully.\r\n", &path);
+                    info!("Delete file: {} successfully", &path);
                 }
             } else {
-                info!("file: {} has been removed \r\n", &path);
+                info!("file: {} has been removed", &path);
             }
         }
     }
