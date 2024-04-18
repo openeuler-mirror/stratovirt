@@ -65,7 +65,7 @@ pub enum UsbPacketStatus {
 
 /// USB request used to transfer to USB device.
 #[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Default)]
 pub struct UsbDeviceRequest {
     pub request_type: u8,
     pub request: u8,
@@ -75,6 +75,66 @@ pub struct UsbDeviceRequest {
 }
 
 impl ByteCode for UsbDeviceRequest {}
+
+impl std::fmt::Debug for UsbDeviceRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsbDeviceRequest")
+            .field("request_type", &parse_request_type(self.request_type))
+            .field("request", &parse_request(self.request))
+            .field("value", &self.value)
+            .field("index", &self.index)
+            .field("length", &self.length)
+            .finish()
+    }
+}
+
+fn parse_request_type(request_type: u8) -> String {
+    let mut ret = "".to_string();
+
+    match request_type & USB_DIRECTION_DEVICE_TO_HOST {
+        USB_DIRECTION_DEVICE_TO_HOST => ret.push_str("IN"),
+        _ => ret.push_str("OUT"),
+    }
+
+    ret.push(' ');
+
+    match request_type & USB_TYPE_MASK {
+        USB_TYPE_STANDARD => ret.push_str("STD"),
+        USB_TYPE_CLASS => ret.push_str("CLASS"),
+        USB_TYPE_VENDOR => ret.push_str("VEND"),
+        _ => ret.push_str("RSVD"),
+    }
+
+    ret.push(' ');
+
+    match request_type & USB_RECIPIENT_MASK {
+        USB_RECIPIENT_DEVICE => ret.push_str("DEV"),
+        USB_RECIPIENT_INTERFACE => ret.push_str("IFACE"),
+        USB_RECIPIENT_ENDPOINT => ret.push_str("EP"),
+        _ => ret.push_str("OTHER"),
+    }
+
+    ret
+}
+
+fn parse_request(request: u8) -> String {
+    match request {
+        USB_REQUEST_GET_STATUS => "GET STAT".to_string(),
+        USB_REQUEST_CLEAR_FEATURE => "CLR FEAT".to_string(),
+        USB_REQUEST_SET_FEATURE => "SET FEAT".to_string(),
+        USB_REQUEST_SET_ADDRESS => "SET ADDR".to_string(),
+        USB_REQUEST_GET_DESCRIPTOR => "GET DESC".to_string(),
+        USB_REQUEST_SET_DESCRIPTOR => "SET DESC".to_string(),
+        USB_REQUEST_GET_CONFIGURATION => "GET CONF".to_string(),
+        USB_REQUEST_SET_CONFIGURATION => "SET CONF".to_string(),
+        USB_REQUEST_GET_INTERFACE => "GET IFACE".to_string(),
+        USB_REQUEST_SET_INTERFACE => "SET IFACE".to_string(),
+        USB_REQUEST_SYNCH_FRAME => "SYN FRAME".to_string(),
+        USB_REQUEST_SET_SEL => "SET SEL".to_string(),
+        USB_REQUEST_SET_ISOCH_DELAY => "SET ISO DEL".to_string(),
+        _ => format!("UNKNOWN {}", request),
+    }
+}
 
 /// The data transmission channel.
 #[derive(Default, Clone, Copy)]
