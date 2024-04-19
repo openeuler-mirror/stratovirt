@@ -209,7 +209,9 @@ impl DeviceTypeOperation for DemoDisplay {
             }
             1 => {
                 buf.push(ds.cursor.len() as u8);
-                buf.push((ds.cursor.len() as u16 >> 8) as u8);
+                buf.push((ds.cursor.len() as u32 >> 8) as u8);
+                buf.push((ds.cursor.len() as u32 >> 16) as u8);
+                buf.push((ds.cursor.len() as u32 >> 24) as u8);
             }
             2 => {
                 buf = ds.image.clone();

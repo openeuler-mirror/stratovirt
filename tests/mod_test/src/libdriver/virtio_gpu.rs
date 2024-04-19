@@ -357,12 +357,12 @@ impl TestDemoDpyDevice {
         return test_state.borrow_mut().readw(addr);
     }
 
-    pub fn query_cursor(&mut self) -> u16 {
+    pub fn query_cursor(&mut self) -> u32 {
         let addr = self.allocator.borrow_mut().alloc(size_of::<u16>() as u64);
         let test_state = self.pci_dev.pci_bus.borrow_mut().test_state.clone();
         self.pci_dev
             .io_writeq(self.bar_addr, DpyEvent::QueryCursor as u64, addr);
-        return test_state.borrow_mut().readw(addr);
+        return test_state.borrow_mut().readl(addr);
     }
 
     pub fn get_surface(&mut self, size: u64) -> Vec<u8> {
