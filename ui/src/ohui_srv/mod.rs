@@ -87,7 +87,8 @@ impl GuestSurface {
     }
 }
 
-const CURSOR_SIZE: u64 = 16 * 1024;
+// image size is 128 * 128, and 4 Bytes per pixel
+const CURSOR_SIZE: u64 = 64 * 1024;
 
 struct CursorInfo {
     buffer: u64,
