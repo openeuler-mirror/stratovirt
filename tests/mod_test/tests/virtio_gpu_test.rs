@@ -40,8 +40,10 @@ const D_FMT: u32 = 2;
 const D_INVALID_FMT: u32 = VIRTIO_GPU_FORMAT_INVALID_UNORM;
 const D_WIDTH: u32 = 64;
 const D_HEIGHT: u32 = 64;
+const D_CURSOR_WIDTH: u32 = 64;
+const D_CURSOR_HEIGHT: u32 = 64;
 const D_BYTE_PER_PIXEL: u32 = 4;
-const D_IMG_SIZE: u32 = D_WIDTH * D_HEIGHT * D_BYTE_PER_PIXEL;
+const D_CURSOR_IMG_SIZE: u32 = D_CURSOR_WIDTH * D_CURSOR_HEIGHT * D_BYTE_PER_PIXEL;
 const D_OFFSET: u64 = 0;
 const D_X_COORD: u32 = 0;
 const D_Y_COORD: u32 = 0;
@@ -188,11 +190,11 @@ fn image_display_fun() {
 
 #[test]
 fn cursor_display_fun() {
-    let image_0: Vec<u8> = vec![0 as u8; D_IMG_SIZE as usize];
-    let image_1: Vec<u8> = vec![1 as u8; D_IMG_SIZE as usize];
+    let image_0: Vec<u8> = vec![0 as u8; D_CURSOR_IMG_SIZE as usize];
+    let image_1: Vec<u8> = vec![1 as u8; D_CURSOR_IMG_SIZE as usize];
     let image_byte_1 = vec![1 as u8; 1];
 
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -206,7 +208,7 @@ fn cursor_display_fun() {
         VIRTIO_GPU_RESP_OK_NODATA,
         resource_create(
             &gpu,
-            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH, D_HEIGHT)
+            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT)
         )
         .hdr_type
     );
@@ -236,7 +238,7 @@ fn cursor_display_fun() {
         transfer_to_host(
             &gpu,
             VirtioGpuTransferToHost2d::new(
-                VirtioGpuRect::new(D_X_COORD, D_Y_COORD, D_WIDTH, D_HEIGHT),
+                VirtioGpuRect::new(D_X_COORD, D_Y_COORD, D_CURSOR_WIDTH, D_CURSOR_HEIGHT),
                 D_OFFSET,
                 D_RES_ID,
             ),
@@ -664,7 +666,7 @@ fn scanout_flush_dfx() {
 
 #[test]
 fn cursor_update_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -674,7 +676,7 @@ fn cursor_update_dfx() {
     gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
     let image_empty: Vec<u8> = vec![];
-    let image_0: Vec<u8> = vec![0 as u8; D_IMG_SIZE as usize];
+    let image_0: Vec<u8> = vec![0 as u8; D_CURSOR_IMG_SIZE as usize];
 
     // invalid scanout id
     assert!(current_curosr_check(&dpy, &image_empty));
@@ -690,7 +692,7 @@ fn cursor_update_dfx() {
         VIRTIO_GPU_RESP_OK_NODATA,
         resource_create(
             &gpu,
-            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_WIDTH / 2, D_HEIGHT)
+            VirtioGpuResourceCreate2d::new(D_RES_ID, D_FMT, D_CURSOR_WIDTH / 2, D_CURSOR_HEIGHT)
         )
         .hdr_type
     );
