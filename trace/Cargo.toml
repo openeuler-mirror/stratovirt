@@ -16,3 +16,4 @@ trace_generator = { path = "trace_generator" }
 [features]
 trace_to_logger = []
 trace_to_ftrace = []
+trace_to_hitrace = []

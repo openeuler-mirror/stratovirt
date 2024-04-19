@@ -625,18 +625,18 @@ pub fn parse_bool(s: &str) -> Result<bool> {
     }
 }
 
-fn enable_trace_events(path: &str) -> Result<()> {
+fn enable_trace_state(path: &str) -> Result<()> {
     let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
     let mut buf = String::new();
     file.read_to_string(&mut buf)
         .with_context(|| format!("Failed to read {}", path))?;
 
-    let events: Vec<&str> = buf.split('\n').filter(|&s| !s.is_empty()).collect();
-    for e in events {
-        set_state_by_pattern(e.trim().to_string(), true).with_context(|| {
+    let state: Vec<&str> = buf.split('\n').filter(|&s| !s.is_empty()).collect();
+    for s in state {
+        set_state_by_pattern(s.trim().to_string(), true).with_context(|| {
             format!(
                 "Unable to set the state of {} according to {}",
-                e.trim(),
+                s.trim(),
                 path
             )
         })?;
@@ -646,13 +646,13 @@ fn enable_trace_events(path: &str) -> Result<()> {
 
 pub fn parse_trace_options(opt: &str) -> Result<()> {
     let mut cmd_parser = CmdParser::new("trace");
-    cmd_parser.push("events");
+    cmd_parser.push("file");
     cmd_parser.get_parameters(opt)?;
 
     let path = cmd_parser
-        .get_value::<String>("events")?
-        .with_context(|| "trace: events file must be set.")?;
-    enable_trace_events(&path)?;
+        .get_value::<String>("file")?
+        .with_context(|| "trace: trace file must be set.")?;
+    enable_trace_state(&path)?;
     Ok(())
 }
 
@@ -849,9 +849,9 @@ mod tests {
 
     #[test]
     fn test_parse_trace_options() {
-        assert!(parse_trace_options("event=test_trace_events").is_err());
-        assert!(parse_trace_options("events").is_err());
-        assert!(parse_trace_options("events=test_trace_events").is_err());
+        assert!(parse_trace_options("fil=test_trace").is_err());
+        assert!(parse_trace_options("file").is_err());
+        assert!(parse_trace_options("file=test_trace").is_err());
     }
 
     #[test]
