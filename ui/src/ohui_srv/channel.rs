@@ -18,7 +18,6 @@ use anyhow::Result;
 use libc::iovec;
 use log::error;
 
-use super::msg::*;
 use util::byte_code::ByteCode;
 use util::unix::UnixSock;
 
@@ -90,16 +89,6 @@ impl OhUiChannel {
             }
         }
         Ok(())
-    }
-
-    pub fn send_message<T: Sized + Default + ByteCode>(
-        &self,
-        t: EventType,
-        body: &T,
-    ) -> Result<()> {
-        let hdr = EventMsgHdr::new(t);
-        self.send_by_obj(&hdr)?;
-        self.send_by_obj(body)
     }
 
     pub fn recv_slice(&self, data: &mut [u8]) -> Result<usize> {
