@@ -73,12 +73,11 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
-    complete_numa_node, get_chardev_socket_path, get_multi_function, get_pci_bdf, parse_device_id,
-    parse_device_type, parse_numa_distance, parse_numa_mem, parse_vsock, str_slip_to_clap,
-    BootIndexInfo, BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig,
-    MigrateMode, NetworkInterfaceConfig, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
-    SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON,
-    MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_chardev_socket_path, get_pci_bdf, parse_device_id, parse_device_type,
+    parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck,
+    DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig,
+    NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo,
+    VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -566,7 +565,8 @@ pub trait MachineOps {
     ///
     /// * `cfg_args` - Device configuration.
     fn add_virtio_vsock(&mut self, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_vsock(cfg_args)?;
+        let device_cfg =
+            VhostKern::VsockConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let sys_mem = self.get_sys_mem().clone();
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         match parse_device_type(cfg_args)?.as_str() {
@@ -580,8 +580,8 @@ pub trait MachineOps {
                 );
             }
             _ => {
-                let bdf = get_pci_bdf(cfg_args)?;
-                let multi_func = get_multi_function(cfg_args)?;
+                let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+                let multi_func = device_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&device_cfg.id, &bdf, vsock.clone(), multi_func, true)
                     .with_context(|| "Failed to add virtio pci vsock device")?;
             }
