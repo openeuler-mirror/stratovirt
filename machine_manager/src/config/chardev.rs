@@ -18,15 +18,10 @@ use clap::{ArgAction, Parser, Subcommand};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check, str_slip_to_clap};
+use super::{error::ConfigError, str_slip_to_clap};
 use super::{get_pci_df, parse_bool};
-use crate::config::{
-    check_arg_too_long, valid_id, valid_path, valid_socket_path, CmdParser, ConfigCheck, VmConfig,
-};
+use crate::config::{valid_id, valid_path, valid_socket_path, ConfigCheck, VmConfig};
 use crate::qmp::qmp_schema;
-
-const MAX_GUEST_CID: u64 = 4_294_967_295;
-const MIN_GUEST_CID: u64 = 3;
 
 /// Default value of max ports for virtio-serial.
 const DEFAULT_SERIAL_PORTS_NUMBER: u32 = 31;
@@ -325,61 +320,6 @@ impl VmConfig {
     }
 }
 
-/// Config structure for virtio-vsock.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VsockConfig {
-    pub id: String,
-    pub guest_cid: u64,
-    pub vhost_fd: Option<i32>,
-}
-
-impl ConfigCheck for VsockConfig {
-    fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "vsock id")?;
-
-        if self.guest_cid < MIN_GUEST_CID || self.guest_cid >= MAX_GUEST_CID {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "Vsock guest-cid".to_string(),
-                MIN_GUEST_CID,
-                true,
-                MAX_GUEST_CID,
-                false,
-            )));
-        }
-
-        Ok(())
-    }
-}
-
-pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
-    let mut cmd_parser = CmdParser::new("vhost-vsock");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("bus")
-        .push("addr")
-        .push("multifunction")
-        .push("guest-cid")
-        .push("vhostfd");
-    cmd_parser.parse(vsock_config)?;
-    pci_args_check(&cmd_parser)?;
-    let id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "vsock".to_string()))?;
-
-    let guest_cid = cmd_parser.get_value::<u64>("guest-cid")?.with_context(|| {
-        ConfigError::FieldIsMissing("guest-cid".to_string(), "vsock".to_string())
-    })?;
-
-    let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
-    let vsock = VsockConfig {
-        id,
-        guest_cid,
-        vhost_fd,
-    };
-    Ok(vsock)
-}
-
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
 pub struct VirtioSerialInfo {
@@ -540,27 +480,6 @@ mod tests {
             nowait: true,
         };
         test_pci_console_config_cmdline_parser(chardev_cfg, expected_chardev)
-    }
-
-    #[test]
-    fn test_vsock_config_cmdline_parser() {
-        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3");
-        assert!(vsock_cfg_op.is_ok());
-
-        let vsock_config = vsock_cfg_op.unwrap();
-        assert_eq!(vsock_config.id, "test_vsock");
-        assert_eq!(vsock_config.guest_cid, 3);
-        assert_eq!(vsock_config.vhost_fd, None);
-        assert!(vsock_config.check().is_ok());
-
-        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4");
-        assert!(vsock_cfg_op.is_ok());
-
-        let vsock_config = vsock_cfg_op.unwrap();
-        assert_eq!(vsock_config.id, "test_vsock");
-        assert_eq!(vsock_config.guest_cid, 3);
-        assert_eq!(vsock_config.vhost_fd, Some(4));
-        assert!(vsock_config.check().is_ok());
     }
 
     #[test]

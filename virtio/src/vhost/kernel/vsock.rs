@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::{ArgAction, Parser};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
@@ -26,7 +27,7 @@ use crate::{
     VirtioInterruptType, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
 };
 use address_space::AddressSpace;
-use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
@@ -39,6 +40,29 @@ const QUEUE_NUM_VSOCK: usize = 3;
 const VHOST_PATH: &str = "/dev/vhost-vsock";
 /// Event transport reset
 const VIRTIO_VSOCK_EVENT_TRANSPORT_RESET: u32 = 0;
+
+const MAX_GUEST_CID: u64 = 4_294_967_295;
+const MIN_GUEST_CID: u64 = 3;
+
+/// Config structure for virtio-vsock.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct VsockConfig {
+    #[arg(long, value_parser = ["vhost-vsock-pci", "vhost-vsock-device"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+    #[arg(long, alias = "guest-cid", value_parser = clap::value_parser!(u64).range(MIN_GUEST_CID..=MAX_GUEST_CID))]
+    pub guest_cid: u64,
+    #[arg(long, alias = "vhostfd")]
+    pub vhost_fd: Option<i32>,
+}
 
 trait VhostVsockBackend {
     /// Each guest should have an unique CID which is used to route data to the guest.
@@ -390,9 +414,9 @@ impl MigrationHook for Vsock {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
-    pub use super::*;
-    pub use address_space::*;
+    use super::*;
+    use address_space::*;
+    use machine_manager::config::str_slip_to_clap;
 
     fn vsock_address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(u64::max_value(), "sysmem");
@@ -405,10 +429,28 @@ mod tests {
             id: "test_vsock_1".to_string(),
             guest_cid: 3,
             vhost_fd: None,
+            ..Default::default()
         };
         let sys_mem = vsock_address_space_init();
         let vsock = Vsock::new(&vsock_conf, &sys_mem);
         vsock
+    }
+
+    #[test]
+    fn test_vsock_config_cmdline_parser() {
+        let vsock_cmd = "vhost-vsock-device,id=test_vsock,guest-cid=3";
+        let vsock_config =
+            VsockConfig::try_parse_from(str_slip_to_clap(vsock_cmd, true, false)).unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, None);
+
+        let vsock_cmd = "vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4";
+        let vsock_config =
+            VsockConfig::try_parse_from(str_slip_to_clap(vsock_cmd, true, false)).unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
     }
 
     #[test]
