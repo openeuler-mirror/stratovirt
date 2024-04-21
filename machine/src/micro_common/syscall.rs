@@ -109,7 +109,18 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_connect),
         #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clone3),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rt_sigaction),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_rseq),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_set_robust_list),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sched_getaffinity),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clock_gettime),
+        BpfRule::new(libc::SYS_prctl),
         madvise_rule(),
     ];
     syscall.append(&mut arch_syscall_whitelist());
@@ -146,6 +157,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETQUEUE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32);
     arch_ioctl_allow_list(bpf_rule)
 }
