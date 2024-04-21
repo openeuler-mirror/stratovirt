@@ -226,10 +226,21 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_REGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_SREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_XSAVE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_FPU() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SUPPORTED_CPUID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEBUGREGS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_DEBUGREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XCRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_XCRS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_LAPIC() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_LAPIC() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MSRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CPUID2() as u32)
 }
 
 pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
