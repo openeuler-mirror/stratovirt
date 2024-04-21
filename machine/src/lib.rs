@@ -74,10 +74,10 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
     complete_numa_node, get_chardev_socket_path, get_multi_function, get_pci_bdf, parse_device_id,
-    parse_device_type, parse_numa_distance, parse_numa_mem, parse_virtio_serial,
-    parse_virtserialport, parse_vsock, str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig,
-    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaConfig,
-    NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_device_type, parse_numa_distance, parse_numa_mem, parse_vsock, str_slip_to_clap,
+    BootIndexInfo, BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig,
+    MigrateMode, NetworkInterfaceConfig, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf,
+    SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
@@ -694,11 +694,17 @@ pub trait MachineOps {
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
     fn add_virtio_serial(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let serial_cfg = parse_virtio_serial(vm_config, cfg_args)?;
+        if vm_config.virtio_serial.is_some() {
+            bail!("Only one virtio serial device is supported");
+        }
+        let mut serial_cfg =
+            VirtioSerialInfo::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        serial_cfg.auto_max_ports();
+        serial_cfg.check()?;
         let sys_mem = self.get_sys_mem().clone();
         let serial = Arc::new(Mutex::new(Serial::new(serial_cfg.clone())));
 
-        match parse_device_type(cfg_args)?.as_str() {
+        match serial_cfg.classtype.as_str() {
             "virtio-serial-device" => {
                 let device = VirtioMmioDevice::new(&sys_mem, serial.clone());
                 MigrationManager::register_device_instance(
@@ -709,8 +715,8 @@ pub trait MachineOps {
                 );
             }
             _ => {
-                let bdf = serial_cfg.pci_bdf.unwrap();
-                let multi_func = serial_cfg.multifunction;
+                let bdf = PciBdf::new(serial_cfg.bus.clone().unwrap(), serial_cfg.addr.unwrap());
+                let multi_func = serial_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&serial_cfg.id, &bdf, serial.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci serial device")?;
             }
@@ -722,6 +728,7 @@ pub trait MachineOps {
             &serial_cfg.id,
         );
 
+        vm_config.virtio_serial = Some(serial_cfg);
         Ok(())
     }
 
@@ -738,7 +745,7 @@ pub trait MachineOps {
             .with_context(|| "No virtio serial device specified")?;
 
         let mut virtio_device = None;
-        if serial_cfg.pci_bdf.is_none() {
+        if serial_cfg.bus.is_none() {
             // Micro_vm.
             for dev in self.get_sys_bus().devices.iter() {
                 let locked_busdev = dev.lock().unwrap();
@@ -775,24 +782,31 @@ pub trait MachineOps {
         let mut virtio_dev_h = virtio_dev.lock().unwrap();
         let serial = virtio_dev_h.as_any_mut().downcast_mut::<Serial>().unwrap();
 
-        let is_console = matches!(parse_device_type(cfg_args)?.as_str(), "virtconsole");
+        let mut serialport_cfg =
+            VirtioSerialPortCfg::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let free_port0 = find_port_by_nr(&serial.ports, 0).is_none();
         // Note: port 0 is reserved for a virtconsole.
         let free_nr = get_max_nr(&serial.ports) + 1;
-        let serialport_cfg =
-            parse_virtserialport(vm_config, cfg_args, is_console, free_nr, free_port0)?;
-        if serialport_cfg.nr >= serial.max_nr_ports {
+        serialport_cfg.auto_nr(free_port0, free_nr, serial.max_nr_ports)?;
+        serialport_cfg.check()?;
+        if find_port_by_nr(&serial.ports, serialport_cfg.nr.unwrap()).is_some() {
             bail!(
-                "virtio serial port nr {} should be less than virtio serial's max_nr_ports {}",
-                serialport_cfg.nr,
-                serial.max_nr_ports
+                "Repetitive virtio serial port nr {}.",
+                serialport_cfg.nr.unwrap()
             );
         }
-        if find_port_by_nr(&serial.ports, serialport_cfg.nr).is_some() {
-            bail!("Repetitive virtio serial port nr {}.", serialport_cfg.nr,);
-        }
+        let is_console = matches!(serialport_cfg.classtype.as_str(), "virtconsole");
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&serialport_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev {:?} not found or is in use",
+                    &serialport_cfg.chardev
+                )
+            })?;
 
-        let mut serial_port = SerialPort::new(serialport_cfg);
+        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg);
         let port = Arc::new(Mutex::new(serial_port.clone()));
         serial_port.realize()?;
         if !is_console {
