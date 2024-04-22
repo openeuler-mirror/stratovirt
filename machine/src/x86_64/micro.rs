@@ -157,6 +157,7 @@ impl MachineOps for LightMachine {
         ));
         trace::cpu_topo(&topology);
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
+        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
         let locked_hypervisor = locked_vm.base.hypervisor.lock().unwrap();
         locked_hypervisor.init_machine(&locked_vm.base.sys_io, &locked_vm.base.sys_mem)?;
         drop(locked_hypervisor);
@@ -165,8 +166,6 @@ impl MachineOps for LightMachine {
             &locked_vm.base.sys_mem,
             vm_config.machine_config.nr_cpus,
         )?;
-
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
         // Add mmio devices
         locked_vm
