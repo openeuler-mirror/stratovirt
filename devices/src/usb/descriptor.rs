@@ -132,7 +132,7 @@ impl ByteCode for UsbBOSDescriptor {}
 #[allow(non_snake_case)]
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct UsbSuperSpeedCapDescriptor {
+pub struct UsbSuperSpeedCapDescriptor {
     pub bLength: u8,
     pub bDescriptorType: u8,
     pub bDevCapabilityType: u8,
@@ -221,6 +221,7 @@ pub struct UsbDescriptor {
     pub altsetting: Vec<u32>,
     pub interface_number: u32,
     pub strings: Vec<String>,
+    pub capabilities: Vec<UsbSuperSpeedCapDescriptor>,
 }
 
 impl UsbDescriptor {
@@ -232,6 +233,7 @@ impl UsbDescriptor {
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
             interface_number: 0,
             strings: Vec::new(),
+            capabilities: Vec::new(),
         }
     }
 
@@ -374,20 +376,27 @@ impl UsbDescriptor {
         let mut cap_num = 0;
 
         if speed == USB_SPEED_SUPER {
-            let super_cap = UsbSuperSpeedCapDescriptor {
-                bLength: USB_DT_SS_CAP_SIZE,
-                bDescriptorType: USB_DT_DEVICE_CAPABILITY,
-                bDevCapabilityType: USB_SS_DEVICE_CAP,
-                bmAttributes: 0,
-                wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER,
-                bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER,
-                bU1DevExitLat: 0xa,
-                wU2DevExitLat: 0x20,
+            let default_cap = if self.capabilities.is_empty() {
+                vec![UsbSuperSpeedCapDescriptor {
+                    bLength: USB_DT_SS_CAP_SIZE,
+                    bDescriptorType: USB_DT_DEVICE_CAPABILITY,
+                    bDevCapabilityType: USB_SS_DEVICE_CAP,
+                    bmAttributes: 0,
+                    wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER,
+                    bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER,
+                    bU1DevExitLat: 0xa,
+                    wU2DevExitLat: 0x20,
+                }]
+            } else {
+                Vec::new()
             };
-            let mut super_buf = super_cap.as_bytes().to_vec();
-            cap_num += 1;
-            total += super_buf.len() as u16;
-            cap.append(&mut super_buf);
+
+            for desc in default_cap.iter().chain(self.capabilities.iter()) {
+                let mut super_buf = (*desc).as_bytes().to_vec();
+                cap_num += 1;
+                total += super_buf.len() as u16;
+                cap.append(&mut super_buf);
+            }
         }
 
         let bos = UsbBOSDescriptor {
@@ -442,6 +451,9 @@ pub trait UsbDescriptorOps {
 
     /// Set interface descriptor with the Interface and Alternate Setting.
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()>;
+
+    /// Set super speed capability descriptors.
+    fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>);
 
     /// Init all endpoint descriptors and reset the USB endpoint.
     fn init_endpoint(&mut self) -> Result<()>;
@@ -515,6 +527,10 @@ impl UsbDescriptorOps for UsbDeviceBase {
         self.descriptor.interfaces[index as usize] = Some(iface);
         self.init_endpoint()?;
         Ok(())
+    }
+
+    fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>) {
+        self.descriptor.capabilities = caps;
     }
 
     fn init_endpoint(&mut self) -> Result<()> {
