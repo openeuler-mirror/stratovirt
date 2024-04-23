@@ -772,7 +772,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 }
             }
         }
-        self.driver.extend_len(addr + size)?;
+        self.driver.extend_to_len(addr + size)?;
         Ok(addr)
     }
 
