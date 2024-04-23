@@ -13,22 +13,26 @@
 use std::net::Ipv4Addr;
 
 use anyhow::{anyhow, Context, Result};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{CmdParser, ConfigError, VmConfig};
+use crate::config::{str_slip_to_clap, ConfigError, VmConfig};
 
 /// Configuration of vnc.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct VncConfig {
-    /// Listening ip.
-    pub ip: String,
-    /// Listening port.
-    pub port: String,
+    /// Vnc listening addr (ip, port).
+    #[arg(long, alias = "classtype", value_parser = parse_ip_port)]
+    pub addr: (String, u16),
     /// Configuration of encryption.
+    #[arg(long, alias = "tls-creds", default_value = "")]
     pub tls_creds: String,
     /// Authentication switch.
+    #[arg(long, default_value = "false", action = ArgAction::SetTrue)]
     pub sasl: bool,
     /// Configuration of authentication.
+    #[arg(long, alias = "sasl-authz", default_value = "")]
     pub sasl_authz: String,
 }
 
@@ -38,45 +42,13 @@ const VNC_PORT_OFFSET: i32 = 5900;
 impl VmConfig {
     /// Make configuration for vnc: "chardev" -> "vnc".
     pub fn add_vnc(&mut self, vnc_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("vnc");
-        cmd_parser
-            .push("")
-            .push("tls-creds")
-            .push("sasl")
-            .push("sasl-authz");
-        cmd_parser.parse(vnc_config)?;
-
-        let mut vnc_config = VncConfig::default();
-        // Parse Ip:Port.
-        if let Some(addr) = cmd_parser.get_value::<String>("")? {
-            parse_port(&mut vnc_config, addr)?;
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "ip".to_string(),
-                "port".to_string()
-            )));
-        }
-
-        // VNC Security Type.
-        if let Some(tls_creds) = cmd_parser.get_value::<String>("tls-creds")? {
-            vnc_config.tls_creds = tls_creds
-        }
-        if let Some(_sasl) = cmd_parser.get_value::<String>("sasl")? {
-            vnc_config.sasl = true
-        } else {
-            vnc_config.sasl = false
-        }
-        if let Some(sasl_authz) = cmd_parser.get_value::<String>("sasl-authz")? {
-            vnc_config.sasl_authz = sasl_authz;
-        }
-
+        let vnc_config = VncConfig::try_parse_from(str_slip_to_clap(vnc_config, true, false))?;
         self.vnc = Some(vnc_config);
         Ok(())
     }
 }
 
-/// Parse Ip:port.
-fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
+fn parse_ip_port(addr: &str) -> Result<(String, u16)> {
     let v: Vec<&str> = addr.split(':').collect();
     if v.len() != 2 {
         return Err(anyhow!(ConfigError::FieldIsMissing(
@@ -97,10 +69,8 @@ fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
             "port".to_string()
         )));
     }
-    vnc_config.ip = ip.to_string();
-    vnc_config.port = ((base_port + VNC_PORT_OFFSET) as u16).to_string();
 
-    Ok(())
+    Ok((ip.to_string(), (base_port + VNC_PORT_OFFSET) as u16))
 }
 
 #[cfg(test)]
@@ -113,8 +83,8 @@ mod tests {
         let config_line = "0.0.0.0:1,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0";
         assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
-        assert_eq!(vnc_config.ip, String::from("0.0.0.0"));
-        assert_eq!(vnc_config.port, String::from("5901"));
+        assert_eq!(vnc_config.addr.0, String::from("0.0.0.0"));
+        assert_eq!(vnc_config.addr.1, 5901);
         assert_eq!(vnc_config.tls_creds, String::from("vnc-tls-creds0"));
         assert_eq!(vnc_config.sasl, true);
         assert_eq!(vnc_config.sasl_authz, String::from("authz0"));
@@ -124,7 +94,7 @@ mod tests {
         assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
         assert_eq!(vnc_config.sasl, false);
-        assert_eq!(vnc_config.port, String::from("11800"));
+        assert_eq!(vnc_config.addr.1, 11800);
 
         let mut vm_config = VmConfig::default();
         let config_line = "0.0.0.0:1,sasl,sasl-authz=authz0";
