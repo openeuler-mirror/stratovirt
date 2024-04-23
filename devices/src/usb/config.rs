@@ -213,7 +213,9 @@ pub const USB_DT_ENDPOINT_COMPANION: u8 = 48;
 
 /// USB SuperSpeed Device Capability.
 pub const USB_SS_DEVICE_CAP: u8 = 0x3;
+pub const USB_SS_DEVICE_SPEED_SUPPORTED_HIGH: u16 = 1 << 2;
 pub const USB_SS_DEVICE_SPEED_SUPPORTED_SUPER: u16 = 1 << 3;
+pub const USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_HIGH: u8 = 2;
 pub const USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER: u8 = 3;
 
 /// USB Descriptor size
