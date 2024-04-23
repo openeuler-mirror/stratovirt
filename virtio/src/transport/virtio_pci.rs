@@ -457,7 +457,10 @@ impl VirtioPciDevice {
             }
             let queue = Queue::new(*q_config, queue_type).unwrap();
             if q_config.ready && !queue.is_valid(&self.sys_mem) {
-                error!("Failed to activate device: Invalid queue");
+                error!(
+                    "Failed to activate device {}: Invalid queue",
+                    self.base.base.id
+                );
                 return false;
             }
             let arc_queue = Arc::new(Mutex::new(queue));
@@ -479,12 +482,18 @@ impl VirtioPciDevice {
             }
             let call_evts = NotifyEventFds::new(queue_num);
             if let Err(e) = locked_dev.set_guest_notifiers(&call_evts.events) {
-                error!("Failed to set guest notifiers, error is {:?}", e);
+                error!(
+                    "Failed to set guest notifiers, device {} error is {:?}",
+                    self.base.base.id, e
+                );
                 return false;
             }
             drop(locked_dev);
             if !self.queues_register_irqfd(&call_evts.events) {
-                error!("Failed to register queues irqfd.");
+                error!(
+                    "Failed to register queues irqfd for device {}",
+                    self.base.base.id
+                );
                 return false;
             }
             locked_dev = self.device.lock().unwrap();
@@ -496,7 +505,10 @@ impl VirtioPciDevice {
             self.interrupt_cb.clone().unwrap(),
             queue_evts,
         ) {
-            error!("Failed to activate device, error is {:?}", e);
+            error!(
+                "Failed to activate device {}, error is {:?}",
+                self.base.base.id, e
+            );
             return false;
         }
 
@@ -516,7 +528,10 @@ impl VirtioPciDevice {
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
             if let Err(e) = locked_dev.deactivate() {
-                error!("Failed to deactivate virtio device, error is {:?}", e);
+                error!(
+                    "Failed to deactivate virtio device {}, error is {:?}",
+                    self.base.base.id, e
+                );
                 return false;
             }
             locked_dev.virtio_base_mut().reset();
@@ -621,7 +636,7 @@ impl VirtioPciDevice {
             }
             COMMON_GF_REG => {
                 if locked_device.device_status() & CONFIG_STATUS_FEATURES_OK != 0 {
-                    error!("it's not allowed to set features after having been negoiated");
+                    error!("it's not allowed to set features after having been negoiated for device {}", self.base.base.id);
                     return Ok(());
                 }
                 let gfeatures_sel = locked_device.gfeatures_sel();
@@ -652,13 +667,16 @@ impl VirtioPciDevice {
                     let features = (locked_device.driver_features(1) as u64) << 32;
                     if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
                         error!(
-                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
+                            "Device {} is modern only, but the driver not support VIRTIO_F_VERSION_1", self.base.base.id
                         );
                         return Ok(());
                     }
                 }
                 if value != 0 && (locked_device.device_status() & !value) != 0 {
-                    error!("Driver must not clear a device status bit");
+                    error!(
+                        "Driver must not clear a device status bit, device {}",
+                        self.base.base.id
+                    );
                     return Ok(());
                 }
 
@@ -688,7 +706,10 @@ impl VirtioPciDevice {
                 .map(|config| config.size = value as u16)?,
             COMMON_Q_ENABLE_REG => {
                 if value != 1 {
-                    error!("Driver set illegal value for queue_enable {}", value);
+                    error!(
+                        "Driver set illegal value for queue_enable {}, device {}",
+                        value, self.base.base.id
+                    );
                     return Err(anyhow!(PciError::QueueEnable(value)));
                 }
                 locked_device
@@ -924,7 +945,7 @@ impl VirtioPciDevice {
         };
         if let Err(e) = result {
             error!(
-                "Failed to access virtio configuration through VirtioPciCfgAccessCap. {:?}",
+                "Failed to access virtio configuration through VirtioPciCfgAccessCap. device is {}, error is {:?}", self.base.base.id,
                 e
             );
         }
@@ -940,7 +961,10 @@ impl VirtioPciDevice {
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
         if self.base.config.msix.is_none() {
-            error!("Failed to get msix in virtio pci device configure");
+            error!(
+                "Failed to get msix in virtio pci device configure, device is {}",
+                self.base.base.id
+            );
             return false;
         }
 
@@ -1191,8 +1215,8 @@ impl PciDevOps for VirtioPciDevice {
         let end = offset + data_size;
         if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
             error!(
-                "Failed to write pcie config space at offset 0x{:x} with data size {}",
-                offset, data_size
+                "Failed to write pcie config space at offset {:#x} with data size {}, device is {}",
+                offset, data_size, self.base.base.id
             );
             return;
         }
@@ -1333,10 +1357,16 @@ impl MigrationHook for VirtioPciDevice {
                     .unwrap()
                     .activate(self.sys_mem.clone(), cb, queue_evts)
             {
-                error!("Failed to resume device, error is {:?}", e);
+                error!(
+                    "Failed to resume device {}, error is {:?}",
+                    self.base.base.id, e
+                );
             }
         } else {
-            error!("Failed to resume device: No interrupt callback");
+            error!(
+                "Failed to resume device {}: No interrupt callback",
+                self.base.base.id
+            );
         }
 
         Ok(())
