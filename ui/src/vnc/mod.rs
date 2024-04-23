@@ -290,7 +290,7 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         None => return Ok(()),
     };
 
-    let addr = format!("{}:{}", vnc_cfg.ip, vnc_cfg.port);
+    let addr = format!("{}:{}", vnc_cfg.addr.0, vnc_cfg.addr.1);
     let listener: TcpListener = match TcpListener::bind(addr.as_str()) {
         Ok(l) => l,
         Err(e) => {
