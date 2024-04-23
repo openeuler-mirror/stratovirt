@@ -233,9 +233,9 @@ pub struct UsbStorageConfig {
     #[arg(long)]
     pub drive: String,
     #[arg(long)]
-    bus: Option<String>,
+    pub(super) bus: Option<String>,
     #[arg(long)]
-    port: Option<String>,
+    pub(super) port: Option<String>,
 }
 
 /// USB storage device.
@@ -346,7 +346,42 @@ impl UsbStorage {
         })
     }
 
-    fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    pub fn do_realize(&mut self) -> Result<()> {
+        self.base.reset_usb_endpoint();
+        self.base.speed = USB_SPEED_HIGH;
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
+        s[STR_SERIAL_STORAGE_INDEX as usize] = self.base.generate_serial_number(prefix);
+        self.base.init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+
+        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
+        // supported.
+        let scsidev_classtype = match self.drive_cfg.media.as_str() {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: self.dev_cfg.drive.clone(),
+            ..Default::default()
+        };
+        let scsi_device = ScsiDevice::new(
+            scsi_dev_cfg,
+            self.drive_cfg.clone(),
+            self.drive_files.clone(),
+            None,
+            self.scsi_bus.clone(),
+        );
+        let realized_scsi = scsi_device.realize()?;
+        self.scsi_dev = Some(realized_scsi.clone());
+
+        self.scsi_bus
+            .lock()
+            .unwrap()
+            .attach_child(get_scsi_key(0, 0), realized_scsi)
+    }
+
+    pub fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         match device_req.request_type {
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE {
@@ -534,39 +569,7 @@ impl UsbDevice for UsbStorage {
     gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
-        self.base.reset_usb_endpoint();
-        self.base.speed = USB_SPEED_HIGH;
-        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
-        s[STR_SERIAL_STORAGE_INDEX as usize] = self.base.generate_serial_number(prefix);
-        self.base.init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
-
-        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
-        // supported.
-        let scsidev_classtype = match self.drive_cfg.media.as_str() {
-            "disk" => "scsi-hd".to_string(),
-            _ => "scsi-cd".to_string(),
-        };
-        let scsi_dev_cfg = ScsiDevConfig {
-            classtype: scsidev_classtype,
-            drive: self.dev_cfg.drive.clone(),
-            ..Default::default()
-        };
-        let scsi_device = ScsiDevice::new(
-            scsi_dev_cfg,
-            self.drive_cfg.clone(),
-            self.drive_files.clone(),
-            None,
-            self.scsi_bus.clone(),
-        );
-        let realized_scsi = scsi_device.realize()?;
-        self.scsi_dev = Some(realized_scsi.clone());
-
-        self.scsi_bus
-            .lock()
-            .unwrap()
-            .attach_child(get_scsi_key(0, 0), realized_scsi)?;
-
+        self.do_realize()?;
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)
     }
