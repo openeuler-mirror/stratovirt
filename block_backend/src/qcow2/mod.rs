@@ -1672,8 +1672,8 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let mut copied = 0;
         while copied < nbytes {
             let pos = offset as u64 + copied;
-            match self.host_offset_for_read(pos, nbytes - copied)? {
-                HostRange::DataAddress(host_offset, cnt) => {
+            match self.host_offset_for_read(pos, nbytes - copied) {
+                Ok(HostRange::DataAddress(host_offset, cnt)) => {
                     let (begin, end) = iovecs_split(left, cnt);
                     left = end;
                     req_list.push(CombineRequest {
@@ -1683,11 +1683,15 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
                     });
                     copied += cnt;
                 }
-                HostRange::DataNotInit(cnt) => {
+                Ok(HostRange::DataNotInit(cnt)) => {
                     let (begin, end) = iovecs_split(left, cnt);
                     left = end;
                     iovec_write_zero(&begin);
                     copied += cnt;
+                }
+                Err(e) => {
+                    error!("Failed to read vectored: {:?}", e);
+                    return self.driver.complete_request(OpCode::Preadv, -1, completecb);
                 }
             }
         }
@@ -1706,7 +1710,15 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         while copied < nbytes {
             let pos = offset as u64 + copied;
             let count = self.cluster_aligned_bytes(pos, nbytes - copied);
-            let host_offset = self.host_offset_for_write(pos, count)?;
+            let host_offset = match self.host_offset_for_write(pos, count) {
+                Ok(host_offset) => host_offset,
+                Err(e) => {
+                    error!("Failed to write vectored: {:?}", e);
+                    return self
+                        .driver
+                        .complete_request(OpCode::Pwritev, -1, completecb);
+                }
+            };
             if let Some(end) = req_list.last_mut() {
                 if end.offset + end.nbytes == host_offset {
                     end.nbytes += count;
