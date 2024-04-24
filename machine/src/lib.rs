@@ -575,18 +575,7 @@ pub trait MachineOps {
             _ => {
                 let bdf = get_pci_bdf(cfg_args)?;
                 let multi_func = get_multi_function(cfg_args)?;
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-                let mut virtio_pci_device = VirtioPciDevice::new(
-                    device_cfg.id.clone(),
-                    devfn,
-                    sys_mem,
-                    vsock.clone(),
-                    parent_bus,
-                    multi_func,
-                );
-                virtio_pci_device.enable_need_irqfd();
-                virtio_pci_device
-                    .realize()
+                self.add_virtio_pci_device(&device_cfg.id, &bdf, vsock.clone(), multi_func, true)
                     .with_context(|| "Failed to add virtio pci vsock device")?;
             }
         }
@@ -681,18 +670,9 @@ pub trait MachineOps {
                 if config.addr.is_none() || config.bus.is_none() {
                     bail!("virtio balloon pci config is error!");
                 }
-                let bdf = PciBdf {
-                    bus: config.bus.unwrap(),
-                    addr: config.addr.unwrap(),
-                };
+                let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
                 let multi_func = config.multifunction.unwrap_or_default();
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-                let sys_mem = self.get_sys_mem().clone();
-                let virtio_pci_device = VirtioPciDevice::new(
-                    config.id, devfn, sys_mem, balloon, parent_bus, multi_func,
-                );
-                virtio_pci_device
-                    .realize()
+                self.add_virtio_pci_device(&config.id, &bdf, balloon, multi_func, false)
                     .with_context(|| "Failed to add virtio pci balloon device")?;
             }
         }
@@ -724,17 +704,7 @@ pub trait MachineOps {
             _ => {
                 let bdf = serial_cfg.pci_bdf.unwrap();
                 let multi_func = serial_cfg.multifunction;
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-                let virtio_pci_device = VirtioPciDevice::new(
-                    serial_cfg.id.clone(),
-                    devfn,
-                    sys_mem,
-                    serial.clone(),
-                    parent_bus,
-                    multi_func,
-                );
-                virtio_pci_device
-                    .realize()
+                self.add_virtio_pci_device(&serial_cfg.id, &bdf, serial.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci serial device")?;
             }
         }
@@ -833,9 +803,9 @@ pub trait MachineOps {
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration arguments.
     fn add_virtio_rng(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg = parse_rng_dev(vm_config, cfg_args)?;
+        let rng_cfg = parse_rng_dev(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
-        let rng_dev = Arc::new(Mutex::new(Rng::new(device_cfg.clone())));
+        let rng_dev = Arc::new(Mutex::new(Rng::new(rng_cfg.clone())));
 
         match parse_device_type(cfg_args)?.as_str() {
             "virtio-rng-device" => {
@@ -846,23 +816,12 @@ pub trait MachineOps {
             _ => {
                 let bdf = get_pci_bdf(cfg_args)?;
                 let multi_func = get_multi_function(cfg_args)?;
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-                let sys_mem = self.get_sys_mem().clone();
-                let vitio_pci_device = VirtioPciDevice::new(
-                    device_cfg.id.clone(),
-                    devfn,
-                    sys_mem,
-                    rng_dev.clone(),
-                    parent_bus,
-                    multi_func,
-                );
-                vitio_pci_device
-                    .realize()
+                self.add_virtio_pci_device(&rng_cfg.id, &bdf, rng_dev.clone(), multi_func, false)
                     .with_context(|| "Failed to add pci rng device")?;
             }
         }
 
-        MigrationManager::register_device_instance(RngState::descriptor(), rng_dev, &device_cfg.id);
+        MigrationManager::register_device_instance(RngState::descriptor(), rng_dev, &rng_cfg.id);
         Ok(())
     }
 
@@ -893,16 +852,10 @@ pub trait MachineOps {
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
-                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
+                let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem)));
                 let bdf = get_pci_bdf(cfg_args)?;
                 let multi_func = get_multi_function(cfg_args)?;
-                let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-
-                let mut vitio_pci_device =
-                    VirtioPciDevice::new(id_clone, devfn, sys_mem, device, parent_bus, multi_func);
-                vitio_pci_device.enable_need_irqfd();
-                vitio_pci_device
-                    .realize()
+                self.add_virtio_pci_device(&id_clone, &bdf, device, multi_func, true)
                     .with_context(|| "Failed to add pci fs device")?;
             }
         }
@@ -1425,17 +1378,15 @@ pub trait MachineOps {
     ) -> Result<Arc<Mutex<dyn PciDevOps>>> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
-        let mut pcidev = VirtioPciDevice::new(
+        let pcidev = VirtioPciDevice::new(
             id.to_string(),
             devfn,
             sys_mem.clone(),
             device,
             parent_bus,
             multi_func,
+            need_irqfd,
         );
-        if need_irqfd {
-            pcidev.enable_need_irqfd();
-        }
         let clone_pcidev = Arc::new(Mutex::new(pcidev.clone()));
         pcidev
             .realize()

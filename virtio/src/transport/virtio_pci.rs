@@ -326,6 +326,7 @@ impl VirtioPciDevice {
         device: Arc<Mutex<dyn VirtioDevice>>,
         parent_bus: Weak<Mutex<PciBus>>,
         multi_func: bool,
+        need_irqfd: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
@@ -342,12 +343,8 @@ impl VirtioPciDevice {
             notify_eventfds: Arc::new(NotifyEventFds::new(queue_num)),
             interrupt_cb: None,
             multi_func,
-            need_irqfd: false,
+            need_irqfd,
         }
-    }
-
-    pub fn enable_need_irqfd(&mut self) {
-        self.need_irqfd = true;
     }
 
     fn assign_interrupt_cb(&mut self) {
@@ -1456,6 +1453,7 @@ mod tests {
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
 
         // Read virtio device features
@@ -1513,6 +1511,7 @@ mod tests {
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
 
         // Read Queue's Descriptor Table address
@@ -1563,6 +1562,7 @@ mod tests {
             sys_mem,
             cloned_virtio_dev,
             Arc::downgrade(&parent_bus),
+            false,
             false,
         );
 
@@ -1638,6 +1638,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
         virtio_pci.init_write_mask(false).unwrap();
         virtio_pci.init_write_clear_mask(false).unwrap();
@@ -1678,6 +1679,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
         assert!(virtio_pci.realize().is_ok());
     }
@@ -1716,6 +1718,7 @@ mod tests {
             sys_mem,
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
+            false,
             false,
         );
         #[cfg(target_arch = "aarch64")]
@@ -1808,6 +1811,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             true,
+            false,
         );
 
         assert!(init_multifunction(
