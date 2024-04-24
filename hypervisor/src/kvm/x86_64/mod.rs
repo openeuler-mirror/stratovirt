@@ -32,6 +32,7 @@ ioctl_iow_nr!(KVM_SET_SREGS, KVMIO, 0x84, kvm_sregs);
 ioctl_iow_nr!(KVM_SET_REGS, KVMIO, 0x82, kvm_regs);
 ioctl_iow_nr!(KVM_SET_XSAVE, KVMIO, 0xa5, kvm_xsave);
 ioctl_iow_nr!(KVM_SET_XCRS, KVMIO, 0xa7, kvm_xcrs);
+ioctl_iow_nr!(KVM_SET_FPU, KVMIO, 0x8d, kvm_fpu);
 ioctl_iow_nr!(KVM_SET_DEBUGREGS, KVMIO, 0xa2, kvm_debugregs);
 ioctl_iow_nr!(KVM_SET_LAPIC, KVMIO, 0x8f, kvm_lapic_state);
 ioctl_iow_nr!(KVM_SET_MSRS, KVMIO, 0x89, kvm_msrs);
