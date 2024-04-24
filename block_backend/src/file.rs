@@ -202,7 +202,7 @@ impl<T: Clone + 'static> FileDriver<T> {
         Ok(disk_size)
     }
 
-    pub fn extend_len(&mut self, len: u64) -> Result<()> {
+    pub fn extend_to_len(&mut self, len: u64) -> Result<()> {
         let file_end = self.file.seek(SeekFrom::End(0))?;
         if len > file_end {
             self.file.set_len(len)?;

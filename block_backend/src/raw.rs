@@ -12,6 +12,7 @@
 
 use std::{
     fs::File,
+    os::unix::io::AsRawFd,
     sync::{
         atomic::{AtomicBool, AtomicU64},
         Arc, Mutex,
@@ -22,9 +23,15 @@ use anyhow::{bail, Result};
 
 use crate::{
     file::{CombineRequest, FileDriver},
+    qcow2::is_aligned,
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
+    SECTOR_SIZE,
 };
-use util::aio::{get_iov_size, Aio, Iovec};
+use util::{
+    aio::{get_iov_size, raw_write, Aio, Iovec},
+    file::MAX_FILE_ALIGN,
+    unix::host_page_size,
+};
 
 pub struct RawDriver<T: Clone + 'static> {
     driver: FileDriver<T>,
@@ -44,12 +51,43 @@ impl<T: Clone + 'static> RawDriver<T> {
             status: Arc::new(Mutex::new(BlockStatus::Init)),
         }
     }
+
+    // Fill the first block with zero.
+    // get_file_alignment() detects the alignment length by submitting IO to the first sector.
+    // If this area is fallocated, misaligned IO will also return success, so we pre fill this area.
+    pub fn alloc_first_block(&mut self, new_size: u64) -> Result<()> {
+        let write_size = if new_size < MAX_FILE_ALIGN as u64 {
+            SECTOR_SIZE
+        } else {
+            MAX_FILE_ALIGN as u64
+        };
+        let max_align = std::cmp::max(MAX_FILE_ALIGN as u64, host_page_size()) as usize;
+        // SAFETY: allocate aligned memory and free it later.
+        let align_buf = unsafe { libc::memalign(max_align, write_size as usize) };
+        if align_buf.is_null() {
+            bail!("Failed to alloc memory for write.");
+        }
+
+        let ret = raw_write(
+            self.driver.file.as_raw_fd(),
+            align_buf as u64,
+            write_size as usize,
+            0,
+        );
+        // SAFETY: the memory is allocated in this function.
+        unsafe { libc::free(align_buf) };
+
+        if ret < 0 {
+            bail!("Failed to alloc first block, ret={}", ret);
+        }
+        Ok(())
+    }
 }
 
 impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String> {
         let raw_options = options.raw()?;
-        self.driver.file.set_len(raw_options.img_size)?;
+        self.resize(raw_options.img_size)?;
         let image_info = format!("fmt=raw size={}", raw_options.img_size);
         Ok(image_info)
     }
@@ -107,6 +145,33 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
     fn flush_request(&mut self) -> Result<()> {
         trace::block_flush_request(&self.driver.block_prop.id);
         self.driver.flush_request()
+    }
+
+    fn resize(&mut self, new_size: u64) -> Result<()> {
+        if !is_aligned(SECTOR_SIZE, new_size) {
+            bail!(
+                "The new size {} is not aligned to {}",
+                new_size,
+                SECTOR_SIZE
+            );
+        }
+
+        let old_size = self.disk_size()?;
+        if new_size == old_size {
+            return Ok(());
+        }
+
+        let meta_data = self.driver.file.metadata()?;
+        if !meta_data.is_file() {
+            bail!("Cannot resize unregular file");
+        }
+
+        self.driver.extend_to_len(new_size)?;
+        if old_size == 0 {
+            self.alloc_first_block(new_size)?;
+        }
+
+        Ok(())
     }
 
     fn drain_request(&self) {
