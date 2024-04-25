@@ -81,6 +81,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
+use machine_manager::{check_arg_exist, check_arg_nonexist};
 use migration::{MigrateOps, MigrationManager};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -571,6 +572,11 @@ pub trait MachineOps {
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         match parse_device_type(cfg_args)?.as_str() {
             "vhost-vsock-device" => {
+                check_arg_nonexist!(
+                    ("bus", device_cfg.bus),
+                    ("addr", device_cfg.addr),
+                    ("multifunction", device_cfg.multifunction)
+                );
                 let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
@@ -580,6 +586,7 @@ pub trait MachineOps {
                 );
             }
             _ => {
+                check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
                 let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
                 let multi_func = device_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&device_cfg.id, &bdf, vsock.clone(), multi_func, true)
@@ -667,16 +674,16 @@ pub trait MachineOps {
         Balloon::object_init(balloon.clone());
         match config.classtype.as_str() {
             "virtio-balloon-device" => {
-                if config.addr.is_some() || config.bus.is_some() || config.multifunction.is_some() {
-                    bail!("virtio balloon device config is error!");
-                }
+                check_arg_nonexist!(
+                    ("bus", config.bus),
+                    ("addr", config.addr),
+                    ("multifunction", config.multifunction)
+                );
                 let device = VirtioMmioDevice::new(sys_mem, balloon);
                 self.realize_virtio_mmio_device(device)?;
             }
             _ => {
-                if config.addr.is_none() || config.bus.is_none() {
-                    bail!("virtio balloon pci config is error!");
-                }
+                check_arg_exist!(("bus", config.bus), ("addr", config.addr));
                 let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
                 let multi_func = config.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&config.id, &bdf, balloon, multi_func, false)
@@ -700,12 +707,16 @@ pub trait MachineOps {
         let mut serial_cfg =
             VirtioSerialInfo::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         serial_cfg.auto_max_ports();
-        serial_cfg.check()?;
         let sys_mem = self.get_sys_mem().clone();
         let serial = Arc::new(Mutex::new(Serial::new(serial_cfg.clone())));
 
         match serial_cfg.classtype.as_str() {
             "virtio-serial-device" => {
+                check_arg_nonexist!(
+                    ("bus", serial_cfg.bus),
+                    ("addr", serial_cfg.addr),
+                    ("multifunction", serial_cfg.multifunction)
+                );
                 let device = VirtioMmioDevice::new(&sys_mem, serial.clone());
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
@@ -715,6 +726,7 @@ pub trait MachineOps {
                 );
             }
             _ => {
+                check_arg_exist!(("bus", serial_cfg.bus), ("addr", serial_cfg.addr));
                 let bdf = PciBdf::new(serial_cfg.bus.clone().unwrap(), serial_cfg.addr.unwrap());
                 let multi_func = serial_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&serial_cfg.id, &bdf, serial.clone(), multi_func, false)
@@ -836,11 +848,17 @@ pub trait MachineOps {
 
         match rng_cfg.classtype.as_str() {
             "virtio-rng-device" => {
+                check_arg_nonexist!(
+                    ("bus", rng_cfg.bus),
+                    ("addr", rng_cfg.addr),
+                    ("multifunction", rng_cfg.multifunction)
+                );
                 let device = VirtioMmioDevice::new(sys_mem, rng_dev.clone());
                 self.realize_virtio_mmio_device(device)
                     .with_context(|| "Failed to add virtio mmio rng device")?;
             }
             _ => {
+                check_arg_exist!(("bus", rng_cfg.bus), ("addr", rng_cfg.addr));
                 let bdf = PciBdf::new(rng_cfg.bus.clone().unwrap(), rng_cfg.addr.unwrap());
                 let multi_func = rng_cfg.multifunction.unwrap_or_default();
                 self.add_virtio_pci_device(&rng_cfg.id, &bdf, rng_dev.clone(), multi_func, false)
@@ -882,11 +900,17 @@ pub trait MachineOps {
         )));
         match dev_cfg.classtype.as_str() {
             "vhost-user-fs-device" => {
+                check_arg_nonexist!(
+                    ("bus", dev_cfg.bus),
+                    ("addr", dev_cfg.addr),
+                    ("multifunction", dev_cfg.multifunction)
+                );
                 let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
                 self.realize_virtio_mmio_device(virtio_mmio_device)
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
+                check_arg_exist!(("bus", dev_cfg.bus), ("addr", dev_cfg.addr));
                 let bdf = PciBdf::new(dev_cfg.bus.clone().unwrap(), dev_cfg.addr.unwrap());
                 let multi_func = dev_cfg.multifunction.unwrap_or_default();
                 let root_bus = self.get_pci_host()?.lock().unwrap().root_bus.clone();
@@ -1068,6 +1092,7 @@ pub trait MachineOps {
     ) -> Result<()> {
         let mut device_cfg =
             VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
         let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
         let multi_func = device_cfg.multifunction.unwrap_or_default();
         if device_cfg.num_queues.is_none() {
@@ -1225,6 +1250,7 @@ pub trait MachineOps {
             .netdevs
             .remove(&net_cfg.netdev)
             .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
+        check_arg_exist!(("bus", net_cfg.bus), ("addr", net_cfg.addr));
         let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
         let multi_func = net_cfg.multifunction.unwrap_or_default();
 
@@ -1278,6 +1304,7 @@ pub trait MachineOps {
         let mut device_cfg = VhostUser::VhostUserBlkDevConfig::try_parse_from(str_slip_to_clap(
             cfg_args, true, false,
         ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
         let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
         if device_cfg.num_queues.is_none() {
             let queues_auto = VirtioPciDevice::virtio_pci_auto_queues_num(
@@ -1329,6 +1356,7 @@ pub trait MachineOps {
         let device_cfg = VhostUser::VhostUserBlkDevConfig::try_parse_from(str_slip_to_clap(
             cfg_args, true, false,
         ))?;
+        check_arg_nonexist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
         let chardev_cfg = vm_config
             .chardev
             .remove(&device_cfg.chardev)

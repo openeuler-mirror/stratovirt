@@ -52,7 +52,6 @@ use machine_manager::config::{
     get_chardev_socket_path, parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig,
     MigrateMode, NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
-use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
@@ -61,6 +60,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{
     qmp_channel::QmpChannel, qmp_response::Response, qmp_schema, qmp_schema::UpdateRegionArgument,
 };
+use machine_manager::{check_arg_nonexist, event};
 use migration::MigrationManager;
 use util::{loop_context::EventLoopManager, num_ops::str_to_num, set_termi_canon_mode};
 use virtio::device::block::VirtioBlkDevConfig;
@@ -399,6 +399,11 @@ impl LightMachine {
     ) -> Result<()> {
         let net_cfg =
             NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        check_arg_nonexist!(
+            ("bus", net_cfg.bus),
+            ("addr", net_cfg.addr),
+            ("multifunction", net_cfg.multifunction)
+        );
         let netdev_cfg = vm_config
             .netdevs
             .remove(&net_cfg.netdev)
@@ -452,6 +457,11 @@ impl LightMachine {
     ) -> Result<()> {
         let device_cfg =
             VirtioBlkDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        check_arg_nonexist!(
+            ("bus", device_cfg.bus),
+            ("addr", device_cfg.addr),
+            ("multifunction", device_cfg.multifunction)
+        );
         let drive_cfg = vm_config
             .drives
             .remove(&device_cfg.drive)

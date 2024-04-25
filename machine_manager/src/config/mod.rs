@@ -713,10 +713,32 @@ pub fn check_path_too_long(arg: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Result<()> {
-    arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
+/// Make sure args are existed.
+///
+///   arg_name: Name of arg.
+///   arg_value: Value of arg. Should be Option<> class.
+/// Eg:
+///   check_arg_exist!(("id", id));
+///   check_arg_exist!(("bus", bus), ("addr", addr));
+#[macro_export]
+macro_rules! check_arg_exist{
+    ($(($arg_name:tt, $arg_value:expr)),*) => {
+        $($arg_value.clone().with_context(|| format!("Should set {}.", $arg_name))?;)*
+    }
+}
 
-    Ok(())
+/// Make sure args are existed.
+///
+///   arg_name: Name of arg.
+///   arg_value: Value of arg. Should be Option<> class.
+/// Eg:
+///   check_arg_nonexist!(("id", id));
+///   check_arg_nonexist!(("bus", bus), ("addr", addr));
+#[macro_export]
+macro_rules! check_arg_nonexist{
+    ($(($arg_name:tt, $arg_value:expr)),*) => {
+        $($arg_value.clone().map_or(Some(0), |_| None).with_context(|| format!("Should not set {}", $arg_name))?;)*
+    }
 }
 
 /// Configure StratoVirt parameters in clap format.

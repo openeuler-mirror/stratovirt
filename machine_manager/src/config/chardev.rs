@@ -346,24 +346,6 @@ impl VirtioSerialInfo {
     }
 }
 
-impl ConfigCheck for VirtioSerialInfo {
-    fn check(&self) -> Result<()> {
-        match self.classtype.as_str() {
-            "virtio-serial-pci" => {}
-            "virtio-serial-device" => {
-                if self.bus.is_some() || self.addr.is_some() || self.multifunction.is_some() {
-                    bail!("virtio mmio device should not set bus/addr/multifunction");
-                }
-            }
-            _ => {
-                bail!("Invalid classtype.");
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,7 +356,6 @@ mod tests {
         let mut serial_cfg =
             VirtioSerialInfo::try_parse_from(str_slip_to_clap(serial_cmd, true, false)).unwrap();
         serial_cfg.auto_max_ports();
-        assert!(serial_cfg.check().is_ok());
         vm_config.virtio_serial = Some(serial_cfg.clone());
         assert!(vm_config.add_chardev(chardev_cfg).is_ok());
 
@@ -394,10 +375,6 @@ mod tests {
         assert!(port_cfg.auto_nr(true, 0, serial_cfg.max_ports).is_err());
 
         let mut vm_config = VmConfig::default();
-        let serial_cmd = "virtio-serial-device,bus=pcie.0,addr=0x1";
-        let serial_cfg =
-            VirtioSerialInfo::try_parse_from(str_slip_to_clap(serial_cmd, true, false)).unwrap();
-        assert!(serial_cfg.check().is_err());
         assert!(vm_config
             .add_chardev("sock,id=test_console,path=/path/to/socket")
             .is_err());
@@ -437,7 +414,6 @@ mod tests {
         let mut serial_cfg =
             VirtioSerialInfo::try_parse_from(str_slip_to_clap(serial_cmd, true, false)).unwrap();
         serial_cfg.auto_max_ports();
-        assert!(serial_cfg.check().is_ok());
         vm_config.virtio_serial = Some(serial_cfg.clone());
         assert!(vm_config.add_chardev(chardev_cfg).is_ok());
 
