@@ -164,7 +164,8 @@ impl LightMachine {
                 DriveConfig::default(),
                 self.get_drive_files(),
             )));
-            let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, block.clone());
+            let virtio_mmio =
+                VirtioMmioDevice::new(&self.base.sys_mem, id.to_string(), block.clone());
             rpl_devs.push(virtio_mmio);
 
             MigrationManager::register_device_instance(
@@ -178,7 +179,8 @@ impl LightMachine {
                 NetworkInterfaceConfig::default(),
                 NetDevcfg::default(),
             )));
-            let virtio_mmio = VirtioMmioDevice::new(&self.base.sys_mem, net.clone());
+            let virtio_mmio =
+                VirtioMmioDevice::new(&self.base.sys_mem, id.to_string(), net.clone());
             rpl_devs.push(virtio_mmio);
 
             MigrationManager::register_device_instance(
@@ -415,7 +417,7 @@ impl LightMachine {
                     netdev_cfg,
                     &self.base.sys_mem,
                 )));
-                VirtioMmioDevice::new(&self.base.sys_mem, net)
+                VirtioMmioDevice::new(&self.base.sys_mem, net_cfg.id.clone(), net)
             } else {
                 let chardev = netdev_cfg.chardev.clone().with_context(|| {
                     format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
@@ -431,7 +433,7 @@ impl LightMachine {
                     sock_path,
                     &self.base.sys_mem,
                 )));
-                VirtioMmioDevice::new(&self.base.sys_mem, net)
+                VirtioMmioDevice::new(&self.base.sys_mem, net_cfg.id.clone(), net)
             };
             self.realize_virtio_mmio_device(device)?;
         } else {
