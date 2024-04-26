@@ -25,7 +25,7 @@ use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::is_aligned,
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
-    SECTOR_SIZE,
+    ImageInfo, SECTOR_SIZE,
 };
 use util::{
     aio::{get_iov_size, raw_write, Aio, Iovec},
@@ -90,6 +90,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         self.resize(raw_options.img_size)?;
         let image_info = format!("fmt=raw size={}", raw_options.img_size);
         Ok(image_info)
+    }
+
+    fn query_image(&mut self, _info: &mut ImageInfo) -> Result<()> {
+        todo!();
     }
 
     fn check_image(&mut self, _res: &mut CheckResult, _quite: bool, _fix: u64) -> Result<()> {

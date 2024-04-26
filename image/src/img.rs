@@ -190,6 +190,10 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn image_info(_args: Vec<String>) -> Result<()> {
+    todo!()
+}
+
 pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     let mut arg_parser =
         ArgsParse::create(vec!["no_print_error", "h", "help"], vec!["f", "r"], vec![]);

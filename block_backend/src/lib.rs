@@ -151,6 +151,16 @@ impl CreateOptions {
     }
 }
 
+#[derive(Default)]
+pub struct ImageInfo {
+    pub path: String,
+    pub format: String,
+    pub actual_size: u64,
+    pub virtual_size: u64,
+    pub cluster_size: Option<u64>,
+    pub snap_lists: Option<String>,
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct DiskFragments {
     pub allocated_clusters: u64,
@@ -290,6 +300,8 @@ impl Default for BlockProperty {
 
 pub trait BlockDriverOps<T: Clone>: Send {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String>;
+
+    fn query_image(&mut self, image_info: &mut ImageInfo) -> Result<()>;
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()>;
 
