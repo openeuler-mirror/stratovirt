@@ -23,8 +23,8 @@ use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
     qcow2::{header::QcowHeader, InternalSnapshotOps, Qcow2Driver, SyncAioInfo},
     raw::RawDriver,
-    BlockDriverOps, BlockProperty, CheckResult, CreateOptions, FIX_ERRORS, FIX_LEAKS, NO_FIX,
-    SECTOR_SIZE,
+    BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo, FIX_ERRORS, FIX_LEAKS,
+    NO_FIX, SECTOR_SIZE,
 };
 use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
@@ -190,8 +190,50 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn image_info(_args: Vec<String>) -> Result<()> {
-    todo!()
+pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
+    if args.len() < 1 {
+        bail!("Not enough arguments");
+    }
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec![], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    // Parse the image path.
+    let len = arg_parser.free.len();
+    let img_path = match len {
+        0 => bail!("Image path is needed"),
+        1 => arg_parser.free[0].clone(),
+        _ => {
+            let param = arg_parser.free[1].clone();
+            bail!("Unexpected argument: {}", param);
+        }
+    };
+
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
+    let image_file = ImageFile::create(&img_path, false)?;
+    let detect_fmt = image_file.detect_img_format()?;
+
+    let mut conf = BlockProperty::default();
+    conf.format = detect_fmt;
+    let mut driver: Box<dyn BlockDriverOps<()>> = match detect_fmt {
+        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
+        DiskFormat::Qcow2 => {
+            let mut qocw2_driver =
+                Qcow2Driver::new(image_file.file.try_clone()?, aio, conf.clone())?;
+            qocw2_driver.load_metadata(conf)?;
+            Box::new(qocw2_driver)
+        }
+    };
+
+    let mut image_info = ImageInfo::default();
+    image_info.path = img_path;
+    driver.query_image(&mut image_info)?;
+    print!("{}", image_info);
+    Ok(())
 }
 
 pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
@@ -478,6 +520,7 @@ Stratovirt disk image utility
 
 Command syntax:
 create [-f fmt] [-o options] filename [size]
+info filename
 check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
 resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot] filename
