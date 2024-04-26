@@ -50,7 +50,7 @@ use crate::{
         table::{Qcow2ClusterType, Qcow2Table},
     },
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
-    SECTOR_SIZE,
+    ImageInfo, SECTOR_SIZE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
@@ -1641,6 +1641,10 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
             qcow2_options.refcount_bits
         );
         Ok(image_info)
+    }
+
+    fn query_image(&mut self, _info: &mut ImageInfo) -> Result<()> {
+        todo!();
     }
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()> {
