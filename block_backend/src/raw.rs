@@ -92,8 +92,11 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         Ok(image_info)
     }
 
-    fn query_image(&mut self, _info: &mut ImageInfo) -> Result<()> {
-        todo!();
+    fn query_image(&mut self, info: &mut ImageInfo) -> Result<()> {
+        info.format = "raw".to_string();
+        info.virtual_size = self.disk_size()?;
+        info.actual_size = self.driver.actual_size()?;
+        Ok(())
     }
 
     fn check_image(&mut self, _res: &mut CheckResult, _quite: bool, _fix: u64) -> Result<()> {

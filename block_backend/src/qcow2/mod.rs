@@ -77,7 +77,7 @@ pub const QCOW2_OFLAG_ZERO: u64 = 1 << 0;
 const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
 pub const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
 const MAX_L1_SIZE: u64 = 32 * (1 << 20);
-const DEFAULT_SECTOR_SIZE: u64 = 512;
+pub(crate) const DEFAULT_SECTOR_SIZE: u64 = 512;
 pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
 // The default flush interval is 30s.
@@ -1643,8 +1643,16 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         Ok(image_info)
     }
 
-    fn query_image(&mut self, _info: &mut ImageInfo) -> Result<()> {
-        todo!();
+    fn query_image(&mut self, info: &mut ImageInfo) -> Result<()> {
+        info.format = "qcow2".to_string();
+        info.virtual_size = self.disk_size()?;
+        info.actual_size = self.driver.actual_size()?;
+        info.cluster_size = Some(self.header.cluster_size());
+
+        if !self.snapshot.snapshots.is_empty() {
+            info.snap_lists = Some(self.qcow2_list_snapshots());
+        }
+        Ok(())
     }
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()> {

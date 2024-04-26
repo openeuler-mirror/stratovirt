@@ -14,7 +14,10 @@ use std::{
     cell::RefCell,
     fs::File,
     io::{Seek, SeekFrom},
-    os::unix::prelude::{AsRawFd, RawFd},
+    os::{
+        linux::fs::MetadataExt,
+        unix::prelude::{AsRawFd, RawFd},
+    },
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering},
@@ -26,7 +29,7 @@ use anyhow::{Context, Result};
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{BlockIoErrorCallback, BlockProperty};
+use crate::{qcow2::DEFAULT_SECTOR_SIZE, BlockIoErrorCallback, BlockProperty};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::{
     aio::{Aio, AioCb, AioEngine, Iovec, OpCode},
@@ -186,6 +189,11 @@ impl<T: Clone + 'static> FileDriver<T> {
 
     pub fn unregister_io_event(&mut self) -> Result<()> {
         unregister_event_helper(self.block_prop.iothread.as_ref(), &mut self.delete_evts)
+    }
+
+    pub fn actual_size(&mut self) -> Result<u64> {
+        let meta_data = self.file.metadata()?;
+        Ok(meta_data.st_blocks() * DEFAULT_SECTOR_SIZE)
     }
 
     pub fn disk_size(&mut self) -> Result<u64> {
