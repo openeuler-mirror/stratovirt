@@ -35,6 +35,16 @@ stratovirt-img create -f qcow2 -o cluster-size=65536 img_path img_size
 
 Note: 1. The cluster size can be only be set for `qcow2` or default to 65536. 2. Disk format is default to raw.
 
+## Info
+
+Query the information of virtual disk.
+
+Sample Configuration：
+
+```shell
+stratovirt-img info img_path
+```
+
 ## Check
 
 Check if there are some mistakes on the image and choose to fix.
