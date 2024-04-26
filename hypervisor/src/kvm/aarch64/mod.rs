@@ -190,10 +190,13 @@ impl KvmCpu {
     fn get_one_reg(&self, reg_id: u64) -> Result<u128> {
         let mut val = [0_u8; 16];
         self.fd.get_one_reg(reg_id, &mut val)?;
-        Ok(u128::from_le_bytes(val))
+        let data = u128::from_le_bytes(val);
+        trace::kvm_get_one_reg(self.id, reg_id, data);
+        Ok(data)
     }
 
     fn set_one_reg(&self, reg_id: u64, val: u128) -> Result<()> {
+        trace::kvm_set_one_reg(self.id, reg_id, val);
         self.fd.set_one_reg(reg_id, &val.to_le_bytes())?;
         Ok(())
     }
@@ -219,12 +222,14 @@ impl KvmCpu {
                     if mp_state.mp_state != KVM_MP_STATE_STOPPED {
                         mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
                     }
+                    trace::kvm_get_mp_state(self.id, &mp_state);
                     locked_arch_cpu.mp_state = mp_state;
                 }
             }
             RegsIndex::VcpuEvents => {
                 if self.caps.vcpu_events {
                     locked_arch_cpu.cpu_events = self.fd.get_vcpu_events()?;
+                    trace::kvm_get_vcpu_events(self.id, &locked_arch_cpu.cpu_events);
                 }
             }
             RegsIndex::CpregList => {
@@ -244,6 +249,10 @@ impl KvmCpu {
                     locked_arch_cpu.cpreg_list[index] = cpreg_entry;
                     locked_arch_cpu.cpreg_len += 1;
                 }
+                trace::kvm_get_reg_list(
+                    self.id,
+                    &&locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len],
+                );
             }
             RegsIndex::VtimerCount => {
                 locked_arch_cpu.vtimer_cnt = self
@@ -270,6 +279,7 @@ impl KvmCpu {
             }
             RegsIndex::MpState => {
                 if self.caps.mp_state {
+                    trace::kvm_set_mp_state(self.id, &locked_arch_cpu.mp_state);
                     self.fd
                         .set_mp_state(locked_arch_cpu.mp_state)
                         .with_context(|| format!("Failed to set mpstate for CPU {}", apic_id))?;
@@ -277,6 +287,7 @@ impl KvmCpu {
             }
             RegsIndex::VcpuEvents => {
                 if self.caps.vcpu_events {
+                    trace::kvm_set_vcpu_events(self.id, &locked_arch_cpu.cpu_events);
                     self.fd
                         .set_vcpu_events(&locked_arch_cpu.cpu_events)
                         .with_context(|| format!("Failed to set vcpu event for CPU {}", apic_id))?;

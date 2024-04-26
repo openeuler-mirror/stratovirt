@@ -306,6 +306,13 @@ impl KvmMemoryListener {
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let vm_fd = self.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
+        trace::kvm_add_ioeventfd(
+            &ioevtfd.fd,
+            &io_addr,
+            ioevtfd.data_match,
+            ioevtfd.addr_range.size,
+            ioevtfd.data,
+        );
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
@@ -340,6 +347,13 @@ impl KvmMemoryListener {
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let vm_fd = self.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
+        trace::kvm_delete_ioeventfd(
+            &ioevtfd.fd,
+            &io_addr,
+            ioevtfd.data_match,
+            ioevtfd.addr_range.size,
+            ioevtfd.data,
+        );
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
@@ -452,6 +466,13 @@ impl KvmIoListener {
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let vm_fd = self.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
+        trace::kvm_add_ioeventfd(
+            &ioevtfd.fd,
+            &io_addr,
+            ioevtfd.data_match,
+            ioevtfd.addr_range.size,
+            ioevtfd.data,
+        );
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
@@ -486,6 +507,13 @@ impl KvmIoListener {
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let vm_fd = self.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
+        trace::kvm_delete_ioeventfd(
+            &ioevtfd.fd,
+            &io_addr,
+            ioevtfd.data_match,
+            ioevtfd.addr_range.size,
+            ioevtfd.data,
+        );
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
