@@ -807,6 +807,55 @@ mod test {
         assert!(remove_file(path).is_ok());
     }
 
+    /// Test the function of query image.
+    /// TestStep:
+    ///   2. Query image info with different type.
+    /// Expect:
+    ///   1. Ihe invalid args will result in failure.
+    #[test]
+    fn test_args_parse_of_image_info() {
+        let path = "/tmp/test_args_parse_of_image_info.qcow2";
+        let test_case = vec![
+            ("img_path", true),
+            ("-f qcow2", false),
+            ("invalid_args", false),
+            ("img_path +1G", false),
+            ("-h", true),
+            ("--help", true),
+        ];
+
+        for case in test_case {
+            let cmd_str = case.0.replace("img_path", path);
+            let args: Vec<String> = cmd_str
+                .split(' ')
+                .into_iter()
+                .map(|str| str.to_string())
+                .collect();
+
+            // Query image info with type of qcow2.
+            assert!(image_create(vec![
+                "-f".to_string(),
+                "qcow2".to_string(),
+                path.to_string(),
+                "+10M".to_string()
+            ])
+            .is_ok());
+            assert_eq!(image_info(args.clone()).is_ok(), case.1);
+
+            // Query image info with type of raw.
+            assert!(image_create(vec![
+                "-f".to_string(),
+                "raw".to_string(),
+                path.to_string(),
+                "+10M".to_string()
+            ])
+            .is_ok());
+            assert_eq!(image_info(args).is_ok(), case.1);
+        }
+
+        assert!(remove_file(path).is_ok());
+    }
+
     /// Test the function of creating image.
     /// TestStep:
     ///   1. Create image with different cluster bits, image size and refcount bits.
