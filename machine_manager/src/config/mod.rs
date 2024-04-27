@@ -141,7 +141,7 @@ pub struct VmConfig {
     #[cfg(feature = "usb_camera")]
     pub camera_backend: HashMap<String, CameraDevConfig>,
     #[cfg(feature = "windows_emu_pid")]
-    pub windows_emu_pid: Option<String>,
+    pub emulator_pid: Option<String>,
     pub smbios: SmbiosConfig,
 }
 
@@ -268,9 +268,9 @@ impl VmConfig {
     #[cfg(feature = "windows_emu_pid")]
     pub fn add_windows_emu_pid(&mut self, windows_emu_pid: &str) -> Result<()> {
         if windows_emu_pid.is_empty() {
-            bail!("The arg of windows_emu_pid is empty!");
+            bail!("The arg of emulator_pid is empty!");
         }
-        self.windows_emu_pid = Some(windows_emu_pid.to_string());
+        self.emulator_pid = Some(windows_emu_pid.to_string());
         Ok(())
     }
 
