@@ -200,7 +200,7 @@ pub trait PciDevOps: Device + Send + AsAny {
     /// # Arguments
     ///
     /// * `bus_num` - Bus number.
-    /// * `devfn` - Slot number << 8 | Function number.
+    /// * `devfn` - Slot number << 3 | Function number.
     ///
     /// # Returns
     ///

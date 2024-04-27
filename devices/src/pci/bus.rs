@@ -94,7 +94,7 @@ impl PciBus {
     /// # Arguments
     ///
     /// * `bus_num` - The bus number.
-    /// * `devfn` - Slot number << 8 | device number.
+    /// * `devfn` - Slot number << 3 | Function number.
     pub fn get_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
         if let Some(dev) = self.devices.get(&devfn) {
             return Some((*dev).clone());

@@ -1020,7 +1020,7 @@ impl PciConfig {
     ///
     /// # Arguments
     ///
-    /// * `devfn` - Slot number << 3 | function number.
+    /// * `devfn` - Slot number << 3 | Function number.
     /// * `port_num` - Port number.
     /// * `dev_type` - Device type.
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
