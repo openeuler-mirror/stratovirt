@@ -98,6 +98,13 @@ pub const MAX_QUEUE_SIZE_BLOCK_DEVICE: u64 = 1024;
 /// The bar0 size of enable_bar0 features
 pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct GlobalConfig {
+    #[arg(long, alias = "pcie-root-port.fast-unplug", value_parser = ["0", "1"])]
+    fast_unplug: Option<String>,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
     pub rng_object: HashMap<String, RngObjConfig>,
@@ -243,24 +250,18 @@ impl VmConfig {
     ///
     /// * `global_config` - The args of global config.
     pub fn add_global_config(&mut self, global_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("global");
-        cmd_parser.push("pcie-root-port.fast-unplug");
-        cmd_parser.parse(global_config)?;
+        let global_config =
+            GlobalConfig::try_parse_from(str_slip_to_clap(global_config, false, false))?;
 
-        if let Some(fast_unplug_value) =
-            cmd_parser.get_value::<String>("pcie-root-port.fast-unplug")?
-        {
-            if fast_unplug_value != FAST_UNPLUG_ON && fast_unplug_value != FAST_UNPLUG_OFF {
-                bail!("The value of fast-unplug is invalid: {}", fast_unplug_value);
-            }
+        if let Some(fast_unplug_value) = global_config.fast_unplug {
             let fast_unplug_key = String::from("pcie-root-port.fast-unplug");
-            if self.global_config.get(&fast_unplug_key).is_none() {
-                self.global_config
-                    .insert(fast_unplug_key, fast_unplug_value);
-            } else {
+            if self.global_config.get(&fast_unplug_key).is_some() {
                 bail!("Global config {} has been added", fast_unplug_key);
             }
+            self.global_config
+                .insert(fast_unplug_key, fast_unplug_value);
         }
+
         Ok(())
     }
 
