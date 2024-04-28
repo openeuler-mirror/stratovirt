@@ -768,9 +768,10 @@ macro_rules! check_arg_nonexist{
 pub fn str_slip_to_clap(
     args: &str,
     first_pos_is_type: bool,
-    mut first_pos_is_subcommand: bool,
+    first_pos_is_subcommand: bool,
 ) -> Vec<String> {
-    let args_str = if first_pos_is_type && !first_pos_is_subcommand {
+    let mut subcommand = first_pos_is_subcommand;
+    let args_str = if first_pos_is_type && !subcommand {
         format!("classtype={}", args)
     } else {
         args.to_string()
@@ -783,9 +784,9 @@ pub fn str_slip_to_clap(
         // Command line like "key" will be converted to "--key".
         for (cnt, param) in key_value.iter().enumerate() {
             if cnt % 2 == 0 {
-                if first_pos_is_subcommand {
+                if subcommand {
                     itr.push(param.to_string());
-                    first_pos_is_subcommand = false;
+                    subcommand = false;
                 } else {
                     itr.push(format!("--{}", param));
                 }
