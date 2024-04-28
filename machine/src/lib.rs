@@ -870,7 +870,7 @@ pub trait MachineOps {
                 let bdf = get_pci_bdf(cfg_args)?;
                 let multi_func = get_multi_function(cfg_args)?;
                 let root_bus = self.get_pci_host()?.lock().unwrap().root_bus.clone();
-                let msi_irq_manager = &root_bus.lock().unwrap().msi_irq_manager;
+                let msi_irq_manager = root_bus.lock().unwrap().msi_irq_manager.clone();
                 let need_irqfd = msi_irq_manager.as_ref().unwrap().irqfd_enable();
                 self.add_virtio_pci_device(&id_clone, &bdf, device, multi_func, need_irqfd)
                     .with_context(|| "Failed to add pci fs device")?;
