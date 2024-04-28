@@ -67,7 +67,7 @@ use devices::usb::{storage::UsbStorage, UsbDevice};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM};
-use hypervisor::{kvm::KvmHypervisor, HypervisorOps};
+use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "demo_device")]
@@ -87,7 +87,7 @@ use machine_manager::config::{
     MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{MachineInterface, VmState};
+use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
 use migration::{MigrateOps, MigrationManager};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -186,7 +186,20 @@ impl MachineBase {
             mmio_region,
         );
 
-        let hypervisor = Arc::new(Mutex::new(KvmHypervisor::new()?));
+        let hypervisor: Arc<Mutex<dyn HypervisorOps>>;
+        let migration_hypervisor: Arc<Mutex<dyn MigrateOps>>;
+        match vm_config.machine_config.hypervisor {
+            HypervisorType::Kvm => {
+                let kvm_hypervisor = Arc::new(Mutex::new(KvmHypervisor::new()?));
+                hypervisor = kvm_hypervisor.clone();
+                migration_hypervisor = kvm_hypervisor;
+            }
+            HypervisorType::Test => {
+                let test_hypervisor = Arc::new(Mutex::new(TestHypervisor::new()?));
+                hypervisor = test_hypervisor.clone();
+                migration_hypervisor = test_hypervisor;
+            }
+        };
 
         Ok(MachineBase {
             cpu_topo,
@@ -204,8 +217,8 @@ impl MachineBase {
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
             fwcfg_dev: None,
             machine_ram,
-            hypervisor: hypervisor.clone(),
-            migration_hypervisor: hypervisor,
+            hypervisor,
+            migration_hypervisor,
         })
     }
 

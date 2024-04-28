@@ -16,8 +16,7 @@ use anyhow::Result;
 use log::error;
 
 use crate::interrupt_controller::LineIrqManager;
-use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_INTR_BASE, PCI_PIN_NUM};
-use util::test_helper::{is_test_enabled, trigger_intx};
+use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_PIN_NUM};
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
 
@@ -95,11 +94,6 @@ impl Intx {
 
             let irq = locked_intx_state.gsi_base + self.irq_pin;
             let level = locked_intx_state.irq_count[self.irq_pin as usize] != 0;
-
-            if is_test_enabled() {
-                trigger_intx(irq + PCI_INTR_BASE as u32, change);
-                return;
-            }
 
             let irq_handler = &locked_intx_state.irq_handler;
             if let Err(e) = irq_handler.set_level_irq(irq, level) {

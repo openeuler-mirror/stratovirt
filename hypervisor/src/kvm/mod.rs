@@ -73,7 +73,6 @@ use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
 use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
-use util::test_helper::is_test_enabled;
 #[cfg(target_arch = "x86_64")]
 use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
 
@@ -152,9 +151,7 @@ impl HypervisorOps for KvmHypervisor {
     ) -> Result<()> {
         self.arch_init()?;
 
-        if !is_test_enabled() {
-            sys_mem.set_ioevtfd_enabled(true);
-        }
+        sys_mem.set_ioevtfd_enabled(true);
 
         sys_mem
             .register_listener(self.create_memory_listener())
@@ -604,10 +601,6 @@ impl CPUHypervisorOps for KvmCpu {
         while let Ok(true) = cpu_thread_worker.ready_for_running() {
             #[cfg(not(test))]
             {
-                if is_test_enabled() {
-                    thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
                 if !self
                     .kvm_vcpu_exec(cpu_thread_worker.thread_cpu.clone())
                     .with_context(|| {
