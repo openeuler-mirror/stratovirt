@@ -368,6 +368,10 @@ impl LineIrqManager for TestInterruptManager {
 }
 
 impl MsiIrqManager for TestInterruptManager {
+    fn irqfd_enable(&self) -> bool {
+        false
+    }
+
     fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
         Err(anyhow!(
             "Failed to allocate irq, mst doesn't support irq routing feature."

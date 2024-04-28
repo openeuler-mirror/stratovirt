@@ -816,6 +816,10 @@ impl LineIrqManager for KVMInterruptManager {
 }
 
 impl MsiIrqManager for KVMInterruptManager {
+    fn irqfd_enable(&self) -> bool {
+        self.irqfd_cap
+    }
+
     fn allocate_irq(&self, vector: MsiVector) -> Result<u32> {
         let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
         let gsi = locked_irq_route_table.allocate_gsi().map_err(|e| {
