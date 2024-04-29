@@ -153,9 +153,10 @@ impl QmpChannel {
     pub fn send_event(event: &schema::QmpEvent) {
         if Self::is_connected() {
             let mut event_str = serde_json::to_string(&event).unwrap();
-            let mut writer_unlocked = Self::inner().event_writer.write().unwrap();
-            let writer = writer_unlocked.as_mut().unwrap();
+            let mut writer_locked = Self::inner().event_writer.write().unwrap();
+            let writer = writer_locked.as_mut().unwrap();
 
+            info!("EVENT: --> {:?}", event);
             if let Err(e) = writer.flush() {
                 error!("flush err, {:?}", e);
                 return;
@@ -163,9 +164,7 @@ impl QmpChannel {
             event_str.push_str("\r\n");
             if let Err(e) = writer.write(event_str.as_bytes()) {
                 error!("write err, {:?}", e);
-                return;
             }
-            info!("EVENT: --> {:?}", event);
         }
     }
 
