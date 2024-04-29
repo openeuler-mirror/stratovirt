@@ -294,7 +294,7 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
 pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
-    if mem_config.memfd {
+    if mem_config.memfd() {
         let anon_fd = memfd_create(
             &CString::new("stratovirt_anon_mem")?,
             MemFdCreateFlag::empty(),

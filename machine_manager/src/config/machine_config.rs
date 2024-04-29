@@ -13,13 +13,12 @@
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use crate::config::{
-    check_arg_too_long, check_path_too_long, CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig,
-    MAX_NODES,
-};
+use super::{parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path};
+use crate::config::{CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES};
 use crate::machine::HypervisorType;
 
 const DEFAULT_CPUS: u8 = 1;
@@ -83,32 +82,37 @@ impl From<String> for HostMemPolicy {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct MemZoneConfig {
+    #[arg(long, alias = "classtype", value_parser = ["memory-backend-ram", "memory-backend-file", "memory-backend-memfd"])]
+    pub mem_type: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
+    #[arg(long, value_parser = parse_size)]
     pub size: u64,
-    pub host_numa_nodes: Option<Vec<u32>>,
+    // Note:
+    // `Clap` will incorrectly assume that we're trying to get multiple arguments since we got
+    // a `Vec<u32>` from parser function `get_host_nodes`. Generally, we should use `Box` or a `new struct type`
+    // to encapsulate this `Vec<u32>`. And fortunately, there's a trick (using full qualified path of Vec)
+    // to avoid the new type wrapper. See: github.com/clap-rs/clap/issues/4626.
+    #[arg(long, alias = "host-nodes", value_parser = get_host_nodes)]
+    pub host_numa_nodes: Option<::std::vec::Vec<u32>>,
+    #[arg(long, default_value = "default", value_parser=["default", "preferred", "bind", "interleave"])]
     pub policy: String,
+    #[arg(long, value_parser = valid_path)]
     pub mem_path: Option<String>,
+    #[arg(long, default_value = "true", value_parser = parse_bool, action = ArgAction::Append)]
     pub dump_guest_core: bool,
+    #[arg(long, default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
     pub share: bool,
+    #[arg(long, alias = "mem-prealloc", default_value = "false", value_parser = parse_bool, action = ArgAction::Append)]
     pub prealloc: bool,
-    pub memfd: bool,
 }
 
-impl Default for MemZoneConfig {
-    fn default() -> Self {
-        MemZoneConfig {
-            id: String::new(),
-            size: 0,
-            host_numa_nodes: None,
-            policy: String::from("bind"),
-            mem_path: None,
-            dump_guest_core: true,
-            share: false,
-            prealloc: false,
-            memfd: false,
-        }
+impl MemZoneConfig {
+    pub fn memfd(&self) -> bool {
+        self.mem_type.eq("memory-backend-memfd")
     }
 }
 
@@ -461,149 +465,26 @@ impl VmConfig {
 }
 
 impl VmConfig {
-    fn get_mem_zone_id(&self, cmd_parser: &CmdParser) -> Result<String> {
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            check_arg_too_long(&id, "id")?;
-            Ok(id)
-        } else {
-            Err(anyhow!(ConfigError::FieldIsMissing(
-                "id".to_string(),
-                "memory-backend-ram".to_string()
-            )))
-        }
-    }
-
-    fn get_mem_path(&self, cmd_parser: &CmdParser) -> Result<Option<String>> {
-        if let Some(path) = cmd_parser.get_value::<String>("mem-path")? {
-            check_path_too_long(&path, "mem-path")?;
-            return Ok(Some(path));
-        }
-        Ok(None)
-    }
-
-    fn get_mem_zone_size(&self, cmd_parser: &CmdParser) -> Result<u64> {
-        if let Some(mem) = cmd_parser.get_value::<String>("size")? {
-            let size = memory_unit_conversion(&mem, M)?;
-            Ok(size)
-        } else {
-            Err(anyhow!(ConfigError::FieldIsMissing(
-                "size".to_string(),
-                "memory-backend-ram".to_string()
-            )))
-        }
-    }
-
-    fn get_mem_zone_host_nodes(&self, cmd_parser: &CmdParser) -> Result<Option<Vec<u32>>> {
-        if let Some(mut host_nodes) = cmd_parser
-            .get_value::<IntegerList>("host-nodes")
-            .with_context(|| {
-                ConfigError::ConvertValueFailed(String::from("u32"), "host-nodes".to_string())
-            })?
-            .map(|v| v.0.iter().map(|e| *e as u32).collect::<Vec<u32>>())
-        {
-            host_nodes.sort_unstable();
-            if host_nodes[host_nodes.len() - 1] >= MAX_NODES {
-                return Err(anyhow!(ConfigError::IllegalValue(
-                    "host_nodes".to_string(),
-                    0,
-                    true,
-                    MAX_NODES as u64,
-                    false,
-                )));
-            }
-            Ok(Some(host_nodes))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn get_mem_zone_policy(&self, cmd_parser: &CmdParser) -> Result<String> {
-        let policy = cmd_parser
-            .get_value::<String>("policy")?
-            .unwrap_or_else(|| "default".to_string());
-        if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
-            return Err(anyhow!(ConfigError::InvalidParam(
-                "policy".to_string(),
-                policy
-            )));
-        }
-        Ok(policy)
-    }
-
-    fn get_mem_share(&self, cmd_parser: &CmdParser) -> Result<bool> {
-        let share = cmd_parser
-            .get_value::<String>("share")?
-            .unwrap_or_else(|| "off".to_string());
-
-        if share.eq("on") || share.eq("off") {
-            Ok(share.eq("on"))
-        } else {
-            Err(anyhow!(ConfigError::InvalidParam(
-                "share".to_string(),
-                share
-            )))
-        }
-    }
-
-    fn get_mem_dump(&self, cmd_parser: &CmdParser) -> Result<bool> {
-        if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
-            return Ok(dump_guest.into());
-        }
-        Ok(true)
-    }
-
-    fn get_mem_prealloc(&self, cmd_parser: &CmdParser) -> Result<bool> {
-        if let Some(mem_prealloc) = cmd_parser.get_value::<ExBool>("mem-prealloc")? {
-            return Ok(mem_prealloc.into());
-        }
-        Ok(false)
-    }
-
     /// Convert memory zone cmdline to VM config
     ///
     /// # Arguments
     ///
     /// * `mem_zone` - The memory zone cmdline string.
-    /// * `mem_type` - The memory zone type
-    pub fn add_mem_zone(&mut self, mem_zone: &str, mem_type: String) -> Result<MemZoneConfig> {
-        let mut cmd_parser = CmdParser::new("mem_zone");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("size")
-            .push("host-nodes")
-            .push("policy")
-            .push("share")
-            .push("mem-path")
-            .push("dump-guest-core")
-            .push("mem-prealloc");
-        cmd_parser.parse(mem_zone)?;
+    pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
+        let zone_config = MemZoneConfig::try_parse_from(str_slip_to_clap(mem_zone, true, false))?;
 
-        let zone_config = MemZoneConfig {
-            id: self.get_mem_zone_id(&cmd_parser)?,
-            size: self.get_mem_zone_size(&cmd_parser)?,
-            host_numa_nodes: self.get_mem_zone_host_nodes(&cmd_parser)?,
-            policy: self.get_mem_zone_policy(&cmd_parser)?,
-            dump_guest_core: self.get_mem_dump(&cmd_parser)?,
-            share: self.get_mem_share(&cmd_parser)?,
-            mem_path: self.get_mem_path(&cmd_parser)?,
-            prealloc: self.get_mem_prealloc(&cmd_parser)?,
-            memfd: mem_type.eq("memory-backend-memfd"),
-        };
-
-        if (zone_config.mem_path.is_none() && mem_type.eq("memory-backend-file"))
-            || (zone_config.mem_path.is_some() && mem_type.ne("memory-backend-file"))
+        if (zone_config.mem_path.is_none() && zone_config.mem_type.eq("memory-backend-file"))
+            || (zone_config.mem_path.is_some() && zone_config.mem_type.ne("memory-backend-file"))
         {
-            bail!("Object type: {} config path err", mem_type);
+            bail!("Object type: {} config path err", zone_config.mem_type);
         }
 
-        if self.object.mem_object.get(&zone_config.id).is_none() {
-            self.object
-                .mem_object
-                .insert(zone_config.id.clone(), zone_config.clone());
-        } else {
+        if self.object.mem_object.get(&zone_config.id).is_some() {
             bail!("Object: {} has been added", zone_config.id);
         }
+        self.object
+            .mem_object
+            .insert(zone_config.id.clone(), zone_config.clone());
 
         if zone_config.host_numa_nodes.is_none() {
             return Ok(zone_config);
@@ -738,6 +619,34 @@ pub fn memory_unit_conversion(origin_value: &str, default_unit: u64) -> Result<u
 
 fn get_inner<T>(outer: Option<T>) -> Result<T> {
     outer.with_context(|| ConfigError::IntegerOverflow("-m".to_string()))
+}
+
+fn get_host_nodes(nodes: &str) -> Result<Vec<u32>> {
+    let mut host_nodes = IntegerList::from_str(nodes)
+        .with_context(|| {
+            ConfigError::ConvertValueFailed(String::from("u32"), "host-nodes".to_string())
+        })?
+        .0
+        .iter()
+        .map(|e| *e as u32)
+        .collect::<Vec<u32>>();
+
+    if host_nodes.is_empty() {
+        bail!("Got empty host nodes list!");
+    }
+
+    host_nodes.sort_unstable();
+    if host_nodes[host_nodes.len() - 1] >= MAX_NODES {
+        return Err(anyhow!(ConfigError::IllegalValue(
+            "host_nodes".to_string(),
+            0,
+            true,
+            MAX_NODES as u64,
+            false,
+        )));
+    }
+
+    Ok(host_nodes)
 }
 
 #[cfg(test)]
@@ -1089,10 +998,7 @@ mod tests {
     fn test_add_mem_zone() {
         let mut vm_config = VmConfig::default();
         let zone_config_1 = vm_config
-            .add_mem_zone(
-                "-object memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind",
-                String::from("memory-backend-ram"),
-            )
+            .add_mem_zone("memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
             .unwrap();
         assert_eq!(zone_config_1.id, "mem1");
         assert_eq!(zone_config_1.size, 2147483648);
@@ -1100,38 +1006,26 @@ mod tests {
         assert_eq!(zone_config_1.policy, "bind");
 
         let zone_config_2 = vm_config
-            .add_mem_zone(
-                "-object memory-backend-ram,size=2G,id=mem2,host-nodes=1-2,policy=default",
-                String::from("memory-backend-ram"),
-            )
+            .add_mem_zone("memory-backend-ram,size=2G,id=mem2,host-nodes=1-2,policy=default")
             .unwrap();
         assert_eq!(zone_config_2.host_numa_nodes, Some(vec![1, 2]));
 
         let zone_config_3 = vm_config
-            .add_mem_zone(
-                "-object memory-backend-ram,size=2M,id=mem3,share=on",
-                String::from("memory-backend-ram"),
-            )
+            .add_mem_zone("memory-backend-ram,size=2M,id=mem3,share=on")
             .unwrap();
         assert_eq!(zone_config_3.size, 2 * 1024 * 1024);
         assert_eq!(zone_config_3.share, true);
 
         let zone_config_4 = vm_config
-            .add_mem_zone(
-                "-object memory-backend-ram,size=2M,id=mem4",
-                String::from("memory-backend-ram"),
-            )
+            .add_mem_zone("memory-backend-ram,size=2M,id=mem4")
             .unwrap();
         assert_eq!(zone_config_4.share, false);
-        assert_eq!(zone_config_4.memfd, false);
+        assert_eq!(zone_config_4.memfd(), false);
 
         let zone_config_5 = vm_config
-            .add_mem_zone(
-                "-object memory-backend-memfd,size=2M,id=mem5",
-                String::from("memory-backend-memfd"),
-            )
+            .add_mem_zone("memory-backend-memfd,size=2M,id=mem5")
             .unwrap();
-        assert_eq!(zone_config_5.memfd, true);
+        assert_eq!(zone_config_5.memfd(), true);
     }
 
     #[test]
