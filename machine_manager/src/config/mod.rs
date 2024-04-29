@@ -628,15 +628,16 @@ fn enable_trace_state(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn parse_trace_options(opt: &str) -> Result<()> {
-    let mut cmd_parser = CmdParser::new("trace");
-    cmd_parser.push("file");
-    cmd_parser.get_parameters(opt)?;
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct TraceConfig {
+    #[arg(long)]
+    file: String,
+}
 
-    let path = cmd_parser
-        .get_value::<String>("file")?
-        .with_context(|| "trace: trace file must be set.")?;
-    enable_trace_state(&path)?;
+pub fn add_trace(opt: &str) -> Result<()> {
+    let trace_cfg = TraceConfig::try_parse_from(str_slip_to_clap(opt, false, false))?;
+    enable_trace_state(&trace_cfg.file)?;
     Ok(())
 }
 
@@ -968,10 +969,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_trace_options() {
-        assert!(parse_trace_options("fil=test_trace").is_err());
-        assert!(parse_trace_options("file").is_err());
-        assert!(parse_trace_options("file=test_trace").is_err());
+    fn test_add_trace() {
+        assert!(add_trace("fil=test_trace").is_err());
+        assert!(add_trace("file").is_err());
+        assert!(add_trace("file=test_trace").is_err());
     }
 
     #[test]
