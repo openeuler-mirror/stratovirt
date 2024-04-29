@@ -226,7 +226,7 @@ impl VmConfig {
                 self.object.rng_object.insert(id, rng_cfg);
             }
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
-                self.add_mem_zone(object_args, device_type)?;
+                self.add_mem_zone(object_args)?;
             }
             #[cfg(feature = "vnc_auth")]
             "tls-creds-x509" => {
@@ -657,7 +657,7 @@ impl FromStr for UnsignedInteger {
 pub struct IntegerList(pub Vec<u64>);
 
 impl FromStr for IntegerList {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let mut integer_list = Vec::new();
@@ -669,19 +669,22 @@ impl FromStr for IntegerList {
         for list in lists.iter() {
             let items: Vec<&str> = list.split('-').collect();
             if items.len() > 2 {
-                return Err(());
+                return Err(anyhow!(
+                    "{} parameters connected by -, should be no more than 2.",
+                    items.len()
+                ));
             }
 
             let start = items[0]
                 .parse::<u64>()
-                .map_err(|e| error!("Invalid value {}, error is {:?}", items[0], e))?;
+                .map_err(|e| anyhow!("Invalid value {}, error is {:?}", items[0], e))?;
             integer_list.push(start);
             if items.len() == 2 {
                 let end = items[1]
                     .parse::<u64>()
-                    .map_err(|e| error!("Invalid value {}, error is {:?}", items[1], e))?;
+                    .map_err(|e| anyhow!("Invalid value {}, error is {:?}", items[1], e))?;
                 if start >= end {
-                    return Err(());
+                    return Err(anyhow!("start {} is bigger than end {}.", start, end));
                 }
 
                 for i in start..end {
@@ -865,6 +868,11 @@ pub fn valid_block_device_virtqueue_size(s: &str) -> Result<u16> {
     )?;
 
     Ok(size as u16)
+}
+
+pub fn parse_size(s: &str) -> Result<u64> {
+    let size = memory_unit_conversion(s, M).with_context(|| format!("Invalid size: {}", s))?;
+    Ok(size)
 }
 
 #[cfg(test)]

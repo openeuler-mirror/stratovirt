@@ -20,11 +20,8 @@ use clap::{ArgAction, Parser};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, M};
-use super::{valid_id, valid_path};
-use crate::config::{
-    memory_unit_conversion, parse_bool, str_slip_to_clap, ConfigCheck, VmConfig, MAX_STRING_LENGTH,
-};
+use super::{error::ConfigError, parse_size, valid_id, valid_path};
+use crate::config::{parse_bool, str_slip_to_clap, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 use util::aio::{aio_probe, AioEngine, WriteZeroesState};
 
 const MAX_IOPS: u64 = 1_000_000;
@@ -88,11 +85,6 @@ impl ToString for DiskFormat {
             DiskFormat::Qcow2 => "qcow2".to_string(),
         }
     }
-}
-
-fn parse_size(s: &str) -> Result<u64> {
-    let size = memory_unit_conversion(s, M).with_context(|| format!("Invalid size: {}", s))?;
-    Ok(size)
 }
 
 fn valid_l2_cache_size(s: &str) -> Result<u64> {
