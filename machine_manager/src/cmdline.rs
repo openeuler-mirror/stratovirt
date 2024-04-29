@@ -13,7 +13,7 @@
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    config::{parse_trace_options, ChardevType, CmdParser, MachineType, SocketType, VmConfig},
+    config::{add_trace, ChardevType, CmdParser, MachineType, SocketType, VmConfig},
     qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
@@ -587,7 +587,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
     add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
     if let Some(opt) = args.value_of("trace") {
-        parse_trace_options(&opt)?;
+        add_trace(&opt)?;
     }
 
     // Check the mini-set for Vm to start is ok
