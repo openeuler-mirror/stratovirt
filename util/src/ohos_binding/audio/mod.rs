@@ -300,6 +300,10 @@ impl AudioContext {
         call_capi!(OH_AudioRenderer_Start(self.renderer))
     }
 
+    pub fn flush_renderer(&self) -> Result<(), OAErr> {
+        call_capi!(OH_AudioRenderer_Flush(self.renderer))
+    }
+
     pub fn new(stream_type: AudioStreamType) -> Self {
         Self {
             stream_type,
