@@ -140,9 +140,14 @@ impl Default for MachineMemConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Parser, Clone, Debug, Serialize, Deserialize, Default)]
+#[command(no_binary_name(true))]
 pub struct CpuConfig {
+    #[arg(long, alias = "classtype", value_parser = ["host"])]
+    pub family: String,
+    #[arg(long, default_value = "off")]
     pub pmu: PmuConfig,
+    #[arg(long, default_value = "off")]
     pub sve: SveConfig,
 }
 
@@ -153,11 +158,39 @@ pub enum PmuConfig {
     Off,
 }
 
+impl FromStr for PmuConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "on" => Ok(PmuConfig::On),
+            "off" => Ok(PmuConfig::Off),
+            _ => Err(anyhow!(
+                "Invalid PMU option,must be one of \'on\" or \"off\"."
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum SveConfig {
     On,
     #[default]
     Off,
+}
+
+impl FromStr for SveConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "on" => Ok(SveConfig::On),
+            "off" => Ok(SveConfig::Off),
+            _ => Err(anyhow!(
+                "Invalid SVE option, must be one of \"on\" or \"off\"."
+            )),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -418,28 +451,8 @@ impl VmConfig {
     }
 
     pub fn add_cpu_feature(&mut self, features: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("cpu");
-        cmd_parser.push("");
-        cmd_parser.push("pmu");
-        cmd_parser.push("sve");
-        cmd_parser.parse(features)?;
-
-        // Check PMU when actually enabling PMU.
-        if let Some(k) = cmd_parser.get_value::<String>("pmu")? {
-            self.machine_config.cpu_config.pmu = match k.as_ref() {
-                "on" => PmuConfig::On,
-                "off" => PmuConfig::Off,
-                _ => bail!("Invalid PMU option,must be one of \'on\" or \"off\"."),
-            }
-        }
-
-        if let Some(k) = cmd_parser.get_value::<String>("sve")? {
-            self.machine_config.cpu_config.sve = match k.as_ref() {
-                "on" => SveConfig::On,
-                "off" => SveConfig::Off,
-                _ => bail!("Invalid SVE option, must be one of \"on\" or \"off\"."),
-            }
-        }
+        let cpu_config = CpuConfig::try_parse_from(str_slip_to_clap(features, true, false))?;
+        self.machine_config.cpu_config = cpu_config;
 
         Ok(())
     }
@@ -1049,15 +1062,25 @@ mod tests {
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
         vm_config.add_cpu_feature("host,pmu=off").unwrap();
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
-        vm_config.add_cpu_feature("pmu=off").unwrap();
-        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
         vm_config.add_cpu_feature("host,pmu=on").unwrap();
         assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
-        vm_config.add_cpu_feature("pmu=on").unwrap();
-        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
-        vm_config.add_cpu_feature("sve=on").unwrap();
+        vm_config.add_cpu_feature("host,sve=on").unwrap();
         assert!(vm_config.machine_config.cpu_config.sve == SveConfig::On);
-        vm_config.add_cpu_feature("sve=off").unwrap();
+        vm_config.add_cpu_feature("host,sve=off").unwrap();
         assert!(vm_config.machine_config.cpu_config.sve == SveConfig::Off);
+
+        // Illegal cpu command lines: should set cpu family.
+        let result = vm_config.add_cpu_feature("pmu=off");
+        assert!(result.is_err());
+        let result = vm_config.add_cpu_feature("sve=on");
+        assert!(result.is_err());
+
+        // Illegal parameters.
+        let result = vm_config.add_cpu_feature("host,sve1=on");
+        assert!(result.is_err());
+
+        // Illegal values.
+        let result = vm_config.add_cpu_feature("host,sve=false");
+        assert!(result.is_err());
     }
 }
