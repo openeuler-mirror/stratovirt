@@ -89,21 +89,6 @@ pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
     Ok(pci_bdf)
 }
 
-pub fn get_multi_function(pci_cfg: &str) -> Result<bool> {
-    let mut cmd_parser = CmdParser::new("multifunction");
-    cmd_parser.push("").push("multifunction");
-    cmd_parser.get_parameters(pci_cfg)?;
-
-    if let Some(multi_func) = cmd_parser
-        .get_value::<ExBool>("multifunction")
-        .with_context(|| "Failed to get multifunction parameter, please set on or off (default).")?
-    {
-        return Ok(multi_func.inner);
-    }
-
-    Ok(false)
-}
-
 pub fn pci_args_check(cmd_parser: &CmdParser) -> Result<()> {
     let device_type = cmd_parser.get_value::<String>("")?;
     let dev_type = device_type.unwrap();
@@ -182,27 +167,5 @@ mod tests {
 
         let pci_bdf = get_pci_bdf("virtio-balloon-device,addr=0x1.0x2");
         assert!(pci_bdf.is_err());
-    }
-
-    #[test]
-    fn test_get_multi_function() {
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2").unwrap(),
-            false
-        );
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=on")
-                .unwrap(),
-            true
-        );
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=off")
-                .unwrap(),
-            false
-        );
-        assert!(get_multi_function(
-            "virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=close"
-        )
-        .is_err());
     }
 }
