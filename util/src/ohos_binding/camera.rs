@@ -27,6 +27,8 @@ pub const CAMERA_FORMAT_YCBCR420: i32 = 2;
 #[allow(unused)]
 pub const CAMERA_FORMAT_RGB18888: i32 = 3;
 pub const CAMERA_FORMAT_YUV420SP: i32 = 1003;
+pub const CAMERA_FORMAT_NV12: i32 = 1004;
+pub const CAMERA_FORMAT_YUYV422: i32 = 1005;
 pub const CAMERA_FORMAT_MJPEG: i32 = 2000;
 
 #[derive(Clone)]
