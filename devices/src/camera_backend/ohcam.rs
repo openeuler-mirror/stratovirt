@@ -30,7 +30,11 @@ static OHCAM_CALLBACK: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(OhCamCallBack::d
 // So, fps * interval / 10_000_000 == 1.
 const FPS_INTERVAL_TRANS: u32 = 10_000_000;
 const RESOLUTION_WHITELIST: [(i32, i32); 2] = [(640, 480), (1280, 720)];
-const FRAME_FORMAT_WHITELIST: [i32; 1] = [CAMERA_FORMAT_YUV420SP];
+const FRAME_FORMAT_WHITELIST: [i32; 3] = [
+    CAMERA_FORMAT_YUV420SP,
+    CAMERA_FORMAT_YUYV422,
+    CAMERA_FORMAT_NV12,
+];
 const FPS_WHITELIST: [i32; 1] = [30];
 
 #[derive(Default)]
@@ -98,6 +102,8 @@ unsafe impl Sync for OhCameraBackend {}
 fn cam_fmt_from_oh(t: i32) -> Result<FmtType> {
     let fmt = match t {
         CAMERA_FORMAT_YUV420SP => FmtType::Nv12,
+        CAMERA_FORMAT_NV12 => FmtType::Nv12,
+        CAMERA_FORMAT_YUYV422 => FmtType::Yuy2,
         CAMERA_FORMAT_MJPEG => FmtType::Mjpg,
         _ => bail!("OHCAM: No supported type {}", t),
     };
