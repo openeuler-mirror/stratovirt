@@ -19,10 +19,7 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, RwLock,
-};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -44,6 +41,7 @@ use channel::*;
 use machine_manager::{
     config::{DisplayConfig, VIRTIO_GPU_ENABLE_BAR0_SIZE},
     event_loop::{register_event_helper, EventLoop},
+    qmp::qmp_schema::OhuiStatus,
     temp_cleaner::TempCleaner,
 };
 use migration::snapshot::OHUI_SNAPSHOT_ID;
@@ -109,8 +107,6 @@ pub struct OhUiServer {
     channel: Arc<Mutex<OhUiChannel>>,
     // message handler
     msg_handler: OhUiMsgHandler,
-    // connected or not
-    connected: AtomicBool,
     // iothread processing unix socket
     iothread: OnceCell<Option<String>>,
     //address of framebuffer
@@ -119,6 +115,8 @@ pub struct OhUiServer {
     fb_file: Option<FileBackend>,
     // tokenID of OHUI client
     pub token_id: Arc<RwLock<u64>>,
+    // ohui server status
+    status: RwLock<OhuiStatus>,
     // Cursor
     cursor: Arc<Mutex<CursorInfo>>,
 }
@@ -222,11 +220,11 @@ impl OhUiServer {
             surface: RwLock::new(GuestSurface::new()),
             channel,
             msg_handler: OhUiMsgHandler::new(),
-            connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
             framebuffer,
             fb_file,
             token_id: Arc::new(RwLock::new(0)),
+            status: RwLock::new(OhuiStatus::uninit),
             cursor: cursor.clone(),
         });
 
@@ -324,25 +322,27 @@ impl OhUiServer {
         self.msg_handler.send_input_device_state();
     }
 
-    #[inline(always)]
     fn connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
-    }
-
-    #[inline(always)]
-    fn set_connect(&self, conn: bool) {
-        self.connected.store(conn, Ordering::Relaxed);
-        if conn {
-            self.msg_handler.update_sock(self.channel.clone());
-        } else {
-            self.msg_handler.reset();
-            self.channel.lock().unwrap().disconnect();
-        }
+        *self.status.read().unwrap() == OhuiStatus::connected
     }
 
     fn set_iothread(&self, iothread: Option<String>) {
         if self.iothread.set(iothread).is_err() {
             error!("Failed to initialize iothread of OHUI Server.");
+        }
+    }
+
+    pub fn get_status(&self) -> OhuiStatus {
+        *self.status.read().unwrap()
+    }
+
+    fn set_status(&self, status: OhuiStatus) {
+        *self.status.write().unwrap() = status;
+        if status == OhuiStatus::connected {
+            self.msg_handler.update_sock(self.channel.clone());
+        } else {
+            self.msg_handler.reset();
+            self.channel.lock().unwrap().disconnect();
         }
     }
 }
@@ -483,6 +483,7 @@ pub fn ohui_init(ohui_srv: Arc<OhUiServer>, cfg: &DisplayConfig) -> Result<()> {
     )));
     dcl.lock().unwrap().update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT;
     register_display(&dcl)?;
+    ohui_srv.set_status(OhuiStatus::disconnected);
     // start listener
     ohui_start_listener(ohui_srv)
 }
@@ -497,7 +498,7 @@ impl OhUiTrans {
     }
 
     fn handle_disconnect(&self) {
-        self.server.set_connect(false);
+        self.server.set_status(OhuiStatus::disconnected);
         if let Err(e) = ohui_start_listener(self.server.clone()) {
             error!("Failed to restart listener: {:?}.", e)
         }
@@ -579,7 +580,7 @@ impl OhUiListener {
     fn handle_connection(&self) -> Result<()> {
         // Register OhUiTrans read notifier
         ohui_register_event(OhUiTrans::new(self.server.clone()), self.server.clone())?;
-        self.server.set_connect(true);
+        self.server.set_status(OhuiStatus::connected);
         // Send window info to the client
         self.server.send_window_info();
         // Send input device state
@@ -643,7 +644,8 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
-    ohui_register_event(OhUiListener::new(server.clone()), server)?;
+    ohui_register_event(OhUiListener::new(server.clone()), server.clone())?;
+    server.set_status(OhuiStatus::listening);
     info!("Successfully start listener.");
     Ok(())
 }

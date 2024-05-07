@@ -71,6 +71,8 @@ use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use machine_manager::qmp::qmp_schema::OhuiStatus;
 use machine_manager::qmp::qmp_schema::{
     BlockDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, UpdateRegionArgument,
 };
@@ -1676,6 +1678,15 @@ impl DeviceInterface for StdMachine {
                     None,
                 )
             }
+        }
+    }
+
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    fn query_ohui_status(&self) -> Response {
+        if let Some(server) = &self.ohui_server {
+            Response::create_response(serde_json::to_value(server.get_status()).unwrap(), None)
+        } else {
+            Response::create_response(serde_json::to_value(OhuiStatus::undefined).unwrap(), None)
         }
     }
 

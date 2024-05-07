@@ -142,6 +142,7 @@ define_qmp_command_enum!(
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
     trace_get_state("trace-get-state", trace_get_state),
     trace_set_state("trace-set-state", trace_set_state),
+    query_ohui_status("query-ohui-status", OhuiStatus, default),
     query_workloads("query-workloads", query_workloads),
     detect_silent_audio("detect-silent-audio", DetectSilentAudio)
 );
@@ -518,6 +519,23 @@ pub struct cameradev_add {
 
 pub type CameraDevAddArgument = cameradev_add;
 generate_command_impl!(cameradev_add, Empty);
+
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OhuiStatus {
+    #[serde(rename = "undefined")]
+    #[default]
+    undefined,
+    #[serde(rename = "uninit")]
+    uninit,
+    #[serde(rename = "disconnected")]
+    disconnected,
+    #[serde(rename = "listening")]
+    listening,
+    #[serde(rename = "connected")]
+    connected,
+}
+
+generate_command_impl!(OhuiStatus, OhuiStatus);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
