@@ -688,7 +688,7 @@ impl TxVirtio {
 }
 
 struct RxVirtio {
-    queue_full: bool,
+    queue_avail: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: Arc<EventFd>,
 }
@@ -696,7 +696,7 @@ struct RxVirtio {
 impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
         RxVirtio {
-            queue_full: false,
+            queue_avail: false,
             queue,
             queue_evt,
         }
@@ -795,7 +795,11 @@ impl NetIoHandler {
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
             if elem.desc_num == 0 {
-                self.rx.queue_full = true;
+                queue
+                    .vring
+                    .suppress_queue_notify(&self.mem_space, self.driver_features, false)
+                    .with_context(|| "Failed to enable rx queue notify")?;
+                self.rx.queue_avail = false;
                 break;
             } else if elem.in_iovec.is_empty() {
                 bail!("The length of in iovec is 0");
@@ -868,7 +872,7 @@ impl NetIoHandler {
                 self.rx
                     .queue_evt
                     .write(1)
-                    .with_context(|| "Failed to trigger tap queue event".to_string())?;
+                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
                 break;
             }
         }
@@ -967,7 +971,7 @@ impl NetIoHandler {
     fn tap_fd_handler(net_io: &mut Self) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
-        if !net_io.is_listening && (!net_io.rx.queue_full || net_io.tx.tap_full) {
+        if !net_io.is_listening && (net_io.rx.queue_avail || net_io.tx.tap_full) {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::Resume,
                 net_io.tap_fd,
@@ -983,12 +987,12 @@ impl NetIoHandler {
         }
 
         // NOTE: We want to poll for OUT event when the tap is full, and for IN event when the
-        // virtio queue is NOT full.
-        let tap_events = match (net_io.rx.queue_full, net_io.tx.tap_full) {
-            (false, true) => EventSet::OUT | EventSet::IN | EventSet::EDGE_TRIGGERED,
-            (true, true) => EventSet::OUT | EventSet::EDGE_TRIGGERED,
-            (false, false) => EventSet::IN | EventSet::EDGE_TRIGGERED,
-            (true, false) => EventSet::empty(),
+        // virtio queue is available.
+        let tap_events = match (net_io.rx.queue_avail, net_io.tx.tap_full) {
+            (true, true) => EventSet::OUT | EventSet::IN | EventSet::EDGE_TRIGGERED,
+            (false, true) => EventSet::OUT | EventSet::EDGE_TRIGGERED,
+            (true, false) => EventSet::IN | EventSet::EDGE_TRIGGERED,
+            (false, false) => EventSet::empty(),
         };
 
         let tap_operation = if tap_events.is_empty() {
@@ -1103,7 +1107,24 @@ impl EventNotifierHelper for NetIoHandler {
                 return None;
             }
 
-            locked_net_io.rx.queue_full = false;
+            locked_net_io.rx.queue_avail = true;
+            let mut locked_queue = locked_net_io.rx.queue.lock().unwrap();
+
+            if let Err(ref err) = locked_queue.vring.suppress_queue_notify(
+                &locked_net_io.mem_space,
+                locked_net_io.driver_features,
+                true,
+            ) {
+                error!("Failed to suppress rx queue notify: {:?}", err);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    &locked_net_io.device_broken,
+                );
+                return None;
+            };
+
+            drop(locked_queue);
 
             if let Err(ref err) = locked_net_io.handle_rx() {
                 error!("Failed to handle receive queue event: {:?}", err);
