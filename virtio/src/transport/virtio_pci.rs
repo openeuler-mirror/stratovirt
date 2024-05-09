@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(feature = "virtio_gpu")]
@@ -429,7 +429,7 @@ impl VirtioPciDevice {
     }
 
     fn activate_device(&self) -> bool {
-        trace::virtio_tpt_common("activate_device", &self.base.base.id);
+        info!("func: activate_device, id: {:?}", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
             return true;
@@ -514,7 +514,7 @@ impl VirtioPciDevice {
     }
 
     fn deactivate_device(&self) -> bool {
-        trace::virtio_tpt_common("deactivate_device", &self.base.base.id);
+        info!("func: deactivate_device, id: {:?}", &self.base.base.id);
         if self.need_irqfd && self.base.config.msix.is_some() {
             let msix = self.base.config.msix.as_ref().unwrap();
             if msix.lock().unwrap().unregister_irqfd().is_err() {
@@ -1018,6 +1018,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn realize(mut self) -> Result<()> {
+        info!("func: realize, id: {:?}", &self.base.base.id);
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -1185,7 +1186,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        trace::virtio_tpt_common("unrealize", &self.base.base.id);
+        info!("func: unrealize, id: {:?}", &self.base.base.id);
         self.device
             .lock()
             .unwrap()
@@ -1233,7 +1234,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        trace::virtio_tpt_common("reset", &self.base.base.id);
+        info!("func: reset, id: {:?}", &self.base.base.id);
         self.deactivate_device();
         self.device
             .lock()

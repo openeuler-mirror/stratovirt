@@ -197,12 +197,6 @@ message = "virtqueue {:#X} set avail event idx {}"
 enabled = true
 
 [[events]]
-name = "virtio_tpt_common"
-args = "func: &str, id: &str"
-message = "{} for device {}"
-enabled = true
-
-[[events]]
 name = "virtio_tpt_read_common_config"
 args = "id: &str, offset: u64"
 message = "read common config for {}, offset is {:#X}"

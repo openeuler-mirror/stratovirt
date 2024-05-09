@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
@@ -188,7 +188,7 @@ impl VirtioMmioDevice {
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
-        trace::virtio_tpt_common("activate", &self.base.base.id);
+        info!("func: activate, id: {:?}", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         let queue_num = locked_dev.queue_num();
         let queue_type = locked_dev.queue_type();
