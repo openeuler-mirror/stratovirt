@@ -381,6 +381,22 @@ impl RefCount {
         self.refcount_blk_cache.flush(self.sync_aio.clone())
     }
 
+    fn get_refcount_block_cache(&mut self, rt_idx: u64) -> Result<Rc<RefCell<CacheTable>>> {
+        let entry = self.refcount_blk_cache.get(rt_idx);
+        let cache_entry = if let Some(entry) = entry {
+            entry.clone()
+        } else {
+            self.load_refcount_block(rt_idx).with_context(|| {
+                format!("Failed to get refcount block cache, index is {}", rt_idx)
+            })?;
+            self.refcount_blk_cache
+                .get(rt_idx)
+                .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
+                .clone()
+        };
+        Ok(cache_entry)
+    }
+
     fn set_refcount(
         &mut self,
         rt_idx: u64,
@@ -391,17 +407,9 @@ impl RefCount {
     ) -> Result<()> {
         let is_add = added > 0;
         let added_value = added.unsigned_abs() as u16;
-        if !self.refcount_blk_cache.contains_keys(rt_idx) {
-            self.load_refcount_block(rt_idx).with_context(|| {
-                format!("Failed to get refcount block cache, index is {}", rt_idx)
-            })?;
-        }
         let cache_entry = self
-            .refcount_blk_cache
-            .get(rt_idx)
-            .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
-            .clone();
-
+            .get_refcount_block_cache(rt_idx)
+            .with_context(|| "Get refcount block cache failed")?;
         let mut rb_vec = Vec::new();
         let mut borrowed_entry = cache_entry.borrow_mut();
         let is_dirty = borrowed_entry.dirty_info.is_dirty;
@@ -471,17 +479,9 @@ impl RefCount {
             );
         }
 
-        if !self.refcount_blk_cache.contains_keys(rt_idx) {
-            self.load_refcount_block(rt_idx).with_context(|| {
-                format!("Failed to get refcount block cache, index is {}", rt_idx)
-            })?;
-        }
         let cache_entry = self
-            .refcount_blk_cache
-            .get(rt_idx)
-            .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
-            .clone();
-
+            .get_refcount_block_cache(rt_idx)
+            .with_context(|| "Get refcount block cache failed")?;
         let rb_idx = self.cluster_in_rc_block(cluster) as usize;
         let rc_value = cache_entry.borrow_mut().get_entry_map(rb_idx).unwrap();
 
