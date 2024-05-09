@@ -316,7 +316,7 @@ impl RefCount {
             bail!("Failed to update refcount, offset is not aligned to cluster");
         }
         let first_cluster = bytes_to_clusters(offset, self.cluster_size).unwrap();
-        let mut rc_vec = Vec::new();
+        let mut rc_vec: Vec<(u64, u64, usize)> = Vec::with_capacity(clusters as usize);
         let mut i = 0;
         while i < clusters {
             let rt_idx = (first_cluster + i) >> self.refcount_blk_bits;
@@ -410,7 +410,7 @@ impl RefCount {
         let cache_entry = self
             .get_refcount_block_cache(rt_idx)
             .with_context(|| "Get refcount block cache failed")?;
-        let mut rb_vec = Vec::new();
+        let mut rb_vec: Vec<u16> = Vec::with_capacity(clusters);
         let mut borrowed_entry = cache_entry.borrow_mut();
         let is_dirty = borrowed_entry.dirty_info.is_dirty;
         for i in 0..clusters {

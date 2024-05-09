@@ -812,8 +812,9 @@ fn iovec_is_zero(iovecs: &[Iovec]) -> bool {
 }
 
 pub fn iovecs_split(iovecs: Vec<Iovec>, mut size: u64) -> (Vec<Iovec>, Vec<Iovec>) {
-    let mut begin = Vec::new();
-    let mut end = Vec::new();
+    let len = iovecs.len();
+    let mut begin: Vec<Iovec> = Vec::with_capacity(len);
+    let mut end: Vec<Iovec> = Vec::with_capacity(len);
     for iov in iovecs {
         if size == 0 {
             end.push(iov);
