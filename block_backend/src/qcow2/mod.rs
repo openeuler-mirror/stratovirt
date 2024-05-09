@@ -435,7 +435,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         l2_entry &= !QCOW2_OFLAG_ZERO;
         let mut cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
         if cluster_addr == 0 {
-            let new_addr = self.alloc_cluster(1, true)?;
+            let new_addr = self.alloc_cluster(1, false)?;
             l2_entry = new_addr | QCOW2_OFFSET_COPIED;
             cluster_addr = new_addr & L2_TABLE_OFFSET_MASK;
         } else if l2_entry & QCOW2_OFFSET_COPIED == 0 {
