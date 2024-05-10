@@ -364,7 +364,6 @@ dependencies = [
  "anyhow",
  "block_backend",
  "byteorder",
- "cairo-rs",
  "chardev_backend",
  "clap",
  "cpu",

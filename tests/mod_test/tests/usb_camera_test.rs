@@ -33,6 +33,7 @@ enum FmtType {
     Yuy2 = 0,
     Rgb565,
     Mjpg,
+    Nv12,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,8 +116,10 @@ fn format_index_to_fmt(idx: u8) -> FmtType {
         FmtType::Yuy2
     } else if idx == 2 {
         FmtType::Mjpg
-    } else {
+    } else if idx == 3 {
         FmtType::Rgb565
+    } else {
+        FmtType::Nv12
     }
 }
 
@@ -193,6 +196,16 @@ fn check_frame_data(fmt: &FmtType, data: &[u8]) {
             let pos = data.len() - 2;
             assert_eq!(data[pos..], [0xff, 0xf9]);
         }
+        FmtType::Nv12 => {
+            let len = data.len();
+            for i in 0..(len / 2) {
+                assert_eq!(data[i], 76);
+            }
+            for i in 0..(len / 4) {
+                let idx = len / 2 + i * 2;
+                assert_eq!(data[idx..idx + 2], [90, 255]);
+            }
+        }
     }
 }
 
@@ -263,6 +276,8 @@ fn test_xhci_camera_basic() {
     check_frame(&mut xhci, slot_id, 2, 2, 3);
     // Rgb
     check_frame(&mut xhci, slot_id, 3, 3, 3);
+    // Nv12
+    check_frame(&mut xhci, slot_id, 4, 1, 3);
 
     test_state.borrow_mut().stop();
 }
