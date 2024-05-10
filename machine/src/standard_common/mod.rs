@@ -54,6 +54,8 @@ use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
 use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
+#[cfg(feature = "scream")]
+use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::PciBus;
 #[cfg(feature = "usb_camera")]
@@ -1139,7 +1141,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
@@ -1434,6 +1436,22 @@ impl DeviceInterface for StdMachine {
                 None,
             ),
         }
+    }
+
+    #[cfg(feature = "scream")]
+    fn switch_audio_record(&self, authorized: String) -> Response {
+        match authorized.as_str() {
+            "on" => set_record_authority(true),
+            "off" => set_record_authority(false),
+            _ => {
+                let err_str = format!("Failed to set audio capture authority: {:?}", authorized);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_str),
+                    None,
+                );
+            }
+        }
+        Response::create_empty_response()
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
@@ -1912,6 +1930,12 @@ fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     if args.cache.is_some() && !args.cache.as_ref().unwrap().direct.unwrap_or(true) {
         config.direct = false;
         config.aio = AioEngine::Off;
+    }
+    if let Some(media) = args.media.as_ref() {
+        match media.as_str() {
+            "disk" | "cdrom" => config.media = media.clone(),
+            _ => bail!("Invalid media argument '{}', expect 'disk | cdrom'", media),
+        }
     }
     if let Some(discard) = args.discard.as_ref() {
         config.discard = discard

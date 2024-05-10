@@ -32,8 +32,9 @@ use crate::{
     input::{
         input_button, input_move_abs, input_point_sync, key_event, keyboard_modifier_get,
         keyboard_state_reset, update_key_state, Axis, KeyboardModifier, ABS_MAX, ASCII_A, ASCII_Z,
-        INPUT_BUTTON_MAX_NUM, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_1,
-        KEYCODE_9, UPPERCASE_TO_LOWERCASE,
+        INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+        INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE,
+        INPUT_POINT_RIGHT, KEYCODE_1, KEYCODE_9, UPPERCASE_TO_LOWERCASE,
     },
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     utils::BuffPool,
@@ -69,6 +70,19 @@ const ENCODING_LED_STATE: i32 = -261;
 const ENCODING_DESKTOP_RESIZE_EXT: i32 = -308;
 const ENCODING_ALPHA_CURSOR: i32 = -314;
 const ENCODING_WMVI: i32 = 1464686185;
+
+const VNC_INPUT_BUTTON_LEFT: u8 = 0x01;
+const VNC_INPUT_BUTTON_MIDDLE: u8 = 0x02;
+const VNC_INPUT_BUTTON_RIGHT: u8 = 0x04;
+const VNC_INPUT_BUTTON_WHEEL_UP: u8 = 0x08;
+const VNC_INPUT_BUTTON_WHEEL_DOWN: u8 = 0x10;
+const VNC_INPUT_BUTTON_WHEEL_LEFT: u8 = 0x20;
+const VNC_INPUT_BUTTON_WHEEL_RIGHT: u8 = 0x40;
+// NOTE: VNC only affords 8 bits for mouse button. Button "back"
+// occupies bit7, while there is no bit for button "forward".
+// Here just support side button "back" only.
+const VNC_INPUT_BUTTON_BACK: u8 = 0x80;
+const VNC_INPUT_BUTTON_MAX_NUM: u32 = 8;
 
 /// This trait is used to send bytes,
 /// the return is the total number of bytes sented.
@@ -994,19 +1008,24 @@ impl ClientIoHandler {
         let new_button = buf[1];
         let last_button = self.client.client_dpm.lock().unwrap().last_button;
         if last_button != new_button {
-            for bit in 0..INPUT_BUTTON_MAX_NUM {
+            for bit in 0..VNC_INPUT_BUTTON_MAX_NUM {
                 let button_mask = 1 << bit;
                 if last_button & button_mask == new_button & button_mask {
                     continue;
                 }
 
                 let button = match button_mask {
-                    INPUT_POINT_LEFT => 0x01,
-                    INPUT_POINT_MIDDLE => 0x04,
-                    INPUT_POINT_RIGHT => 0x02,
-                    _ => button_mask,
+                    VNC_INPUT_BUTTON_LEFT => INPUT_POINT_LEFT,
+                    VNC_INPUT_BUTTON_RIGHT => INPUT_POINT_RIGHT,
+                    VNC_INPUT_BUTTON_MIDDLE => INPUT_POINT_MIDDLE,
+                    VNC_INPUT_BUTTON_WHEEL_UP => INPUT_BUTTON_WHEEL_UP,
+                    VNC_INPUT_BUTTON_WHEEL_DOWN => INPUT_BUTTON_WHEEL_DOWN,
+                    VNC_INPUT_BUTTON_WHEEL_RIGHT => INPUT_BUTTON_WHEEL_RIGHT,
+                    VNC_INPUT_BUTTON_WHEEL_LEFT => INPUT_BUTTON_WHEEL_LEFT,
+                    VNC_INPUT_BUTTON_BACK => INPUT_POINT_BACK,
+                    _ => button_mask as u32,
                 };
-                input_button(button as u32, new_button & button_mask != 0)?;
+                input_button(button, new_button & button_mask != 0)?;
             }
             self.client.client_dpm.lock().unwrap().last_button = new_button;
         }

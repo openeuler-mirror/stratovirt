@@ -765,6 +765,7 @@ dependencies = [
  "migration",
  "migration_derive",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
@@ -1729,6 +1730,7 @@ dependencies = [
  "log",
  "regex",
  "trace_generator",
+ "vmm-sys-util",
 ]
 
 [[package]]
@@ -1807,6 +1809,7 @@ dependencies = [
  "io-uring",
  "kvm-bindings",
  "libc",
+ "libloading",
  "log",
  "nix 0.26.2",
  "once_cell",

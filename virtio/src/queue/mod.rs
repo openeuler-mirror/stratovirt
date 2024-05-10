@@ -20,6 +20,7 @@ use anyhow::{bail, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache};
+use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
 
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
@@ -81,8 +82,8 @@ impl Element {
         Element {
             index,
             desc_num: 0,
-            out_iovec: Vec::new(),
-            in_iovec: Vec::new(),
+            out_iovec: Vec::with_capacity(DEFAULT_VIRTQUEUE_SIZE.into()),
+            in_iovec: Vec::with_capacity(DEFAULT_VIRTQUEUE_SIZE.into()),
         }
     }
 

@@ -469,6 +469,7 @@ fn qmp_command_exec(
         (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
+        (switch_audio_record, switch_audio_record, authorized),
         (blockdev_del, blockdev_del, node_name),
         (netdev_del, netdev_del, id),
         (chardev_remove, chardev_remove, id),
@@ -500,12 +501,12 @@ fn qmp_command_exec(
                 qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
-            QmpCommand::trace_event_get_state { arguments, id } => {
+            QmpCommand::trace_get_state { arguments, id } => {
                 match trace::get_state_by_pattern(arguments.pattern) {
                     Ok(events) => {
                         let mut ret = Vec::new();
                         for (name, state) in events {
-                            ret.push(qmp_schema::TraceEventInfo { name, state });
+                            ret.push(qmp_schema::TraceInfo { name, state });
                         }
                         qmp_response =
                             Response::create_response(serde_json::to_value(ret).unwrap(), None);
@@ -513,7 +514,7 @@ fn qmp_command_exec(
                     Err(_) => {
                         qmp_response = Response::create_error_response(
                             qmp_schema::QmpErrorClass::GenericError(
-                                "Failed to get trace event state".to_string(),
+                                "Failed to get trace state".to_string(),
                             ),
                             None,
                         )
@@ -521,11 +522,11 @@ fn qmp_command_exec(
                 }
                 id
             }
-            QmpCommand::trace_event_set_state { arguments, id } => {
+            QmpCommand::trace_set_state { arguments, id } => {
                 if trace::set_state_by_pattern(arguments.pattern, arguments.enable).is_err() {
                     qmp_response = Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(
-                            "Failed to set trace event state".to_string(),
+                            "Failed to set trace state".to_string(),
                         ),
                         None,
                     )

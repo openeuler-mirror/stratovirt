@@ -102,6 +102,7 @@ define_qmp_command_enum!(
     query_balloon("query-balloon", query_balloon, FALSE, default),
     query_vnc("query-vnc", query_vnc, TRUE, default),
     query_display_image("query-display-image", query_display_image, FALSE, default),
+    switch_audio_record("switch-audio-record", switch_audio_record, FALSE),
     migrate("migrate", migrate, FALSE),
     query_migrate("query-migrate", query_migrate, FALSE, default),
     cancel_migrate("migrate_cancel", cancel_migrate, FALSE, default),
@@ -135,8 +136,8 @@ define_qmp_command_enum!(
     blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal, FALSE),
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal, FALSE),
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg, FALSE),
-    trace_event_get_state("trace-event-get-state", trace_event_get_state, FALSE),
-    trace_event_set_state("trace-event-set-state", trace_event_set_state, FALSE)
+    trace_get_state("trace-get-state", trace_get_state, FALSE),
+    trace_set_state("trace-set-state", trace_set_state, FALSE)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -422,6 +423,7 @@ pub struct blockdev_add {
     #[serde(rename = "node-name")]
     pub node_name: String,
     pub file: FileOptions,
+    pub media: Option<String>,
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
@@ -993,6 +995,28 @@ pub struct getfd {
     pub fd_name: String,
 }
 generate_command_impl!(getfd, Empty);
+
+/// switch_audio_record
+///
+/// Control the authority of audio record
+///
+/// # Arguments
+///
+/// * `authorized` - on or off.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "switch_audio_record", "arguments": { "authorized": "on" } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct switch_audio_record {
+    #[serde(rename = "authorized")]
+    pub authorized: String,
+}
+generate_command_impl!(switch_audio_record, Empty);
 
 /// query-balloon
 ///
@@ -1910,7 +1934,7 @@ pub struct DeviceDeleted {
     pub path: String,
 }
 
-/// trace-event-get-state
+/// trace-get-state
 ///
 /// # Arguments
 ///
@@ -1919,25 +1943,25 @@ pub struct DeviceDeleted {
 /// # Examples
 ///
 /// ```text
-/// -> { "execute": "trace-event-get-state",
+/// -> { "execute": "trace-get-state",
 ///      "arguments": { "name": "event_name" } }
 /// <- { "return": [ { "name": "event_name", "state": "disabled" } ] }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct trace_event_get_state {
+pub struct trace_get_state {
     #[serde(rename = "name")]
     pub pattern: String,
 }
-pub type TraceEventGetArgument = trace_event_get_state;
+pub type TraceGetArgument = trace_get_state;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct TraceEventInfo {
+pub struct TraceInfo {
     pub name: String,
     pub state: bool,
 }
 
-/// trace-event-set-state
+/// trace-set-state
 ///
 /// # Arguments
 ///
@@ -1947,20 +1971,20 @@ pub struct TraceEventInfo {
 /// # Examples
 ///
 /// ```text
-/// -> { "execute": "trace-event-set-state",
+/// -> { "execute": "trace-set-state",
 ///      "arguments": { "name": "event_name",
 ///                     "enable": true } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct trace_event_set_state {
+pub struct trace_set_state {
     #[serde(rename = "name")]
     pub pattern: String,
     #[serde(rename = "enable")]
     pub enable: bool,
 }
-pub type TraceEventSetArgument = trace_event_set_state;
+pub type TraceSetArgument = trace_set_state;
 
 #[cfg(test)]
 mod tests {

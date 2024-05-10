@@ -34,7 +34,7 @@ impl From<&CpuConfig> for ArmCPUFeatures {
 }
 
 /// Entry to cpreg list.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct CpregListEntry {
     pub reg_id: u64,
     pub value: u128,

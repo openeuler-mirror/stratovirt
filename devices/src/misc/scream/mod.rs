@@ -14,7 +14,7 @@
 mod alsa;
 mod audio_demo;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-mod ohos;
+mod ohaudio;
 #[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
@@ -29,7 +29,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use core::time;
 use log::{error, warn};
 
@@ -39,9 +39,9 @@ use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
-use machine_manager::config::{get_pci_df, valid_id};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-use ohos::ohaudio::OhAudio;
+use ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
@@ -86,6 +86,22 @@ pub struct ShmemStreamHeader {
     start_time_ns: i64,
     /// Audio stream format.
     pub fmt: ShmemStreamFmt,
+}
+
+fn record_authority_rw(auth: bool, write: bool) -> bool {
+    static AUTH: RwLock<bool> = RwLock::new(true);
+    if write {
+        *AUTH.write().unwrap() = auth;
+    }
+    *AUTH.read().unwrap()
+}
+
+pub fn set_record_authority(auth: bool) {
+    record_authority_rw(auth, true);
+}
+
+fn get_record_authority() -> bool {
+    record_authority_rw(false, false)
 }
 
 impl ShmemStreamHeader {
@@ -323,7 +339,12 @@ impl StreamData {
                 return;
             }
 
-            let recv_chunks_cnt = locked_interface.receive(self);
+            let recv_chunks_cnt: i32 = if get_record_authority() {
+                locked_interface.receive(self)
+            } else {
+                locked_interface.destroy();
+                0
+            };
             if recv_chunks_cnt > 0 {
                 self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
 
@@ -391,6 +412,8 @@ pub struct ScreamConfig {
     playback: String,
     #[arg(long, default_value = "")]
     record: String,
+    #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
+    record_auth: bool,
 }
 
 /// Scream sound card device structure.
@@ -403,6 +426,7 @@ pub struct Scream {
 
 impl Scream {
     pub fn new(size: u64, config: ScreamConfig, token_id: Option<Arc<RwLock<u64>>>) -> Self {
+        set_record_authority(config.record_auth);
         Self {
             hva: 0,
             size,

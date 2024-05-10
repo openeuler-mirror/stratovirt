@@ -205,6 +205,7 @@ impl IrqRouteTable {
             std::cmp::max(align_of::<IrqRoute>(), align_of::<IrqRouteEntry>()),
         )?;
 
+        trace::kvm_commit_irq_routing();
         // SAFETY: data in `routes` is reliable.
         unsafe {
             let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;

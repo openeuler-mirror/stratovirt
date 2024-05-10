@@ -20,9 +20,41 @@ use std::{
 
 use anyhow::{bail, Result};
 
-use crate::img::{image_check, image_create, image_snapshot, print_help};
+use crate::img::{
+    image_check, image_create, image_resize, image_snapshot, print_help, print_version,
+};
 
 const BINARY_NAME: &str = "stratovirt-img";
+
+macro_rules! image_operation_matches {
+    ( $cmd:expr;
+        $(($($opt_0:tt)|+, $function_0:tt, $arg:expr)),*;
+        $(($($opt_1:tt)|+, $function_1:tt)),*
+    ) => {
+        match $cmd {
+            $(
+                $($opt_0)|+ => {
+                    if let Err(e) = $function_0($arg) {
+                        bail!("{}: {:?}", BINARY_NAME, e);
+                    }
+                },
+            )*
+            $(
+                $($opt_1)|+ => {
+                    $function_1()
+                },
+            )*
+            _ => {
+                bail!(
+                    "{}: Command not found: {}\n\
+                    Try 'stratovirt-img --help' for more information.",
+                    BINARY_NAME,
+                    $cmd
+                );
+            }
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -46,43 +78,17 @@ fn run(args: Vec<String>) -> Result<()> {
     }
 
     let opt = args[1].clone();
+    let cmd_args = args[2..].to_vec();
 
-    match opt.as_str() {
-        "create" => {
-            if let Err(e) = image_create(args[2..].to_vec()) {
-                bail!("{}: {:?}", BINARY_NAME, e);
-            }
-        }
-        "check" => {
-            if let Err(e) = image_check(args[2..].to_vec()) {
-                bail!("{}: {:?}", BINARY_NAME, e);
-            }
-        }
-        "snapshot" => {
-            if let Err(e) = image_snapshot(args[2..].to_vec()) {
-                bail!("{}: {:?}", BINARY_NAME, e);
-            }
-        }
-        "-v" | "--version" => {
-            println!(
-                "{} version {}\
-                Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.",
-                BINARY_NAME,
-                util::VERSION,
-            )
-        }
-        "-h" | "--help" => {
-            print_help();
-        }
-        _ => {
-            bail!(
-                "{}: Command not found: {}\n\
-                Try 'stratovirt-img --help' for more information.",
-                BINARY_NAME,
-                opt.as_str()
-            );
-        }
-    }
+    image_operation_matches!(
+        opt.as_str();
+        ("create", image_create, cmd_args),
+        ("check", image_check, cmd_args),
+        ("resize", image_resize, cmd_args),
+        ("snapshot", image_snapshot, cmd_args);
+        ("-v" | "--version", print_version),
+        ("-h" | "--help", print_help)
+    );
 
     Ok(())
 }

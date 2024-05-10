@@ -22,7 +22,8 @@ use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
-use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
+use util::num_ops::{deposit_u32, extract_u32, read_data_u32, round_up, write_data_u32};
+use util::unix::host_page_size;
 
 pub struct PFlash {
     base: SysBusDevBase,
@@ -59,6 +60,27 @@ pub struct PFlash {
 }
 
 impl PFlash {
+    fn flash_region_size(
+        region_max_size: u64,
+        backend: &Option<File>,
+        read_only: bool,
+    ) -> Result<u64> {
+        // We don't have to occupy the whole memory region.
+        // If flash is read-only, expose just real data size,
+        // rounded up to page_size
+        if let Some(fd) = backend.as_ref() {
+            let len = fd.metadata().unwrap().len();
+            if len > region_max_size || len == 0 || (!read_only && len != region_max_size) {
+                bail!(
+                    "Invalid flash file: Region size 0x{region_max_size:X}, file size 0x{len:X}; read_only {read_only}"
+                );
+            }
+            Ok(round_up(len, host_page_size()).unwrap())
+        } else {
+            Ok(region_max_size)
+        }
+    }
+
     /// Construct function of PFlash device.
     ///
     /// # Arguments
@@ -75,9 +97,9 @@ impl PFlash {
     /// Return Error when
     /// * block-length is zero.
     /// * PFlash size is zero.
-    /// * file size is smaller than PFlash size.
+    /// * flash is writable and file size is smaller than region_max_size.
     pub fn new(
-        size: u64,
+        region_max_size: u64,
         backend: &Option<File>,
         block_len: u32,
         bank_width: u32,
@@ -87,17 +109,10 @@ impl PFlash {
         if block_len == 0 {
             bail!("PFlash: block-length is zero which is invalid.");
         }
+        let size = Self::flash_region_size(region_max_size, backend, read_only)?;
         let blocks_per_device: u32 = size as u32 / block_len;
         if blocks_per_device == 0 {
             bail!("PFlash: num-blocks is zero which is invalid.");
-        }
-        if let Some(fd) = backend.as_ref() {
-            let len = fd.metadata().unwrap().len();
-            if len > size || len == 0 || (!read_only && len != size) {
-                bail!(
-                    "Invalid flash file: Region size 0x{size:X}, file size 0x{len:X}; read_only {read_only}"
-                );
-            }
         }
         let num_devices: u32 = if device_width == 0 {
             1
@@ -195,9 +210,10 @@ impl PFlash {
         mut self,
         sysbus: &mut SysBus,
         region_base: u64,
-        region_size: u64,
+        region_max_size: u64,
         backend: Option<File>,
     ) -> Result<()> {
+        let region_size = Self::flash_region_size(region_max_size, &backend, self.read_only)?;
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| "Failed to allocate system resource for PFlash.")?;
 

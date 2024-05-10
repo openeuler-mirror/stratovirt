@@ -19,9 +19,8 @@ use std::{cmp, ptr, thread, time};
 
 use log::{error, warn};
 
-use super::ohaudio_bindings::{OhAudioCapturer, OhAudioRenderer};
-use super::ohaudio_rapi::{AudioContext, AudioProcessCb, AudioStreamType};
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
+use util::ohos_binding::audio::*;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
@@ -360,5 +359,134 @@ impl AudioInterface for OhAudio {
 
     fn destroy(&mut self) {
         self.processor.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::misc::scream::ohaudio::{on_read_data_cb, on_write_data_cb, StreamUnit};
+    use crate::misc::scream::ohaudio::{OhAudioCapture, OhAudioProcess, OhAudioRender};
+    use crate::misc::scream::StreamData;
+
+    use util::ohos_binding::audio::*;
+
+    #[test]
+    fn test_render_init_and_destroy() {
+        let mut render = OhAudioRender::default();
+        let mut stream_data = StreamData::default();
+
+        assert!(!render.init(&stream_data));
+
+        stream_data.fmt.size = 16;
+        stream_data.fmt.rate = 1;
+        render.init(&stream_data);
+        assert!(render.ctx.is_some());
+        assert!(render.start);
+        assert_eq!(render.stream_data.lock().unwrap().len(), 0);
+
+        render.destroy();
+        assert!(!render.start);
+        assert!(render.ctx.is_none());
+        assert_eq!(render.stream_data.lock().unwrap().len(), 0);
+        assert_eq!(render.prepared_data, 0);
+    }
+
+    #[test]
+    fn test_render_check_data_ready() {
+        let mut render = OhAudioRender::default();
+        let mut recv_data = StreamData::default();
+        recv_data.fmt.size = 16;
+        recv_data.fmt.rate = 1;
+        recv_data.fmt.channels = 2;
+        assert!(!render.check_data_ready(&recv_data));
+
+        render.prepared_data = 96000;
+        assert!(render.check_data_ready(&recv_data));
+    }
+
+    #[test]
+    fn test_render_check_fmt_update() {
+        let mut render = OhAudioRender::default();
+        let mut recv_data = StreamData::default();
+        recv_data.fmt.size = 16;
+        recv_data.fmt.rate = 158;
+        recv_data.fmt.channels = 2;
+        let stream_data = StreamData::default();
+        render.init(&stream_data);
+        render.check_fmt_update(&recv_data);
+        assert!(render.ctx.is_none());
+    }
+
+    #[test]
+    fn test_capture_init_and_destroy() {
+        let mut capture = OhAudioCapture::default();
+        let stream_data = StreamData::default();
+        assert!(!capture.init(&stream_data));
+    }
+
+    #[test]
+    fn test_on_write_data_cb() {
+        let mut _renderer = OhAudioRenderer::default();
+        let mut render = OhAudioRender::default();
+        let user_data = std::ptr::addr_of!(render) as *mut ::std::os::raw::c_void;
+
+        let mut dst: Vec<u8> = vec![25, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let src1: Vec<u8> = vec![10, 11, 12, 13, 14];
+        let su1 = StreamUnit {
+            addr: src1.as_ptr() as u64,
+            len: src1.len() as u64,
+        };
+        let src2: Vec<u8> = vec![21, 22, 23, 24, 25];
+        let su2 = StreamUnit {
+            addr: src2.as_ptr() as u64,
+            len: src2.len() as u64,
+        };
+
+        render.stream_data.lock().unwrap().push(su1);
+        render.stream_data.lock().unwrap().push(su2);
+        render.start = true;
+
+        // SAFETY: we checked len.
+        let dst_ptr = unsafe { dst.as_mut_ptr().offset(1) };
+
+        on_write_data_cb(
+            &mut _renderer,
+            user_data,
+            dst_ptr as *mut ::std::os::raw::c_void,
+            8,
+        );
+
+        let target = [25, 10, 11, 12, 13, 14, 21, 22, 23];
+        assert_eq!(dst, target);
+    }
+
+    #[test]
+    fn test_on_read_data_cb() {
+        let mut _capturer = OhAudioCapturer::default();
+        let mut capture = OhAudioCapture::default();
+
+        let mut src: Vec<u8> = vec![10, 11, 12, 13, 14, 15, 16];
+        let mut dst: Vec<u8> = vec![99, 0, 0, 0, 0, 0, 0, 0];
+
+        let user_data = std::ptr::addr_of!(capture) as *mut ::std::os::raw::c_void;
+
+        capture.align = dst.len() as u32;
+        capture.shm_len = dst.len() as u64;
+        capture.shm_addr = dst.as_mut_ptr() as u64;
+        capture.start = true;
+        // SAFETY: we checked len.
+        capture.cur_pos = unsafe { dst.as_mut_ptr().offset(3) as u64 };
+
+        on_read_data_cb(
+            &mut _capturer,
+            user_data,
+            src.as_mut_ptr() as *mut ::std::os::raw::c_void,
+            src.len() as i32,
+        );
+
+        assert_eq!(capture.new_chunks.into_inner(), 0);
+        let target = [15, 16, 0, 10, 11, 12, 13, 14];
+        assert_eq!(dst, target);
     }
 }

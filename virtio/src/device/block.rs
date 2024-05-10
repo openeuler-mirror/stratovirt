@@ -18,7 +18,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -73,8 +72,8 @@ const MAX_NUM_MERGE_REQS: u16 = 32;
 const MAX_NUM_MERGE_IOVS: usize = 1024;
 /// Max number bytes of a merged request.
 const MAX_NUM_MERGE_BYTES: u64 = i32::MAX as u64;
-/// Max time for every round of process queue.
-const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
+/// Max iteration for every round of process queue.
+const MAX_ITERATION_PROCESS_QUEUE: u16 = 10;
 /// Max number sectors of per request.
 const MAX_REQUEST_SECTORS: u32 = u32::MAX >> SECTOR_SHIFT;
 
@@ -557,7 +556,8 @@ impl BlockIoHandler {
     }
 
     fn process_queue_internal(&mut self) -> Result<bool> {
-        let mut req_queue = Vec::new();
+        let queue_size = self.queue.lock().unwrap().vring.actual_size() as usize;
+        let mut req_queue = Vec::with_capacity(queue_size);
         let mut done = false;
 
         loop {
@@ -596,7 +596,7 @@ impl BlockIoHandler {
                 continue;
             }
             // Avoid bogus guest stuck IO thread.
-            if req_queue.len() >= queue.vring.actual_size() as usize {
+            if req_queue.len() >= queue_size {
                 bail!("The front driver may be damaged, avail requests more than queue size");
             }
             req_queue.push(req);
@@ -653,7 +653,7 @@ impl BlockIoHandler {
         trace::virtio_blk_process_queue_suppress_notify(len);
 
         let mut done = false;
-        let start_time = Instant::now();
+        let mut iteration = 0;
 
         while self
             .queue
@@ -664,8 +664,8 @@ impl BlockIoHandler {
             != 0
         {
             // Do not stuck IO thread.
-            let now = Instant::now();
-            if (now - start_time).as_millis() > MAX_MILLIS_TIME_PROCESS_QUEUE as u128 {
+            iteration += 1;
+            if iteration > MAX_ITERATION_PROCESS_QUEUE {
                 // Make sure we can come back.
                 self.queue_evt.write(1)?;
                 break;

@@ -12,30 +12,40 @@
 
 #[cfg(feature = "trace_to_ftrace")]
 pub(crate) mod ftrace;
+#[cfg(all(target_env = "ohos", feature = "trace_to_hitrace"))]
+pub(crate) mod hitrace;
+#[cfg(any(
+    feature = "trace_to_logger",
+    feature = "trace_to_ftrace",
+    all(target_env = "ohos", feature = "trace_to_hitrace")
+))]
+pub(crate) mod trace_scope;
 
 use std::{
     fmt,
     os::unix::io::RawFd,
     sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
 };
-#[cfg(feature = "trace_to_ftrace")]
-use std::{fs::File, io::Write, sync::Mutex};
 
 use anyhow::{Ok, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
+use vmm_sys_util::eventfd::EventFd;
 
-use trace_generator::{add_trace_event_to, gen_trace_func, gen_trace_state};
+use trace_generator::{
+    add_trace_state_to, gen_trace_event_func, gen_trace_scope_func, gen_trace_state,
+};
 
-struct TraceEvent {
+struct TraceState {
     name: String,
     get_state: fn() -> bool,
     set_state: fn(bool),
 }
 
-impl TraceEvent {
+impl TraceState {
     fn new(name: String, get_state: fn() -> bool, set_state: fn(bool)) -> Self {
-        TraceEvent {
+        TraceState {
             name,
             get_state,
             set_state,
@@ -44,20 +54,20 @@ impl TraceEvent {
 }
 
 #[derive(Default)]
-struct TraceEventSet {
-    event_list: Vec<TraceEvent>,
+struct TraceStateSet {
+    state_list: Vec<TraceState>,
 }
 
-impl TraceEventSet {
-    fn add_trace_event(&mut self, event: TraceEvent) {
-        self.event_list.push(event);
+impl TraceStateSet {
+    fn add_trace_state(&mut self, state: TraceState) {
+        self.state_list.push(state);
     }
 
-    fn set_state_by_pattern(&self, pattern: String, state: bool) -> Result<()> {
+    fn set_state_by_pattern(&self, pattern: String, target_state: bool) -> Result<()> {
         let re = Regex::new(&pattern)?;
-        for event in &self.event_list {
-            if re.is_match(&event.name) {
-                (event.set_state)(state);
+        for state in &self.state_list {
+            if re.is_match(&state.name) {
+                (state.set_state)(target_state);
             }
         }
         Ok(())
@@ -66,9 +76,9 @@ impl TraceEventSet {
     fn get_state_by_pattern(&self, pattern: String) -> Result<Vec<(String, bool)>> {
         let re = Regex::new(&pattern)?;
         let mut ret: Vec<(String, bool)> = Vec::new();
-        for event in &self.event_list {
-            if re.is_match(&event.name) {
-                ret.push((event.name.to_string(), (event.get_state)()));
+        for state in &self.state_list {
+            if re.is_match(&state.name) {
+                ret.push((state.name.to_string(), (state.get_state)()));
             }
         }
         Ok(ret)
@@ -78,24 +88,41 @@ impl TraceEventSet {
 gen_trace_state! {}
 
 lazy_static! {
-    static ref TRACE_EVENT_SET: TraceEventSet = {
-        let mut set = TraceEventSet::default();
-        add_trace_event_to!(set);
+    static ref TRACE_STATE_SET: TraceStateSet = {
+        let mut set = TraceStateSet::default();
+        add_trace_state_to!(set);
         set
     };
 }
 
-gen_trace_func! {}
+gen_trace_event_func! {}
 
-#[cfg(feature = "trace_to_ftrace")]
-lazy_static! {
-    static ref TRACE_MARKER_FD: Mutex<File> = Mutex::new(ftrace::open_trace_marker());
+gen_trace_scope_func! {}
+
+#[macro_export]
+macro_rules! trace_scope_start {
+    ($func: ident) => {
+        let _scope = trace::$func(false);
+    };
+    ($func: ident, args=($($args: expr),+)) => {
+        let _scope = trace::$func(false, $($args),+);
+    };
+}
+
+#[macro_export]
+macro_rules! trace_scope_asyn_start {
+    ($func: ident) => {
+        let _scope = trace::$func(true);
+    };
+    ($func: ident, args=($($args: expr),+)) => {
+        let _scope = trace::$func(true, $($args),+);
+    };
 }
 
 pub fn get_state_by_pattern(pattern: String) -> Result<Vec<(String, bool)>> {
-    TRACE_EVENT_SET.get_state_by_pattern(pattern)
+    TRACE_STATE_SET.get_state_by_pattern(pattern)
 }
 
 pub fn set_state_by_pattern(pattern: String, state: bool) -> Result<()> {
-    TRACE_EVENT_SET.set_state_by_pattern(pattern, state)
+    TRACE_STATE_SET.set_state_by_pattern(pattern, state)
 }

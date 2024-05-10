@@ -31,11 +31,10 @@ use super::{
 use machine_manager::config::valid_id;
 use ui::input::{
     register_pointer, unregister_pointer, Axis, InputEvent, InputType, PointerOpts,
-    INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+    INPUT_BUTTON_MASK, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
     INPUT_BUTTON_WHEEL_UP,
 };
 
-const INPUT_BUTTON_MASK: u32 = 0x7;
 const INPUT_COORDINATES_MAX: u32 = 0x7fff;
 
 /// Tablet device descriptor

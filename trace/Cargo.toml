@@ -12,7 +12,9 @@ lazy_static = "1.4.0"
 regex = "1"
 anyhow = "1.0"
 trace_generator = { path = "trace_generator" }
+vmm-sys-util = "0.11.1"
 
 [features]
 trace_to_logger = []
 trace_to_ftrace = []
+trace_to_hitrace = []

@@ -78,6 +78,7 @@ Add a block backend.
 
 * `node-name` : the name of the block driver node, must be unique.
 * `file` : the backend file information.
+* `media` : indicate media type of the backend file. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
 * `cache` : if use direct io.
 * `read-only` : if readonly.
 * `driver` : the block image format. Possible values are `raw` or `qcow2`. If not set, default is `raw`.
@@ -533,34 +534,34 @@ Query the display image of virtiogpu. Currently only stdvm and gtk supports.
 <- { "return": { "fileDir": "/tmp/stratovirt-images", "isSuccess": true } }
 ```
 
-### trace-event-get-state
+### trace-get-state
 
-Query whether the trace event is enabled.
+Query whether the trace state is enabled.
 
 #### Arguments
 
-* `name` : Pattern used to match event name.
+* `name` : Pattern used to match trace name.
 
 #### Example
 
 ```json
--> { "execute": "trace-event-get-state", "arguments": { "name": "event_name" } }
-<- { "return": [ { "name": "event_name", "state": "disabled" } ] }
+-> { "execute": "trace-get-state", "arguments": { "name": "trace_name" } }
+<- { "return": [ { "name": "trace_name", "state": "disabled" } ] }
 ```
 
-### trace-event-set-state
+### trace-set-state
 
-Set the state of trace event.
+Set the state of trace.
 
 #### Arguments
 
-* `name` : Pattern used to match event name.
-* `enable` : Whether to enable trace events.
+* `name` : Pattern used to match trace name.
+* `enable` : Whether to enable trace state.
 
 #### Example
 
 ```json
--> { "execute": "trace-event-set-state", "arguments": { "name": "event_name","enable": true } }
+-> { "execute": "trace-set-state", "arguments": { "name": "trace_name","enable": true } }
 <- { "return": {} }
 ```
 
@@ -574,6 +575,21 @@ Receive a file descriptor via SCM rights and assign it a name.
 
 ```json
 -> { "execute": "getfd", "arguments": { "fdname": "fd1" } }
+<- { "return": {} }
+ ```
+
+### switch-audio-record
+
+Control if the scream device can use host's microphone record.
+
+#### Arguments
+
+* `authorized` : "on" means scream can use host's microphone record, "off" opposites in meaning.
+
+#### Example
+
+```json
+-> { "execute": "switch-audio-record", "arguments": { "authorized": "on" } }
 <- { "return": {} }
  ```
 

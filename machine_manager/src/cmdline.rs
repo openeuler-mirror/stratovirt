@@ -446,8 +446,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("trace")
             .multiple(false)
             .long("trace")
-            .value_name("events=<file>")
-            .help("specify the file lists trace events to enable")
+            .value_name("file=<file>")
+            .help("specify the file lists trace state to enable")
             .takes_value(true),
         )
         .arg(
@@ -662,9 +662,7 @@ pub fn check_api_channel(
                         path
                     );
                 }
-                sock_paths.push(
-                    QmpSocketPath::new(path).with_context(|| "Failed to parse qmp socket path")?,
-                );
+                sock_paths.push(QmpSocketPath::Unix { path });
             } else if let ChardevType::TcpSocket {
                 host,
                 port,

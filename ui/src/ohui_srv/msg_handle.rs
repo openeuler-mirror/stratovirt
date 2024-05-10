@@ -23,7 +23,8 @@ use crate::{
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED, INPUT_BUTTON_WHEEL_DOWN,
-        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP,
+        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK,
+        INPUT_POINT_FORWARD, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
         KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
@@ -119,25 +120,25 @@ impl WindowState {
 }
 
 pub struct OhUiMsgHandler {
-    channel: Arc<OhUiChannel>,
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<MsgReader>,
+    writer: Mutex<MsgWriter>,
 }
 
 impl OhUiMsgHandler {
     pub fn new(channel: Arc<OhUiChannel>) -> Self {
         OhUiMsgHandler {
-            channel,
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
-            reader: Mutex::new(MsgReader::default()),
+            reader: Mutex::new(MsgReader::new(channel.clone())),
+            writer: Mutex::new(MsgWriter::new(channel)),
         }
     }
 
     pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {
         let mut reader = self.reader.lock().unwrap();
-        if !reader.recv(&self.channel)? {
+        if !reader.recv()? {
             return Ok(());
         }
 
@@ -211,7 +212,15 @@ impl OhUiMsgHandler {
     }
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
-        let (btn, action) = (mb.button, mb.btn_action);
+        let (msg_btn, action) = (mb.button, mb.btn_action);
+        let btn = match msg_btn {
+            CLIENT_MOUSE_BUTTON_LEFT => INPUT_POINT_LEFT,
+            CLIENT_MOUSE_BUTTON_RIGHT => INPUT_POINT_RIGHT,
+            CLIENT_MOUSE_BUTTON_MIDDLE => INPUT_POINT_MIDDLE,
+            CLIENT_MOUSE_BUTTON_FORWARD => INPUT_POINT_FORWARD,
+            CLIENT_MOUSE_BUTTON_BACK => INPUT_POINT_BACK,
+            _ => bail!("Invalid mouse button number {}", msg_btn),
+        };
         match action {
             CLIENT_PRESS_BTN => self.state.lock().unwrap().press_btn(btn),
             CLIENT_RELEASE_BTN => self.state.lock().unwrap().release_btn(btn),
@@ -228,7 +237,12 @@ impl OhUiMsgHandler {
         size_per_pixel: u32,
     ) {
         let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
-        if let Err(e) = self.channel.send_message(EventType::CursorDefine, &body) {
+        if let Err(e) = self
+            .writer
+            .lock()
+            .unwrap()
+            .send_message(EventType::CursorDefine, &body)
+        {
             error!("handle_cursor_define: failed to send message with error {e}");
         }
     }
@@ -293,7 +307,9 @@ impl OhUiMsgHandler {
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         let body = WindowInfoEvent::new(w, h);
-        self.channel
+        self.writer
+            .lock()
+            .unwrap()
             .send_message(EventType::WindowInfo, &body)
             .unwrap();
     }
@@ -301,7 +317,9 @@ impl OhUiMsgHandler {
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
         let body = FrameBufferDirtyEvent::new(x, y, w, h);
         if let Err(e) = self
-            .channel
+            .writer
+            .lock()
+            .unwrap()
             .send_message(EventType::FrameBufferDirty, &body)
         {
             error!("handle_dirty_area: failed to send message with error {e}");
@@ -309,8 +327,9 @@ impl OhUiMsgHandler {
     }
 }
 
-#[derive(Default)]
 struct MsgReader {
+    /// socket to read
+    channel: Arc<OhUiChannel>,
     /// cache for header
     pub header: EventMsgHdr,
     /// received byte size of header
@@ -322,9 +341,19 @@ struct MsgReader {
 }
 
 impl MsgReader {
-    pub fn recv(&mut self, channel: &Arc<OhUiChannel>) -> Result<bool> {
-        if self.recv_header(channel)? {
-            return self.recv_body(channel);
+    pub fn new(channel: Arc<OhUiChannel>) -> Self {
+        MsgReader {
+            channel,
+            header: EventMsgHdr::default(),
+            header_ready: 0,
+            body: None,
+            body_ready: 0,
+        }
+    }
+
+    pub fn recv(&mut self) -> Result<bool> {
+        if self.recv_header()? {
+            return self.recv_body();
         }
         Ok(false)
     }
@@ -335,17 +364,17 @@ impl MsgReader {
         self.body = None;
     }
 
-    fn recv_header(&mut self, channel: &Arc<OhUiChannel>) -> Result<bool> {
+    fn recv_header(&mut self) -> Result<bool> {
         if self.header_ready == EVENT_MSG_HDR_SIZE as usize {
             return Ok(true);
         }
 
         let buf = self.header.as_mut_bytes();
-        self.header_ready += channel.recv_slice(&mut buf[self.header_ready..])?;
+        self.header_ready += self.channel.recv_slice(&mut buf[self.header_ready..])?;
         Ok(self.header_ready == EVENT_MSG_HDR_SIZE as usize)
     }
 
-    fn recv_body(&mut self, channel: &Arc<OhUiChannel>) -> Result<bool> {
+    fn recv_body(&mut self) -> Result<bool> {
         let body_size = self.header.size as usize;
         if body_size == self.body_ready {
             return Ok(true);
@@ -363,8 +392,22 @@ impl MsgReader {
         unsafe {
             buf.set_len(body_size);
         }
-        self.body_ready += channel.recv_slice(&mut buf[self.body_ready..])?;
+        self.body_ready += self.channel.recv_slice(&mut buf[self.body_ready..])?;
 
         Ok(self.body_ready == body_size)
+    }
+}
+
+struct MsgWriter(Arc<OhUiChannel>);
+
+impl MsgWriter {
+    fn new(channel: Arc<OhUiChannel>) -> Self {
+        MsgWriter(channel)
+    }
+
+    fn send_message<T: Sized + Default + ByteCode>(&self, t: EventType, body: &T) -> Result<()> {
+        let hdr = EventMsgHdr::new(t);
+        self.0.send_by_obj(&hdr)?;
+        self.0.send_by_obj(body)
     }
 }
