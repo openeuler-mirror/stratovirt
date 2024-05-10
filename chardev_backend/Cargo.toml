@@ -1,6 +1,6 @@
 [package]
 name = "chardev_backend"
-version = "2.3.0"
+version = "2.4.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"
 license = "Mulan PSL v2"
