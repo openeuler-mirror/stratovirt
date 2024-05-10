@@ -78,7 +78,7 @@ impl OhAudioRender {
         let mut cnt = 0;
         while (cnt < FLUSH_DELAY_CNT) && (self.flushing.load(Ordering::Acquire)) {
             thread::sleep(time::Duration::from_millis(FLUSH_DELAY_MS));
-            cnt = cnt + 1;
+            cnt += 1;
         }
         // We need to wait for 100ms to ensure the audio data has
         // been flushed before stop renderer.
