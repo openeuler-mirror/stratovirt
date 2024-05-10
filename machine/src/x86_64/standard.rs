@@ -762,8 +762,6 @@ pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_mkdir),
         BpfRule::new(libc::SYS_unlink),
         BpfRule::new(libc::SYS_readlink),
-        #[cfg(target_env = "musl")]
-        BpfRule::new(libc::SYS_clone),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clone3),
         #[cfg(target_env = "gnu")]
