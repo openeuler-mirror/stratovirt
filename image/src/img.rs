@@ -169,6 +169,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         .read(true)
         .write(true)
         .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+        .mode(0o660)
         .open(path.clone())?;
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
