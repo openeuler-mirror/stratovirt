@@ -322,11 +322,14 @@ impl OhUiMsgHandler {
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         let body = WindowInfoEvent::new(w, h);
-        self.writer
+        if let Err(e) = self
+            .writer
             .lock()
             .unwrap()
             .send_message(EventType::WindowInfo, &body)
-            .unwrap();
+        {
+            error!("send_windowinfo: failed to send message with error {e}");
+        }
     }
 
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
