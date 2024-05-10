@@ -30,7 +30,7 @@ After the VM boot up, hotplug CPU with QMP:
 
 ```shell
 $ ncat -U path/to/api/socket
-{"QMP":{"version":{"qemu":{"micro":1,"minor":0,"major":5},"package":"StratoVirt-2.3.0"},"capabilities":[]}}
+{"QMP":{"version":{"qemu":{"micro":1,"minor":0,"major":5},"package":"StratoVirt-2.4.0"},"capabilities":[]}}
 -> {"execute": "device_add","arguments": { "id": "device-id", "driver": "generic-x86-cpu", "cpu-id": cpuid }}
 <- {"return":{}}
 <- {"event":"CPU_RESIZE","data":{},"timestamp":{"seconds":seconds, "microseconds":microseconds}}
@@ -45,7 +45,7 @@ hotunplug CPU with QMP:
 
 ```shell
 $ ncat -U path/to/api/socket
-{"QMP":{"version":{"qemu":{"micro":1,"minor":0,"major":5},"package":"StratoVirt-2.3.0"},"capabilities":[]}}
+{"QMP":{"version":{"qemu":{"micro":1,"minor":0,"major":5},"package":"StratoVirt-2.4.0"},"capabilities":[]}}
 -> {"execute": "device_del", "arguments": { "id": "device-id"}}
 <- {"return":{}}
 <- {"event":"CPU_RESIZE","data":{},"timestamp":{"seconds":seconds, "microseconds":microseconds}}
