@@ -142,9 +142,9 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     }
 
     if let Err(e) = locked_client.activate_vhost_user() {
-        error!("Failed to reactivate vhost-user net, {:?}", e);
+        error!("Failed to reactivate vhost-user {}, {:?}", dev_type, e);
     } else {
-        info!("Reconnecting vhost-user net succeed.");
+        info!("Reconnecting vhost-user {} succeed.", dev_type);
     }
 }
 
@@ -612,7 +612,7 @@ impl VhostUserClient {
         Ok(())
     }
 
-    pub fn reset_vhost_user(&mut self) -> Result<()> {
+    fn reset_queues(&mut self) -> Result<()> {
         for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             if !queue_mutex.lock().unwrap().vring.is_enabled() {
                 continue;
@@ -622,12 +622,25 @@ impl VhostUserClient {
             self.get_vring_base(queue_index)
                 .with_context(|| format!("Failed to get vring base, index: {}", queue_index))?;
         }
+        Ok(())
+    }
+
+    pub fn reset_vhost_user(&mut self, reset_owner: bool) {
+        let dev_type = self.backend_type.to_string();
+        if reset_owner {
+            if let Err(e) = self.reset_owner() {
+                warn!("Failed to reset owner for vhost-user {}: {:?}", dev_type, e);
+            }
+        } else if let Err(e) = self.reset_queues() {
+            warn!(
+                "Failed to reset queues for vhost-user {}: {:?}",
+                dev_type, e
+            );
+        }
 
         self.queue_evts.clear();
         self.call_events.clear();
         self.queues.clear();
-
-        Ok(())
     }
 
     pub fn add_event(client: &Arc<Mutex<Self>>) -> Result<()> {
@@ -1055,7 +1068,16 @@ impl VhostOps for VhostUserClient {
     }
 
     fn reset_owner(&self) -> Result<()> {
-        bail!("Does not support for resetting owner")
+        trace::vhost_reset_owner();
+        let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::ResetOwner as u32, 0, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .with_context(|| "Failed to send msg for reset_owner")?;
+        Ok(())
     }
 
     fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
