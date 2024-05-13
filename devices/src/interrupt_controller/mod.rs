@@ -81,6 +81,8 @@ pub trait LineIrqManager: Send + Sync {
 }
 
 pub trait MsiIrqManager: Send + Sync {
+    fn irqfd_enable(&self) -> bool;
+
     fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
         Ok(0)
     }
