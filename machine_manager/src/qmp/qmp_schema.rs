@@ -1152,7 +1152,7 @@ generate_command_impl!(balloon, Empty);
 /// -> { "execute": "query-version" }
 /// <- { "return": {
 ///         "version": { "qemu": { "minor": 1, "micro": 0, "major": 5 },
-///         "package": "StratoVirt-2.3.0" },
+///         "package": "StratoVirt-2.4.0" },
 ///         "capabilities": [] } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
