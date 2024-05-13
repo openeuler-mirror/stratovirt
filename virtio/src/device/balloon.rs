@@ -616,7 +616,7 @@ impl BalloonIoHandler {
             trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
         } else {
-            trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
+            trace::virtio_receive_request("Balloon".to_string(), "to deflate".to_string());
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
