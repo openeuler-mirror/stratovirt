@@ -349,11 +349,25 @@ impl UsbDescriptor {
     }
 
     fn get_device_qualifier_descriptor(&self) -> Result<Vec<u8>> {
-        if let Some(desc) = self.device_qualifier_desc.as_ref() {
-            Ok(desc.qualifier_desc.as_bytes().to_vec())
-        } else {
-            bail!("Device qualifier descriptor not found");
+        if self.device_desc.is_none() {
+            bail!("device qualifier descriptor not found");
         }
+
+        // SAFETY: device_desc has just been checked
+        let device_desc = &self.device_desc.as_ref().unwrap().device_desc;
+        let device_qualifier_desc = UsbDeviceQualifierDescriptor {
+            bLength: USB_DT_DEVICE_QUALIFIER_SIZE,
+            bDescriptorType: USB_DT_DEVICE_QUALIFIER,
+            bcdUSB: device_desc.bcdUSB,
+            bDeviceClass: device_desc.bDeviceClass,
+            bDeviceSubClass: device_desc.bDeviceSubClass,
+            bDeviceProtocol: device_desc.bDeviceProtocol,
+            bMaxPacketSize0: device_desc.bMaxPacketSize0,
+            bNumConfigurations: device_desc.bNumConfigurations,
+            bReserved: 0,
+        };
+
+        Ok(device_qualifier_desc.as_bytes().to_vec())
     }
 
     fn get_debug_descriptor(&self) -> Result<Vec<u8>> {

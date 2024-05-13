@@ -44,11 +44,6 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 
-// CRC16 of "STRATOVIRT"
-const UVC_VENDOR_ID: u16 = 0xB74C;
-// The first 4 chars of "VIDEO", 5 substitutes V.
-const UVC_PRODUCT_ID: u16 = 0x51DE;
-
 const INTERFACE_ID_CONTROL: u8 = 0;
 const INTERFACE_ID_STREAMING: u8 = 1;
 
@@ -433,8 +428,8 @@ fn gen_desc_device_camera(fmt_list: Vec<CameraFormatList>) -> Result<Arc<UsbDesc
         device_desc: UsbDeviceDescriptor {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
-            idVendor: UVC_VENDOR_ID,
-            idProduct: UVC_PRODUCT_ID,
+            idVendor: USB_VENDOR_ID_STRATOVIRT,
+            idProduct: USB_PRODUCT_ID_UVC,
             bcdDevice: 0,
             iManufacturer: UsbCameraStringIDs::Manufacture as u8,
             iProduct: UsbCameraStringIDs::Product as u8,
@@ -782,6 +777,8 @@ impl UsbDevice for UsbCamera {
         self.camera_backend.lock().unwrap().reset();
         Ok(())
     }
+
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
 
     fn reset(&mut self) {
         info!("Camera {} device reset", self.device_id());

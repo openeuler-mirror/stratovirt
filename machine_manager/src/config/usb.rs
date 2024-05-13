@@ -97,3 +97,66 @@ pub fn parse_usb_storage(vm_config: &mut VmConfig, drive_config: &str) -> Result
     dev.check()?;
     Ok(dev)
 }
+
+#[derive(Clone, Debug, Default)]
+pub struct UsbUasConfig {
+    pub id: Option<String>,
+    pub speed: Option<String>,
+    pub scsi_cfg: ScsiDevConfig,
+    pub media: String,
+}
+
+impl UsbUasConfig {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ConfigCheck for UsbUasConfig {
+    fn check(&self) -> Result<()> {
+        check_id(self.id.clone(), "usb-uas")?;
+
+        if self.scsi_cfg.aio_type != AioEngine::Off || self.scsi_cfg.direct {
+            bail!("USB UAS: \"aio=off,direct=false\" must be configured.");
+        }
+
+        Ok(())
+    }
+}
+
+pub fn parse_usb_uas(vm_config: &mut VmConfig, drive_config: &str) -> Result<UsbUasConfig> {
+    let mut cmd_parser = CmdParser::new("usb-uas");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("port")
+        .push("drive")
+        .push("speed");
+
+    cmd_parser.parse(drive_config)?;
+
+    let mut dev = UsbUasConfig::new();
+    dev.id = cmd_parser.get_value::<String>("id")?;
+    dev.speed = cmd_parser.get_value::<String>("speed")?;
+
+    let uas_drive = cmd_parser.get_value::<String>("drive")?.with_context(|| {
+        ConfigError::FieldIsMissing("drive".to_string(), "usb uas device".to_string())
+    })?;
+
+    let drive_arg = &vm_config
+        .drives
+        .remove(&uas_drive)
+        .with_context(|| "No drive configured matched for usb uas device.")?;
+    dev.scsi_cfg.path_on_host = drive_arg.path_on_host.clone();
+    dev.scsi_cfg.read_only = drive_arg.read_only;
+    dev.scsi_cfg.aio_type = drive_arg.aio;
+    dev.scsi_cfg.direct = drive_arg.direct;
+    dev.scsi_cfg.format = drive_arg.format;
+    dev.scsi_cfg.l2_cache_size = drive_arg.l2_cache_size;
+    dev.scsi_cfg.refcount_cache_size = drive_arg.refcount_cache_size;
+    dev.media = drive_arg.media.clone();
+
+    dev.check()?;
+    Ok(dev)
+}
