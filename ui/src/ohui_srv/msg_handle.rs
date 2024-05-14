@@ -196,6 +196,7 @@ impl OhUiMsgHandler {
             }
             EventType::Focus => {
                 let body = FocusEvent::from_bytes(&body_bytes[..]).unwrap();
+                trace::oh_event_focus(body.state);
                 if body.state == CLIENT_FOCUSOUT_EVENT {
                     reader.clear();
                     release_all_key()?;
@@ -209,6 +210,7 @@ impl OhUiMsgHandler {
             }
             EventType::Greet => {
                 let body = GreetEvent::from_bytes(&body_bytes[..]).unwrap();
+                trace::oh_event_greet(body.token_id);
                 *token_id.write().unwrap() = body.token_id;
                 Ok(())
             }
@@ -217,6 +219,7 @@ impl OhUiMsgHandler {
                     "unsupported type {:?} and body size {}",
                     event_type, body_size
                 );
+                trace::oh_event_unsupported_type(&event_type, body_size.try_into().unwrap());
                 Ok(())
             }
         } {
@@ -228,6 +231,7 @@ impl OhUiMsgHandler {
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
         let (msg_btn, action) = (mb.button, mb.btn_action);
+        trace::oh_event_mouse_button(msg_btn, action);
         let btn = match msg_btn {
             CLIENT_MOUSE_BUTTON_LEFT => INPUT_POINT_LEFT,
             CLIENT_MOUSE_BUTTON_RIGHT => INPUT_POINT_RIGHT,
@@ -264,6 +268,7 @@ impl OhUiMsgHandler {
 
     // NOTE: we only support absolute position info now, that means usb-mouse does not work.
     fn handle_mouse_motion(&self, mm: &MouseMotionEvent) -> Result<()> {
+        trace::oh_event_mouse_motion(mm.x, mm.y);
         self.state.lock().unwrap().move_pointer(mm.x, mm.y)
     }
 
@@ -278,6 +283,7 @@ impl OhUiMsgHandler {
                 bail!("not supported keycode {}", hmkey);
             }
         };
+        trace::oh_event_keyboard(keycode, ke.key_action);
         self.state
             .lock()
             .unwrap()
@@ -295,6 +301,7 @@ impl OhUiMsgHandler {
         };
         self.state.lock().unwrap().press_btn(dir)?;
         self.state.lock().unwrap().release_btn(dir)?;
+        trace::oh_event_scroll(dir);
         Ok(())
     }
 
@@ -310,6 +317,7 @@ impl OhUiMsgHandler {
                 error!("handle_windowinfo failed with error {e}");
             }
         }
+        trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
     fn handle_ledstate(&self, led: &LedstateEvent) {
@@ -317,6 +325,7 @@ impl OhUiMsgHandler {
             .lock()
             .unwrap()
             .update_host_ledstate(led.state as u8);
+        trace::oh_event_ledstate(led.state);
     }
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {
