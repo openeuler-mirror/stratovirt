@@ -219,3 +219,57 @@ name = "console_select"
 args = "con_id: &dyn fmt::Debug"
 message = "console id={:?}"
 enabled = true
+
+[[events]]
+name = "oh_event_mouse_button"
+args = "msg_btn: u32, action: u32"
+message = "msg_btn={} action={}"
+enabled = true
+
+[[events]]
+name = "oh_event_mouse_motion"
+args = "x: f64, y: f64"
+message = "x={} y={}"
+enabled = true
+
+[[events]]
+name = "oh_event_keyboard"
+args = "keycode: u16, key_action: u16"
+message = "keycode={} key_action={}"
+enabled = true
+
+[[events]]
+name = "oh_event_windowinfo"
+args = "width: u32, height: u32"
+message = "width={} height={}"
+enabled = true
+
+[[events]]
+name = "oh_event_scroll"
+args = "direction: u32"
+message = "direction={}"
+enabled = true
+
+[[events]]
+name = "oh_event_ledstate"
+args = "state: u32"
+message = "state={}"
+enabled = true
+
+[[events]]
+name = "oh_event_focus"
+args = "state: u32"
+message = "state={}"
+enabled = true
+
+[[events]]
+name = "oh_event_greet"
+args = "id: u64"
+message = "token_id={}"
+enabled = true
+
+[[events]]
+name = "oh_event_unsupported_type"
+args = "ty: &dyn fmt::Debug, size: u32"
+message = "type={:?} body_size={}"
+enabled = true
