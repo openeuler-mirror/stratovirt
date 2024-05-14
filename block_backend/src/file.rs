@@ -102,7 +102,7 @@ impl<T: Clone + 'static> FileDriver<T> {
         completecb: T,
     ) -> Result<()> {
         if req_list.is_empty() {
-            return self.complete_request(opcode, &Vec::new(), 0, 0, completecb);
+            return self.complete_request(opcode, 0, completecb);
         }
         let single_req = req_list.len() == 1;
         let cnt = Arc::new(AtomicU32::new(req_list.len() as u32));
@@ -127,16 +127,10 @@ impl<T: Clone + 'static> FileDriver<T> {
         self.process_request(OpCode::Preadv, req_list, completecb)
     }
 
-    fn complete_request(
-        &mut self,
-        opcode: OpCode,
-        iovec: &[Iovec],
-        offset: usize,
-        nbytes: u64,
-        completecb: T,
-    ) -> Result<()> {
-        let aiocb = self.package_aiocb(opcode, iovec.to_vec(), offset, nbytes, completecb);
-        (self.aio.borrow_mut().complete_func)(&aiocb, nbytes as i64)
+    pub fn complete_request(&mut self, opcode: OpCode, res: i64, completecb: T) -> Result<()> {
+        let iovec: Vec<Iovec> = Vec::new();
+        let aiocb = self.package_aiocb(opcode, iovec.to_vec(), 0, 0, completecb);
+        (self.aio.borrow_mut().complete_func)(&aiocb, res)
     }
 
     pub fn write_vectored(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {
