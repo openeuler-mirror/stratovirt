@@ -22,7 +22,7 @@ pub use vfio_dev::{
     VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS, VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA,
     VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
 };
-pub use vfio_pci::VfioPciDevice;
+pub use vfio_pci::{VfioConfig, VfioPciDevice};
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;

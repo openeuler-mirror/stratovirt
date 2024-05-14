@@ -17,12 +17,11 @@ use std::mem::size_of;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::{debug, error, info, warn};
-use machine_manager::config::{DriveFile, UsbUasConfig};
 use once_cell::sync::Lazy;
 use strum::EnumCount;
 use strum_macros::EnumCount;
-use util::byte_code::ByteCode;
 
 use super::config::*;
 use super::descriptor::{
@@ -35,15 +34,16 @@ use super::{
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
     USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
-
 use crate::{
     ScsiBus::{
         scsi_cdb_xfer, scsi_cdb_xfer_mode, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense,
         ScsiXferMode, CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
         SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE, SCSI_SENSE_OVERLAPPED_COMMANDS,
     },
-    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
+    ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
+use machine_manager::config::{DriveConfig, DriveFile};
+use util::byte_code::ByteCode;
 
 // Size of UasIUBody
 const UAS_IU_BODY_SIZE: usize = 30;
@@ -88,6 +88,23 @@ const _UAS_TMF_CLEAR_ACA: u8 = 0x40;
 const _UAS_TMF_QUERY_TASK: u8 = 0x80;
 const _UAS_TMF_QUERY_TASK_SET: u8 = 0x81;
 const _UAS_TMF_QUERY_ASYNC_EVENT: u8 = 0x82;
+
+#[derive(Parser, Clone, Debug)]
+#[command(no_binary_name(true))]
+pub struct UsbUasConfig {
+    #[arg(long, value_parser = ["usb-uas"])]
+    pub classtype: String,
+    #[arg(long)]
+    pub drive: String,
+    #[arg(long)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub speed: Option<String>,
+    #[arg(long)]
+    bus: Option<String>,
+    #[arg(long)]
+    port: Option<String>,
+}
 
 pub struct UsbUas {
     base: UsbDeviceBase,
@@ -573,11 +590,17 @@ fn complete_async_packet(packet: &Arc<Mutex<UsbPacket>>) {
 impl UsbUas {
     pub fn new(
         uas_config: UsbUasConfig,
+        drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Self {
-        let scsi_type = match &uas_config.media as &str {
-            "disk" => SCSI_TYPE_DISK,
-            _ => SCSI_TYPE_ROM,
+        let scsidev_classtype = match &drive_cfg.media as &str {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: uas_config.drive.clone(),
+            ..Default::default()
         };
 
         let mut base = UsbDeviceBase::new(
@@ -594,8 +617,8 @@ impl UsbUas {
             base,
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
             scsi_device: Arc::new(Mutex::new(ScsiDevice::new(
-                uas_config.scsi_cfg,
-                scsi_type,
+                scsi_dev_cfg,
+                drive_cfg,
                 drive_files,
             ))),
             commands_high: VecDeque::new(),

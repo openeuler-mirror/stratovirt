@@ -486,8 +486,9 @@ mod test {
     #[test]
     fn test_receive() {
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
         let mut pl011_dev = PL011::new(SerialConfig {
             chardev: chardev_cfg,

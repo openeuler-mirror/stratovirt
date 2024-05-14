@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -32,16 +33,22 @@ use devices::ScsiBus::{
     ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, CHECK_CONDITION,
     EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
 };
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{
-    config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
-    event_loop::EventLoop,
+use machine_manager::config::{
+    get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, MAX_VIRTIO_QUEUE,
 };
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+
+/// According to Virtio Spec.
+/// Max_channel should be 0.
+/// Max_target should be less than or equal to 255.
+const VIRTIO_SCSI_MAX_TARGET: u16 = 255;
+/// Max_lun should be less than or equal to 16383 (2^14 - 1).
+const VIRTIO_SCSI_MAX_LUN: u32 = 16383;
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
@@ -88,6 +95,27 @@ const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
 /// with a response equal to VIRTIO_SCSI_S_FAILURE.
 const VIRTIO_SCSI_S_FAILURE: u8 = 9;
 
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct ScsiCntlrConfig {
+    #[arg(long, value_parser = ["virtio-scsi-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, value_parser = parse_bool)]
+    pub multifunction: Option<bool>,
+    #[arg(long, alias = "num-queues", value_parser = clap::value_parser!(u32).range(1..=MAX_VIRTIO_QUEUE as i64))]
+    pub num_queues: Option<u32>,
+    #[arg(long)]
+    pub iothread: Option<String>,
+    #[arg(long, alias = "queue-size", default_value = "256", value_parser = valid_block_device_virtqueue_size)]
+    pub queue_size: u16,
+}
+
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
 struct VirtioScsiConfig {
@@ -121,7 +149,8 @@ pub struct ScsiCntlr {
 impl ScsiCntlr {
     pub fn new(config: ScsiCntlrConfig) -> ScsiCntlr {
         // Note: config.queues <= MAX_VIRTIO_QUEUE(32).
-        let queue_num = config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM;
+        let queue_num =
+            config.num_queues.unwrap() as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM;
         let queue_size = config.queue_size;
 
         Self {
@@ -164,16 +193,15 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.config_space.num_queues = self.config.queues;
         self.config_space.max_sectors = 0xFFFF_u32;
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
         self.config_space.seg_max = self.queue_size_max() as u32 - 2;
         self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
-        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN;
         // num_queues: request queues number.
-        self.config_space.num_queues = self.config.queues;
+        self.config_space.num_queues = self.config.num_queues.unwrap();
 
         self.base.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
@@ -964,4 +992,56 @@ pub fn scsi_cntlr_create_scsi_bus(
     let bus = ScsiBus::new(bus_name.to_string());
     locked_scsi_cntlr.bus = Some(Arc::new(Mutex::new(bus)));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_scsi_cntlr_config_cmdline_parser() {
+        // Test1: Right.
+        let cmdline1 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3,multifunction=on,iothread=iothread1,num-queues=3,queue-size=128";
+        let device_cfg =
+            ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline1, true, false)).unwrap();
+        assert_eq!(device_cfg.id, "scsi0");
+        assert_eq!(device_cfg.bus, "pcie.0");
+        assert_eq!(device_cfg.addr, (3, 0));
+        assert_eq!(device_cfg.multifunction, Some(true));
+        assert_eq!(device_cfg.iothread.unwrap(), "iothread1");
+        assert_eq!(device_cfg.num_queues.unwrap(), 3);
+        assert_eq!(device_cfg.queue_size, 128);
+
+        // Test2: Default value.
+        let cmdline2 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1";
+        let device_cfg =
+            ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline2, true, false)).unwrap();
+        assert_eq!(device_cfg.addr, (3, 1));
+        assert_eq!(device_cfg.multifunction, None);
+        assert_eq!(device_cfg.num_queues, None);
+        assert_eq!(device_cfg.queue_size, 256);
+
+        // Test3: Illegal value.
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,num-queues=33";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,queue-size=1025";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,queue-size=65";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+
+        // Test4: Missing necessary parameters.
+        let cmdline4 = "virtio-scsi-pci,id=scsi0";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "virtio-scsi-pci,bus=pcie.0,addr=0x3.0x1";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "virtio-scsi-pci,id=scsi0,addr=0x3.0x1";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+    }
 }

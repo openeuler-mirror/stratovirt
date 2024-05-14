@@ -666,7 +666,7 @@ impl ScsiRequest {
         let mut not_supported_flag = false;
         let mut sense = None;
         let mut status = GOOD;
-        let found_lun = self.dev.lock().unwrap().config.lun;
+        let found_lun = self.dev.lock().unwrap().dev_cfg.lun;
 
         // Requested lun id is not equal to found device id means it may be a target request.
         // REPORT LUNS is also a target request command.
@@ -1174,7 +1174,7 @@ fn scsi_command_emulate_mode_sense(
         if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
             dev_specific_parameter = 0x10;
         }
-        if dev_lock.config.read_only {
+        if dev_lock.drive_cfg.readonly {
             // Readonly.
             dev_specific_parameter |= 0x80;
         }
@@ -1362,7 +1362,7 @@ fn scsi_command_emulate_report_luns(
     let dev_lock = dev.lock().unwrap();
     // Byte 0-3: Lun List Length. Byte 4-7: Reserved.
     let mut outbuf: Vec<u8> = vec![0; 8];
-    let target = dev_lock.config.target;
+    let target = dev_lock.dev_cfg.target;
 
     if cmd.xfer < 16 {
         bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
@@ -1383,17 +1383,17 @@ fn scsi_command_emulate_report_luns(
 
     for (_pos, device) in scsi_bus_clone.devices.iter() {
         let device_lock = device.lock().unwrap();
-        if device_lock.config.target != target {
+        if device_lock.dev_cfg.target != target {
             drop(device_lock);
             continue;
         }
         let len = outbuf.len();
-        if device_lock.config.lun < 256 {
+        if device_lock.dev_cfg.lun < 256 {
             outbuf.push(0);
-            outbuf.push(device_lock.config.lun as u8);
+            outbuf.push(device_lock.dev_cfg.lun as u8);
         } else {
-            outbuf.push(0x40 | ((device_lock.config.lun >> 8) & 0xff) as u8);
-            outbuf.push((device_lock.config.lun & 0xff) as u8);
+            outbuf.push(0x40 | ((device_lock.dev_cfg.lun >> 8) & 0xff) as u8);
+            outbuf.push((device_lock.dev_cfg.lun & 0xff) as u8);
         }
         outbuf.resize(len + 8, 0);
         drop(device_lock);

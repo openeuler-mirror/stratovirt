@@ -13,9 +13,8 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::error::ConfigError;
-use super::{CmdParser, ConfigCheck, UnsignedInteger};
-use crate::config::{check_arg_too_long, ExBool};
+use super::CmdParser;
+use crate::config::ExBool;
 use util::num_ops::str_to_num;
 
 /// Basic information of pci devices such as bus number,
@@ -39,30 +38,6 @@ impl Default for PciBdf {
         PciBdf {
             bus: "pcie.0".to_string(),
             addr: (0, 0),
-        }
-    }
-}
-
-/// Basic information of RootPort like port number.
-#[derive(Debug, Clone)]
-pub struct RootPortConfig {
-    pub port: u8,
-    pub id: String,
-    pub multifunction: bool,
-}
-
-impl ConfigCheck for RootPortConfig {
-    fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "root_port id")
-    }
-}
-
-impl Default for RootPortConfig {
-    fn default() -> Self {
-        RootPortConfig {
-            port: 0,
-            id: "".to_string(),
-            multifunction: false,
         }
     }
 }
@@ -127,39 +102,6 @@ pub fn get_multi_function(pci_cfg: &str) -> Result<bool> {
     }
 
     Ok(false)
-}
-
-pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
-    let mut cmd_parser = CmdParser::new("pcie-root-port");
-    cmd_parser
-        .push("")
-        .push("bus")
-        .push("addr")
-        .push("port")
-        .push("chassis")
-        .push("multifunction")
-        .push("id");
-    cmd_parser.parse(rootport_cfg)?;
-
-    let root_port = RootPortConfig {
-        port: cmd_parser
-            .get_value::<UnsignedInteger>("port")?
-            .with_context(|| {
-                ConfigError::FieldIsMissing("port".to_string(), "rootport".to_string())
-            })?
-            .0 as u8,
-        id: cmd_parser.get_value::<String>("id")?.with_context(|| {
-            ConfigError::FieldIsMissing("id".to_string(), "rootport".to_string())
-        })?,
-        multifunction: cmd_parser
-            .get_value::<ExBool>("multifunction")?
-            .map_or(false, bool::from),
-    };
-
-    let _ = cmd_parser.get_value::<u8>("chassis")?;
-
-    root_port.check()?;
-    Ok(root_port)
 }
 
 pub fn pci_args_check(cmd_parser: &CmdParser) -> Result<()> {

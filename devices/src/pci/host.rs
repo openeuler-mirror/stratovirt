@@ -547,7 +547,7 @@ pub mod tests {
     use super::*;
     use crate::pci::bus::PciBus;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
-    use crate::pci::root_port::RootPort;
+    use crate::pci::root_port::{RootPort, RootPortConfig};
     use crate::pci::{PciDevBase, Result};
     use crate::{Device, DeviceBase};
     use address_space::Region;
@@ -658,7 +658,12 @@ pub mod tests {
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let pio_addr_ops = PciHost::build_pio_addr_ops(pci_host.clone());
         let pio_data_ops = PciHost::build_pio_data_ops(pci_host.clone());
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
+        let root_port_config = RootPortConfig {
+            addr: (1, 0),
+            id: "pcie.1".to_string(),
+            ..Default::default()
+        };
+        let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
         let mut data = [0_u8; 4];
@@ -735,10 +740,20 @@ pub mod tests {
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(pci_host.clone());
 
-        let mut root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
+        let root_port_config = RootPortConfig {
+            addr: (1, 0),
+            id: "pcie.1".to_string(),
+            ..Default::default()
+        };
+        let mut root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[1]);
         root_port.realize().unwrap();
-        let mut root_port = RootPort::new("pcie.2".to_string(), 16, 0, root_bus, false);
+        let root_port_config = RootPortConfig {
+            addr: (2, 0),
+            id: "pcie.2".to_string(),
+            ..Default::default()
+        };
+        let mut root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[2]);
         root_port.realize().unwrap();
 

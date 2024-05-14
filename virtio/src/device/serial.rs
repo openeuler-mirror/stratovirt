@@ -20,6 +20,7 @@ use std::{cmp, usize};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
+use machine_manager::config::ChardevConfig;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -31,7 +32,7 @@ use crate::{
 use address_space::AddressSpace;
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{ChardevType, VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
+    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -354,17 +355,21 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
-    pub fn new(port_cfg: VirtioSerialPort) -> Self {
+    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Self {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
-        let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
+        let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
+        let mut host_connected = is_console;
+        if let ChardevType::Pty { .. } = chardev_cfg.classtype {
+            host_connected = true;
+        }
 
         SerialPort {
             name: Some(port_cfg.id),
             paused: false,
-            chardev: Arc::new(Mutex::new(Chardev::new(port_cfg.chardev))),
-            nr: port_cfg.nr,
-            is_console: port_cfg.is_console,
+            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg))),
+            nr: port_cfg.nr.unwrap(),
+            is_console,
             guest_connected: false,
             host_connected,
             ctrl_handler: None,
@@ -1020,18 +1025,15 @@ impl ChardevNotifyDevice for SerialPort {
 mod tests {
     pub use super::*;
 
-    use machine_manager::config::PciBdf;
-
     #[test]
     fn test_set_driver_features() {
         let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
             id: "serial".to_string(),
-            pci_bdf: Some(PciBdf {
-                bus: "pcie.0".to_string(),
-                addr: (0, 0),
-            }),
-            multifunction: false,
+            multifunction: Some(false),
             max_ports: 31,
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
         });
 
         // If the device feature is 0, all driver features are not supported.
@@ -1094,13 +1096,12 @@ mod tests {
     fn test_read_config() {
         let max_ports: u8 = 31;
         let serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
             id: "serial".to_string(),
-            pci_bdf: Some(PciBdf {
-                bus: "pcie.0".to_string(),
-                addr: (0, 0),
-            }),
-            multifunction: false,
+            multifunction: Some(false),
             max_ports: max_ports as u32,
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
         });
 
         // The offset of configuration that needs to be read exceeds the maximum.

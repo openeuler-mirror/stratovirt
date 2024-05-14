@@ -20,75 +20,53 @@ pub mod vnc;
 
 mod boot_source;
 mod chardev;
-#[cfg(feature = "demo_device")]
-mod demo_dev;
 mod devices;
 mod drive;
-mod fs;
-#[cfg(feature = "virtio_gpu")]
-mod gpu;
 mod incoming;
 mod iothread;
 mod machine_config;
 mod network;
 mod numa;
 mod pci;
-#[cfg(feature = "pvpanic")]
-mod pvpanic_pci;
-#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
-mod ramfb;
 mod rng;
 #[cfg(feature = "vnc_auth")]
 mod sasl_auth;
-mod scsi;
 mod smbios;
 #[cfg(feature = "vnc_auth")]
 mod tls_creds;
-mod usb;
-mod vfio;
 
 pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
 pub use chardev::*;
-#[cfg(feature = "demo_device")]
-pub use demo_dev::*;
 pub use devices::*;
 #[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub use display::*;
 pub use drive::*;
 pub use error::ConfigError;
-pub use fs::*;
-#[cfg(feature = "virtio_gpu")]
-pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
 pub use numa::*;
 pub use pci::*;
-#[cfg(feature = "pvpanic")]
-pub use pvpanic_pci::*;
-#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
-pub use ramfb::*;
 pub use rng::*;
 #[cfg(feature = "vnc_auth")]
 pub use sasl_auth::*;
-pub use scsi::*;
 pub use smbios::*;
 #[cfg(feature = "vnc_auth")]
 pub use tls_creds::*;
-pub use usb::*;
-pub use vfio::*;
 #[cfg(feature = "vnc")]
 pub use vnc::*;
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{canonicalize, File};
 use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use log::error;
 use serde::{Deserialize, Serialize};
 
@@ -110,10 +88,15 @@ pub const MAX_SOCK_PATH_LENGTH: usize = 108;
 pub const MAX_VIRTIO_QUEUE: usize = 32;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
-pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
 /// Default virtqueue size for virtio devices excepts virtio-fs.
 pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi/virtio-blk should be larger than 2.
+pub const MIN_QUEUE_SIZE_BLOCK_DEVICE: u64 = 2;
+// Max size of each virtqueue for virtio-scsi/virtio-blk.
+pub const MAX_QUEUE_SIZE_BLOCK_DEVICE: u64 = 1024;
+/// The bar0 size of enable_bar0 features
+pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
@@ -139,7 +122,7 @@ pub struct VmConfig {
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
     pub object: ObjectConfig,
-    pub pflashs: Option<Vec<PFlashConfig>>,
+    pub pflashs: Option<Vec<DriveConfig>>,
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
@@ -179,12 +162,12 @@ impl VmConfig {
 
         let mut stdio_count = 0;
         if let Some(serial) = self.serial.as_ref() {
-            if serial.chardev.backend == ChardevType::Stdio {
+            if let ChardevType::Stdio { .. } = serial.chardev.classtype {
                 stdio_count += 1;
             }
         }
         for (_, char_dev) in self.chardev.clone() {
-            if char_dev.backend == ChardevType::Stdio {
+            if let ChardevType::Stdio { .. } = char_dev.classtype {
                 stdio_count += 1;
             }
         }
@@ -227,13 +210,13 @@ impl VmConfig {
                     .with_context(|| "Failed to add iothread")?;
             }
             "rng-random" => {
-                let rng_cfg = parse_rng_obj(object_args)?;
+                let rng_cfg =
+                    RngObjConfig::try_parse_from(str_slip_to_clap(object_args, true, false))?;
                 let id = rng_cfg.id.clone();
-                if self.object.rng_object.get(&id).is_none() {
-                    self.object.rng_object.insert(id, rng_cfg);
-                } else {
+                if self.object.rng_object.get(&id).is_some() {
                     bail!("Object: {} has been added", id);
                 }
+                self.object.rng_object.insert(id, rng_cfg);
             }
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
                 self.add_mem_zone(object_args, device_type)?;
@@ -395,7 +378,7 @@ impl VmConfig {
                 &mut drive_files,
                 &drive.id,
                 &drive.path_on_host,
-                drive.read_only,
+                drive.readonly,
                 drive.direct,
             )?;
         }
@@ -405,7 +388,7 @@ impl VmConfig {
                     &mut drive_files,
                     "",
                     &pflash.path_on_host,
-                    pflash.read_only,
+                    pflash.readonly,
                     false,
                 )?;
             }
@@ -619,8 +602,8 @@ impl From<ExBool> for bool {
 
 pub fn parse_bool(s: &str) -> Result<bool> {
     match s {
-        "on" => Ok(true),
-        "off" => Ok(false),
+        "true" | "on" | "yes" | "unmap" => Ok(true),
+        "false" | "off" | "no" | "ignore" => Ok(false),
         _ => Err(anyhow!("Unknow bool value {s}")),
     }
 }
@@ -730,21 +713,85 @@ pub fn check_path_too_long(arg: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn check_arg_nonexist(arg: Option<String>, name: &str, device: &str) -> Result<()> {
-    arg.with_context(|| ConfigError::FieldIsMissing(name.to_string(), device.to_string()))?;
+/// Make sure args are existed.
+///
+///   arg_name: Name of arg.
+///   arg_value: Value of arg. Should be Option<> class.
+/// Eg:
+///   check_arg_exist!(("id", id));
+///   check_arg_exist!(("bus", bus), ("addr", addr));
+#[macro_export]
+macro_rules! check_arg_exist{
+    ($(($arg_name:tt, $arg_value:expr)),*) => {
+        $($arg_value.clone().with_context(|| format!("Should set {}.", $arg_name))?;)*
+    }
+}
 
-    Ok(())
+/// Make sure args are existed.
+///
+///   arg_name: Name of arg.
+///   arg_value: Value of arg. Should be Option<> class.
+/// Eg:
+///   check_arg_nonexist!(("id", id));
+///   check_arg_nonexist!(("bus", bus), ("addr", addr));
+#[macro_export]
+macro_rules! check_arg_nonexist{
+    ($(($arg_name:tt, $arg_value:expr)),*) => {
+        $($arg_value.clone().map_or(Some(0), |_| None).with_context(|| format!("Should not set {}", $arg_name))?;)*
+    }
 }
 
 /// Configure StratoVirt parameters in clap format.
-pub fn str_slip_to_clap(args: &str) -> Vec<String> {
-    let args_vecs = args.split([',', '=']).collect::<Vec<&str>>();
-    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len());
-    for (cnt, param) in args_vecs.iter().enumerate() {
-        if cnt % 2 == 1 {
-            itr.push(format!("--{}", param));
-        } else {
-            itr.push(param.to_string());
+///
+/// The first parameter will be parsed as the `binary name` unless Command::no_binary_name is used when using `clap`.
+/// Stratovirt command line may use the first parameter as class type.
+/// Eg:
+/// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
+///   This cmdline has no class type.
+/// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
+///   This cmdline sets device type `virtio-balloon-pci` as the first parameter.
+///
+/// Use first_pos_is_type to indicate whether the first parameter is a type class which needs a separate analysis.
+/// Eg:
+/// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
+///   Set first_pos_is_type false for this cmdline has no class type.
+/// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
+///   Set first_pos_is_type true for this cmdline has device type "virtio-balloon-pci" as the first parameter.
+///
+/// Use first_pos_is_subcommand to indicate whether the first parameter is a subclass.
+/// Eg:
+/// Chardev has stdio/unix-socket/tcp-socket/pty/file classes. These classes have different configurations but will be stored
+/// in the same `ChardevConfig` structure by using `enum`. So, we will use class type as a subcommand to indicate which subtype
+/// will be used to store the configuration in enumeration type. Subcommand in `clap` doesn't need `--` in parameter.
+/// 1. -serial file,path=<file_path>
+///   Set first_pos_is_subcommand true for first parameter `file` is the subclass type for chardev.
+pub fn str_slip_to_clap(
+    args: &str,
+    first_pos_is_type: bool,
+    mut first_pos_is_subcommand: bool,
+) -> Vec<String> {
+    let args_str = if first_pos_is_type && !first_pos_is_subcommand {
+        format!("classtype={}", args)
+    } else {
+        args.to_string()
+    };
+    let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
+    let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len() * 2);
+    for params in args_vecs {
+        let key_value = params.split(['=']).collect::<Vec<&str>>();
+        // Command line like "key=value" will be converted to "--key value".
+        // Command line like "key" will be converted to "--key".
+        for (cnt, param) in key_value.iter().enumerate() {
+            if cnt % 2 == 0 {
+                if first_pos_is_subcommand {
+                    itr.push(param.to_string());
+                    first_pos_is_subcommand = false;
+                } else {
+                    itr.push(format!("--{}", param));
+                }
+            } else {
+                itr.push(param.to_string());
+            }
         }
     }
     itr
@@ -753,6 +800,69 @@ pub fn str_slip_to_clap(args: &str) -> Vec<String> {
 pub fn valid_id(id: &str) -> Result<String> {
     check_arg_too_long(id, "id")?;
     Ok(id.to_string())
+}
+
+// Virtio queue size must be power of 2 and in range [min_size, max_size].
+pub fn valid_virtqueue_size(size: u64, min_size: u64, max_size: u64) -> Result<()> {
+    if size < min_size || size > max_size {
+        return Err(anyhow!(ConfigError::IllegalValue(
+            "virtqueue size".to_string(),
+            min_size,
+            true,
+            max_size,
+            true
+        )));
+    }
+
+    if size & (size - 1) != 0 {
+        bail!("Virtqueue size should be power of 2!");
+    }
+
+    Ok(())
+}
+
+pub fn valid_path(path: &str) -> Result<String> {
+    if path.len() > MAX_PATH_LENGTH {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "path".to_string(),
+            MAX_PATH_LENGTH,
+        )));
+    }
+
+    let canonical_path = canonicalize(path).map_or(path.to_string(), |pathbuf| {
+        String::from(pathbuf.to_str().unwrap())
+    });
+
+    Ok(canonical_path)
+}
+
+pub fn valid_socket_path(sock_path: &str) -> Result<String> {
+    if sock_path.len() > MAX_SOCK_PATH_LENGTH {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "socket path".to_string(),
+            MAX_SOCK_PATH_LENGTH,
+        )));
+    }
+    valid_path(sock_path)
+}
+
+pub fn valid_dir(d: &str) -> Result<String> {
+    let dir = String::from(d);
+    if !Path::new(&dir).is_dir() {
+        return Err(anyhow!(ConfigError::DirNotExist(dir)));
+    }
+    Ok(dir)
+}
+
+pub fn valid_block_device_virtqueue_size(s: &str) -> Result<u16> {
+    let size: u64 = s.parse()?;
+    valid_virtqueue_size(
+        size,
+        MIN_QUEUE_SIZE_BLOCK_DEVICE + 1,
+        MAX_QUEUE_SIZE_BLOCK_DEVICE,
+    )?;
+
+    Ok(size as u16)
 }
 
 #[cfg(test)]

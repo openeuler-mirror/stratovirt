@@ -13,7 +13,7 @@
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    config::{parse_trace_options, ChardevType, CmdParser, MachineType, VmConfig},
+    config::{parse_trace_options, ChardevType, CmdParser, MachineType, SocketType, VmConfig},
     qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
@@ -641,47 +641,33 @@ pub fn check_api_channel(
             .get_value::<String>("chardev")?
             .with_context(|| "Argument \'chardev\' is missing for \'mon\'")?;
 
-        if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
-            if mode != *"control" {
-                bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
-            }
-        } else {
-            bail!("Argument \'mode\' of \'mon\' should be set to \'control\'.");
+        let mode = cmd_parser
+            .get_value::<String>("mode")?
+            .with_context(|| "Argument \'mode\' of \'mon\' should be set to \'control\'.")?;
+        if mode != "control" {
+            bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
         }
 
-        if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::UnixSocket {
-                path,
-                server,
-                nowait,
-            } = cfg.backend
-            {
-                if !server || !nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        path
-                    );
-                }
-                sock_paths.push(QmpSocketPath::Unix { path });
-            } else if let ChardevType::TcpSocket {
-                host,
-                port,
-                server,
-                nowait,
-            } = cfg.backend
-            {
-                if !server || !nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}:{}\'",
-                        host, port
-                    );
-                }
-                sock_paths.push(QmpSocketPath::Tcp { host, port });
-            } else {
-                bail!("Only chardev of unix-socket type can be used for monitor");
+        let cfg = vm_config
+            .chardev
+            .remove(&chardev)
+            .with_context(|| format!("No chardev found: {}", &chardev))?;
+        let socket = cfg
+            .classtype
+            .socket_type()
+            .with_context(|| "Only chardev of unix-socket type can be used for monitor")?;
+        if let ChardevType::Socket { server, nowait, .. } = cfg.classtype {
+            if !server || !nowait {
+                bail!(
+                    "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                    cfg.id()
+                );
             }
-        } else {
-            bail!("No chardev found: {}", &chardev);
+        }
+        if let SocketType::Tcp { host, port } = socket {
+            sock_paths.push(QmpSocketPath::Tcp { host, port });
+        } else if let SocketType::Unix { path } = socket {
+            sock_paths.push(QmpSocketPath::Unix { path });
         }
     }
 

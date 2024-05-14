@@ -221,7 +221,7 @@ impl SecurityType {
         // Tls configuration.
         if let Some(tls_cred) = object.tls_object.get(&vnc_cfg.tls_creds) {
             let tlscred = TlsCreds {
-                cred_type: tls_cred.cred_type.clone(),
+                cred_type: "x509".to_string(),
                 dir: tls_cred.dir.clone(),
                 endpoint: tls_cred.endpoint.clone(),
                 verifypeer: tls_cred.verifypeer,

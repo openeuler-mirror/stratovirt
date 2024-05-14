@@ -33,11 +33,11 @@ mod queue;
 mod transport;
 
 pub use device::balloon::*;
-pub use device::block::{Block, BlockState, VirtioBlkConfig};
+pub use device::block::{Block, BlockState, VirtioBlkConfig, VirtioBlkDevConfig};
 #[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
 pub use device::net::*;
-pub use device::rng::{Rng, RngState};
+pub use device::rng::{Rng, RngConfig, RngState};
 pub use device::scsi_cntlr as ScsiCntlr;
 pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
 pub use error::VirtioError;
@@ -729,8 +729,9 @@ pub trait VirtioDevice: Send + AsAny {
     ///
     /// # Arguments
     ///
-    /// * `_file_path` - The related backend file path.
-    fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
+    /// * `_configs` - The related configs for device.
+    ///     eg: DriveConfig and VirtioBlkDevConfig for virtio blk device.
+    fn update_config(&mut self, _configs: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
     }
 

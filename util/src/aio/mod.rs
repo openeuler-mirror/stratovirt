@@ -66,7 +66,7 @@ pub enum AioEngine {
 }
 
 impl FromStr for AioEngine {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
@@ -74,7 +74,7 @@ impl FromStr for AioEngine {
             AIO_NATIVE => Ok(AioEngine::Native),
             AIO_IOURING => Ok(AioEngine::IoUring),
             AIO_THREADS => Ok(AioEngine::Threads),
-            _ => Err(()),
+            _ => Err(anyhow!("Unknown aio type")),
         }
     }
 }
@@ -90,8 +90,9 @@ impl ToString for AioEngine {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WriteZeroesState {
+    #[default]
     Off,
     On,
     Unmap,

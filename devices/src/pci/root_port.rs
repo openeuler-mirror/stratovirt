@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use log::{error, info};
 use once_cell::sync::OnceCell;
 
@@ -39,16 +40,40 @@ use crate::pci::{
 };
 use crate::{Device, DeviceBase, MsiIrqManager};
 use address_space::Region;
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::{byte_code::ByteCode, num_ops::ranges_overlap};
+use util::{
+    byte_code::ByteCode,
+    num_ops::{ranges_overlap, str_to_num},
+};
 
 const DEVICE_ID_RP: u16 = 0x000c;
 
 static FAST_UNPLUG_FEATURE: OnceCell<bool> = OnceCell::new();
+
+/// Basic information of RootPort like port number.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct RootPortConfig {
+    #[arg(long, value_parser = ["pcie-root-port"])]
+    pub classtype: String,
+    #[arg(long, value_parser = str_to_num::<u8>)]
+    pub port: u8,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: bool,
+    #[arg(long, default_value = "0")]
+    pub chassis: u8,
+}
 
 /// Device state root port.
 #[repr(C)]
@@ -81,22 +106,15 @@ impl RootPort {
     ///
     /// # Arguments
     ///
-    /// * `name` - Root port name.
-    /// * `devfn` - Device number << 3 | Function number.
-    /// * `port_num` - Root port number.
+    /// * `cfg` - Root port config.
     /// * `parent_bus` - Weak reference to the parent bus.
-    pub fn new(
-        name: String,
-        devfn: u8,
-        port_num: u8,
-        parent_bus: Weak<Mutex<PciBus>>,
-        multifunction: bool,
-    ) -> Self {
+    pub fn new(cfg: RootPortConfig, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+        let devfn = cfg.addr.0 << 3 | cfg.addr.1;
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16, "RootPortIo");
         let mem_region = Region::init_container_region(u64::max_value(), "RootPortMem");
         let sec_bus = Arc::new(Mutex::new(PciBus::new(
-            name.clone(),
+            cfg.id.clone(),
             #[cfg(target_arch = "x86_64")]
             io_region.clone(),
             mem_region.clone(),
@@ -104,18 +122,18 @@ impl RootPort {
 
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name, true),
+                base: DeviceBase::new(cfg.id, true),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
                 parent_bus,
             },
-            port_num,
+            port_num: cfg.port,
             sec_bus,
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
             dev_id: Arc::new(AtomicU16::new(0)),
-            multifunction,
+            multifunction: cfg.multifunction,
             hpev_notified: false,
         }
     }
@@ -694,7 +712,12 @@ mod tests {
     fn test_read_config() {
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
+        let root_port_config = RootPortConfig {
+            addr: (1, 0),
+            id: "pcie.1".to_string(),
+            ..Default::default()
+        };
+        let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
         let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
@@ -710,7 +733,12 @@ mod tests {
     fn test_write_config() {
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
+        let root_port_config = RootPortConfig {
+            addr: (1, 0),
+            id: "pcie.1".to_string(),
+            ..Default::default()
+        };
+        let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
         let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
 

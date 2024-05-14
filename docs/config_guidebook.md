@@ -938,7 +938,7 @@ Six properties can be set for Virtio-Scsi controller.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
-* num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default block queue number is 1. The max queues number supported is no more than 32. (optional)
+* num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)). The max queues number supported is no more than 32. (optional)
 * queue-size: the optional virtqueue size for all the queues. Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 ```shell
 -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
