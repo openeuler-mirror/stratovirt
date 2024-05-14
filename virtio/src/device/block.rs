@@ -26,17 +26,17 @@ use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_to_buf,
-    read_config_default, report_virtio_error, virtio_has_feature, Element, Queue, VirtioBase,
-    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_DISCARD,
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
-    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID,
-    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    check_config_space_rw, gpa_hva_iovec_map_by_cache, iov_discard_back, iov_discard_front,
+    iov_to_buf_by_cache, read_config_default, report_virtio_error, virtio_has_feature, Element,
+    Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
+    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
+    VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
+    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
     VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, GuestAddress, RegionCache};
 use block_backend::{
     create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
     BlockProperty, BlockStatus,
@@ -270,7 +270,12 @@ struct Request {
 }
 
 impl Request {
-    fn new(handler: &BlockIoHandler, elem: &mut Element, status: &mut u8) -> Result<Self> {
+    fn new(
+        handler: &BlockIoHandler,
+        cache: &Option<RegionCache>,
+        elem: &mut Element,
+        status: &mut u8,
+    ) -> Result<Self> {
         if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() {
             bail!(
                 "Missed header for block request: out {} in {} desc num {}",
@@ -281,8 +286,9 @@ impl Request {
         }
 
         let mut out_header = RequestOutHeader::default();
-        iov_to_buf(
+        iov_to_buf_by_cache(
             &handler.mem_space,
+            cache,
             &elem.out_iovec,
             out_header.as_mut_bytes(),
         )
@@ -338,7 +344,8 @@ impl Request {
                 }
                 .with_context(|| "Empty data for block request")?;
 
-                let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, &handler.mem_space)?;
+                let (data_len, iovec) =
+                    gpa_hva_iovec_map_by_cache(data_iovec, &handler.mem_space, cache)?;
                 request.data_len = data_len;
                 request.iovec = iovec;
             }
@@ -651,7 +658,8 @@ impl BlockIoHandler {
 
             // Init and put valid request into request queue.
             let mut status = VIRTIO_BLK_S_OK;
-            let req = Request::new(self, &mut elem, &mut status)?;
+            let cache = queue.vring.get_cache();
+            let req = Request::new(self, cache, &mut elem, &mut status)?;
             if status != VIRTIO_BLK_S_OK {
                 let aiocompletecb = AioCompleteCb::new(
                     self.queue.clone(),
