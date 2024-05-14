@@ -1936,8 +1936,12 @@ impl XhciDevice {
                     trb.parameter
                 };
 
-                self.mem_space
-                    .get_address_map(GuestAddress(dma_addr), chunk as u64, &mut vec)?;
+                self.mem_space.get_address_map(
+                    &None,
+                    GuestAddress(dma_addr),
+                    chunk as u64,
+                    &mut vec,
+                )?;
             }
         }
 

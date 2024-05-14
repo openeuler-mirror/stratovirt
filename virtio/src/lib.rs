@@ -57,7 +57,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
-use address_space::AddressSpace;
+use address_space::{AddressSpace, RegionCache};
 use machine_manager::config::ConfigCheck;
 use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
@@ -789,12 +789,21 @@ pub fn report_virtio_error(
 
 /// Read iovec to buf and return the read number of bytes.
 pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8]) -> Result<usize> {
+    iov_to_buf_by_cache(mem_space, &None, iovec, buf)
+}
+
+pub fn iov_to_buf_by_cache(
+    mem_space: &AddressSpace,
+    cache: &Option<RegionCache>,
+    iovec: &[ElemIovec],
+    buf: &mut [u8],
+) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;
 
     for iov in iovec {
         let mut addr_map = Vec::new();
-        mem_space.get_address_map(iov.addr, iov.len as u64, &mut addr_map)?;
+        mem_space.get_address_map(cache, iov.addr, iov.len as u64, &mut addr_map)?;
         for addr in addr_map.into_iter() {
             end = cmp::min(start + addr.iov_len as usize, buf.len());
             mem_to_buf(&mut buf[start..end], addr.iov_base)?;
@@ -839,11 +848,19 @@ fn gpa_hva_iovec_map(
     gpa_elemiovec: &[ElemIovec],
     mem_space: &AddressSpace,
 ) -> Result<(u64, Vec<Iovec>)> {
+    gpa_hva_iovec_map_by_cache(gpa_elemiovec, mem_space, &None)
+}
+
+fn gpa_hva_iovec_map_by_cache(
+    gpa_elemiovec: &[ElemIovec],
+    mem_space: &AddressSpace,
+    cache: &Option<RegionCache>,
+) -> Result<(u64, Vec<Iovec>)> {
     let mut iov_size = 0;
     let mut hva_iovec = Vec::with_capacity(gpa_elemiovec.len());
 
     for elem in gpa_elemiovec.iter() {
-        mem_space.get_address_map(elem.addr, elem.len as u64, &mut hva_iovec)?;
+        mem_space.get_address_map(cache, elem.addr, elem.len as u64, &mut hva_iovec)?;
         iov_size += elem.len as u64;
     }
 
