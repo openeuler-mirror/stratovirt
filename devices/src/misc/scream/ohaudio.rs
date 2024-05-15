@@ -108,6 +108,7 @@ impl OhAudioProcess for OhAudioRender {
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 self.start = true;
+                trace::oh_scream_render_init(&self.ctx);
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
@@ -128,6 +129,7 @@ impl OhAudioProcess for OhAudioRender {
         let mut locked_data = self.stream_data.lock().unwrap();
         locked_data.clear();
         self.data_size.store(0, Ordering::Relaxed);
+        trace::oh_scream_render_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
@@ -197,6 +199,7 @@ impl OhAudioProcess for OhAudioCapture {
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 self.start = true;
+                trace::oh_scream_capture_init(&self.ctx);
                 true
             }
             Err(e) => {
@@ -214,6 +217,7 @@ impl OhAudioProcess for OhAudioCapture {
             }
             self.ctx = None;
         }
+        trace::oh_scream_capture_destroy();
     }
 
     fn preprocess(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {
@@ -271,6 +275,7 @@ extern "C" fn on_write_data_cb(
         unsafe {
             ptr::copy_nonoverlapping(su.addr as *const u8, dst_addr as *mut u8, len as usize)
         };
+        trace::oh_scream_on_write_data_cb(len as usize);
 
         dst_addr += len;
         left -= len;
@@ -330,6 +335,7 @@ extern "C" fn on_read_data_cb(
                 len as usize,
             )
         };
+        trace::oh_scream_on_read_data_cb(len as usize);
         left -= len;
         src_addr += len;
         capture.cur_pos += len;
