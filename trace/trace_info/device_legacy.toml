@@ -201,3 +201,27 @@ name = "pflash_write_data"
 args = "offset: u64, size: usize, value: &[u8], counter: u32"
 message = "data offset: 0x{:04x}, size: {}, value: 0x{:x?}, counter: 0x{:04x}"
 enabled = true
+
+[[events]]
+name = "fwcfg_select_entry"
+args = "key: u16, key_name: &'static str, ret: i32"
+message = "key_value {} key_name {:?} ret {}"
+enabled = true
+
+[[events]]
+name = "fwcfg_add_entry"
+args = "key: u16, key_name: &'static str, data: Vec<u8>"
+message = "key_value {} key_name {:?} data {:?}"
+enabled = true
+
+[[events]]
+name = "fwcfg_read_data"
+args = "value: u64"
+message = "value {}"
+enabled = true
+
+[[events]]
+name = "fwcfg_add_file"
+args = "index: usize, filename: &str, data_len: usize"
+message = "index {} filename {:?} data_len {}"
+enabled = true
