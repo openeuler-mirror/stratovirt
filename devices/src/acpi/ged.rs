@@ -122,6 +122,7 @@ impl Ged {
                 .notification_type
                 .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
             ged_clone.inject_interrupt();
+            trace::ged_inject_acpi_event(AcpiEvent::PowerDown as u32);
             if QmpChannel::is_connected() {
                 event!(Powerdown);
             }
@@ -151,6 +152,7 @@ impl Ged {
                 .notification_type
                 .store(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
             clone_ged.inject_interrupt();
+            trace::ged_inject_acpi_event(AcpiEvent::CpuResize as u32);
             if QmpChannel::is_connected() {
                 event!(CpuResize);
             }
@@ -174,6 +176,7 @@ impl Ged {
         self.notification_type
             .fetch_or(evt as u32, Ordering::SeqCst);
         self.inject_interrupt();
+        trace::ged_inject_acpi_event(evt as u32);
     }
 }
 
@@ -203,6 +206,7 @@ impl SysBusDevOps for Ged {
         let value = self
             .notification_type
             .swap(AcpiEvent::Nothing as u32, Ordering::SeqCst);
+        trace::ged_read(value);
         write_data_u32(data, value)
     }
 
