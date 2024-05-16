@@ -98,6 +98,13 @@ pub const MAX_QUEUE_SIZE_BLOCK_DEVICE: u64 = 1024;
 /// The bar0 size of enable_bar0 features
 pub const VIRTIO_GPU_ENABLE_BAR0_SIZE: u64 = 64 * M;
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct GlobalConfig {
+    #[arg(long, alias = "pcie-root-port.fast-unplug", value_parser = ["0", "1"])]
+    fast_unplug: Option<String>,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
     pub rng_object: HashMap<String, RngObjConfig>,
@@ -219,7 +226,7 @@ impl VmConfig {
                 self.object.rng_object.insert(id, rng_cfg);
             }
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
-                self.add_mem_zone(object_args, device_type)?;
+                self.add_mem_zone(object_args)?;
             }
             #[cfg(feature = "vnc_auth")]
             "tls-creds-x509" => {
@@ -243,24 +250,18 @@ impl VmConfig {
     ///
     /// * `global_config` - The args of global config.
     pub fn add_global_config(&mut self, global_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("global");
-        cmd_parser.push("pcie-root-port.fast-unplug");
-        cmd_parser.parse(global_config)?;
+        let global_config =
+            GlobalConfig::try_parse_from(str_slip_to_clap(global_config, false, false))?;
 
-        if let Some(fast_unplug_value) =
-            cmd_parser.get_value::<String>("pcie-root-port.fast-unplug")?
-        {
-            if fast_unplug_value != FAST_UNPLUG_ON && fast_unplug_value != FAST_UNPLUG_OFF {
-                bail!("The value of fast-unplug is invalid: {}", fast_unplug_value);
-            }
+        if let Some(fast_unplug_value) = global_config.fast_unplug {
             let fast_unplug_key = String::from("pcie-root-port.fast-unplug");
-            if self.global_config.get(&fast_unplug_key).is_none() {
-                self.global_config
-                    .insert(fast_unplug_key, fast_unplug_value);
-            } else {
+            if self.global_config.get(&fast_unplug_key).is_some() {
                 bail!("Global config {} has been added", fast_unplug_key);
             }
+            self.global_config
+                .insert(fast_unplug_key, fast_unplug_value);
         }
+
         Ok(())
     }
 
@@ -627,15 +628,16 @@ fn enable_trace_state(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn parse_trace_options(opt: &str) -> Result<()> {
-    let mut cmd_parser = CmdParser::new("trace");
-    cmd_parser.push("file");
-    cmd_parser.get_parameters(opt)?;
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct TraceConfig {
+    #[arg(long)]
+    file: String,
+}
 
-    let path = cmd_parser
-        .get_value::<String>("file")?
-        .with_context(|| "trace: trace file must be set.")?;
-    enable_trace_state(&path)?;
+pub fn add_trace(opt: &str) -> Result<()> {
+    let trace_cfg = TraceConfig::try_parse_from(str_slip_to_clap(opt, false, false))?;
+    enable_trace_state(&trace_cfg.file)?;
     Ok(())
 }
 
@@ -656,7 +658,7 @@ impl FromStr for UnsignedInteger {
 pub struct IntegerList(pub Vec<u64>);
 
 impl FromStr for IntegerList {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let mut integer_list = Vec::new();
@@ -668,19 +670,22 @@ impl FromStr for IntegerList {
         for list in lists.iter() {
             let items: Vec<&str> = list.split('-').collect();
             if items.len() > 2 {
-                return Err(());
+                return Err(anyhow!(
+                    "{} parameters connected by -, should be no more than 2.",
+                    items.len()
+                ));
             }
 
             let start = items[0]
                 .parse::<u64>()
-                .map_err(|e| error!("Invalid value {}, error is {:?}", items[0], e))?;
+                .map_err(|e| anyhow!("Invalid value {}, error is {:?}", items[0], e))?;
             integer_list.push(start);
             if items.len() == 2 {
                 let end = items[1]
                     .parse::<u64>()
-                    .map_err(|e| error!("Invalid value {}, error is {:?}", items[1], e))?;
+                    .map_err(|e| anyhow!("Invalid value {}, error is {:?}", items[1], e))?;
                 if start >= end {
-                    return Err(());
+                    return Err(anyhow!("start {} is bigger than end {}.", start, end));
                 }
 
                 for i in start..end {
@@ -768,9 +773,10 @@ macro_rules! check_arg_nonexist{
 pub fn str_slip_to_clap(
     args: &str,
     first_pos_is_type: bool,
-    mut first_pos_is_subcommand: bool,
+    first_pos_is_subcommand: bool,
 ) -> Vec<String> {
-    let args_str = if first_pos_is_type && !first_pos_is_subcommand {
+    let mut subcommand = first_pos_is_subcommand;
+    let args_str = if first_pos_is_type && !subcommand {
         format!("classtype={}", args)
     } else {
         args.to_string()
@@ -783,9 +789,9 @@ pub fn str_slip_to_clap(
         // Command line like "key" will be converted to "--key".
         for (cnt, param) in key_value.iter().enumerate() {
             if cnt % 2 == 0 {
-                if first_pos_is_subcommand {
+                if subcommand {
                     itr.push(param.to_string());
-                    first_pos_is_subcommand = false;
+                    subcommand = false;
                 } else {
                     itr.push(format!("--{}", param));
                 }
@@ -863,6 +869,11 @@ pub fn valid_block_device_virtqueue_size(s: &str) -> Result<u16> {
     )?;
 
     Ok(size as u16)
+}
+
+pub fn parse_size(s: &str) -> Result<u64> {
+    let size = memory_unit_conversion(s, M).with_context(|| format!("Invalid size: {}", s))?;
+    Ok(size)
 }
 
 #[cfg(test)]
@@ -958,10 +969,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_trace_options() {
-        assert!(parse_trace_options("fil=test_trace").is_err());
-        assert!(parse_trace_options("file").is_err());
-        assert!(parse_trace_options("file=test_trace").is_err());
+    fn test_add_trace() {
+        assert!(add_trace("fil=test_trace").is_err());
+        assert!(add_trace("file").is_err());
+        assert!(add_trace("file=test_trace").is_err());
     }
 
     #[test]
