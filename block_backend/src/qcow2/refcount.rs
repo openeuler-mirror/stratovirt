@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
@@ -31,6 +31,9 @@ use util::{
 
 // The max refcount table size default is 4 clusters;
 const MAX_REFTABLE_NUM: u64 = 4;
+
+// Default refcount table map length, which can describe 512GiB data for 64Kib cluster.
+const REFCOUNT_TABLE_MAP_LEN: usize = 256;
 
 #[derive(Eq, PartialEq, Clone)]
 pub enum Qcow2DiscardType {
@@ -64,6 +67,7 @@ impl DiscardTask {
 #[derive(Clone)]
 pub struct RefCount {
     pub refcount_table: Vec<u64>,
+    pub refcount_table_map: HashMap<u64, u8>,
     sync_aio: Rc<RefCell<SyncAioInfo>>,
     pub(crate) refcount_blk_cache: Qcow2Cache,
     pub discard_list: Vec<DiscardTask>,
@@ -87,6 +91,7 @@ impl RefCount {
     pub fn new(sync_aio: Rc<RefCell<SyncAioInfo>>) -> Self {
         RefCount {
             refcount_table: Vec::new(),
+            refcount_table_map: HashMap::with_capacity(REFCOUNT_TABLE_MAP_LEN),
             sync_aio,
             refcount_blk_cache: Qcow2Cache::default(),
             discard_list: Vec::new(),
@@ -217,9 +222,11 @@ impl RefCount {
         new_table.resize(new_table_size as usize, 0);
         let start_offset = start_idx * self.cluster_size;
         let mut table_offset = start_offset;
+        let mut added_rb = Vec::new();
         for i in 0..new_block_clusters {
             if new_table[i as usize] == 0 {
                 new_table[i as usize] = table_offset;
+                added_rb.push(table_offset & REFCOUNT_TABLE_OFFSET_MASK);
                 table_offset += self.cluster_size;
             }
         }
@@ -247,6 +254,9 @@ impl RefCount {
         let old_table_offset = self.refcount_table_offset;
         let old_table_clusters = self.refcount_table_clusters;
         self.refcount_table = new_table;
+        for rb_offset in added_rb.iter() {
+            self.refcount_table_map.insert(*rb_offset, 1);
+        }
         self.refcount_table_offset = header.refcount_table_offset;
         self.refcount_table_clusters = header.refcount_table_clusters;
         self.refcount_table_size = new_table_size;
@@ -316,7 +326,7 @@ impl RefCount {
             bail!("Failed to update refcount, offset is not aligned to cluster");
         }
         let first_cluster = bytes_to_clusters(offset, self.cluster_size).unwrap();
-        let mut rc_vec = Vec::new();
+        let mut rc_vec: Vec<(u64, u64, usize)> = Vec::with_capacity(clusters as usize);
         let mut i = 0;
         while i < clusters {
             let rt_idx = (first_cluster + i) >> self.refcount_blk_bits;
@@ -381,6 +391,22 @@ impl RefCount {
         self.refcount_blk_cache.flush(self.sync_aio.clone())
     }
 
+    fn get_refcount_block_cache(&mut self, rt_idx: u64) -> Result<Rc<RefCell<CacheTable>>> {
+        let entry = self.refcount_blk_cache.get(rt_idx);
+        let cache_entry = if let Some(entry) = entry {
+            entry.clone()
+        } else {
+            self.load_refcount_block(rt_idx).with_context(|| {
+                format!("Failed to get refcount block cache, index is {}", rt_idx)
+            })?;
+            self.refcount_blk_cache
+                .get(rt_idx)
+                .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
+                .clone()
+        };
+        Ok(cache_entry)
+    }
+
     fn set_refcount(
         &mut self,
         rt_idx: u64,
@@ -391,18 +417,10 @@ impl RefCount {
     ) -> Result<()> {
         let is_add = added > 0;
         let added_value = added.unsigned_abs() as u16;
-        if !self.refcount_blk_cache.contains_keys(rt_idx) {
-            self.load_refcount_block(rt_idx).with_context(|| {
-                format!("Failed to get refcount block cache, index is {}", rt_idx)
-            })?;
-        }
         let cache_entry = self
-            .refcount_blk_cache
-            .get(rt_idx)
-            .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
-            .clone();
-
-        let mut rb_vec = Vec::new();
+            .get_refcount_block_cache(rt_idx)
+            .with_context(|| "Get refcount block cache failed")?;
+        let mut rb_vec: Vec<u16> = Vec::with_capacity(clusters);
         let mut borrowed_entry = cache_entry.borrow_mut();
         let is_dirty = borrowed_entry.dirty_info.is_dirty;
         for i in 0..clusters {
@@ -471,17 +489,9 @@ impl RefCount {
             );
         }
 
-        if !self.refcount_blk_cache.contains_keys(rt_idx) {
-            self.load_refcount_block(rt_idx).with_context(|| {
-                format!("Failed to get refcount block cache, index is {}", rt_idx)
-            })?;
-        }
         let cache_entry = self
-            .refcount_blk_cache
-            .get(rt_idx)
-            .with_context(|| format!("Not found refcount block cache, index is {}", rt_idx))?
-            .clone();
-
+            .get_refcount_block_cache(rt_idx)
+            .with_context(|| "Get refcount block cache failed")?;
         let rb_idx = self.cluster_in_rc_block(cluster) as usize;
         let rc_value = cache_entry.borrow_mut().get_entry_map(rb_idx).unwrap();
 
@@ -542,6 +552,8 @@ impl RefCount {
 
         // Update refcount table.
         self.refcount_table[rt_idx as usize] = alloc_offset;
+        let rb_offset = alloc_offset & REFCOUNT_TABLE_OFFSET_MASK;
+        self.refcount_table_map.insert(rb_offset, 1);
         let rc_block = vec![0_u8; self.cluster_size as usize];
         let cache_entry = Rc::new(RefCell::new(CacheTable::new(
             alloc_offset,

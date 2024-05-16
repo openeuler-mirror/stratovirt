@@ -503,6 +503,7 @@ impl AddressSpace {
     /// * `count` - Memory needed length
     pub fn get_address_map(
         &self,
+        cache: &Option<RegionCache>,
         addr: GuestAddress,
         count: u64,
         res: &mut Vec<Iovec>,
@@ -512,7 +513,7 @@ impl AddressSpace {
 
         loop {
             let io_vec = self
-                .addr_cache_init(start)
+                .get_host_address_from_cache(start, cache)
                 .map(|(hva, fr_len)| Iovec {
                     iov_base: hva,
                     iov_len: std::cmp::min(len, fr_len),

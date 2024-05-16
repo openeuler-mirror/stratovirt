@@ -341,6 +341,13 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             .sync_aio
             .borrow_mut()
             .read_ctrl_cluster(self.header.refcount_table_offset, sz)?;
+        for block_offset in &self.refcount.refcount_table {
+            if *block_offset == 0 {
+                continue;
+            }
+            let rfb_offset = block_offset & REFCOUNT_TABLE_OFFSET_MASK;
+            self.refcount.refcount_table_map.insert(rfb_offset, 1);
+        }
         Ok(())
     }
 
@@ -435,7 +442,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         l2_entry &= !QCOW2_OFLAG_ZERO;
         let mut cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
         if cluster_addr == 0 {
-            let new_addr = self.alloc_cluster(1, true)?;
+            let new_addr = self.alloc_cluster(1, false)?;
             l2_entry = new_addr | QCOW2_OFFSET_COPIED;
             cluster_addr = new_addr & L2_TABLE_OFFSET_MASK;
         } else if l2_entry & QCOW2_OFFSET_COPIED == 0 {
@@ -865,6 +872,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.table.l1_table_offset = new_l1_table_offset;
         self.table.l1_size = snap.l1_size;
         self.table.l1_table = snap_l1_table;
+        self.table.l1_table_map.clear();
+        for l1_entry in self.table.l1_table.iter() {
+            let addr = l1_entry & L1_TABLE_OFFSET_MASK;
+            self.table.l1_table_map.insert(addr, 1);
+        }
 
         self.qcow2_update_snapshot_refcount(old_l1_table_offset, old_l1_size as usize, -1)?;
 
@@ -1291,13 +1303,14 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             return 0;
         }
 
-        if check & METADATA_OVERLAP_CHECK_MAINHEADER != 0 && offset < self.header.cluster_size() {
+        let cluster_size = self.header.cluster_size();
+        if check & METADATA_OVERLAP_CHECK_MAINHEADER != 0 && offset < cluster_size {
             return METADATA_OVERLAP_CHECK_MAINHEADER as i64;
         }
 
         let size = round_up(
             self.refcount.offset_into_cluster(offset) + size,
-            self.header.cluster_size(),
+            cluster_size,
         )
         .unwrap() as usize;
         let offset = self.refcount.start_of_cluster(offset) as usize;
@@ -1321,15 +1334,10 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         if check & METADATA_OVERLAP_CHECK_ACTIVEL2 != 0 {
-            for l1_entry in &self.table.l1_table {
-                if ranges_overlap(
-                    offset,
-                    size,
-                    (l1_entry & L1_TABLE_OFFSET_MASK) as usize,
-                    self.header.cluster_size() as usize,
-                )
-                .unwrap()
-                {
+            let num = size as u64 / cluster_size;
+            for i in 0..num {
+                let addr = offset as u64 + i * cluster_size;
+                if self.table.l1_table_map.contains_key(&addr) {
                     return METADATA_OVERLAP_CHECK_ACTIVEL2 as i64;
                 }
             }
@@ -1340,7 +1348,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 offset,
                 size,
                 self.header.refcount_table_offset as usize,
-                self.header.refcount_table_clusters as usize * self.header.cluster_size() as usize,
+                self.header.refcount_table_clusters as usize * cluster_size as usize,
             )
             .unwrap()
         {
@@ -1348,15 +1356,10 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         }
 
         if check & METADATA_OVERLAP_CHECK_REFCOUNTBLOCK != 0 {
-            for block_offset in &self.refcount.refcount_table {
-                if ranges_overlap(
-                    offset,
-                    size,
-                    (block_offset & REFCOUNT_TABLE_OFFSET_MASK) as usize,
-                    self.header.cluster_size() as usize,
-                )
-                .unwrap()
-                {
+            let num = size as u64 / cluster_size;
+            for i in 0..num {
+                let addr = offset as u64 + i * cluster_size;
+                if self.refcount.refcount_table_map.contains_key(&addr) {
                     return METADATA_OVERLAP_CHECK_REFCOUNTBLOCK as i64;
                 }
             }
