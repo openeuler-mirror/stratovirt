@@ -27,3 +27,39 @@ name = "scream_setup_alsa_hwp"
 args = "name: &str, hwp: &dyn fmt::Debug"
 message = "scream {} setup hardware parameters: {:?}"
 enabled = true
+
+[[events]]
+name = "oh_scream_render_init"
+args = "context: &dyn fmt::Debug"
+message = "context: {:?}"
+enabled = true
+
+[[events]]
+name = "oh_scream_render_destroy"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "oh_scream_capture_init"
+args = "context: &dyn fmt::Debug"
+message = "context: {:?}"
+enabled = true
+
+[[events]]
+name = "oh_scream_capture_destroy"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "oh_scream_on_write_data_cb"
+args = "len: usize"
+message = "len: {}"
+enabled = true
+
+[[events]]
+name = "oh_scream_on_read_data_cb"
+args = "len: usize"
+message = "len: {}"
+enabled = true

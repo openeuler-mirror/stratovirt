@@ -197,6 +197,7 @@ pub enum AudioProcessCb {
     ),
 }
 
+#[derive(Debug)]
 pub struct AudioContext {
     stream_type: AudioStreamType,
     spec: AudioSpec,
