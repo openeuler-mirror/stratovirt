@@ -361,11 +361,14 @@ impl FwCfgCommon {
 
     /// Select the entry by the key specified
     fn select_entry(&mut self, key: u16) {
+        let ret;
         self.cur_offset = 0;
         if (key & FW_CFG_ENTRY_MASK) >= self.max_entry() {
             self.cur_entry = FW_CFG_INVALID;
+            ret = 0;
         } else {
             self.cur_entry = key;
+            ret = 1;
 
             // unwrap() is safe because we have checked the range of `key`.
             let selected_entry = self.get_entry_mut().unwrap();
@@ -373,6 +376,8 @@ impl FwCfgCommon {
                 cb.select_callback();
             }
         }
+
+        trace::fwcfg_select_entry(key, get_key_name(key as usize), ret);
     }
 
     fn add_entry(
@@ -404,11 +409,12 @@ impl FwCfgCommon {
             warn!("Entry not empty, will override");
         }
 
-        entry.data = data;
+        entry.data = data.clone();
         entry.select_cb = select_cb;
         entry.allow_write = allow_write;
         entry.write_cb = write_cb;
 
+        trace::fwcfg_add_entry(key, get_key_name(key as usize), data);
         Ok(())
     }
 
@@ -467,11 +473,8 @@ impl FwCfgCommon {
             }
         }
 
-        let file = FwCfgFile::new(
-            data.len() as u32,
-            FW_CFG_FILE_FIRST + index as u16,
-            filename,
-        );
+        let data_len = data.len();
+        let file = FwCfgFile::new(data_len as u32, FW_CFG_FILE_FIRST + index as u16, filename);
         self.files.insert(index, file);
         self.files.iter_mut().skip(index + 1).for_each(|f| {
             f.select += 1;
@@ -489,6 +492,8 @@ impl FwCfgCommon {
             FW_CFG_FILE_FIRST as usize + index,
             FwCfgEntry::new(data, select_cb, write_cb, allow_write),
         );
+
+        trace::fwcfg_add_file(index, filename, data_len);
         Ok(())
     }
 
@@ -650,6 +655,8 @@ impl FwCfgCommon {
 
         self.cur_offset = offset;
         write_dma_result(&self.mem_space, dma_addr, dma.control)?;
+
+        trace::fwcfg_read_data(0);
         Ok(())
     }
 
@@ -743,6 +750,8 @@ impl FwCfgCommon {
             value <<= 8 * size as u64;
         }
         self.cur_offset = cur_offset;
+
+        trace::fwcfg_read_data(value);
         Ok(value)
     }
 
