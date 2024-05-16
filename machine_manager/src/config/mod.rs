@@ -803,6 +803,24 @@ pub fn str_slip_to_clap(
     itr
 }
 
+/// Retrieve the value of the specified parameter from a string in the format "key=value".
+pub fn get_value_of_parameter(parameter: &str, args_str: &str) -> Result<String> {
+    let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
+
+    for args in args_vecs {
+        let key_value = args.split(['=']).collect::<Vec<&str>>();
+        if key_value.len() != 2 || key_value[0] != parameter {
+            continue;
+        }
+        if key_value[1].is_empty() {
+            bail!("Find empty arg {} in string {}.", key_value[0], args_str);
+        }
+        return Ok(key_value[1].to_string());
+    }
+
+    bail!("Cannot find {}'s value from string {}", parameter, args_str);
+}
+
 pub fn valid_id(id: &str) -> Result<String> {
     check_arg_too_long(id, "id")?;
     Ok(id.to_string())
@@ -1006,5 +1024,21 @@ mod tests {
         assert!(res.is_ok());
         let res = vm_config.add_global_config("pcie-root-port.fast-unplug=1");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_get_value_of_parameter() {
+        let cmd = "scsi-hd,id=disk1,drive=scsi-drive-0";
+        let id = get_value_of_parameter("id", cmd).unwrap();
+        assert_eq!(id, "disk1");
+
+        let cmd = "id=";
+        assert!(get_value_of_parameter("id", cmd).is_err());
+
+        let cmd = "id";
+        assert!(get_value_of_parameter("id", cmd).is_err());
+
+        let cmd = "scsi-hd,idxxx=disk1";
+        assert!(get_value_of_parameter("id", cmd).is_err());
     }
 }
