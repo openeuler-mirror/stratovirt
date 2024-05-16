@@ -204,14 +204,9 @@ impl VmConfig {
     ///
     /// * `object_args` - The args of object.
     pub fn add_object(&mut self, object_args: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("object");
-        cmd_params.push("");
-
-        cmd_params.get_parameters(object_args)?;
-        let device_type = cmd_params
-            .get_value::<String>("")?
-            .with_context(|| "Object type not specified")?;
-        match device_type.as_str() {
+        let object_type =
+            get_class_type(object_args).with_context(|| "Object type not specified")?;
+        match object_type.as_str() {
             "iothread" => {
                 self.add_iothread(object_args)
                     .with_context(|| "Failed to add iothread")?;
@@ -237,7 +232,7 @@ impl VmConfig {
                 self.add_saslauth(object_args)?;
             }
             _ => {
-                bail!("Unknow object type: {:?}", &device_type);
+                bail!("Unknow object type: {:?}", &object_type);
             }
         }
 
@@ -746,6 +741,14 @@ macro_rules! check_arg_nonexist{
     }
 }
 
+fn concat_classtype(args: &str, concat: bool) -> String {
+    if concat {
+        format!("classtype={}", args)
+    } else {
+        args.to_string()
+    }
+}
+
 /// Configure StratoVirt parameters in clap format.
 ///
 /// The first parameter will be parsed as the `binary name` unless Command::no_binary_name is used when using `clap`.
@@ -776,11 +779,7 @@ pub fn str_slip_to_clap(
     first_pos_is_subcommand: bool,
 ) -> Vec<String> {
     let mut subcommand = first_pos_is_subcommand;
-    let args_str = if first_pos_is_type && !subcommand {
-        format!("classtype={}", args)
-    } else {
-        args.to_string()
-    };
+    let args_str = concat_classtype(args, first_pos_is_type && !subcommand);
     let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
     let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len() * 2);
     for params in args_vecs {
@@ -819,6 +818,11 @@ pub fn get_value_of_parameter(parameter: &str, args_str: &str) -> Result<String>
     }
 
     bail!("Cannot find {}'s value from string {}", parameter, args_str);
+}
+
+pub fn get_class_type(args: &str) -> Result<String> {
+    let args_str = concat_classtype(args, true);
+    get_value_of_parameter("classtype", &args_str)
 }
 
 pub fn valid_id(id: &str) -> Result<String> {

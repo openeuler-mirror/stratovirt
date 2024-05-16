@@ -13,7 +13,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::CmdParser;
+use super::{get_value_of_parameter, CmdParser};
 use crate::config::ExBool;
 use util::num_ops::str_to_num;
 
@@ -71,21 +71,14 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
 }
 
 pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
-    let mut cmd_parser = CmdParser::new("bdf");
-    cmd_parser.push("").push("bus").push("addr");
-    cmd_parser.get_parameters(pci_cfg)?;
-
-    let mut pci_bdf = PciBdf {
-        bus: cmd_parser
-            .get_value::<String>("bus")?
-            .with_context(|| "Bus not specified for pci device")?,
-        ..Default::default()
-    };
-    if let Some(addr) = cmd_parser.get_value::<String>("addr")? {
-        pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get addr")?;
-    } else {
-        bail!("No addr found for pci device");
+    let bus = get_value_of_parameter("bus", pci_cfg)?;
+    let addr_str = get_value_of_parameter("addr", pci_cfg)?;
+    if addr_str.is_empty() {
+        bail!("Invalid addr.");
     }
+    let addr = get_pci_df(&addr_str).with_context(|| "Failed to get addr")?;
+    let pci_bdf = PciBdf::new(bus, addr);
+
     Ok(pci_bdf)
 }
 
