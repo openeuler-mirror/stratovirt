@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use super::{CmdParser, VmConfig};
+use super::{get_class_type, VmConfig};
 use crate::qmp::qmp_schema;
 
 impl VmConfig {
@@ -117,7 +117,7 @@ impl VmConfig {
     }
 
     pub fn add_device(&mut self, device_config: &str) -> Result<()> {
-        let device_type = parse_device_type(device_config)?;
+        let device_type = get_class_type(device_config).with_context(|| "Missing driver field.")?;
         self.devices.push((device_type, device_config.to_string()));
 
         Ok(())
@@ -133,46 +133,5 @@ impl VmConfig {
                 return;
             }
         }
-    }
-}
-
-pub fn parse_device_type(device_config: &str) -> Result<String> {
-    let mut cmd_params = CmdParser::new("device");
-    cmd_params.push("");
-    cmd_params.get_parameters(device_config)?;
-    cmd_params
-        .get_value::<String>("")?
-        .with_context(|| "Missing driver field.")
-}
-
-pub fn parse_device_id(device_config: &str) -> Result<String> {
-    let mut cmd_parser = CmdParser::new("device");
-    cmd_parser.push("id");
-
-    cmd_parser.get_parameters(device_config)?;
-    if let Some(id) = cmd_parser.get_value::<String>("id")? {
-        Ok(id)
-    } else {
-        Ok(String::new())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_device_id() {
-        let test_conf = "virtio-blk-device,drive=rootfs,id=blkid";
-        let ret = parse_device_id(test_conf);
-        assert!(ret.is_ok());
-        let id = ret.unwrap();
-        assert_eq!("blkid", id);
-
-        let test_conf = "virtio-blk-device,drive=rootfs";
-        let ret = parse_device_id(test_conf);
-        assert!(ret.is_ok());
-        let id = ret.unwrap();
-        assert_eq!("", id);
     }
 }
