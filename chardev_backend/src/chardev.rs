@@ -15,6 +15,7 @@ use std::io::{Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,6 +25,7 @@ use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::pty::openpty;
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{PathInfo, PTY_PATH};
@@ -85,6 +87,10 @@ pub struct Chardev {
     /// Scheduled DPC to unpause input stream.
     /// Unpause must be done inside event-loop
     unpause_timer: Option<u64>,
+    /// output stream fd is blocked
+    output_blocked: Option<Arc<AtomicBool>>,
+    /// output listener to notify when output stream fd can be written
+    output_listener_fd: Option<Arc<EventFd>>,
 }
 
 impl Chardev {
@@ -100,6 +106,8 @@ impl Chardev {
             dev: None,
             wait_port: false,
             unpause_timer: None,
+            output_blocked: None,
+            output_listener_fd: None,
         }
     }
 
@@ -222,7 +230,7 @@ impl Chardev {
         let unpause_fn = Box::new(move || {
             let res = EventLoop::update_event(
                 vec![EventNotifier::new(
-                    NotifierOperation::Modify,
+                    NotifierOperation::AddEvents,
                     input_fd,
                     None,
                     EventSet::IN | EventSet::HANG_UP,
@@ -244,6 +252,33 @@ impl Chardev {
             let main_loop = EventLoop::get_ctx(None).unwrap();
             main_loop.timer_del(timer_id);
             self.unpause_timer = None;
+        }
+    }
+
+    pub fn add_listen_for_tx(
+        &mut self,
+        listener_fd: Arc<EventFd>,
+        blocked: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let event_notifier = EventNotifier::new(
+            NotifierOperation::AddEvents,
+            self.stream_fd.unwrap(),
+            None,
+            EventSet::OUT,
+            Vec::new(),
+        );
+
+        match EventLoop::update_event(vec![event_notifier], None) {
+            Ok(()) => {
+                self.output_blocked = Some(blocked.clone());
+                self.output_listener_fd = Some(listener_fd);
+                blocked.store(true, Ordering::Release);
+                Ok(())
+            }
+            Err(e) => {
+                blocked.store(false, Ordering::Release);
+                Err(e)
+            }
         }
     }
 }
@@ -438,10 +473,10 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                     locked_receiver.set_paused();
 
                     return Some(vec![EventNotifier::new(
-                        NotifierOperation::Modify,
+                        NotifierOperation::DeleteEvents,
                         stream_fd,
                         None,
-                        EventSet::HANG_UP,
+                        EventSet::IN,
                         vec![],
                     )]);
                 }
@@ -471,12 +506,42 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             None
         });
 
+        let handling_chardev = cloned_chardev.clone();
+        let output_handler = Rc::new(move |event, fd| {
+            if event & EventSet::OUT != EventSet::OUT {
+                return None;
+            }
+
+            let mut locked_cdev = handling_chardev.lock().unwrap();
+            if locked_cdev.output_blocked.is_some() && locked_cdev.output_listener_fd.is_some() {
+                let fd = locked_cdev.output_listener_fd.as_ref().unwrap();
+                if let Err(e) = fd.write(1) {
+                    error!("Failed to write eventfd with error {:?}", e);
+                    return None;
+                }
+                locked_cdev
+                    .output_blocked
+                    .as_ref()
+                    .unwrap()
+                    .store(false, Ordering::Release);
+                locked_cdev.output_blocked = None;
+                locked_cdev.output_listener_fd = None;
+            }
+            Some(vec![EventNotifier::new(
+                NotifierOperation::DeleteEvents,
+                fd,
+                None,
+                EventSet::OUT,
+                Vec::new(),
+            )])
+        });
+
         Some(vec![EventNotifier::new(
             NotifierOperation::AddShared,
             stream_fd,
             Some(listener_fd),
             EventSet::IN | EventSet::HANG_UP,
-            vec![input_handler],
+            vec![input_handler, output_handler],
         )])
     });
 
