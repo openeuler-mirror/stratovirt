@@ -549,7 +549,7 @@ fn convert_to_nv12(source: &[u8], width: u32, height: u32) -> Vec<u8> {
             source[idx + 2] as f32,
         );
         let y = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
-        img_nv12.push(y as u8);
+        img_nv12.push(y);
     }
     for i in 0..(width * height / 2) {
         let idx = (i * 2 * pixel) as usize;
