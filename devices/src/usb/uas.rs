@@ -31,7 +31,7 @@ use super::descriptor::{
 };
 use super::xhci::xhci_controller::XhciDevice;
 use super::{
-    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
+    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
     USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use crate::{
@@ -934,10 +934,6 @@ impl UsbDevice for UsbUas {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         None
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }
 
