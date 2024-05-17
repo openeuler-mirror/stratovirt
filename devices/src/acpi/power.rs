@@ -154,6 +154,8 @@ impl PowerDev {
         // unit: mW
         self.regs[REG_IDX_BAT_PRATE] =
             (self.regs[REG_IDX_BAT_PRATE] * self.regs[REG_IDX_BAT_PVOLT]) / 1000;
+
+        trace::power_status_read(&self.regs);
         Ok(())
     }
 
@@ -253,6 +255,7 @@ impl SysBusDevOps for PowerDev {
             return false;
         }
         let value = self.regs[reg_idx as usize];
+        trace::power_read(reg_idx, value);
         write_data_u32(data, value)
     }
 
