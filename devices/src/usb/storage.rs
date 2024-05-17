@@ -27,7 +27,7 @@ use super::descriptor::{
 };
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
-use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
+use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 use crate::{
     ScsiBus::{
         ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
@@ -627,9 +627,5 @@ impl UsbDevice for UsbStorage {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

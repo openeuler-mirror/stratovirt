@@ -23,10 +23,10 @@ use super::descriptor::{
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
-use super::xhci::xhci_controller::XhciDevice;
+use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{
-    config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint,
-    UsbPacket, UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
+    config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket,
+    UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use machine_manager::config::valid_id;
 use ui::input::{
@@ -229,7 +229,9 @@ impl PointerOpts for UsbTabletAdapter {
         locked_tablet.hid.num += 1;
         drop(locked_tablet);
         let clone_tablet = self.tablet.clone();
-        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDevice>>))
+        // Wakeup endpoint.
+        let ep_id = endpoint_number_to_id(true, 1);
+        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDevice>>), ep_id)
     }
 }
 
@@ -299,9 +301,5 @@ impl UsbDevice for UsbTablet {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

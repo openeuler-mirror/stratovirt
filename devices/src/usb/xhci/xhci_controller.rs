@@ -30,7 +30,7 @@ use super::xhci_trb::{
     TRB_TYPE_SHIFT,
 };
 use crate::usb::{config::*, TransferOps};
-use crate::usb::{UsbDevice, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, UsbPacketStatus};
+use crate::usb::{UsbDevice, UsbDeviceRequest, UsbError, UsbPacket, UsbPacketStatus};
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 
@@ -2324,21 +2324,15 @@ impl XhciDevice {
     }
 
     /// Used for device to wakeup endpoint
-    pub fn wakeup_endpoint(
-        &mut self,
-        slot_id: u32,
-        ep: &UsbEndpoint,
-        stream_id: u32,
-    ) -> Result<()> {
-        let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
-        if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id as u32) {
+    pub fn wakeup_endpoint(&mut self, slot_id: u32, ep_id: u32, stream_id: u32) -> Result<()> {
+        if let Err(e) = self.get_endpoint_ctx(slot_id, ep_id) {
             trace::usb_xhci_unimplemented(&format!(
                 "Invalid slot id or ep id, maybe device not activated, {:?}",
                 e
             ));
             return Ok(());
         }
-        self.kick_endpoint(slot_id, ep_id as u32, stream_id)?;
+        self.kick_endpoint(slot_id, ep_id, stream_id)?;
         Ok(())
     }
 
@@ -2496,7 +2490,7 @@ fn endpoint_id_to_number(ep_id: u8) -> (bool, u8) {
     (ep_id & 1 == 1, ep_id >> 1)
 }
 
-fn endpoint_number_to_id(in_direction: bool, ep_number: u8) -> u8 {
+pub fn endpoint_number_to_id(in_direction: bool, ep_number: u8) -> u8 {
     if ep_number == 0 {
         // Control endpoint.
         1
