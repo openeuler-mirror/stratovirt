@@ -54,6 +54,10 @@ pub enum NotifierOperation {
     Park = 16,
     /// Resume a file descriptor from the event table
     Resume = 32,
+    /// Add events to current event table for a file descriptor
+    AddEvents = 64,
+    /// Delete events from current event table for a file descriptor
+    DeleteEvents = 128,
 }
 
 #[derive(Debug, PartialEq)]
@@ -466,6 +470,35 @@ impl EventLoopContext {
         Ok(())
     }
 
+    fn update_events_for_fd(&mut self, event: &EventNotifier, add: bool) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                let new_events = if add {
+                    event.event | notifier.event
+                } else {
+                    !event.event & notifier.event
+                };
+                if new_events != notifier.event {
+                    self.epoll
+                        .ctl(
+                            ControlOperation::Modify,
+                            notifier.raw_fd,
+                            EpollEvent::new(new_events, &**notifier as *const _ as u64),
+                        )
+                        .with_context(|| {
+                            format!("Failed to add events, event fd: {}", notifier.raw_fd)
+                        })?;
+                    notifier.event = new_events;
+                }
+            }
+            _ => {
+                return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
+            }
+        }
+        Ok(())
+    }
+
     /// update fds registered to `EventLoop` according to the operation type.
     ///
     /// # Arguments
@@ -489,6 +522,12 @@ impl EventLoopContext {
                 }
                 NotifierOperation::Resume => {
                     self.resume_event(&en)?;
+                }
+                NotifierOperation::AddEvents => {
+                    self.update_events_for_fd(&en, true)?;
+                }
+                NotifierOperation::DeleteEvents => {
+                    self.update_events_for_fd(&en, false)?;
                 }
             }
         }
