@@ -14,6 +14,7 @@ use std::os::unix::io::RawFd;
 use std::str::FromStr;
 use std::sync::Mutex;
 
+use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use strum::VariantNames;
@@ -54,13 +55,14 @@ pub enum HypervisorType {
 }
 
 impl FromStr for HypervisorType {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "kvm" => Ok(HypervisorType::Kvm),
+            // Note: "kvm:tcg" is a configuration compatible with libvirt.
+            "kvm" | "kvm:tcg" => Ok(HypervisorType::Kvm),
             "test" => Ok(HypervisorType::Test),
-            _ => Err(()),
+            _ => Err(anyhow!("Not supported or invalid hypervisor type {}.", s)),
         }
     }
 }
