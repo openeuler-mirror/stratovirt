@@ -11,9 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgAction, Parser};
 
 use crate::{
-    config::{add_trace, ChardevType, CmdParser, MachineType, SocketType, VmConfig},
+    config::{add_trace, str_slip_to_clap, ChardevType, MachineType, SocketType, VmConfig},
     qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
@@ -599,6 +600,28 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     Ok(vm_cfg)
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct QmpConfig {
+    #[arg(long, alias = "classtype")]
+    uri: String,
+    #[arg(long, action = ArgAction::SetTrue, required = true)]
+    server: bool,
+    #[arg(long, action = ArgAction::SetTrue, required = true)]
+    nowait: bool,
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MonConfig {
+    #[arg(long, default_value = "")]
+    id: String,
+    #[arg(long, value_parser = ["control"])]
+    mode: String,
+    #[arg(long)]
+    chardev: String,
+}
+
 /// This function is to parse qmp socket path and type.
 ///
 /// # Arguments
@@ -613,45 +636,18 @@ pub fn check_api_channel(
     vm_config: &mut VmConfig,
 ) -> Result<Vec<SocketListener>> {
     let mut sock_paths = Vec::new();
-    if let Some(qmp_config) = args.value_of("qmp") {
-        let mut cmd_parser = CmdParser::new("qmp");
-        cmd_parser.push("").push("server").push("nowait");
-
-        cmd_parser.parse(&qmp_config)?;
-        if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let sock_path =
-                QmpSocketPath::new(uri).with_context(|| "Failed to parse qmp socket path")?;
-            sock_paths.push(sock_path);
-        } else {
-            bail!("No uri found for qmp");
-        }
-        if cmd_parser.get_value::<String>("server")?.is_none() {
-            bail!("Argument \'server\' is needed for qmp");
-        }
-        if cmd_parser.get_value::<String>("nowait")?.is_none() {
-            bail!("Argument \'nowait\' is needed for qmp");
-        }
+    if let Some(qmp_args) = args.value_of("qmp") {
+        let qmp_cfg = QmpConfig::try_parse_from(str_slip_to_clap(&qmp_args, true, false))?;
+        let sock_path =
+            QmpSocketPath::new(qmp_cfg.uri).with_context(|| "Failed to parse qmp socket path")?;
+        sock_paths.push(sock_path);
     }
-    if let Some(mon_config) = args.value_of("mon") {
-        let mut cmd_parser = CmdParser::new("monitor");
-        cmd_parser.push("id").push("mode").push("chardev");
-        cmd_parser.parse(&mon_config)?;
-
-        let chardev = cmd_parser
-            .get_value::<String>("chardev")?
-            .with_context(|| "Argument \'chardev\' is missing for \'mon\'")?;
-
-        let mode = cmd_parser
-            .get_value::<String>("mode")?
-            .with_context(|| "Argument \'mode\' of \'mon\' should be set to \'control\'.")?;
-        if mode != "control" {
-            bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
-        }
-
+    if let Some(mon_args) = args.value_of("mon") {
+        let mon_cfg = MonConfig::try_parse_from(str_slip_to_clap(&mon_args, false, false))?;
         let cfg = vm_config
             .chardev
-            .remove(&chardev)
-            .with_context(|| format!("No chardev found: {}", &chardev))?;
+            .remove(&mon_cfg.chardev)
+            .with_context(|| format!("No chardev found: {}", &mon_cfg.chardev))?;
         let socket = cfg
             .classtype
             .socket_type()
