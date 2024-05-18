@@ -251,6 +251,13 @@ impl ConfigCheck for MachineConfig {
     }
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct AccelConfig {
+    #[arg(long, alias = "classtype")]
+    hypervisor: HypervisorType,
+}
+
 impl VmConfig {
     /// Add argument `name` to `VmConfig`.
     ///
@@ -317,17 +324,8 @@ impl VmConfig {
 
     /// Add '-accel' accelerator config to `VmConfig`.
     pub fn add_accel(&mut self, accel_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("accel");
-        cmd_parser.push("");
-        cmd_parser.parse(accel_config)?;
-
-        if let Some(accel) = cmd_parser
-            .get_value::<HypervisorType>("")
-            .with_context(|| "Only \'kvm\' and \'test\' is supported for \'accel\'")?
-        {
-            self.machine_config.hypervisor = accel;
-        }
-
+        let accel_cfg = AccelConfig::try_parse_from(str_slip_to_clap(accel_config, true, false))?;
+        self.machine_config.hypervisor = accel_cfg.hypervisor;
         Ok(())
     }
 
@@ -1082,5 +1080,24 @@ mod tests {
         // Illegal values.
         let result = vm_config.add_cpu_feature("host,sve=false");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_accel() {
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm";
+        assert!(vm_config.add_accel(accel_cfg).is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
+
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm:tcg";
+        assert!(vm_config.add_accel(accel_cfg).is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
+
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm1";
+        assert!(vm_config.add_accel(accel_cfg).is_err());
     }
 }
