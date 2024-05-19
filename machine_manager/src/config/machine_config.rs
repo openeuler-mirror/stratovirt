@@ -17,7 +17,9 @@ use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path};
+use super::{
+    get_value_of_parameter, parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path,
+};
 use crate::config::{CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES};
 use crate::machine::HypervisorType;
 
@@ -258,6 +260,13 @@ struct AccelConfig {
     hypervisor: HypervisorType,
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MemSizeConfig {
+    #[arg(long, alias = "classtype", value_parser = parse_size)]
+    size: u64,
+}
+
 impl VmConfig {
     /// Add argument `name` to `VmConfig`.
     ///
@@ -331,23 +340,14 @@ impl VmConfig {
 
     /// Add '-m' memory config to `VmConfig`.
     pub fn add_memory(&mut self, mem_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("m");
-        cmd_parser.push("").push("size");
-
-        cmd_parser.parse(mem_config)?;
-
-        let mem = if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
-            memory_unit_conversion(&mem_size, M)?
-        } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
-            memory_unit_conversion(&mem_size, M)?
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "size".to_string(),
-                "memory".to_string()
-            )));
-        };
-
-        self.machine_config.mem_config.mem_size = mem;
+        // Is there a "size=" prefix tag in the command line.
+        let mut has_size_label = false;
+        if get_value_of_parameter("size", mem_config).is_ok() {
+            has_size_label = true;
+        }
+        let mem_cfg =
+            MemSizeConfig::try_parse_from(str_slip_to_clap(mem_config, !has_size_label, false))?;
+        self.machine_config.mem_config.mem_size = mem_cfg.size;
 
         Ok(())
     }
