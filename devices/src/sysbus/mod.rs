@@ -14,16 +14,30 @@ pub mod error;
 
 pub use error::SysBusError;
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
+#[cfg(target_arch = "x86_64")]
+use crate::acpi::cpu_controller::CpuController;
+use crate::acpi::ged::Ged;
+#[cfg(target_arch = "aarch64")]
+use crate::acpi::power::PowerDev;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
+use crate::legacy::Ramfb;
+#[cfg(target_arch = "x86_64")]
+use crate::legacy::{FwCfgIO, RTC};
+#[cfg(target_arch = "aarch64")]
+use crate::legacy::{FwCfgMem, PL011, PL031};
+use crate::legacy::{PFlash, Serial};
+use crate::pci::PciHost;
 use crate::{Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use util::AsAny;
 
 // Now that the serial device use a hardcoded IRQ number (4), and the starting
 // free IRQ number can be 5.
@@ -251,7 +265,7 @@ impl SysBusDevBase {
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
+pub trait SysBusDevOps: Device + Send + AmlBuilder {
     fn sysbusdev_base(&self) -> &SysBusDevBase;
 
     fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase;
@@ -340,5 +354,67 @@ impl AmlBuilder for SysBus {
         });
 
         scope.aml_bytes()
+    }
+}
+
+pub type ToSysBusDevOpsFunc = fn(&dyn Any) -> &dyn SysBusDevOps;
+
+static mut SYSBUSDEVTYPE_HASHMAP: Option<HashMap<TypeId, ToSysBusDevOpsFunc>> = None;
+
+pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &dyn Any) -> &dyn SysBusDevOps {
+    // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
+    // the conversion is its own structure type, so the conversion result will definitely not be `None`.
+    let t = item.downcast_ref::<T>().unwrap();
+    t as &dyn SysBusDevOps
+}
+
+pub fn register_sysbusdevops_type<T: SysBusDevOps>() -> Result<()> {
+    let type_id = TypeId::of::<T>();
+    // SAFETY: SYSBUSDEVTYPE_HASHMAP will be built in `type_init` function sequentially in the main thread.
+    // And will not be changed after `type_init`.
+    unsafe {
+        if SYSBUSDEVTYPE_HASHMAP.is_none() {
+            SYSBUSDEVTYPE_HASHMAP = Some(HashMap::new());
+        }
+        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
+        if types.get(&type_id).is_some() {
+            bail!("Type Id {:?} has been registered.", type_id);
+        }
+        types.insert(type_id, convert_to_sysbusdevops::<T>);
+    }
+
+    Ok(())
+}
+
+pub fn devices_register_sysbusdevops_type() -> Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        register_sysbusdevops_type::<FwCfgIO>()?;
+        register_sysbusdevops_type::<CpuController>()?;
+        register_sysbusdevops_type::<RTC>()?;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        register_sysbusdevops_type::<FwCfgMem>()?;
+        #[cfg(all(feature = "ramfb"))]
+        register_sysbusdevops_type::<Ramfb>()?;
+        register_sysbusdevops_type::<PL011>()?;
+        register_sysbusdevops_type::<PL031>()?;
+        register_sysbusdevops_type::<PowerDev>()?;
+    }
+    register_sysbusdevops_type::<Ged>()?;
+    register_sysbusdevops_type::<PFlash>()?;
+    register_sysbusdevops_type::<Serial>()?;
+    register_sysbusdevops_type::<PciHost>()
+}
+
+pub fn to_sysbusdevops(dev: &dyn Device) -> Option<&dyn SysBusDevOps> {
+    let type_id = dev.type_id();
+    // SAFETY: SYSBUSDEVTYPE_HASHMAP has been built. And this function is called without changing hashmap.
+    unsafe {
+        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
+        let func = types.get(&type_id)?;
+        let sysbusdev = func(dev.as_any());
+        Some(sysbusdev)
     }
 }

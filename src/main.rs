@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use thiserror::Error;
 
-use machine::{LightMachine, MachineOps, StdMachine};
+use machine::{type_init, LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::MachineType,
@@ -71,6 +71,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    type_init()?;
+
     let cmd_args = create_args_parser().get_matches()?;
 
     if cmd_args.is_present("mod-test") {

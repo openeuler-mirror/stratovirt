@@ -52,10 +52,13 @@ use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
 use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
-use devices::pci::{PciBus, PciDevOps, PciHost, RootPort, RootPortConfig};
+use devices::pci::{
+    devices_register_pcidevops_type, register_pcidevops_type, PciBus, PciDevOps, PciHost, RootPort,
+    RootPortConfig,
+};
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
-use devices::sysbus::{SysBus, SysBusDevOps, SysBusDevType};
+use devices::sysbus::{devices_register_sysbusdevops_type, SysBus, SysBusDevOps, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
@@ -90,12 +93,13 @@ use util::{
     arg_parser,
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
-use vfio::{VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, Balloon, BalloonConfig, Block,
-    BlockState, Rng, RngConfig, RngState,
+    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Rng, RngConfig,
+    RngState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
     Serial, SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
@@ -2346,4 +2350,32 @@ fn check_windows_emu_pid(
     EventLoop::get_ctx(None)
         .unwrap()
         .timer_add(check_emu_alive, check_delay);
+}
+
+fn machine_register_pcidevops_type() -> Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        register_pcidevops_type::<x86_64::ich9_lpc::LPCBridge>()?;
+        register_pcidevops_type::<x86_64::mch::Mch>()?;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        register_pcidevops_type::<aarch64::pci_host_root::PciHostRoot>()?;
+    }
+
+    Ok(())
+}
+
+pub fn type_init() -> Result<()> {
+    // Register all sysbus devices type.
+    virtio_register_sysbusdevops_type()?;
+    devices_register_sysbusdevops_type()?;
+
+    // Register all pci devices type.
+    machine_register_pcidevops_type()?;
+    vfio_register_pcidevops_type()?;
+    virtio_register_pcidevops_type()?;
+    devices_register_pcidevops_type()?;
+
+    Ok(())
 }

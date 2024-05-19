@@ -30,20 +30,23 @@ pub use intx::{init_intx, InterruptHandler, PciIntxState};
 pub use msix::{init_msix, MsiVector};
 pub use root_port::{RootPort, RootPortConfig};
 
-use std::{
-    mem::size_of,
-    sync::{Arc, Mutex, Weak},
-};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::mem::size_of;
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::{
-    pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC},
-    MsiIrqManager,
-};
-use crate::{Device, DeviceBase};
-use util::AsAny;
+#[cfg(feature = "scream")]
+use crate::misc::ivshmem::Ivshmem;
+#[cfg(feature = "pvpanic")]
+use crate::misc::pvpanic::PvPanicPci;
+use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+use crate::usb::xhci::xhci_pci::XhciPciDevice;
+use crate::{Device, DeviceBase, MsiIrqManager};
+#[cfg(feature = "demo_device")]
+use demo_device::DemoDev;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;
@@ -142,7 +145,7 @@ pub struct PciDevBase {
     pub parent_bus: Weak<Mutex<PciBus>>,
 }
 
-pub trait PciDevOps: Device + Send + AsAny {
+pub trait PciDevOps: Device + Send {
     /// Get base property of pci device.
     fn pci_base(&self) -> &PciDevBase;
 
@@ -270,6 +273,57 @@ pub trait PciDevOps: Device + Send + AsAny {
     }
 }
 
+pub type ToPciDevOpsFunc = fn(&dyn Any) -> &dyn PciDevOps;
+
+static mut PCIDEVOPS_HASHMAP: Option<HashMap<TypeId, ToPciDevOpsFunc>> = None;
+
+pub fn convert_to_pcidevops<T: PciDevOps>(item: &dyn Any) -> &dyn PciDevOps {
+    // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
+    // the conversion is its own structure type, so the conversion result will definitely not be `None`.
+    let t = item.downcast_ref::<T>().unwrap();
+    t as &dyn PciDevOps
+}
+
+pub fn register_pcidevops_type<T: PciDevOps>() -> Result<()> {
+    let type_id = TypeId::of::<T>();
+    // SAFETY: PCIDEVOPS_HASHMAP will be built in `type_init` function sequentially in the main thread.
+    // And will not be changed after `type_init`.
+    unsafe {
+        if PCIDEVOPS_HASHMAP.is_none() {
+            PCIDEVOPS_HASHMAP = Some(HashMap::new());
+        }
+        let types = PCIDEVOPS_HASHMAP.as_mut().unwrap();
+        if types.get(&type_id).is_some() {
+            bail!("Type Id {:?} has been registered.", type_id);
+        }
+        types.insert(type_id, convert_to_pcidevops::<T>);
+    }
+
+    Ok(())
+}
+
+pub fn devices_register_pcidevops_type() -> Result<()> {
+    #[cfg(feature = "scream")]
+    register_pcidevops_type::<Ivshmem>()?;
+    #[cfg(feature = "pvpanic")]
+    register_pcidevops_type::<PvPanicPci>()?;
+    register_pcidevops_type::<RootPort>()?;
+    #[cfg(feature = "demo_device")]
+    register_pcidevops_type::<DemoDev>()?;
+    register_pcidevops_type::<XhciPciDevice>()
+}
+
+pub fn to_pcidevops(dev: &dyn Device) -> Option<&dyn PciDevOps> {
+    let type_id = dev.type_id();
+    // SAFETY: PCIDEVOPS_HASHMAP has been built. And this function is called without changing hashmap.
+    unsafe {
+        let types = PCIDEVOPS_HASHMAP.as_mut().unwrap();
+        let func = types.get(&type_id)?;
+        let pcidev = func(dev.as_any());
+        Some(pcidev)
+    }
+}
+
 /// Init multifunction for pci devices.
 ///
 /// # Arguments
@@ -349,10 +403,9 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::DeviceBase;
     use address_space::{AddressSpace, Region};
-
-    use super::*;
 
     #[test]
     fn test_le_write_u16_01() {
