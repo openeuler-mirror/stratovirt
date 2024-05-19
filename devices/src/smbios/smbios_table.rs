@@ -656,9 +656,9 @@ impl SmbiosTable {
     fn build_type0(&mut self, type0: SmbiosType0Config) {
         let mut table0: SmbiosType0Table = SmbiosType0Table::new();
 
-        if let Some(vender) = type0.vender {
+        if let Some(vendor) = type0.vendor {
             table0.header.vendor_idx = table0.str_index + 1;
-            table0.set_str(vender);
+            table0.set_str(vendor);
         }
 
         if let Some(version) = type0.version {

@@ -500,48 +500,6 @@ impl CmdParser {
         Ok(())
     }
 
-    /// Parse all cmdline parameters string into `params`.
-    ///
-    /// # Arguments
-    ///
-    /// * `cmd_param`: The whole cmdline parameter string.
-    fn get_parameters(&mut self, cmd_param: &str) -> Result<()> {
-        if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(anyhow!(ConfigError::InvalidParam(
-                cmd_param.to_string(),
-                self.name.clone()
-            )));
-        }
-        let param_items = cmd_param.split(',').collect::<Vec<&str>>();
-        for param_item in param_items {
-            let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
-            let (param_key, param_value) = match param.len() {
-                1 => ("", param[0]),
-                2 => (param[0], param[1]),
-                _ => {
-                    return Err(anyhow!(ConfigError::InvalidParam(
-                        param_item.to_string(),
-                        self.name.clone()
-                    )));
-                }
-            };
-
-            if self.params.contains_key(param_key) {
-                let field_value = self.params.get_mut(param_key).unwrap();
-                if field_value.is_none() {
-                    *field_value = Some(String::from(param_value));
-                } else {
-                    return Err(anyhow!(ConfigError::FieldRepeat(
-                        self.name.clone(),
-                        param_key.to_string()
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     /// Get cmdline parameters value from param field name.
     ///
     /// # Arguments
