@@ -39,6 +39,10 @@ pub use legacy::error::LegacyError as LegacyErrs;
 pub use scsi::bus as ScsiBus;
 pub use scsi::disk as ScsiDisk;
 
+use std::any::Any;
+
+use util::AsAny;
+
 #[derive(Clone, Default)]
 pub struct DeviceBase {
     /// Name of this device
@@ -53,7 +57,7 @@ impl DeviceBase {
     }
 }
 
-pub trait Device {
+pub trait Device: Any + AsAny {
     fn device_base(&self) -> &DeviceBase;
 
     fn device_base_mut(&mut self) -> &mut DeviceBase;
