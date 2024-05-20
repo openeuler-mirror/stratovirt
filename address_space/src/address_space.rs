@@ -650,6 +650,7 @@ impl AddressSpace {
                     src.read_to_end(&mut buf).unwrap();
 
                     if buf.len() <= 8 {
+                        buf.resize(8, 0);
                         let data = u64::from_bytes(buf.as_slice()).unwrap();
                         if *data == evtfd.data {
                             if let Err(e) = evtfd.fd.write(1) {
