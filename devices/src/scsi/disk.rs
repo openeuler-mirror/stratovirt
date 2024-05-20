@@ -221,7 +221,7 @@ impl ScsiDevice {
         }
 
         let drive_files = self.drive_files.lock().unwrap();
-        // File path can not be empty string. And it has also been checked in CmdParser::parse.
+        // File path can not be empty string. And it has also been checked in command parsing by using `Clap`.
         let file = VmConfig::fetch_drive_file(&drive_files, &self.drive_cfg.path_on_host)?;
 
         let alignments = VmConfig::fetch_drive_align(&drive_files, &self.drive_cfg.path_on_host)?;
