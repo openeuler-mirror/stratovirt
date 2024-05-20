@@ -20,7 +20,7 @@ use super::error::ConfigError;
 use super::{
     get_value_of_parameter, parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path,
 };
-use crate::config::{CmdParser, ConfigCheck, IntegerList, VmConfig, MAX_NODES};
+use crate::config::{ConfigCheck, IntegerList, VmConfig, MAX_NODES};
 use crate::machine::HypervisorType;
 
 const DEFAULT_CPUS: u8 = 1;
@@ -288,6 +288,84 @@ struct MachineCmdConfig {
     gic_version: u8,
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct SmpConfig {
+    #[arg(long, alias = "classtype", value_parser = clap::value_parser!(u64).range(MIN_NR_CPUS..=MAX_NR_CPUS))]
+    cpus: u64,
+    #[arg(long, default_value = "0")]
+    maxcpus: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    sockets: u64,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
+    dies: u64,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
+    clusters: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    cores: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    threads: u64,
+}
+
+impl SmpConfig {
+    fn auto_adjust_topology(&mut self) -> Result<()> {
+        let mut max_cpus = self.maxcpus;
+        let mut sockets = self.sockets;
+        let mut cores = self.cores;
+        let mut threads = self.threads;
+
+        if max_cpus == 0 {
+            if sockets * self.dies * self.clusters * cores * threads > 0 {
+                max_cpus = sockets * self.dies * self.clusters * cores * threads;
+            } else {
+                max_cpus = self.cpus;
+            }
+        }
+
+        if cores == 0 {
+            if sockets == 0 {
+                sockets = 1;
+            }
+            if threads == 0 {
+                threads = 1;
+            }
+            cores = max_cpus / (sockets * self.dies * self.clusters * threads);
+        } else if sockets == 0 {
+            if threads == 0 {
+                threads = 1;
+            }
+            sockets = max_cpus / (self.dies * self.clusters * cores * threads);
+        }
+
+        if threads == 0 {
+            threads = max_cpus / (sockets * self.dies * self.clusters * cores);
+        }
+
+        let min_max_cpus = std::cmp::max(self.cpus, MIN_NR_CPUS);
+
+        if !(min_max_cpus..=MAX_NR_CPUS).contains(&max_cpus) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "MAX CPU number".to_string(),
+                min_max_cpus,
+                true,
+                MAX_NR_CPUS,
+                true,
+            )));
+        }
+
+        if sockets * self.dies * self.clusters * cores * threads != max_cpus {
+            bail!("sockets * dies * clusters * cores * threads must be equal to max_cpus");
+        }
+
+        self.maxcpus = max_cpus;
+        self.sockets = sockets;
+        self.cores = cores;
+        self.threads = threads;
+
+        Ok(())
+    }
+}
+
 impl VmConfig {
     /// Add argument `name` to `VmConfig`.
     ///
@@ -337,96 +415,21 @@ impl VmConfig {
 
     /// Add '-smp' cpu config to `VmConfig`.
     pub fn add_cpu(&mut self, cpu_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("smp");
-        cmd_parser
-            .push("")
-            .push("maxcpus")
-            .push("sockets")
-            .push("dies")
-            .push("clusters")
-            .push("cores")
-            .push("threads")
-            .push("cpus");
-
-        cmd_parser.parse(cpu_config)?;
-
-        let cpu = if let Some(cpu) = cmd_parser.get_value::<u64>("")? {
-            cpu
-        } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
-            if cpu == 0 {
-                return Err(anyhow!(ConfigError::IllegalValue(
-                    "cpu".to_string(),
-                    1,
-                    true,
-                    MAX_NR_CPUS,
-                    true
-                )));
-            }
-            cpu
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "cpus".to_string(),
-                "smp".to_string()
-            )));
-        };
-
-        let sockets = smp_read_and_check(&cmd_parser, "sockets", 0)?;
-
-        let dies = smp_read_and_check(&cmd_parser, "dies", 1)?;
-
-        let clusters = smp_read_and_check(&cmd_parser, "clusters", 1)?;
-
-        let cores = smp_read_and_check(&cmd_parser, "cores", 0)?;
-
-        let threads = smp_read_and_check(&cmd_parser, "threads", 0)?;
-
-        let max_cpus = cmd_parser.get_value::<u64>("maxcpus")?.unwrap_or_default();
-
-        let (max_cpus, sockets, cores, threads) =
-            adjust_topology(cpu, max_cpus, sockets, dies, clusters, cores, threads);
-
-        // limit cpu count
-        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "CPU number".to_string(),
-                MIN_NR_CPUS,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
+        let mut has_cpus_label = false;
+        if get_value_of_parameter("cpus", cpu_config).is_ok() {
+            has_cpus_label = true;
         }
+        let mut smp_cfg =
+            SmpConfig::try_parse_from(str_slip_to_clap(cpu_config, !has_cpus_label, false))?;
+        smp_cfg.auto_adjust_topology()?;
 
-        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&max_cpus) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "MAX CPU number".to_string(),
-                MIN_NR_CPUS,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
-        }
-
-        if max_cpus < cpu {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "maxcpus".to_string(),
-                cpu,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
-        }
-
-        if sockets * dies * clusters * cores * threads != max_cpus {
-            bail!("sockets * dies * clusters * cores * threads must be equal to max_cpus");
-        }
-
-        self.machine_config.nr_cpus = cpu as u8;
-        self.machine_config.nr_threads = threads as u8;
-        self.machine_config.nr_cores = cores as u8;
-        self.machine_config.nr_dies = dies as u8;
-        self.machine_config.nr_clusters = clusters as u8;
-        self.machine_config.nr_sockets = sockets as u8;
-        self.machine_config.max_cpus = max_cpus as u8;
+        self.machine_config.nr_cpus = smp_cfg.cpus as u8;
+        self.machine_config.nr_threads = smp_cfg.threads as u8;
+        self.machine_config.nr_cores = smp_cfg.cores as u8;
+        self.machine_config.nr_dies = smp_cfg.dies as u8;
+        self.machine_config.nr_clusters = smp_cfg.clusters as u8;
+        self.machine_config.nr_sockets = smp_cfg.sockets as u8;
+        self.machine_config.max_cpus = smp_cfg.maxcpus as u8;
 
         Ok(())
     }
@@ -497,62 +500,6 @@ impl VmConfig {
 
         Ok(zone_config)
     }
-}
-
-fn smp_read_and_check(cmd_parser: &CmdParser, name: &str, default_val: u64) -> Result<u64> {
-    if let Some(values) = cmd_parser.get_value::<u64>(name)? {
-        if values == 0 {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                name.to_string(),
-                1,
-                true,
-                u8::MAX as u64,
-                false
-            )));
-        }
-        Ok(values)
-    } else {
-        Ok(default_val)
-    }
-}
-
-fn adjust_topology(
-    cpu: u64,
-    mut max_cpus: u64,
-    mut sockets: u64,
-    dies: u64,
-    clusters: u64,
-    mut cores: u64,
-    mut threads: u64,
-) -> (u64, u64, u64, u64) {
-    if max_cpus == 0 {
-        if sockets * dies * clusters * cores * threads > 0 {
-            max_cpus = sockets * dies * clusters * cores * threads;
-        } else {
-            max_cpus = cpu;
-        }
-    }
-
-    if cores == 0 {
-        if sockets == 0 {
-            sockets = 1;
-        }
-        if threads == 0 {
-            threads = 1;
-        }
-        cores = max_cpus / (sockets * dies * clusters * threads);
-    } else if sockets == 0 {
-        if threads == 0 {
-            threads = 1;
-        }
-        sockets = max_cpus / (dies * clusters * cores * threads);
-    }
-
-    if threads == 0 {
-        threads = max_cpus / (sockets * dies * clusters * cores);
-    }
-
-    (max_cpus, sockets, cores, threads)
 }
 
 /// Convert memory units from GiB, Mib to Byte.
