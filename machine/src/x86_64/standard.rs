@@ -702,7 +702,7 @@ impl MachineOps for StdMachine {
         // GTK display init.
         #[cfg(feature = "gtk")]
         match vm_config.display {
-            Some(ref ds_cfg) if ds_cfg.gtk => {
+            Some(ref ds_cfg) if ds_cfg.display_type == "gtk" => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
                     power_button: None,
