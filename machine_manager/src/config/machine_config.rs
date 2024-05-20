@@ -20,7 +20,7 @@ use super::error::ConfigError;
 use super::{
     get_value_of_parameter, parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES};
+use crate::config::{CmdParser, ConfigCheck, IntegerList, VmConfig, MAX_NODES};
 use crate::machine::HypervisorType;
 
 const DEFAULT_CPUS: u8 = 1;
@@ -47,7 +47,7 @@ pub enum MachineType {
 }
 
 impl FromStr for MachineType {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -57,7 +57,7 @@ impl FromStr for MachineType {
             "q35" => Ok(MachineType::StandardVm),
             #[cfg(target_arch = "aarch64")]
             "virt" => Ok(MachineType::StandardVm),
-            _ => Err(()),
+            _ => Err(anyhow!("Invalid machine type.")),
         }
     }
 }
@@ -267,6 +267,27 @@ struct MemSizeConfig {
     size: u64,
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MachineCmdConfig {
+    #[arg(long, aliases = ["classtype", "type"])]
+    mach_type: MachineType,
+    #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
+    dump_guest_core: bool,
+    #[arg(long, default_value = "off", action = ArgAction::Append, value_parser = parse_bool)]
+    mem_share: bool,
+    #[arg(long, default_value = "kvm")]
+    accel: HypervisorType,
+    // The "usb" member is added for compatibility with libvirt and is currently not in use.
+    // It only supports configuration as "off". Currently, a `String` type is used to verify incoming values.
+    // When it will be used, it needs to be changed to a `bool` type.
+    #[arg(long, default_value = "off", value_parser = ["off"])]
+    usb: String,
+    #[cfg(target_arch = "aarch64")]
+    #[arg(long, default_value = "3", value_parser = clap::value_parser!(u8).range(3..=3))]
+    gic_version: u8,
+}
+
 impl VmConfig {
     /// Add argument `name` to `VmConfig`.
     ///
@@ -274,59 +295,21 @@ impl VmConfig {
     ///
     /// * `name` - The name `String` added to `VmConfig`.
     pub fn add_machine(&mut self, mach_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("machine");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("accel")
-            .push("usb")
-            .push("dump-guest-core")
-            .push("mem-share");
-        #[cfg(target_arch = "aarch64")]
-        cmd_parser.push("gic-version");
-        cmd_parser.parse(mach_config)?;
-
-        #[cfg(target_arch = "aarch64")]
-        if let Some(gic_version) = cmd_parser.get_value::<u8>("gic-version")? {
-            if gic_version != 3 {
-                bail!("Unsupported gic version, only gicv3 is supported");
-            }
+        let mut has_type_label = false;
+        if get_value_of_parameter("type", mach_config).is_ok() {
+            has_type_label = true;
         }
-
-        if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
-            // Libvirt checks the parameter types of 'kvm', 'kvm:tcg' and 'tcg'.
-            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") && accel.ne("test") {
-                bail!("Only \'kvm\', \'kvm:tcg\', \'test\' and \'tcg\' are supported for \'accel\' of \'machine\'");
-            }
-
-            match accel.as_str() {
-                "test" => self.machine_config.hypervisor = HypervisorType::Test,
-                _ => self.machine_config.hypervisor = HypervisorType::Kvm,
-            };
-        }
-        if let Some(usb) = cmd_parser.get_value::<ExBool>("usb")? {
-            if usb.into() {
-                bail!("Argument \'usb\' should be set to \'off\'");
-            }
-        }
-        if let Some(mach_type) = cmd_parser
-            .get_value::<MachineType>("")
-            .with_context(|| "Unrecognized machine type")?
-        {
-            self.machine_config.mach_type = mach_type;
-        }
-        if let Some(mach_type) = cmd_parser
-            .get_value::<MachineType>("type")
-            .with_context(|| "Unrecognized machine type")?
-        {
-            self.machine_config.mach_type = mach_type;
-        }
-        if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
-            self.machine_config.mem_config.dump_guest_core = dump_guest.into();
-        }
-        if let Some(mem_share) = cmd_parser.get_value::<ExBool>("mem-share")? {
-            self.machine_config.mem_config.mem_share = mem_share.into();
-        }
+        let mach_cfg = MachineCmdConfig::try_parse_from(str_slip_to_clap(
+            mach_config,
+            !has_type_label,
+            false,
+        ))?;
+        // TODO: The current "accel" configuration in "-machine" command line and "-accel" command line are not foolproof.
+        // Later parsing will overwrite first parsing. We will optimize this in the future.
+        self.machine_config.hypervisor = mach_cfg.accel;
+        self.machine_config.mach_type = mach_cfg.mach_type;
+        self.machine_config.mem_config.dump_guest_core = mach_cfg.dump_guest_core;
+        self.machine_config.mem_config.mem_share = mach_cfg.mem_share;
 
         Ok(())
     }
@@ -900,11 +883,12 @@ mod tests {
         assert_eq!(machine_cfg.mem_config.mem_share, true);
 
         let mut vm_config = VmConfig::default();
-        let memory_cfg_str = "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
+        let memory_cfg_str = "none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
         let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
         assert!(machine_cfg_ret.is_ok());
         let machine_cfg = vm_config.machine_config;
         assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
         assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
         assert_eq!(machine_cfg.mem_config.mem_share, false);
 
