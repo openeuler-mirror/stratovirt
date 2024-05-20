@@ -13,8 +13,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{get_value_of_parameter, CmdParser};
-use crate::config::ExBool;
+use super::get_value_of_parameter;
 use util::num_ops::str_to_num;
 
 /// Basic information of pci devices such as bus number,
@@ -80,25 +79,6 @@ pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
     let pci_bdf = PciBdf::new(bus, addr);
 
     Ok(pci_bdf)
-}
-
-pub fn pci_args_check(cmd_parser: &CmdParser) -> Result<()> {
-    let device_type = cmd_parser.get_value::<String>("")?;
-    let dev_type = device_type.unwrap();
-    // Safe, because this function only be called when certain
-    // devices type are added.
-    if dev_type.ends_with("-device") {
-        if cmd_parser.get_value::<String>("bus")?.is_some() {
-            bail!("virtio mmio device does not support bus arguments");
-        }
-        if cmd_parser.get_value::<String>("addr")?.is_some() {
-            bail!("virtio mmio device does not support addr arguments");
-        }
-        if cmd_parser.get_value::<ExBool>("multifunction")?.is_some() {
-            bail!("virtio mmio device does not support multifunction arguments");
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
