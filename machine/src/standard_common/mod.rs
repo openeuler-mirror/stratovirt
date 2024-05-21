@@ -1279,7 +1279,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" | "usb-uas" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
