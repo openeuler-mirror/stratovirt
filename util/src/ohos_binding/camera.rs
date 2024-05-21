@@ -110,6 +110,9 @@ impl OhCamera {
     ) -> Result<()> {
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
+            if (self.capi.create_session)(self.ctx) != 0 {
+                bail!("OH Camera: failed to create session");
+            }
             if (self.capi.pre_start)(self.ctx, buffer_proc, broken_proc) != 0 {
                 bail!("OH Camera: failed to prestart camera stream");
             }
@@ -123,7 +126,6 @@ impl OhCamera {
     pub fn reset_camera(&self) {
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
-            (self.capi.create_session)(self.ctx);
             (self.capi.init_cameras)(self.ctx);
             (self.capi.init_profiles)(self.ctx);
         }
