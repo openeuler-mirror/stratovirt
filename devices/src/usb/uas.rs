@@ -1108,8 +1108,8 @@ impl UsbDevice for UsbUas {
                 locked_packet.status = UsbPacketStatus::Stall;
             }
             Err(err) => {
-                error!(
-                    "UAS {} device descriptor error {:?}.",
+                warn!(
+                    "{} received incorrect UAS descriptor message: {:?}",
                     self.device_id(),
                     err
                 );

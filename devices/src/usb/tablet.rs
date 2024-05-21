@@ -284,7 +284,7 @@ impl UsbDevice for UsbTablet {
                 }
             }
             Err(e) => {
-                warn!("Tablet descriptor error {:?}", e);
+                warn!("Received incorrect USB Tablet descriptor message: {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }

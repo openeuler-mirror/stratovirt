@@ -241,7 +241,10 @@ impl UsbDevice for UsbKeyboard {
                 }
             }
             Err(e) => {
-                warn!("Keyboard descriptor error {:?}", e);
+                warn!(
+                    "Received incorrect USB Keyboard descriptor message: {:?}",
+                    e
+                );
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
