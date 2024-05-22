@@ -586,11 +586,12 @@ pub trait MachineOps {
                     ("addr", device_cfg.addr),
                     ("multifunction", device_cfg.multifunction)
                 );
-                let device = VirtioMmioDevice::new(&sys_mem, device_cfg.id.clone(), vsock.clone());
+                let device = self
+                    .add_virtio_mmio_device(device_cfg.id.clone(), vsock.clone())
+                    .with_context(|| MachineError::RlzVirtioMmioErr)?;
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
-                    self.realize_virtio_mmio_device(device)
-                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                    device,
                     &device_cfg.id,
                 );
             }
@@ -612,9 +613,10 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn realize_virtio_mmio_device(
+    fn add_virtio_mmio_device(
         &mut self,
-        _dev: VirtioMmioDevice,
+        _name: String,
+        _device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
         bail!("Virtio mmio devices not supported");
     }
@@ -688,8 +690,7 @@ pub trait MachineOps {
                     ("addr", config.addr),
                     ("multifunction", config.multifunction)
                 );
-                let device = VirtioMmioDevice::new(sys_mem, config.id.clone(), balloon);
-                self.realize_virtio_mmio_device(device)?;
+                self.add_virtio_mmio_device(config.id.clone(), balloon)?;
             }
             _ => {
                 check_arg_exist!(("bus", config.bus), ("addr", config.addr));
@@ -716,7 +717,6 @@ pub trait MachineOps {
         let mut serial_cfg =
             VirtioSerialInfo::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         serial_cfg.auto_max_ports();
-        let sys_mem = self.get_sys_mem().clone();
         let serial = Arc::new(Mutex::new(Serial::new(serial_cfg.clone())));
 
         match serial_cfg.classtype.as_str() {
@@ -726,11 +726,12 @@ pub trait MachineOps {
                     ("addr", serial_cfg.addr),
                     ("multifunction", serial_cfg.multifunction)
                 );
-                let device = VirtioMmioDevice::new(&sys_mem, serial_cfg.id.clone(), serial.clone());
+                let device = self
+                    .add_virtio_mmio_device(serial_cfg.id.clone(), serial.clone())
+                    .with_context(|| MachineError::RlzVirtioMmioErr)?;
                 MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
-                    self.realize_virtio_mmio_device(device)
-                        .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                    device,
                     &serial_cfg.id,
                 );
             }
@@ -852,7 +853,6 @@ pub trait MachineOps {
             .rng_object
             .remove(&rng_cfg.rng)
             .with_context(|| "Object for rng-random device not found")?;
-        let sys_mem = self.get_sys_mem();
         let rng_dev = Arc::new(Mutex::new(Rng::new(rng_cfg.clone(), rngobj_cfg)));
 
         match rng_cfg.classtype.as_str() {
@@ -862,8 +862,7 @@ pub trait MachineOps {
                     ("addr", rng_cfg.addr),
                     ("multifunction", rng_cfg.multifunction)
                 );
-                let device = VirtioMmioDevice::new(sys_mem, rng_cfg.id.clone(), rng_dev.clone());
-                self.realize_virtio_mmio_device(device)
+                self.add_virtio_mmio_device(rng_cfg.id.clone(), rng_dev.clone())
                     .with_context(|| "Failed to add virtio mmio rng device")?;
             }
             _ => {
@@ -905,7 +904,7 @@ pub trait MachineOps {
         let device = Arc::new(Mutex::new(vhost::user::Fs::new(
             dev_cfg.clone(),
             char_dev,
-            sys_mem.clone(),
+            sys_mem,
         )));
         match dev_cfg.classtype.as_str() {
             "vhost-user-fs-device" => {
@@ -914,9 +913,7 @@ pub trait MachineOps {
                     ("addr", dev_cfg.addr),
                     ("multifunction", dev_cfg.multifunction)
                 );
-                let virtio_mmio_device =
-                    VirtioMmioDevice::new(&sys_mem, dev_cfg.id.clone(), device);
-                self.realize_virtio_mmio_device(virtio_mmio_device)
+                self.add_virtio_mmio_device(dev_cfg.id.clone(), device)
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
@@ -1381,9 +1378,7 @@ pub trait MachineOps {
             chardev_cfg,
             self.get_sys_mem(),
         )));
-        let virtio_mmio_device =
-            VirtioMmioDevice::new(self.get_sys_mem(), device_cfg.id.clone(), device);
-        self.realize_virtio_mmio_device(virtio_mmio_device)
+        self.add_virtio_mmio_device(device_cfg.id.clone(), device)
             .with_context(|| "Failed to add vhost user block device")?;
         Ok(())
     }

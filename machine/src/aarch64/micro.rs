@@ -26,7 +26,7 @@ use util::{
     device_tree::{self, CompileFDT, FdtBuilder},
     seccomp::{BpfRule, SeccompCmpOpt},
 };
-use virtio::VirtioMmioDevice;
+use virtio::{VirtioDevice, VirtioMmioDevice};
 
 #[repr(usize)]
 pub enum LayoutEntryType {
@@ -218,11 +218,12 @@ impl MachineOps for LightMachine {
         self.add_virtio_mmio_block(vm_config, cfg_args)
     }
 
-    fn realize_virtio_mmio_device(
+    fn add_virtio_mmio_device(
         &mut self,
-        dev: VirtioMmioDevice,
+        name: String,
+        device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
-        self.realize_virtio_mmio_device(dev)
+        self.add_virtio_mmio_device(name, device)
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
