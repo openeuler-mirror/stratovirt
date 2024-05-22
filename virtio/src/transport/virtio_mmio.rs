@@ -26,7 +26,7 @@ use crate::{
     QUEUE_TYPE_PACKED_VRING, VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
-use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use devices::{Device, DeviceBase};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
@@ -170,7 +170,7 @@ impl VirtioMmioDevice {
         if region_base >= sysbus.mmio_region.1 {
             bail!("Mmio region space exhausted.");
         }
-        self.set_sys_resource(sysbus, region_base, region_size)?;
+        self.set_sys_resource(sysbus, region_base, region_size, "VirtioMmio")?;
         self.assign_interrupt_cb();
         self.device
             .lock()
@@ -179,7 +179,7 @@ impl VirtioMmioDevice {
             .with_context(|| "Failed to realize virtio.")?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "VirtioMmio")?;
+        sysbus.attach_device(&dev)?;
 
         #[cfg(target_arch = "x86_64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
@@ -529,10 +529,6 @@ impl SysBusDevOps for VirtioMmioDevice {
             })
         }
         ret
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

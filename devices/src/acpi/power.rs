@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use log::info;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
 use crate::{Device, DeviceBase};
 use acpi::{
     AcpiError, AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldAccessType,
@@ -183,11 +183,11 @@ impl PowerDev {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "PowerDev")?;
+        sysbus.attach_device(&dev)?;
 
         let pdev_available: bool;
         {
@@ -261,10 +261,6 @@ impl SysBusDevOps for PowerDev {
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

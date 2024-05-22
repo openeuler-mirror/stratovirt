@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
@@ -101,11 +101,11 @@ impl PL031 {
         region_size: u64,
     ) -> Result<()> {
         self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "PL031")
             .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "PL031")?;
+        sysbus.attach_device(&dev)?;
 
         MigrationManager::register_device_instance(
             PL031State::descriptor(),
@@ -197,10 +197,6 @@ impl SysBusDevOps for PL031 {
         }
 
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

@@ -19,7 +19,7 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
 
 use crate::legacy::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
@@ -856,12 +856,12 @@ impl FwCfgMem {
         region_size: u64,
     ) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "FwCfgMem")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size, "FwCfgMem")
+            .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
@@ -989,19 +989,15 @@ impl SysBusDevOps for FwCfgMem {
         true
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
+        self.sysbusdev_base_mut()
+            .set_sys(-1, region_base, region_size, region_name);
         Ok(())
     }
 
@@ -1022,30 +1018,19 @@ pub struct FwCfgIO {
 impl FwCfgIO {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgIO {
-            base: SysBusDevBase {
-                base: DeviceBase::default(),
-                dev_type: SysBusDevType::FwCfg,
-                res: SysRes {
-                    region_base: FW_CFG_IO_BASE,
-                    region_size: FW_CFG_IO_SIZE,
-                    irq: -1,
-                },
-                ..Default::default()
-            },
+            base: SysBusDevBase::new(SysBusDevType::FwCfg),
             fwcfg: FwCfgCommon::new(sys_mem),
         }
     }
 
     pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
-        let region_base = self.base.res.region_base;
-        let region_size = self.base.res.region_size;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, FW_CFG_IO_BASE, FW_CFG_IO_SIZE, "FwCfgIO")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size, "FwCfgIO")
+            .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
@@ -1174,19 +1159,15 @@ impl SysBusDevOps for FwCfgIO {
         true
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
+        self.sysbusdev_base_mut()
+            .set_sys(-1, region_base, region_size, region_name);
         Ok(())
     }
 

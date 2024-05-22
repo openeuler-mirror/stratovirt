@@ -118,84 +118,82 @@ impl SysBus {
         }
     }
 
-    pub fn attach_device<T: 'static + SysBusDevOps>(
-        &mut self,
-        dev: &Arc<Mutex<T>>,
-        region_base: u64,
-        region_size: u64,
-        region_name: &str,
-    ) -> Result<()> {
-        let region_ops = self.build_region_ops(dev);
-        let region = Region::init_io_region(region_size, region_ops, region_name);
-        let locked_dev = dev.lock().unwrap();
+    pub fn attach_device<T: 'static + SysBusDevOps>(&mut self, dev: &Arc<Mutex<T>>) -> Result<()> {
+        let res = dev.lock().unwrap().get_sys_resource().clone();
+        let region_base = res.region_base;
+        let region_size = res.region_size;
+        let region_name = res.region_name;
 
-        region.set_ioeventfds(&locked_dev.ioeventfds());
-        match locked_dev.sysbusdev_base().dev_type {
-            SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
-                #[cfg(target_arch = "x86_64")]
-                self.sys_io
+        // region_base/region_size are both 0 means this device doesn't have its own memory layout.
+        // The normally allocated device region_base is above the `MEM_LAYOUT[LayoutEntryType::Mmio as usize].0`.
+        if region_base != 0 && region_size != 0 {
+            let region_ops = self.build_region_ops(dev);
+            let region = Region::init_io_region(region_size, region_ops, &region_name);
+            let locked_dev = dev.lock().unwrap();
+
+            region.set_ioeventfds(&locked_dev.ioeventfds());
+            match locked_dev.sysbusdev_base().dev_type {
+                SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
+                    #[cfg(target_arch = "x86_64")]
+                    self.sys_io
+                        .root()
+                        .add_subregion(region, region_base)
+                        .with_context(|| {
+                            format!(
+                                "Failed to register region in I/O space: offset={},size={}",
+                                region_base, region_size
+                            )
+                        })?;
+                }
+                SysBusDevType::FwCfg if cfg!(target_arch = "x86_64") => {
+                    #[cfg(target_arch = "x86_64")]
+                    self.sys_io
+                        .root()
+                        .add_subregion(region, region_base)
+                        .with_context(|| {
+                            format!(
+                                "Failed to register region in I/O space: offset 0x{:x}, size {}",
+                                region_base, region_size
+                            )
+                        })?;
+                }
+                SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
+                    #[cfg(target_arch = "x86_64")]
+                    self.sys_io
+                        .root()
+                        .add_subregion(region, region_base)
+                        .with_context(|| {
+                            format!(
+                                "Failed to register region in I/O space: offset 0x{:x}, size {}",
+                                region_base, region_size
+                            )
+                        })?;
+                }
+                _ => self
+                    .sys_mem
                     .root()
                     .add_subregion(region, region_base)
                     .with_context(|| {
                         format!(
-                            "Failed to register region in I/O space: offset={},size={}",
+                            "Failed to register region in memory space: offset={},size={}",
                             region_base, region_size
                         )
-                    })?;
+                    })?,
             }
-            SysBusDevType::FwCfg if cfg!(target_arch = "x86_64") => {
-                #[cfg(target_arch = "x86_64")]
-                self.sys_io
-                    .root()
-                    .add_subregion(region, region_base)
-                    .with_context(|| {
-                        format!(
-                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                            region_base, region_size
-                        )
-                    })?;
-            }
-            SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
-                #[cfg(target_arch = "x86_64")]
-                self.sys_io
-                    .root()
-                    .add_subregion(region, region_base)
-                    .with_context(|| {
-                        format!(
-                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                            region_base, region_size
-                        )
-                    })?;
-            }
-            _ => self
-                .sys_mem
-                .root()
-                .add_subregion(region, region_base)
-                .with_context(|| {
-                    format!(
-                        "Failed to register region in memory space: offset={},size={}",
-                        region_base, region_size
-                    )
-                })?,
         }
 
         self.devices.push(dev.clone());
         Ok(())
     }
-
-    pub fn attach_dynamic_device<T: 'static + SysBusDevOps>(
-        &mut self,
-        dev: &Arc<Mutex<T>>,
-    ) -> Result<()> {
-        self.devices.push(dev.clone());
-        Ok(())
-    }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct SysRes {
+    // Note: region_base/region_size are both 0 means that this device doesn't have its own memory layout.
+    // The normally allocated device memory region is above the `MEM_LAYOUT[LayoutEntryType::Mmio as usize].0`.
     pub region_base: u64,
     pub region_size: u64,
+    pub region_name: String,
     pub irq: i32,
 }
 
@@ -204,6 +202,7 @@ impl Default for SysRes {
         Self {
             region_base: 0,
             region_size: 0,
+            region_name: "".to_string(),
             irq: -1,
         }
     }
@@ -257,10 +256,11 @@ impl SysBusDevBase {
         }
     }
 
-    pub fn set_sys(&mut self, irq: i32, region_base: u64, region_size: u64) {
+    pub fn set_sys(&mut self, irq: i32, region_base: u64, region_size: u64, region_name: &str) {
         self.res.irq = irq;
         self.res.region_base = region_base;
         self.res.region_size = region_size;
+        self.res.region_name = region_name.to_string();
     }
 }
 
@@ -306,8 +306,8 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
         Ok(irq)
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        None
+    fn get_sys_resource(&mut self) -> &mut SysRes {
+        &mut self.sysbusdev_base_mut().res
     }
 
     fn set_sys_resource(
@@ -315,6 +315,7 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
         let irq = self.get_irq(sysbus)?;
         let interrupt_evt = self.sysbusdev_base().interrupt_evt.clone();
@@ -326,7 +327,7 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
         irq_state.register_irq()?;
 
         self.sysbusdev_base_mut()
-            .set_sys(irq, region_base, region_size);
+            .set_sys(irq, region_base, region_size, region_name);
         Ok(())
     }
 
