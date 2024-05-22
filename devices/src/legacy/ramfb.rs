@@ -252,7 +252,7 @@ impl Ramfb {
 
     pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_dynamic_device(&dev)?;
+        sysbus.attach_device(&dev)?;
         Ok(())
     }
 }

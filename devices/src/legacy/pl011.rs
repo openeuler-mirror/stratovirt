@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use log::error;
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
@@ -165,12 +165,12 @@ impl PL011 {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "PL011")
             .with_context(|| "Failed to set system resource for PL011.")?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .attach_device(&dev, region_base, region_size, "PL011")
+            .attach_device(&dev)
             .with_context(|| "Failed to attach PL011 to system bus.")?;
 
         bs.lock().unwrap().kernel_cmdline.push(Param {
@@ -413,10 +413,6 @@ impl SysBusDevOps for PL011 {
         }
 
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

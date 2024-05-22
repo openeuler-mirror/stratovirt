@@ -17,7 +17,7 @@ use anyhow::{bail, Context, Result};
 use log::{debug, error};
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
@@ -144,11 +144,11 @@ impl Serial {
             .realize()
             .with_context(|| "Failed to realize chardev")?;
         self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "Serial")
             .with_context(|| LegacyError::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "Serial")?;
+        sysbus.attach_device(&dev)?;
 
         MigrationManager::register_device_instance(
             SerialState::descriptor(),
@@ -405,10 +405,6 @@ impl SysBusDevOps for Serial {
 
     fn get_irq(&self, _sysbus: &mut SysBus) -> Result<i32> {
         Ok(UART_IRQ)
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 
