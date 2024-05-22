@@ -190,8 +190,6 @@ impl LightMachine {
             );
         }
 
-        let mut region_base = self.base.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         for (id, dev) in rpl_devs.into_iter().enumerate() {
             self.replaceable_info
                 .devices
@@ -205,20 +203,11 @@ impl LightMachine {
 
             MigrationManager::register_transport_instance(
                 VirtioMmioState::descriptor(),
-                VirtioMmioDevice::realize(
-                    dev,
-                    &mut self.base.sysbus,
-                    region_base,
-                    MEM_LAYOUT[LayoutEntryType::Mmio as usize].1,
-                    #[cfg(target_arch = "x86_64")]
-                    &self.base.boot_source,
-                )
-                .with_context(|| MachineError::RlzVirtioMmioErr)?,
+                self.realize_virtio_mmio_device(dev)?,
                 &id.to_string(),
             );
-            region_base += region_size;
         }
-        self.base.sysbus.min_free_base = region_base;
+
         Ok(())
     }
 
