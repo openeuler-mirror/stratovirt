@@ -124,30 +124,32 @@ pub struct Serial {
 }
 
 impl Serial {
-    pub fn new(cfg: SerialConfig) -> Self {
-        Serial {
+    pub fn new(
+        cfg: SerialConfig,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut serial = Serial {
             base: SysBusDevBase::new(SysBusDevType::Serial),
             paused: false,
             rbr: VecDeque::new(),
             state: SerialState::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
-        }
+        };
+        serial.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        serial
+            .set_sys_resource(sysbus, region_base, region_size, "Serial")
+            .with_context(|| LegacyError::SetSysResErr)?;
+        Ok(serial)
     }
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
+
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size, "Serial")
-            .with_context(|| LegacyError::SetSysResErr)?;
-
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 
@@ -459,6 +461,7 @@ impl MigrationHook for Serial {}
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
@@ -469,9 +472,11 @@ mod test {
                 id: "chardev".to_string(),
             },
         };
-        let mut usart = Serial::new(SerialConfig {
+        let mut sysbus = sysbus_init();
+        let config = SerialConfig {
             chardev: chardev_cfg.clone(),
-        });
+        };
+        let mut usart = Serial::new(config, &mut sysbus, SERIAL_ADDR, 8).unwrap();
         assert_eq!(usart.state.ier, 0);
         assert_eq!(usart.state.iir, 1);
         assert_eq!(usart.state.lcr, 3);
@@ -525,9 +530,11 @@ mod test {
                 id: "chardev".to_string(),
             },
         };
-        let mut usart = Serial::new(SerialConfig {
+        let config = SerialConfig {
             chardev: chardev_cfg,
-        });
+        };
+        let mut sysbus = sysbus_init();
+        let mut usart = Serial::new(config, &mut sysbus, SERIAL_ADDR, 8).unwrap();
         // Get state vector for usart
         let serial_state_result = usart.get_state_vec();
         assert!(serial_state_result.is_ok());

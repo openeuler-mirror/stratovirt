@@ -208,8 +208,6 @@ impl StdMachine {
         cpu_topology: CPUTopology,
         vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
-        let cpu_controller: CpuController = Default::default();
-
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].1;
         let cpu_config = CpuConfig::new(boot_config, cpu_topology);
@@ -217,22 +215,18 @@ impl StdMachine {
             create_new_eventfd()
                 .with_context(|| MachineError::InitEventFdErr("hotplug cpu".to_string()))?,
         );
-
+        let cpu_controller = CpuController::new(
+            self.base.cpu_topo.max_cpus,
+            &mut self.base.sysbus,
+            region_base,
+            region_size,
+            cpu_config,
+            hotplug_cpu_req.clone(),
+            self.base.cpus.clone(),
+        )?;
         let realize_controller = cpu_controller
-            .realize(
-                &mut self.base.sysbus,
-                self.base.cpu_topo.max_cpus,
-                region_base,
-                region_size,
-                cpu_config,
-                hotplug_cpu_req.clone(),
-            )
+            .realize(&mut self.base.sysbus)
             .with_context(|| "Failed to realize Cpu Controller")?;
-
-        let mut lock_controller = realize_controller.lock().unwrap();
-        lock_controller.set_boot_vcpu(self.base.cpus.clone())?;
-        drop(lock_controller);
-
         self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
         self.cpu_controller = Some(realize_controller);
         Ok(())
@@ -281,7 +275,7 @@ impl StdMachineOps for StdMachine {
         nr_cpus: u8,
         max_cpus: u8,
     ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
-        let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone());
+        let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone(), &mut self.base.sysbus)?;
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
@@ -439,38 +433,45 @@ impl MachineOps for StdMachine {
     }
 
     fn add_rtc_device(&mut self, mem_size: u64) -> Result<()> {
-        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        let mut rtc =
+            RTC::new(&mut self.base.sysbus).with_context(|| "Failed to create RTC device")?;
         rtc.set_memory(
             mem_size,
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        RTC::realize(rtc, &mut self.base.sysbus).with_context(|| "Failed to realize RTC device")
+        rtc.realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize RTC device")
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
-        let ged = Ged::default();
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::GedMmio as usize].1;
-
         let ged_event = GedEvent::new(self.power_button.clone(), self.cpu_resize_req.clone());
-        ged.realize(
-            &mut self.base.sysbus,
-            ged_event,
+        let ged = Ged::new(
             false,
+            &mut self.base.sysbus,
             region_base,
             region_size,
-        )
-        .with_context(|| "Failed to realize Ged")?;
+            ged_event,
+        )?;
+
+        ged.realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize Ged")?;
         Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-        let serial = Serial::new(config.clone());
+        let serial = Serial::new(
+            config.clone(),
+            &mut self.base.sysbus,
+            region_base,
+            region_size,
+        )?;
         serial
-            .realize(&mut self.base.sysbus, region_base, region_size)
+            .realize(&mut self.base.sysbus)
             .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
@@ -615,21 +616,18 @@ impl MachineOps for StdMachine {
             let backend = Some(fd);
             let pflash = PFlash::new(
                 pfl_size,
-                &backend,
+                backend,
                 sector_len,
                 4_u32,
                 1_u32,
                 config.readonly,
-            )
-            .with_context(|| MachineError::InitPflashErr)?;
-            PFlash::realize(
-                pflash,
                 &mut self.base.sysbus,
                 flash_end - pfl_size,
-                pfl_size,
-                backend,
             )
-            .with_context(|| MachineError::RlzPflashErr)?;
+            .with_context(|| MachineError::InitPflashErr)?;
+            pflash
+                .realize(&mut self.base.sysbus)
+                .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 
