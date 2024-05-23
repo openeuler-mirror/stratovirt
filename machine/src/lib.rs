@@ -107,8 +107,11 @@ use virtio::{
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
 
+#[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
+#[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_SHUTDOWN_INTERVAL: u64 = 1000;
+#[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_POWERDOWN_INTERVAL: u64 = 30000;
 
 /// Machine structure include base members.
