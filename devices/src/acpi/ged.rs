@@ -54,6 +54,7 @@ pub enum AcpiEvent {
 const AML_GED_EVT_REG: &str = "EREG";
 const AML_GED_EVT_SEL: &str = "ESEL";
 
+#[derive(Clone)]
 pub struct GedEvent {
     power_button: Arc<EventFd>,
     #[cfg(target_arch = "x86_64")]
@@ -78,32 +79,32 @@ pub struct Ged {
     base: SysBusDevBase,
     notification_type: Arc<AtomicU32>,
     battery_present: bool,
-}
-
-impl Default for Ged {
-    fn default() -> Self {
-        Self {
-            base: SysBusDevBase::default(),
-            notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
-            battery_present: false,
-        }
-    }
+    ged_event: GedEvent,
 }
 
 impl Ged {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        ged_event: GedEvent,
+    pub fn new(
         battery_present: bool,
+        sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> Result<Arc<Mutex<Ged>>> {
-        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size, "Ged")
+        ged_event: GedEvent,
+    ) -> Result<Self> {
+        let mut ged = Self {
+            base: SysBusDevBase::default(),
+            notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
+            battery_present,
+            ged_event,
+        };
+        ged.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        ged.set_sys_resource(sysbus, region_base, region_size, "Ged")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
-        self.battery_present = battery_present;
 
+        Ok(ged)
+    }
+
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Ged>>> {
+        let ged_event = self.ged_event.clone();
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 

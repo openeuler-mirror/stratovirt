@@ -354,6 +354,7 @@ impl UsbStorage {
                 scsi_dev_cfg,
                 drive_cfg,
                 drive_files,
+                None,
             ))),
         })
     }
@@ -555,7 +556,7 @@ impl UsbDevice for UsbStorage {
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
         let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
-        locked_scsi_dev.realize(None)?;
+        locked_scsi_dev.realize()?;
         drop(locked_scsi_dev);
         self.scsi_bus
             .lock()

@@ -1199,16 +1199,10 @@ pub trait MachineOps: MachineLifecycle {
             .drives
             .remove(&device_cfg.drive)
             .with_context(|| "No drive configured matched for scsi device")?;
-
         if let Some(bootindex) = device_cfg.bootindex {
             self.check_bootindex(bootindex)
                 .with_context(|| "Failed to add scsi device for invalid bootindex")?;
         }
-        let device = Arc::new(Mutex::new(ScsiDevice::new(
-            device_cfg.clone(),
-            drive_arg,
-            self.get_drive_files(),
-        )));
 
         // Bus name `$parent_cntlr_name.0` is checked when parsing by clap.
         let cntlr = device_cfg.bus.split('.').collect::<Vec<&str>>()[0].to_string();
@@ -1223,7 +1217,6 @@ pub trait MachineOps: MachineLifecycle {
             .unwrap();
         let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
         let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
-
         let bus = cntlr.bus.as_ref().unwrap();
         if bus
             .lock()
@@ -1234,7 +1227,14 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Wrong! Two scsi devices have the same scsi-id and lun");
         }
         let iothread = cntlr.config.iothread.clone();
-        device.lock().unwrap().realize(iothread)?;
+
+        let device = Arc::new(Mutex::new(ScsiDevice::new(
+            device_cfg.clone(),
+            drive_arg,
+            self.get_drive_files(),
+            iothread,
+        )));
+        device.lock().unwrap().realize()?;
         bus.lock()
             .unwrap()
             .devices
@@ -1670,11 +1670,8 @@ pub trait MachineOps: MachineLifecycle {
         token_id: Option<Arc<RwLock<u64>>>,
     ) -> Result<()> {
         let config = ScreamConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
-        let bdf = PciBdf {
-            bus: config.bus.clone(),
-            addr: config.addr,
-        };
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let bdf = PciBdf::new(config.bus.clone(), config.addr);
+        let (_, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
         let mem_cfg = vm_config
             .object
@@ -1691,9 +1688,9 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Object for share config is not on");
         }
 
-        let mut scream = Scream::new(mem_cfg.size, config, token_id);
+        let mut scream = Scream::new(mem_cfg.size, config, token_id)?;
         scream
-            .realize(devfn, parent_bus)
+            .realize(parent_bus)
             .with_context(|| "Failed to realize scream device")?;
         self.register_vm_pause_notifier(Arc::new(scream));
         Ok(())

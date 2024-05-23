@@ -58,6 +58,8 @@ pub struct PFlash {
     write_blk_size: u32,
     /// ROM region of PFlash.
     rom: Option<Region>,
+    /// backend: Option<File>,
+    host_mmap: Arc<HostMemMapping>,
 }
 
 impl PFlash {
@@ -99,18 +101,21 @@ impl PFlash {
     /// * block-length is zero.
     /// * PFlash size is zero.
     /// * flash is writable and file size is smaller than region_max_size.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         region_max_size: u64,
-        backend: &Option<File>,
+        backend: Option<File>,
         block_len: u32,
         bank_width: u32,
         device_width: u32,
         read_only: bool,
+        sysbus: &mut SysBus,
+        region_base: u64,
     ) -> Result<Self> {
         if block_len == 0 {
             bail!("PFlash: block-length is zero which is invalid.");
         }
-        let size = Self::flash_region_size(region_max_size, backend, read_only)?;
+        let size = Self::flash_region_size(region_max_size, &backend, read_only)?;
         let blocks_per_device: u32 = size as u32 / block_len;
         if blocks_per_device == 0 {
             bail!("PFlash: num-blocks is zero which is invalid.");
@@ -187,9 +192,21 @@ impl PFlash {
         // Number of protection fields.
         cfi_table[0x3f] = 0x01;
 
-        Ok(PFlash {
+        let has_backend = backend.is_some();
+        let region_size = Self::flash_region_size(region_max_size, &backend, read_only)?;
+        let host_mmap = Arc::new(HostMemMapping::new(
+            GuestAddress(region_base),
+            None,
+            region_size,
+            backend.map(FileBackend::new_common),
+            false,
+            true,
+            read_only,
+        )?);
+
+        let mut pflash = PFlash {
             base: SysBusDevBase::new(SysBusDevType::Flash),
-            has_backend: backend.is_some(),
+            has_backend,
             block_len,
             bank_width,
             // device id for Intel PFlash.
@@ -204,33 +221,20 @@ impl PFlash {
             counter: 0,
             write_blk_size,
             rom: None,
-        })
+            host_mmap,
+        };
+
+        pflash
+            .set_sys_resource(sysbus, region_base, region_size, "PflashRom")
+            .with_context(|| "Failed to allocate system resource for PFlash.")?;
+        Ok(pflash)
     }
 
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_max_size: u64,
-        backend: Option<File>,
-    ) -> Result<()> {
-        let region_size = Self::flash_region_size(region_max_size, &backend, self.read_only)?;
-        self.set_sys_resource(sysbus, region_base, region_size, "PflashRom")
-            .with_context(|| "Failed to allocate system resource for PFlash.")?;
-
-        let host_mmap = Arc::new(HostMemMapping::new(
-            GuestAddress(region_base),
-            None,
-            region_size,
-            backend.map(FileBackend::new_common),
-            false,
-            true,
-            self.read_only,
-        )?);
-
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<PFlash>>> {
+        let region_base = self.base.res.region_base;
+        let host_mmap = self.host_mmap.clone();
         let dev = Arc::new(Mutex::new(self));
         let region_ops = sysbus.build_region_ops(&dev);
-
         let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
         dev.lock().unwrap().rom = Some(rom_region.clone());
         sysbus
@@ -238,9 +242,9 @@ impl PFlash {
             .root()
             .add_subregion(rom_region, region_base)
             .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.devices.push(dev);
+        sysbus.devices.push(dev.clone());
 
-        Ok(())
+        Ok(dev)
     }
 
     fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
@@ -938,25 +942,20 @@ mod test {
                 .open(file_name)
                 .unwrap(),
         );
-        let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only).unwrap();
-        let sysbus = sysbus_init();
-        let dev = Arc::new(Mutex::new(pflash));
-        let region_ops = sysbus.build_region_ops(&dev);
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(flash_base),
-                None,
-                flash_size,
-                fd.map(FileBackend::new_common),
-                false,
-                true,
-                false,
-            )
-            .unwrap(),
-        );
+        let mut sysbus = sysbus_init();
+        let pflash = PFlash::new(
+            flash_size,
+            fd,
+            sector_len,
+            4,
+            2,
+            read_only,
+            &mut sysbus,
+            flash_base,
+        )
+        .unwrap();
+        let dev = pflash.realize(&mut sysbus).unwrap();
 
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "pflash-dev");
-        dev.lock().unwrap().rom = Some(rom_region);
         dev
     }
 

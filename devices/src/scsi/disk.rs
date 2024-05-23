@@ -161,6 +161,7 @@ pub struct ScsiDevice {
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     /// Aio context.
     pub aio: Option<Arc<Mutex<Aio<ScsiCompleteCb>>>>,
+    pub iothread: Option<String>,
 }
 
 // SAFETY: the devices attached in one scsi controller will process IO in the same thread.
@@ -173,6 +174,7 @@ impl ScsiDevice {
         dev_cfg: ScsiDevConfig,
         drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+        iothread: Option<String>,
     ) -> ScsiDevice {
         let scsi_type = match dev_cfg.classtype.as_str() {
             "scsi-hd" => SCSI_TYPE_DISK,
@@ -193,10 +195,11 @@ impl ScsiDevice {
             parent_bus: Weak::new(),
             drive_files,
             aio: None,
+            iothread,
         }
     }
 
-    pub fn realize(&mut self, iothread: Option<String>) -> Result<()> {
+    pub fn realize(&mut self) -> Result<()> {
         match self.scsi_type {
             SCSI_TYPE_DISK => {
                 self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
@@ -232,7 +235,7 @@ impl ScsiDevice {
         let conf = BlockProperty {
             id: drive_id,
             format: self.drive_cfg.format,
-            iothread,
+            iothread: self.iothread.clone(),
             direct: self.drive_cfg.direct,
             req_align: self.req_align,
             buf_align: self.buf_align,

@@ -25,10 +25,8 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use chardev_backend::chardev::{Chardev, InputReceiver};
-use machine_manager::{
-    config::{BootSource, Param, SerialConfig},
-    event_loop::EventLoop,
-};
+use machine_manager::config::SerialConfig;
+use machine_manager::event_loop::EventLoop;
 use migration::{
     snapshot::PL011_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
     MigrationManager, StateTransfer,
@@ -131,8 +129,13 @@ pub struct PL011 {
 
 impl PL011 {
     /// Create a new `PL011` instance with default parameters.
-    pub fn new(cfg: SerialConfig) -> Result<Self> {
-        Ok(PL011 {
+    pub fn new(
+        cfg: SerialConfig,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut pl011 = PL011 {
             base: SysBusDevBase {
                 dev_type: SysBusDevType::PL011,
                 interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
@@ -141,7 +144,12 @@ impl PL011 {
             paused: false,
             state: PL011State::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
-        })
+        };
+        pl011
+            .set_sys_resource(sysbus, region_base, region_size, "PL011")
+            .with_context(|| "Failed to set system resource for PL011.")?;
+
+        Ok(pl011)
     }
 
     fn interrupt(&mut self) {
@@ -154,30 +162,16 @@ impl PL011 {
         }
     }
 
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-        bs: &Arc<Mutex<BootSource>>,
-    ) -> Result<()> {
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.set_sys_resource(sysbus, region_base, region_size, "PL011")
-            .with_context(|| "Failed to set system resource for PL011.")?;
-
         let dev = Arc::new(Mutex::new(self));
         sysbus
             .attach_device(&dev)
             .with_context(|| "Failed to attach PL011 to system bus.")?;
-
-        bs.lock().unwrap().kernel_cmdline.push(Param {
-            param_type: "earlycon".to_string(),
-            value: format!("pl011,mmio,0x{:08x}", region_base),
-        });
         MigrationManager::register_device_instance(
             PL011State::descriptor(),
             dev.clone(),
@@ -455,6 +449,7 @@ impl AmlBuilder for PL011 {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
@@ -464,10 +459,11 @@ mod test {
                 id: "chardev".to_string(),
             },
         };
-        let mut pl011_dev = PL011::new(SerialConfig {
+        let config = SerialConfig {
             chardev: chardev_cfg,
-        })
-        .unwrap();
+        };
+        let mut sysbus = sysbus_init();
+        let mut pl011_dev = PL011::new(config, &mut sysbus, 0x0900_0000, 0x0000_1000).unwrap();
         assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
         assert_eq!(pl011_dev.state.flags, 0x90);
         assert_eq!(pl011_dev.state.lcr, 0);

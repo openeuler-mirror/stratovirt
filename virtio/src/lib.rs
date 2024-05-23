@@ -883,8 +883,34 @@ mod tests {
     use std::sync::Arc;
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 
     pub const MEMORY_SIZE: u64 = 1024 * 1024;
+
+    pub fn sysbus_init() -> SysBus {
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sys_mem"),
+            "sys_mem",
+            None,
+        )
+        .unwrap();
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sys_io"),
+            "sys_io",
+            None,
+        )
+        .unwrap();
+        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
+        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
+        SysBus::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            free_irqs,
+            mmio_region,
+        )
+    }
 
     pub fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "root");
