@@ -1385,7 +1385,7 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::transport::virtio_mmio::tests::address_space_init;
+    use crate::tests::address_space_init;
     use crate::VirtioBase;
     use address_space::{AddressSpace, GuestAddress};
     use devices::pci::{
@@ -1397,13 +1397,13 @@ mod tests {
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
     const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
 
-    pub struct VirtioDeviceTest {
+    struct VirtioDeviceTest {
         base: VirtioBase,
-        pub is_activated: bool,
+        is_activated: bool,
     }
 
     impl VirtioDeviceTest {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let mut base = VirtioBase::new(
                 VIRTIO_DEVICE_TEST_TYPE,
                 VIRTIO_DEVICE_QUEUE_NUM,

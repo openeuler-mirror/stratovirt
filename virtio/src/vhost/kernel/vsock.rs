@@ -414,14 +414,8 @@ impl MigrationHook for Vsock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use address_space::*;
+    use crate::tests::address_space_init;
     use machine_manager::config::str_slip_to_clap;
-
-    fn vsock_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(u64::max_value(), "sysmem");
-        let sys_mem = AddressSpace::new(root, "sysmem", None).unwrap();
-        sys_mem
-    }
 
     fn vsock_create_instance() -> Vsock {
         let vsock_conf = VsockConfig {
@@ -430,7 +424,7 @@ mod tests {
             vhost_fd: None,
             ..Default::default()
         };
-        let sys_mem = vsock_address_space_init();
+        let sys_mem = address_space_init();
         let vsock = Vsock::new(&vsock_conf, &sys_mem);
         vsock
     }

@@ -1245,38 +1245,12 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
-    pub use crate::*;
-
+    use super::*;
+    use crate::tests::{address_space_init, MEMORY_SIZE};
+    use crate::*;
     use address_space::{AddressRange, HostMemMapping, Region};
 
-    const MEMORY_SIZE: u64 = 1024 * 1024;
     const QUEUE_SIZE: u16 = 256;
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "space");
-        let sys_space = AddressSpace::new(root, "space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                MEMORY_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "space"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
         let mem_mapping = Arc::new(

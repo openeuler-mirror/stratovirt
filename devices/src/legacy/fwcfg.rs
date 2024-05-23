@@ -1293,32 +1293,7 @@ impl AmlBuilder for FwCfgIO {
 mod test {
     use super::*;
     use crate::sysbus::sysbus_init;
-    use address_space::{AddressSpace, HostMemMapping, Region};
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                0x1000_0000,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "region_1"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
+    use crate::test::address_space_init;
 
     #[test]
     fn test_entry_functions() {
