@@ -15,6 +15,7 @@ pub mod qcow2;
 pub mod raw;
 
 use std::{
+    fmt,
     fs::File,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -148,6 +149,66 @@ impl CreateOptions {
         };
 
         Ok(options_qcow2)
+    }
+}
+
+// Transform size into string with storage units.
+fn size_to_string(size: f64) -> Result<String> {
+    let units = vec!["", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+
+    // Switch to higher power if the integer part is >= 1000,
+    // For example: 1000 * 2^30 bytes
+    // It's better to output 0.978 TiB, rather than 1000 GiB.
+    let n = (size / 1000.0 * 1024.0).log2() as u64;
+    let idx = n / 10;
+    if idx >= units.len() as u64 {
+        bail!("Input value {} is too large", size);
+    }
+    let div = 1_u64 << (idx * 10);
+
+    // Keep three significant digits and do not output any extra zeros,
+    // For example: 512 * 2^20 bytes
+    // It's better to output 512 MiB, rather than 512.000 MiB.
+    let num_str = format!("{:.3}", size / div as f64);
+    let num_str = num_str.trim_end_matches('0').trim_end_matches('.');
+
+    let res = format!("{} {}", num_str, units[idx as usize]);
+    Ok(res)
+}
+
+#[derive(Default)]
+pub struct ImageInfo {
+    pub path: String,
+    pub format: String,
+    pub actual_size: u64,
+    pub virtual_size: u64,
+    pub cluster_size: Option<u64>,
+    pub snap_lists: Option<String>,
+}
+
+impl fmt::Display for ImageInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "image: {}\n\
+            file format: {}\n\
+            virtual size: {} ({} bytes)\n\
+            disk size: {}",
+            self.path,
+            self.format,
+            size_to_string(self.virtual_size as f64).unwrap_or_else(|e| format!("{:?}", e)),
+            self.virtual_size,
+            size_to_string(self.actual_size as f64).unwrap_or_else(|e| format!("{:?}", e))
+        )?;
+
+        if let Some(cluster_size) = self.cluster_size {
+            writeln!(f, "cluster_size: {}", cluster_size)?;
+        }
+
+        if let Some(snap_lists) = &self.snap_lists {
+            write!(f, "Snapshot list:\n{}", snap_lists)?;
+        }
+        Ok(())
     }
 }
 
@@ -290,6 +351,8 @@ impl Default for BlockProperty {
 
 pub trait BlockDriverOps<T: Clone>: Send {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String>;
+
+    fn query_image(&mut self, image_info: &mut ImageInfo) -> Result<()>;
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()>;
 
