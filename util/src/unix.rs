@@ -187,10 +187,11 @@ impl UnixSock {
 
     /// The listener accepts incoming client connections.
     pub fn accept(&mut self) -> Result<()> {
-        let (sock, _addr) = self
+        let listener = self
             .listener
             .as_ref()
-            .unwrap()
+            .with_context(|| "UnixSock is not bound")?;
+        let (sock, _addr) = listener
             .accept()
             .with_context(|| format!("Failed to accept the socket {}", self.path))?;
         self.sock = Some(sock);
@@ -203,8 +204,12 @@ impl UnixSock {
     }
 
     pub fn server_connection_refuse(&mut self) -> Result<()> {
+        let listener = self
+            .listener
+            .as_ref()
+            .with_context(|| "UnixSock is not bound")?;
         // Refuse connection by finishing life cycle of stream fd from listener fd.
-        self.listener.as_ref().unwrap().accept().with_context(|| {
+        listener.accept().with_context(|| {
             format!(
                 "Failed to accept the socket for refused connection {}",
                 self.path
@@ -224,18 +229,21 @@ impl UnixSock {
     }
 
     pub fn listen_set_nonblocking(&self, nonblocking: bool) -> Result<()> {
-        self.listener
+        let listener = self
+            .listener
             .as_ref()
-            .unwrap()
+            .with_context(|| "UnixSock is not bound")?;
+        listener
             .set_nonblocking(nonblocking)
             .with_context(|| "couldn't set nonblocking for unix sock listener")
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
-        self.sock
+        let sock = self
+            .sock
             .as_ref()
-            .unwrap()
-            .set_nonblocking(nonblocking)
+            .with_context(|| "UnixSock is not connected")?;
+        sock.set_nonblocking(nonblocking)
             .with_context(|| "couldn't set nonblocking")
     }
 
@@ -287,7 +295,7 @@ impl UnixSock {
     /// # Errors
     ///
     /// The socket file descriptor is broken.
-    pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> std::io::Result<usize> {
+    pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> Result<usize> {
         // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We checked the out_fds lens before.
@@ -331,17 +339,17 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
-        let write_count =
-            // SAFETY: msg parameters are valid.
-            unsafe { sendmsg(self.sock.as_ref().unwrap().as_raw_fd(), &msg, MSG_NOSIGNAL) };
+        let sock = self
+            .sock
+            .as_ref()
+            .with_context(|| "UnixSock is not connected")?;
+        // SAFETY: msg parameters are valid.
+        let write_count = unsafe { sendmsg(sock.as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
         if write_count == -1 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Failed to send msg, err: {}",
-                    std::io::Error::last_os_error()
-                ),
+            Err(anyhow!(
+                "Failed to send msg, err: {}",
+                std::io::Error::last_os_error()
             ))
         } else {
             Ok(write_count as usize)
@@ -358,11 +366,7 @@ impl UnixSock {
     /// # Errors
     ///
     /// The socket file descriptor is broken.
-    pub fn recv_msg(
-        &self,
-        iovecs: &mut [iovec],
-        in_fds: &mut [RawFd],
-    ) -> std::io::Result<(usize, usize)> {
+    pub fn recv_msg(&self, iovecs: &mut [iovec], in_fds: &mut [RawFd]) -> Result<(usize, usize)> {
         // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We check the in_fds lens before.
@@ -386,33 +390,25 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
+        let sock = self
+            .sock
+            .as_ref()
+            .with_context(|| "UnixSock is not connected")?;
         // SAFETY: msg parameters are valid.
-        let total_read = unsafe {
-            recvmsg(
-                self.sock.as_ref().unwrap().as_raw_fd(),
-                &mut msg,
-                MSG_WAITALL,
-            )
-        };
+        let total_read = unsafe { recvmsg(sock.as_raw_fd(), &mut msg, MSG_WAITALL) };
 
         if total_read == -1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Failed to recv msg, err: {}",
-                    std::io::Error::last_os_error()
-                ),
-            ));
+            bail!(
+                "Failed to recv msg, err: {}",
+                std::io::Error::last_os_error()
+            );
         }
         if total_read == 0 && (msg.msg_controllen as u64) < size_of::<cmsghdr>() as u64 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "The length of control message is invalid, {} {}",
-                    msg.msg_controllen,
-                    size_of::<cmsghdr>()
-                ),
-            ));
+            bail!(
+                "The length of control message is invalid, {} {}",
+                msg.msg_controllen,
+                size_of::<cmsghdr>()
+            );
         }
 
         let mut cmsg_ptr = msg.msg_control as *mut cmsghdr;
