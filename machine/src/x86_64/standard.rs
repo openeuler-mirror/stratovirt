@@ -48,6 +48,7 @@ use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
 };
 use machine_manager::event;
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
     MigrateInterface, VmState,
@@ -220,6 +221,7 @@ impl StdMachine {
             }
         }
 
+        EventLoop::kick_all();
         info!("vm destroy");
 
         Ok(())
