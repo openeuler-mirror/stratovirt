@@ -930,33 +930,7 @@ mod test {
     use std::fs::File;
 
     use super::*;
-    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
-    use address_space::AddressSpace;
-
-    fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sys_mem"),
-            "sys_mem",
-            None,
-        )
-        .unwrap();
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(
-            Region::init_container_region(1 << 16, "sys_io"),
-            "sys_io",
-            None,
-        )
-        .unwrap();
-        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
-        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-        SysBus::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            free_irqs,
-            mmio_region,
-        )
-    }
+    use crate::sysbus::sysbus_init;
 
     fn pflash_dev_init(file_name: &str) -> Arc<Mutex<PFlash>> {
         let sector_len: u32 = 0x40_000;
