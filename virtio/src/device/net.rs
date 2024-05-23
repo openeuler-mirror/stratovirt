@@ -1787,7 +1787,7 @@ impl MigrationHook for Net {}
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
+    use super::*;
 
     #[test]
     fn test_net_init() {

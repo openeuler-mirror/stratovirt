@@ -1008,7 +1008,7 @@ impl ChardevNotifyDevice for SerialPort {
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
+    use super::*;
 
     #[test]
     fn test_set_driver_features() {

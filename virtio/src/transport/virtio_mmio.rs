@@ -594,53 +594,28 @@ impl MigrationHook for VirtioMmioDevice {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
+    use crate::tests::address_space_init;
     use crate::{
         check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
         VIRTIO_TYPE_BLOCK,
     };
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use address_space::{AddressSpace, GuestAddress};
 
-    pub fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
-
-    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
     const CONFIG_SPACE_SIZE: usize = 16;
     const QUEUE_NUM: usize = 2;
     const QUEUE_SIZE: u16 = 256;
 
-    pub struct VirtioDeviceTest {
+    struct VirtioDeviceTest {
         base: VirtioBase,
-        pub config_space: Vec<u8>,
-        pub b_active: bool,
-        pub b_realized: bool,
+        config_space: Vec<u8>,
+        b_active: bool,
+        b_realized: bool,
     }
 
     impl VirtioDeviceTest {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let mut config_space = Vec::new();
             for i in 0..CONFIG_SPACE_SIZE {
                 config_space.push(i as u8);

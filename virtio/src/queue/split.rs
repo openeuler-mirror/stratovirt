@@ -975,33 +975,9 @@ impl VringOps for SplitVring {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::address_space_init;
     use crate::{Queue, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING};
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
+    use address_space::{AddressSpace, GuestAddress};
 
     trait VringOpsTest {
         fn set_desc(
