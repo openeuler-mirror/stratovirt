@@ -532,7 +532,7 @@ impl MachineLifecycle for LightMachine {
         }
 
         info!("vm destroy");
-        EventLoop::get_ctx(None).unwrap().kick();
+        EventLoop::kick_all();
 
         true
     }

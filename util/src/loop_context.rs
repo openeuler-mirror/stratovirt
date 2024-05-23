@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Barrier, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -219,6 +219,8 @@ pub struct EventLoopContext {
     pub thread_pool: Arc<ThreadPool>,
     /// Record VM clock state.
     pub clock_state: Arc<Mutex<ClockState>>,
+    /// The io thread barrier.
+    pub thread_exit_barrier: Arc<Barrier>,
 }
 
 impl Drop for EventLoopContext {
@@ -235,7 +237,7 @@ unsafe impl Send for EventLoopContext {}
 
 impl EventLoopContext {
     /// Constructs a new `EventLoopContext`.
-    pub fn new() -> Self {
+    pub fn new(thread_exit_barrier: Arc<Barrier>) -> Self {
         let mut ctx = EventLoopContext {
             epoll: Epoll::new().unwrap(),
             manager: None,
@@ -249,6 +251,7 @@ impl EventLoopContext {
             timer_next_id: AtomicU64::new(0),
             thread_pool: Arc::new(ThreadPool::default()),
             clock_state: Arc::new(Mutex::new(ClockState::default())),
+            thread_exit_barrier,
         };
         ctx.init_kick();
         ctx
@@ -716,12 +719,6 @@ impl EventLoopContext {
     }
 }
 
-impl Default for EventLoopContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn read_fd(fd: RawFd) -> u64 {
     let mut value: u64 = 0;
 
@@ -746,6 +743,7 @@ pub fn read_fd(fd: RawFd) -> u64 {
 #[cfg(test)]
 mod test {
     use std::os::unix::io::{AsRawFd, RawFd};
+    use std::sync::Barrier;
 
     use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -794,7 +792,7 @@ mod test {
 
     #[test]
     fn basic_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -822,7 +820,7 @@ mod test {
 
     #[test]
     fn parked_event_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -869,7 +867,7 @@ mod test {
 
     #[test]
     fn event_handler_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -908,7 +906,7 @@ mod test {
 
     #[test]
     fn error_operation_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let leisure_fd = EventFd::new(EFD_NONBLOCK).unwrap();
 
@@ -945,7 +943,7 @@ mod test {
 
     #[test]
     fn error_parked_operation_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
 
@@ -980,7 +978,7 @@ mod test {
 
     #[test]
     fn fd_released_test() {
-        let mut mainloop = EventLoopContext::new();
+        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let fd = mainloop.create_event();
 
         // In this case, fd is already closed. But program was wrote to ignore the error.

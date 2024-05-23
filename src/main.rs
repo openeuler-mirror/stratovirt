@@ -160,7 +160,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
                 LightMachine::new(vm_config).with_context(|| "Failed to init MicroVM")?,
             ));
             MachineOps::realize(&vm, vm_config).with_context(|| "Failed to realize micro VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
                 sockets.push(Socket::from_listener(listener, Some(vm.clone())));
@@ -173,7 +173,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             ));
             MachineOps::realize(&vm, vm_config)
                 .with_context(|| "Failed to realize standard VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             if is_test_enabled() {
                 let sock_path = cmd_args.value_of("mod-test");
@@ -199,7 +199,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
                 sockets.push(Socket::from_listener(listener, Some(vm.clone())));
