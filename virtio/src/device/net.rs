@@ -672,30 +672,33 @@ impl EventNotifierHelper for NetCtrlHandler {
 }
 
 struct TxVirtio {
+    tap_full: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: Arc<EventFd>,
 }
 
 impl TxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
-        TxVirtio { queue, queue_evt }
+        TxVirtio {
+            tap_full: false,
+            queue,
+            queue_evt,
+        }
     }
 }
 
 struct RxVirtio {
-    queue_full: bool,
+    queue_avail: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: Arc<EventFd>,
-    recv_evt: Arc<EventFd>,
 }
 
 impl RxVirtio {
-    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>, recv_evt: Arc<EventFd>) -> Self {
+    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
         RxVirtio {
-            queue_full: false,
+            queue_avail: false,
             queue,
             queue_evt,
-            recv_evt,
         }
     }
 }
@@ -792,7 +795,11 @@ impl NetIoHandler {
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
             if elem.desc_num == 0 {
-                self.rx.queue_full = true;
+                queue
+                    .vring
+                    .suppress_queue_notify(&self.mem_space, self.driver_features, false)
+                    .with_context(|| "Failed to enable rx queue notify")?;
+                self.rx.queue_avail = false;
                 break;
             } else if elem.in_iovec.is_empty() {
                 bail!("The length of in iovec is 0");
@@ -863,9 +870,9 @@ impl NetIoHandler {
             rx_packets += 1;
             if rx_packets >= self.queue_size {
                 self.rx
-                    .recv_evt
+                    .queue_evt
                     .write(1)
-                    .with_context(|| "Failed to trigger tap queue event".to_string())?;
+                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
                 break;
             }
         }
@@ -925,10 +932,12 @@ impl NetIoHandler {
             };
             if tap_fd != -1 && self.send_packets(tap_fd, &iovecs) == -1 {
                 queue.vring.push_back();
-                self.tx.queue_evt.write(1).with_context(|| {
-                    "Failed to trigger tx queue event when writev blocked".to_string()
-                })?;
-                return Ok(());
+                queue
+                    .vring
+                    .suppress_queue_notify(&self.mem_space, self.driver_features, true)
+                    .with_context(|| "Failed to suppress tx queue notify")?;
+                self.tx.tap_full = true;
+                break;
             }
 
             queue
@@ -959,6 +968,50 @@ impl NetIoHandler {
         Ok(())
     }
 
+    fn tap_fd_handler(net_io: &mut Self) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
+        if !net_io.is_listening && (net_io.rx.queue_avail || net_io.tx.tap_full) {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Resume,
+                net_io.tap_fd,
+                None,
+                EventSet::empty(),
+                Vec::new(),
+            ));
+            net_io.is_listening = true;
+        }
+
+        if !net_io.is_listening {
+            return notifiers;
+        }
+
+        // NOTE: We want to poll for OUT event when the tap is full, and for IN event when the
+        // virtio queue is available.
+        let tap_events = match (net_io.rx.queue_avail, net_io.tx.tap_full) {
+            (true, true) => EventSet::OUT | EventSet::IN | EventSet::EDGE_TRIGGERED,
+            (false, true) => EventSet::OUT | EventSet::EDGE_TRIGGERED,
+            (true, false) => EventSet::IN | EventSet::EDGE_TRIGGERED,
+            (false, false) => EventSet::empty(),
+        };
+
+        let tap_operation = if tap_events.is_empty() {
+            net_io.is_listening = false;
+            NotifierOperation::Park
+        } else {
+            NotifierOperation::Modify
+        };
+
+        notifiers.push(EventNotifier::new(
+            tap_operation,
+            net_io.tap_fd,
+            None,
+            tap_events,
+            Vec::new(),
+        ));
+        notifiers
+    }
+
     fn update_evt_handler(net_io: &Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut locked_net_io = net_io.lock().unwrap();
         locked_net_io.tap = match locked_net_io.receiver.recv() {
@@ -977,7 +1030,6 @@ impl NetIoHandler {
         let mut notifiers_fds = vec![
             locked_net_io.update_evt.as_raw_fd(),
             locked_net_io.rx.queue_evt.as_raw_fd(),
-            locked_net_io.rx.recv_evt.as_raw_fd(),
             locked_net_io.tx.queue_evt.as_raw_fd(),
         ];
         if old_tap_fd != -1 {
@@ -1055,30 +1107,40 @@ impl EventNotifierHelper for NetIoHandler {
                 return None;
             }
 
-            if let Err(ref e) = locked_net_io.rx.recv_evt.write(1) {
-                error!("Failed to trigger tap receive event, {:?}", e);
+            locked_net_io.rx.queue_avail = true;
+            let mut locked_queue = locked_net_io.rx.queue.lock().unwrap();
+
+            if let Err(ref err) = locked_queue.vring.suppress_queue_notify(
+                &locked_net_io.mem_space,
+                locked_net_io.driver_features,
+                true,
+            ) {
+                error!("Failed to suppress rx queue notify: {:?}", err);
                 report_virtio_error(
                     locked_net_io.interrupt_cb.clone(),
                     locked_net_io.driver_features,
                     &locked_net_io.device_broken,
                 );
+                return None;
+            };
+
+            drop(locked_queue);
+
+            if let Err(ref err) = locked_net_io.handle_rx() {
+                error!("Failed to handle receive queue event: {:?}", err);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    &locked_net_io.device_broken,
+                );
+                return None;
             }
 
-            if let Some(tap) = locked_net_io.tap.as_ref() {
-                if !locked_net_io.is_listening {
-                    let notifier = vec![EventNotifier::new(
-                        NotifierOperation::Resume,
-                        tap.as_raw_fd(),
-                        None,
-                        EventSet::IN | EventSet::EDGE_TRIGGERED,
-                        Vec::new(),
-                    )];
-                    locked_net_io.is_listening = true;
-                    locked_net_io.rx.queue_full = false;
-                    return Some(notifier);
-                }
+            if locked_net_io.tap.is_some() {
+                Some(NetIoHandler::tap_fd_handler(&mut locked_net_io))
+            } else {
+                None
             }
-            None
         });
         let rx_fd = locked_net_io.rx.queue_evt.as_raw_fd();
         notifiers.push(build_event_notifier(
@@ -1096,6 +1158,7 @@ impl EventNotifierHelper for NetIoHandler {
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+
             if let Err(ref e) = locked_net_io.handle_tx() {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
                 report_virtio_error(
@@ -1104,7 +1167,12 @@ impl EventNotifierHelper for NetIoHandler {
                     &locked_net_io.device_broken,
                 );
             }
-            None
+
+            if locked_net_io.tap.is_some() {
+                Some(NetIoHandler::tap_fd_handler(&mut locked_net_io))
+            } else {
+                None
+            }
         });
         let tx_fd = locked_net_io.tx.queue_evt.as_raw_fd();
         notifiers.push(build_event_notifier(
@@ -1117,50 +1185,62 @@ impl EventNotifierHelper for NetIoHandler {
         // Register event notifier for tap.
         let cloned_net_io = net_io.clone();
         if let Some(tap) = locked_net_io.tap.as_ref() {
-            let handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let handler: Rc<NotifierCallback> = Rc::new(move |events: EventSet, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if locked_net_io.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
 
-                if let Err(ref e) = locked_net_io.handle_rx() {
-                    error!("Failed to handle rx(tap event), {:?}", e);
-                    report_virtio_error(
-                        locked_net_io.interrupt_cb.clone(),
-                        locked_net_io.driver_features,
-                        &locked_net_io.device_broken,
-                    );
-                    return None;
-                }
+                if events.contains(EventSet::OUT) {
+                    locked_net_io.tx.tap_full = false;
+                    let mut locked_queue = locked_net_io.tx.queue.lock().unwrap();
 
-                if let Some(tap) = locked_net_io.tap.as_ref() {
-                    if locked_net_io.rx.queue_full && locked_net_io.is_listening {
-                        let notifier = vec![EventNotifier::new(
-                            NotifierOperation::Park,
-                            tap.as_raw_fd(),
-                            None,
-                            EventSet::IN | EventSet::EDGE_TRIGGERED,
-                            Vec::new(),
-                        )];
-                        locked_net_io.is_listening = false;
-                        return Some(notifier);
+                    if let Err(ref err) = locked_queue.vring.suppress_queue_notify(
+                        &locked_net_io.mem_space,
+                        locked_net_io.driver_features,
+                        false,
+                    ) {
+                        error!("Failed to enable tx queue notify: {:?}", err);
+                        report_virtio_error(
+                            locked_net_io.interrupt_cb.clone(),
+                            locked_net_io.driver_features,
+                            &locked_net_io.device_broken,
+                        );
+                        return None;
+                    };
+
+                    drop(locked_queue);
+
+                    if let Err(ref e) = locked_net_io.handle_tx() {
+                        error!("Failed to handle tx(tx event) for net, {:?}", e);
+                        report_virtio_error(
+                            locked_net_io.interrupt_cb.clone(),
+                            locked_net_io.driver_features,
+                            &locked_net_io.device_broken,
+                        );
                     }
                 }
-                None
+
+                if events.contains(EventSet::IN) {
+                    if let Err(ref err) = locked_net_io.handle_rx() {
+                        error!("Failed to handle receive queue event: {:?}", err);
+                        report_virtio_error(
+                            locked_net_io.interrupt_cb.clone(),
+                            locked_net_io.driver_features,
+                            &locked_net_io.device_broken,
+                        );
+                        return None;
+                    }
+                }
+
+                Some(NetIoHandler::tap_fd_handler(&mut locked_net_io))
             });
             let tap_fd = tap.as_raw_fd();
             notifiers.push(build_event_notifier(
                 tap_fd,
                 Some(handler.clone()),
                 NotifierOperation::AddShared,
-                EventSet::IN | EventSet::EDGE_TRIGGERED,
-            ));
-            let recv_evt_fd = locked_net_io.rx.recv_evt.as_raw_fd();
-            notifiers.push(build_event_notifier(
-                recv_evt_fd,
-                Some(handler),
-                NotifierOperation::AddShared,
-                EventSet::IN | EventSet::EDGE_TRIGGERED,
+                EventSet::OUT | EventSet::IN | EventSet::EDGE_TRIGGERED,
             ));
         }
 
@@ -1565,9 +1645,8 @@ impl VirtioDevice for Net {
             }
 
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
-            let recv_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let mut handler = NetIoHandler {
-                rx: RxVirtio::new(rx_queue, rx_queue_evt, recv_evt),
+                rx: RxVirtio::new(rx_queue, rx_queue_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
                 tap: self.taps.as_ref().map(|t| t[index].clone()),
                 tap_fd: -1,
