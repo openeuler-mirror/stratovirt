@@ -170,6 +170,7 @@ impl OhUiMsgHandler {
             reader.clear();
             return Ok(());
         }
+        trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
         if let Err(e) = match event_type {
