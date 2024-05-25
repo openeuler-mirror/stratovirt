@@ -204,14 +204,9 @@ impl VmConfig {
     ///
     /// * `object_args` - The args of object.
     pub fn add_object(&mut self, object_args: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("object");
-        cmd_params.push("");
-
-        cmd_params.get_parameters(object_args)?;
-        let device_type = cmd_params
-            .get_value::<String>("")?
-            .with_context(|| "Object type not specified")?;
-        match device_type.as_str() {
+        let object_type =
+            get_class_type(object_args).with_context(|| "Object type not specified")?;
+        match object_type.as_str() {
             "iothread" => {
                 self.add_iothread(object_args)
                     .with_context(|| "Failed to add iothread")?;
@@ -237,7 +232,7 @@ impl VmConfig {
                 self.add_saslauth(object_args)?;
             }
             _ => {
-                bail!("Unknow object type: {:?}", &device_type);
+                bail!("Unknow object type: {:?}", &object_type);
             }
         }
 
@@ -746,6 +741,14 @@ macro_rules! check_arg_nonexist{
     }
 }
 
+fn concat_classtype(args: &str, concat: bool) -> String {
+    if concat {
+        format!("classtype={}", args)
+    } else {
+        args.to_string()
+    }
+}
+
 /// Configure StratoVirt parameters in clap format.
 ///
 /// The first parameter will be parsed as the `binary name` unless Command::no_binary_name is used when using `clap`.
@@ -776,11 +779,7 @@ pub fn str_slip_to_clap(
     first_pos_is_subcommand: bool,
 ) -> Vec<String> {
     let mut subcommand = first_pos_is_subcommand;
-    let args_str = if first_pos_is_type && !subcommand {
-        format!("classtype={}", args)
-    } else {
-        args.to_string()
-    };
+    let args_str = concat_classtype(args, first_pos_is_type && !subcommand);
     let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
     let mut itr: Vec<String> = Vec::with_capacity(args_vecs.len() * 2);
     for params in args_vecs {
@@ -801,6 +800,29 @@ pub fn str_slip_to_clap(
         }
     }
     itr
+}
+
+/// Retrieve the value of the specified parameter from a string in the format "key=value".
+pub fn get_value_of_parameter(parameter: &str, args_str: &str) -> Result<String> {
+    let args_vecs = args_str.split([',']).collect::<Vec<&str>>();
+
+    for args in args_vecs {
+        let key_value = args.split(['=']).collect::<Vec<&str>>();
+        if key_value.len() != 2 || key_value[0] != parameter {
+            continue;
+        }
+        if key_value[1].is_empty() {
+            bail!("Find empty arg {} in string {}.", key_value[0], args_str);
+        }
+        return Ok(key_value[1].to_string());
+    }
+
+    bail!("Cannot find {}'s value from string {}", parameter, args_str);
+}
+
+pub fn get_class_type(args: &str) -> Result<String> {
+    let args_str = concat_classtype(args, true);
+    get_value_of_parameter("classtype", &args_str)
 }
 
 pub fn valid_id(id: &str) -> Result<String> {
@@ -1006,5 +1028,21 @@ mod tests {
         assert!(res.is_ok());
         let res = vm_config.add_global_config("pcie-root-port.fast-unplug=1");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_get_value_of_parameter() {
+        let cmd = "scsi-hd,id=disk1,drive=scsi-drive-0";
+        let id = get_value_of_parameter("id", cmd).unwrap();
+        assert_eq!(id, "disk1");
+
+        let cmd = "id=";
+        assert!(get_value_of_parameter("id", cmd).is_err());
+
+        let cmd = "id";
+        assert!(get_value_of_parameter("id", cmd).is_err());
+
+        let cmd = "scsi-hd,idxxx=disk1";
+        assert!(get_value_of_parameter("id", cmd).is_err());
     }
 }

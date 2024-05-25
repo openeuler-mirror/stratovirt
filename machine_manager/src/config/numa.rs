@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::error::ConfigError;
+use super::get_class_type;
 use crate::config::{CmdParser, IntegerList, VmConfig, MAX_NODES};
 
 const MIN_NUMA_DISTANCE: u8 = 10;
@@ -238,13 +239,8 @@ impl VmConfig {
     ///
     /// * `numa_config` - The NUMA node configuration.
     pub fn add_numa(&mut self, numa_config: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("numa");
-        cmd_params.push("");
-
-        cmd_params.get_parameters(numa_config)?;
-        if let Some(numa_type) = cmd_params.get_value::<String>("")? {
-            self.numa_nodes.push((numa_type, numa_config.to_string()));
-        }
+        let numa_type = get_class_type(numa_config).with_context(|| "Numa type not specified")?;
+        self.numa_nodes.push((numa_type, numa_config.to_string()));
 
         Ok(())
     }
@@ -258,17 +254,15 @@ mod tests {
     fn test_parse_numa_mem() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_numa("-numa node,nodeid=0,cpus=0-1,memdev=mem0")
+            .add_numa("node,nodeid=0,cpus=0-1,memdev=mem0")
             .is_ok());
         assert!(vm_config
-            .add_numa("-numa node,nodeid=1,cpus=2-1,memdev=mem1")
+            .add_numa("node,nodeid=1,cpus=2-1,memdev=mem1")
             .is_ok());
+        assert!(vm_config.add_numa("node,nodeid=2,memdev=mem2").is_ok());
+        assert!(vm_config.add_numa("node,nodeid=3,cpus=3-4").is_ok());
         assert!(vm_config
-            .add_numa("-numa node,nodeid=2,memdev=mem2")
-            .is_ok());
-        assert!(vm_config.add_numa("-numa node,nodeid=3,cpus=3-4").is_ok());
-        assert!(vm_config
-            .add_numa("-numa node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
+            .add_numa("node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
             .is_ok());
 
         let numa = vm_config.numa_nodes.get(0).unwrap();
@@ -291,11 +285,11 @@ mod tests {
     #[test]
     fn test_parse_numa_distance() {
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=15").is_ok());
-        assert!(vm_config.add_numa("-numa dist,dst=1,val=10").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,val=10").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1,val=15").is_ok());
+        assert!(vm_config.add_numa("dist,dst=1,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1,val=10").is_ok());
 
         let numa = vm_config.numa_nodes.get(0).unwrap();
         let dist = parse_numa_distance(numa.1.as_str()).unwrap();

@@ -73,11 +73,11 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 use machine_manager::config::{
-    complete_numa_node, get_chardev_socket_path, get_pci_bdf, parse_device_id, parse_device_type,
-    parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck,
-    DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig,
-    NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo,
-    VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_chardev_socket_path, get_class_type, get_pci_bdf,
+    get_value_of_parameter, parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo,
+    BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
+    NetworkInterfaceConfig, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig,
+    VirtioSerialInfo, VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -570,7 +570,7 @@ pub trait MachineOps {
             VhostKern::VsockConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let sys_mem = self.get_sys_mem().clone();
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
-        match parse_device_type(cfg_args)?.as_str() {
+        match device_cfg.classtype.as_str() {
             "vhost-vsock-device" => {
                 check_arg_nonexist!(
                     ("bus", device_cfg.bus),
@@ -1771,7 +1771,7 @@ pub trait MachineOps {
     /// * `driver` - USB device class.
     /// * `cfg_args` - USB device Configuration.
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let usb_device = match parse_device_type(cfg_args)?.as_str() {
+        let usb_device = match get_class_type(cfg_args)?.as_str() {
             "usb-kbd" => {
                 let config =
                     UsbKeyboardConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1873,7 +1873,7 @@ pub trait MachineOps {
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             // Check whether the device id exists to ensure device uniqueness.
-            let id = parse_device_id(cfg_args)?;
+            let id = get_value_of_parameter("id", cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
             #[cfg(feature = "scream")]
