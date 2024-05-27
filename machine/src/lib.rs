@@ -403,6 +403,7 @@ pub trait MachineOps {
         sys_mem: &Arc<AddressSpace>,
         nr_cpus: u8,
     ) -> Result<()> {
+        trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
         if migrate_info.0 != MigrateMode::File {
             self.create_machine_ram(mem_config, nr_cpus)?;

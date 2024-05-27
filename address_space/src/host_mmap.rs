@@ -205,6 +205,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
 fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+    trace::trace_scope_start!(pre_alloc, args = (size));
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
