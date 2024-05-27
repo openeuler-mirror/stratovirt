@@ -212,8 +212,8 @@ impl OhAudioProcess for OhAudioCapture {
     fn destroy(&mut self) {
         if self.ctx.is_some() {
             if self.start {
-                self.ctx.as_mut().unwrap().stop();
                 self.start = false;
+                self.ctx.as_mut().unwrap().stop();
             }
             self.ctx = None;
         }
