@@ -297,3 +297,21 @@ name = "vhost_delete_mem_range_failed"
 args = ""
 message = "Vhost: deleting mem region failed: not matched."
 enabled = true
+
+[[scopes]]
+name = "auto_msg_evt_handler"
+args = ""
+message = "Balloon: handle auto balloon message"
+enabled = true
+
+[[scopes]]
+name = "reporting_evt_handler"
+args = ""
+message = "Balloon: handle fpr message"
+enabled = true
+
+[[scopes]]
+name = "process_balloon_queue"
+args = ""
+message = "Balloon: handle normal balloon message"
+enabled = true
