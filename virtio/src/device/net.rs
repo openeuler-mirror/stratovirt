@@ -57,7 +57,8 @@ use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::gen_delete_notifiers;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 use util::num_ops::str_to_num;
 use util::tap::{
@@ -1644,7 +1645,7 @@ impl VirtioDevice for Net {
                     .with_context(|| "Failed to set tap offload")?;
             }
 
-            let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
+            let update_evt = Arc::new(create_new_eventfd()?);
             let mut handler = NetIoHandler {
                 rx: RxVirtio::new(rx_queue, rx_queue_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),

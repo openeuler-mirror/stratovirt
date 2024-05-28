@@ -81,7 +81,7 @@ use ui::ohui_srv::{ohui_init, OhUiServer};
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::EventLoopManager;
+use util::loop_context::{create_new_eventfd, EventLoopManager};
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::set_termi_canon_mode;
 
@@ -186,23 +186,23 @@ impl StdMachine {
                 IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             power_button: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
             ),
             shutdown_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
             ),
             reset_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
             ),
             pause_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("pause_req".to_string()))?,
             ),
             resume_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("resume_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),

@@ -79,7 +79,9 @@ use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis}
 use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventNotifier, NotifierCallback, NotifierOperation,
+};
 use virtio::{qmp_balloon, qmp_query_balloon};
 
 const MAX_REGION_SIZE: u64 = 65536;
@@ -1549,7 +1551,7 @@ impl DeviceInterface for StdMachine {
                 region = Region::init_io_region(args.size, dummy_dev_ops, "UpdateRegionTest");
                 if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
                     let ioeventfds = vec![RegionIoEventFd {
-                        fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+                        fd: Arc::new(create_new_eventfd().unwrap()),
                         addr_range: AddressRange::from((
                             0,
                             args.ioeventfd_size.unwrap_or_default(),

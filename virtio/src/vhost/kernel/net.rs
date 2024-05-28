@@ -34,7 +34,7 @@ use address_space::AddressSpace;
 use machine_manager::config::{NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::tap::Tap;
 
 /// Number of virtqueues.
@@ -327,8 +327,7 @@ impl VirtioDevice for Net {
                 let event = if self.call_events.is_empty() {
                     let host_notify = VhostNotify {
                         notify_evt: Arc::new(
-                            EventFd::new(libc::EFD_NONBLOCK)
-                                .with_context(|| VirtioError::EventFdCreate)?,
+                            create_new_eventfd().with_context(|| VirtioError::EventFdCreate)?,
                         ),
                         queue: queue_mutex.clone(),
                     };

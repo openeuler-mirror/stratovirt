@@ -15,7 +15,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -28,6 +27,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::loop_context::create_new_eventfd;
 use util::num_ops::write_data_u32;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
@@ -100,7 +100,7 @@ impl PL031 {
         region_base: u64,
         region_size: u64,
     ) -> Result<()> {
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
+        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 

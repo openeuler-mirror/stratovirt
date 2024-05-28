@@ -45,6 +45,7 @@ use devices::pci::{
 };
 use devices::{pci::MsiVector, Device, DeviceBase};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use util::loop_context::create_new_eventfd;
 use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
 
@@ -534,7 +535,7 @@ impl VfioPciDevice {
             let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
             let gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
             if gsi_route.irq_fd.is_none() {
-                let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+                let irq_fd = create_new_eventfd().unwrap();
                 gsi_route.irq_fd = Some(Arc::new(irq_fd));
             }
             let irq_fd = gsi_route.irq_fd.clone();
@@ -722,7 +723,7 @@ impl VfioPciDevice {
     fn vfio_enable_msix(&mut self) -> Result<()> {
         let mut gsi_routes = self.gsi_msi_routes.lock().unwrap();
         if gsi_routes.len() == 0 {
-            let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+            let irq_fd = create_new_eventfd().unwrap();
             let gsi_route = GsiMsiRoute {
                 irq_fd: Some(Arc::new(irq_fd)),
                 gsi: -1,

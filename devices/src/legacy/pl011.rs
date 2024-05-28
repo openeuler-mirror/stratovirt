@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use log::{debug, error};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -36,7 +35,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::num_ops::read_data_u32;
 
 const PL011_FLAG_TXFE: u8 = 0x80;
@@ -135,7 +134,7 @@ impl PL011 {
         Ok(PL011 {
             base: SysBusDevBase {
                 dev_type: SysBusDevType::PL011,
-                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
             },
             paused: false,

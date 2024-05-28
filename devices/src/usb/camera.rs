@@ -41,7 +41,8 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 
 const INTERFACE_ID_CONTROL: u8 = 0;
@@ -505,7 +506,7 @@ impl UsbCamera {
         Ok(Self {
             base: UsbDeviceBase::new(config.id, USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
-            camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            camera_fd: Arc::new(create_new_eventfd()?),
             camera_backend: camera,
             packet_list: Arc::new(Mutex::new(LinkedList::new())),
             payload: Arc::new(Mutex::new(UvcPayload::new())),
