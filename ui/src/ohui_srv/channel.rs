@@ -19,7 +19,7 @@ use libc::iovec;
 use log::error;
 
 use util::byte_code::ByteCode;
-use util::unix::UnixSock;
+use util::unix::{limit_permission, UnixSock};
 
 pub struct OhUiChannel {
     pub sock: RwLock<UnixSock>,
@@ -35,7 +35,18 @@ impl OhUiChannel {
     }
 
     pub fn bind(&self) -> Result<()> {
-        self.sock.write().unwrap().bind(true)
+        match self.sock.write().unwrap().bind(true) {
+            Ok(_) => {
+                limit_permission(self.path.as_str()).unwrap_or_else(|e| {
+                    error!(
+                        "Failed to limit permission for ohui-sock {}, err: {:?}",
+                        self.path, e
+                    );
+                });
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub fn get_listener_raw_fd(&self) -> RawFd {
