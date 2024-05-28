@@ -52,7 +52,7 @@ use util::{
         NotifierOperation,
     },
     pixman::{pixman_format_code_t, pixman_image_t},
-    unix::do_mmap,
+    unix::{do_mmap, limit_permission},
 };
 
 #[derive(Debug, Clone)]
@@ -127,6 +127,12 @@ impl OhUiServer {
             .ok_or_else(|| anyhow!("init_fb_file: Failed to get str from {}", path))?;
         let fb_backend = FileBackend::new_mem(fb_file, VIRTIO_GPU_ENABLE_BAR0_SIZE)?;
         TempCleaner::add_path(fb_file.to_string());
+        limit_permission(fb_file).unwrap_or_else(|e| {
+            error!(
+                "Failed to limit permission for ohui-fb {}, err: {:?}",
+                fb_file, e
+            );
+        });
 
         let host_addr = do_mmap(
             &Some(fb_backend.file.as_ref()),
@@ -147,6 +153,12 @@ impl OhUiServer {
             .ok_or_else(|| anyhow!("init_cursor_file: Failed to get str from {}", path))?;
         let cursor_backend = FileBackend::new_mem(cursor_file, CURSOR_SIZE)?;
         TempCleaner::add_path(cursor_file.to_string());
+        limit_permission(cursor_file).unwrap_or_else(|e| {
+            error!(
+                "Failed to limit permission for ohui-cursor {}, err: {:?}",
+                cursor_file, e
+            );
+        });
 
         let cursorbuffer = do_mmap(
             &Some(cursor_backend.file.as_ref()),
