@@ -509,7 +509,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .multiple(false)
             .long("windows_emu_pid")
             .value_name("pid")
-            .help("watch on the external windows emu pid")
+            .help("watch on the external emulator pid")
             .takes_value(true),
     );
 

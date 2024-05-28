@@ -882,11 +882,11 @@ impl StdMachine {
         power_button: Arc<EventFd>,
         shutdown_req: Arc<EventFd>,
     ) {
-        let emu_pid = vm_config.windows_emu_pid.as_ref();
+        let emu_pid = vm_config.emulator_pid.as_ref();
         if emu_pid.is_none() {
             return;
         }
-        log::info!("Watching on windows emu lifetime");
+        log::info!("Watching on emulator lifetime");
         crate::check_windows_emu_pid(
             "/proc/".to_owned() + emu_pid.unwrap(),
             power_button,
