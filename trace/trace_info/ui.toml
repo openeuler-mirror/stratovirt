@@ -273,3 +273,9 @@ name = "oh_event_unsupported_type"
 args = "ty: &dyn fmt::Debug, size: u32"
 message = "type={:?} body_size={}"
 enabled = true
+
+[[scopes]]
+name = "handle_msg"
+args = "opcode: &dyn fmt::Debug"
+message = "handle ohui {:?} message"
+enabled = true
