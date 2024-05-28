@@ -120,7 +120,7 @@ impl Ged {
             read_fd(power_down_fd);
             ged_clone
                 .notification_type
-                .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
+                .fetch_or(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
             ged_clone.inject_interrupt();
             trace::ged_inject_acpi_event(AcpiEvent::PowerDown as u32);
             if QmpChannel::is_connected() {
@@ -150,7 +150,7 @@ impl Ged {
             read_fd(cpu_resize_fd);
             clone_ged
                 .notification_type
-                .store(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
+                .fetch_or(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
             clone_ged.inject_interrupt();
             trace::ged_inject_acpi_event(AcpiEvent::CpuResize as u32);
             if QmpChannel::is_connected() {
