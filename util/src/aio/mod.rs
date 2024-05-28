@@ -32,6 +32,7 @@ use uring::IoUringContext;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
+use crate::loop_context::create_new_eventfd;
 use crate::num_ops::{round_down, round_up};
 use crate::thread_pool::ThreadPool;
 use crate::unix::host_page_size;
@@ -504,7 +505,7 @@ impl<T: Clone + 'static> Aio<T> {
         thread_pool: Option<Arc<ThreadPool>>,
     ) -> Result<Self> {
         let max_events: usize = 128;
-        let fd = EventFd::new(libc::EFD_NONBLOCK)?;
+        let fd = create_new_eventfd()?;
         let ctx: Option<Box<dyn AioContext<T>>> = if let Some(pool) = thread_pool {
             let threads_aio_ctx = ThreadsAioContext::new(max_events as u32, &fd, pool);
             match engine {

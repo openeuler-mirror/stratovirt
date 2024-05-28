@@ -21,6 +21,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache};
 use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
+use util::loop_context::create_new_eventfd;
 
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
@@ -226,7 +227,7 @@ impl NotifyEventFds {
     pub fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
-            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
+            events.push(Arc::new(create_new_eventfd().unwrap()));
         }
 
         NotifyEventFds { events }

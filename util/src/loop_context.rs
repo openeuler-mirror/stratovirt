@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,7 +21,7 @@ use std::sync::{Arc, Barrier, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use libc::{c_void, read, EFD_NONBLOCK};
+use libc::{c_void, read, EFD_CLOEXEC, EFD_NONBLOCK};
 use log::{error, warn};
 use nix::errno::Errno;
 use nix::{
@@ -158,6 +159,10 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
+pub fn create_new_eventfd() -> Result<EventFd, Error> {
+    EventFd::new(EFD_NONBLOCK | EFD_CLOEXEC)
+}
+
 /// EventLoop manager, advise continue running or stop running
 pub trait EventLoopManager: Send + Sync {
     fn loop_should_exit(&self) -> bool;
@@ -241,7 +246,7 @@ impl EventLoopContext {
         let mut ctx = EventLoopContext {
             epoll: Epoll::new().unwrap(),
             manager: None,
-            kick_event: EventFd::new(EFD_NONBLOCK).unwrap(),
+            kick_event: create_new_eventfd().unwrap(),
             kick_me: AtomicBool::new(false),
             kicked: AtomicBool::new(false),
             events: Arc::new(RwLock::new(BTreeMap::new())),

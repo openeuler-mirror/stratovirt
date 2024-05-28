@@ -58,7 +58,8 @@ use util::aio::{
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 use util::offset_of;
 
@@ -1249,7 +1250,7 @@ impl VirtioDevice for Block {
                 continue;
             }
             let (sender, receiver) = channel();
-            let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
+            let update_evt = Arc::new(create_new_eventfd()?);
             let driver_features = self.base.driver_features;
             let handler = BlockIoHandler {
                 queue: queue.clone(),

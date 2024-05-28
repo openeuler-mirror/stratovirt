@@ -20,7 +20,7 @@ use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::clock::get_current_time;
-use crate::loop_context::EventLoopContext;
+use crate::loop_context::{create_new_eventfd, EventLoopContext};
 use crate::time::NANOSECONDS_PER_SECOND;
 
 /// Used to improve the accuracy of bucket level.
@@ -53,7 +53,7 @@ impl LeakBucket {
             level: 0,
             prev_time: get_current_time(),
             timer_started: false,
-            timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            timer_wakeup: Arc::new(create_new_eventfd()?),
         })
     }
 

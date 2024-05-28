@@ -15,7 +15,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use log::{debug, error, warn};
-use vmm_sys_util::eventfd::EventFd;
 
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
 use crate::{Device, DeviceBase};
@@ -24,6 +23,7 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use util::loop_context::create_new_eventfd;
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
@@ -126,7 +126,7 @@ impl RTC {
                     region_size: 8,
                     irq: -1,
                 },
-                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
             },
             cmos_data: [0_u8; 128],

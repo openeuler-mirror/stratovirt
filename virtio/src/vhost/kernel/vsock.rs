@@ -32,7 +32,7 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 
 /// Number of virtqueues.
 const QUEUE_NUM_VSOCK: usize = 3;
@@ -311,8 +311,7 @@ impl VirtioDevice for Vsock {
             let event = if self.call_events.is_empty() {
                 let host_notify = VhostNotify {
                     notify_evt: Arc::new(
-                        EventFd::new(libc::EFD_NONBLOCK)
-                            .with_context(|| VirtioError::EventFdCreate)?,
+                        create_new_eventfd().with_context(|| VirtioError::EventFdCreate)?,
                     ),
                     queue: queue_mutex.clone(),
                 };

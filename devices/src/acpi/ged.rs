@@ -35,7 +35,7 @@ use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_channel::QmpChannel;
-use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
+use util::loop_context::{create_new_eventfd, read_fd, EventNotifier, NotifierOperation};
 use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
 
 #[derive(Clone, Copy)]
@@ -96,7 +96,7 @@ impl Ged {
         region_base: u64,
         region_size: u64,
     ) -> Result<Arc<Mutex<Ged>>> {
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
+        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
         self.battery_present = battery_present;
