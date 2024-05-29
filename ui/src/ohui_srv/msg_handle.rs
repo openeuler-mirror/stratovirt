@@ -156,14 +156,13 @@ impl OhUiMsgHandler {
         let body_size = hdr.size as usize;
         let event_type = hdr.event_type;
         if body_size != event_msg_data_len(hdr.event_type) {
-            warn!(
+            reader.clear();
+            bail!(
                 "{:?} data len is wrong, we want {}, but receive {}",
                 event_type,
                 event_msg_data_len(hdr.event_type),
                 body_size
             );
-            reader.clear();
-            return Ok(());
         }
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
@@ -332,6 +331,10 @@ impl OhUiMsgHandler {
         if let Err(e) = self.writer.send_message(EventType::FrameBufferDirty, &body) {
             error!("handle_dirty_area: failed to send message with error {e}");
         }
+    }
+
+    pub fn reset(&self) {
+        self.reader.lock().unwrap().clear();
     }
 }
 

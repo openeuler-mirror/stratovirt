@@ -269,6 +269,8 @@ impl OhUiServer {
             register_led_sync(self.msg_handler.clone());
         } else {
             unregister_led_sync();
+            self.channel.lock().unwrap().disconnect();
+            self.msg_handler.reset();
         }
     }
 

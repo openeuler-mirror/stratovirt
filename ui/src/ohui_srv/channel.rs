@@ -106,6 +106,12 @@ impl OhUiChannel {
         }
     }
 
+    pub fn disconnect(&mut self) {
+        if self.stream.is_some() {
+            self.stream = None;
+        }
+    }
+
     fn get_stream(&mut self) -> Result<&mut SocketStream> {
         if self.stream.is_some() {
             Ok(self.stream.as_mut().unwrap())
