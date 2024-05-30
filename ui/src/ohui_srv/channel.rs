@@ -33,7 +33,7 @@ impl OhUiChannel {
             Ok(l) => l,
             Err(e) => bail!("Failed to create listener with path {}, {:?}", path, e),
         };
-        limit_permission(path.as_str()).unwrap_or_else(|e| {
+        limit_permission(path).unwrap_or_else(|e| {
             error!(
                 "Failed to limit permission for ohui-sock {}, err: {:?}",
                 path, e
