@@ -186,7 +186,7 @@ impl ShmemStreamFmt {
 }
 
 /// Audio stream data structure.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StreamData {
     pub fmt: ShmemStreamFmt,
     chunk_idx: u16,

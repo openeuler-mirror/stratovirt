@@ -137,6 +137,8 @@ impl OhAudioProcess for OhAudioRender {
 
         fence(Ordering::Acquire);
 
+        trace::trace_scope_start!(ohaudio_render_process, args = (recv_data));
+
         let su = StreamUnit {
             addr: recv_data.audio_base,
             len: recv_data.audio_size as u64,
@@ -230,6 +232,9 @@ impl OhAudioProcess for OhAudioCapture {
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
         self.check_fmt_update(recv_data);
+
+        trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
+
         if !self.start && !self.init(recv_data) {
             self.destroy();
             return 0;
@@ -255,8 +260,10 @@ extern "C" fn on_write_data_cb(
             .as_mut()
             .unwrap_unchecked()
     };
-
     let data_size = render.data_size.load(Ordering::Relaxed);
+
+    trace::trace_scope_start!(ohaudio_write_cb, args = (length, data_size));
+
     if !render.flushing.load(Ordering::Acquire) && data_size < length {
         // SAFETY: we checked len.
         unsafe { ptr::write_bytes(buffer as *mut u8, 0, length as usize) };
@@ -312,6 +319,8 @@ extern "C" fn on_read_data_cb(
             .as_mut()
             .unwrap_unchecked()
     };
+
+    trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
     loop {
         if !capture.start {
