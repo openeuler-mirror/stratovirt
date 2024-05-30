@@ -47,8 +47,8 @@ use crate::{
 use util::{
     bitmap::Bitmap,
     loop_context::{
-        gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
-        NotifierOperation,
+        create_new_eventfd, gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper,
+        NotifierCallback, NotifierOperation,
     },
 };
 
@@ -392,8 +392,8 @@ impl ClientState {
     pub fn new(addr: String) -> Self {
         ClientState {
             addr,
-            disconn_evt: Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
-            write_fd: Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+            disconn_evt: Arc::new(Mutex::new(create_new_eventfd().unwrap())),
+            write_fd: Arc::new(Mutex::new(create_new_eventfd().unwrap())),
             in_buffer: Arc::new(Mutex::new(BuffPool::new())),
             out_buffer: Arc::new(Mutex::new(BuffPool::new())),
             client_dpm: Arc::new(Mutex::new(DisplayMode::default())),

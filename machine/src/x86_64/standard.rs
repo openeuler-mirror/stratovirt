@@ -61,7 +61,10 @@ use ui::gtk::gtk_display_init;
 use ui::vnc::vnc_init;
 use util::seccomp::SeccompCmpOpt;
 use util::{
-    byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
+    byte_code::ByteCode,
+    loop_context::{create_new_eventfd, EventLoopManager},
+    seccomp::BpfRule,
+    set_termi_canon_mode,
 };
 
 pub(crate) const VENDOR_ID_INTEL: u16 = 0x8086;
@@ -156,20 +159,20 @@ impl StdMachine {
                 IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             reset_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("reset request".to_string()))?,
             ),
             shutdown_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                create_new_eventfd().with_context(|| {
                     MachineError::InitEventFdErr("shutdown request".to_string())
                 })?,
             ),
             power_button: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("power button".to_string()))?,
             ),
             cpu_resize_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("cpu resize".to_string()))?,
             ),
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -264,7 +267,7 @@ impl StdMachine {
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].1;
         let cpu_config = CpuConfig::new(boot_config, cpu_topology);
         let hotplug_cpu_req = Arc::new(
-            EventFd::new(libc::EFD_NONBLOCK)
+            create_new_eventfd()
                 .with_context(|| MachineError::InitEventFdErr("hotplug cpu".to_string()))?,
         );
 

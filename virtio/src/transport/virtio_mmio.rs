@@ -33,6 +33,7 @@ use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::loop_context::create_new_eventfd;
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
@@ -105,7 +106,7 @@ impl HostNotifyInfo {
     fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
-            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
+            events.push(Arc::new(create_new_eventfd().unwrap()));
         }
 
         HostNotifyInfo { events }
@@ -149,7 +150,7 @@ impl VirtioMmioDevice {
                     hotpluggable: false,
                 },
                 dev_type: SysBusDevType::VirtioMmio,
-                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+                interrupt_evt: Some(Arc::new(create_new_eventfd().unwrap())),
                 ..Default::default()
             },
             device,

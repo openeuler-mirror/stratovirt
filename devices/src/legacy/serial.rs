@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -34,7 +33,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
@@ -144,7 +143,7 @@ impl Serial {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
+        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
         self.set_sys_resource(sysbus, region_base, region_size)
             .with_context(|| LegacyError::SetSysResErr)?;
 

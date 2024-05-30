@@ -39,7 +39,8 @@ use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 
 /// 5.2 PCI Configuration Registers(USB)
@@ -122,7 +123,7 @@ impl XhciPciDevice {
                 XHCI_PCI_CONFIG_LENGTH as u64,
                 "XhciPciContainer",
             ),
-            doorbell_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            doorbell_fd: Arc::new(create_new_eventfd().unwrap()),
             delete_evts: Vec::new(),
             iothread: config.iothread.clone(),
         }
