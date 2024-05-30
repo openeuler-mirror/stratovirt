@@ -52,7 +52,7 @@ impl OhUiChannel {
     }
 
     pub fn get_stream_raw_fd(&self) -> Option<RawFd> {
-        self.stream.as_ref().and_then(|s| Some(s.as_raw_fd()))
+        self.stream.as_ref().map(|s| s.as_raw_fd())
     }
 
     pub fn accept(&mut self) -> Result<()> {

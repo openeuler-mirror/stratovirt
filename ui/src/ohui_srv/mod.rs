@@ -520,7 +520,7 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
-    ohui_register_event(OhUiListener::new(server.clone()), server.clone())?;
+    ohui_register_event(OhUiListener::new(server.clone()), server)?;
     info!("Successfully start listener.");
     Ok(())
 }
