@@ -124,30 +124,25 @@ pub struct OhUiMsgHandler {
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<MsgReader>,
-    writer: Mutex<MsgWriter>,
+    writer: MsgWriter,
 }
 
 impl SyncLedstate for OhUiMsgHandler {
     fn sync_to_host(&self, state: u8) {
         let body = LedstateEvent::new(state as u32);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::Ledstate, &body)
-        {
+        if let Err(e) = self.writer.send_message(EventType::Ledstate, &body) {
             error!("sync_to_host: failed to send message with error {e}");
         }
     }
 }
 
 impl OhUiMsgHandler {
-    pub fn new(channel: Arc<OhUiChannel>) -> Self {
+    pub fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
         OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(MsgReader::new(channel.clone())),
-            writer: Mutex::new(MsgWriter::new(channel)),
+            writer: MsgWriter::new(channel),
         }
     }
 
@@ -161,14 +156,13 @@ impl OhUiMsgHandler {
         let body_size = hdr.size as usize;
         let event_type = hdr.event_type;
         if body_size != event_msg_data_len(hdr.event_type) {
-            warn!(
+            reader.clear();
+            bail!(
                 "{:?} data len is wrong, we want {}, but receive {}",
                 event_type,
                 event_msg_data_len(hdr.event_type),
                 body_size
             );
-            reader.clear();
-            return Ok(());
         }
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
@@ -257,12 +251,7 @@ impl OhUiMsgHandler {
         size_per_pixel: u32,
     ) {
         let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::CursorDefine, &body)
-        {
+        if let Err(e) = self.writer.send_message(EventType::CursorDefine, &body) {
             error!("handle_cursor_define: failed to send message with error {e}");
         }
     }
@@ -332,32 +321,26 @@ impl OhUiMsgHandler {
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         let body = WindowInfoEvent::new(w, h);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::WindowInfo, &body)
-        {
+        if let Err(e) = self.writer.send_message(EventType::WindowInfo, &body) {
             error!("send_windowinfo: failed to send message with error {e}");
         }
     }
 
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
         let body = FrameBufferDirtyEvent::new(x, y, w, h);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::FrameBufferDirty, &body)
-        {
+        if let Err(e) = self.writer.send_message(EventType::FrameBufferDirty, &body) {
             error!("handle_dirty_area: failed to send message with error {e}");
         }
+    }
+
+    pub fn reset(&self) {
+        self.reader.lock().unwrap().clear();
     }
 }
 
 struct MsgReader {
     /// socket to read
-    channel: Arc<OhUiChannel>,
+    channel: Arc<Mutex<OhUiChannel>>,
     /// cache for header
     pub header: EventMsgHdr,
     /// received byte size of header
@@ -369,7 +352,7 @@ struct MsgReader {
 }
 
 impl MsgReader {
-    pub fn new(channel: Arc<OhUiChannel>) -> Self {
+    pub fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
         MsgReader {
             channel,
             header: EventMsgHdr::default(),
@@ -398,7 +381,11 @@ impl MsgReader {
         }
 
         let buf = self.header.as_mut_bytes();
-        self.header_ready += self.channel.recv_slice(&mut buf[self.header_ready..])?;
+        self.header_ready += self
+            .channel
+            .lock()
+            .unwrap()
+            .recv_slice(&mut buf[self.header_ready..])?;
         Ok(self.header_ready == EVENT_MSG_HDR_SIZE as usize)
     }
 
@@ -420,22 +407,27 @@ impl MsgReader {
         unsafe {
             buf.set_len(body_size);
         }
-        self.body_ready += self.channel.recv_slice(&mut buf[self.body_ready..])?;
+        self.body_ready += self
+            .channel
+            .lock()
+            .unwrap()
+            .recv_slice(&mut buf[self.body_ready..])?;
 
         Ok(self.body_ready == body_size)
     }
 }
 
-struct MsgWriter(Arc<OhUiChannel>);
+struct MsgWriter(Arc<Mutex<OhUiChannel>>);
 
 impl MsgWriter {
-    fn new(channel: Arc<OhUiChannel>) -> Self {
+    fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
         MsgWriter(channel)
     }
 
     fn send_message<T: Sized + Default + ByteCode>(&self, t: EventType, body: &T) -> Result<()> {
+        let mut channel = self.0.lock().unwrap();
         let hdr = EventMsgHdr::new(t);
-        self.0.send_by_obj(&hdr)?;
-        self.0.send_by_obj(body)
+        channel.send_by_obj(&hdr)?;
+        channel.send_by_obj(body)
     }
 }

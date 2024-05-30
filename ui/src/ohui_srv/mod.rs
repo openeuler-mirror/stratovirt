@@ -93,7 +93,7 @@ pub struct OhUiServer {
     // guest surface for framebuffer
     surface: RwLock<GuestSurface>,
     // transfer channel via unix sock
-    channel: Arc<OhUiChannel>,
+    channel: Arc<Mutex<OhUiChannel>>,
     // message handler
     msg_handler: Arc<OhUiMsgHandler>,
     // connected or not
@@ -111,13 +111,13 @@ pub struct OhUiServer {
 }
 
 impl OhUiServer {
-    fn init_channel(path: &String) -> Result<Arc<OhUiChannel>> {
+    fn init_channel(path: &String) -> Result<Arc<Mutex<OhUiChannel>>> {
         let file_path = Path::new(path.as_str()).join("ohui.sock");
         let sock_file = file_path
             .to_str()
             .ok_or_else(|| anyhow!("init_channel: Failed to get str from {}", path))?;
         TempCleaner::add_path(sock_file.to_string());
-        Ok(Arc::new(OhUiChannel::new(sock_file)))
+        Ok(Arc::new(Mutex::new(OhUiChannel::new(sock_file)?)))
     }
 
     fn init_fb_file(path: &String) -> Result<(Option<FileBackend>, u64)> {
@@ -198,8 +198,8 @@ impl OhUiServer {
     }
 
     #[inline(always)]
-    fn get_channel(&self) -> &OhUiChannel {
-        self.channel.as_ref()
+    fn get_channel(&self) -> Arc<Mutex<OhUiChannel>> {
+        self.channel.clone()
     }
 
     #[inline(always)]
@@ -269,6 +269,8 @@ impl OhUiServer {
             register_led_sync(self.msg_handler.clone());
         } else {
             unregister_led_sync();
+            self.channel.lock().unwrap().disconnect();
+            self.msg_handler.reset();
         }
     }
 
@@ -404,7 +406,12 @@ impl OhUiTrans {
     }
 
     fn get_fd(&self) -> RawFd {
-        self.server.get_channel().get_stream_raw_fd()
+        self.server
+            .get_channel()
+            .lock()
+            .unwrap()
+            .get_stream_raw_fd()
+            .unwrap()
     }
 }
 
@@ -449,8 +456,6 @@ impl OhUiListener {
     }
 
     fn handle_connection(&self) -> Result<()> {
-        // Set stream sock with nonblocking
-        self.server.get_channel().set_nonblocking(true)?;
         // Register OhUiTrans read notifier
         ohui_register_event(OhUiTrans::new(self.server.clone()), self.server.clone())?;
         self.server.set_connect(true);
@@ -460,11 +465,15 @@ impl OhUiListener {
     }
 
     fn accept(&self) -> Result<()> {
-        self.server.get_channel().accept()
+        self.server.get_channel().lock().unwrap().accept()
     }
 
     fn get_fd(&self) -> RawFd {
-        self.server.get_channel().get_listener_raw_fd()
+        self.server
+            .get_channel()
+            .lock()
+            .unwrap()
+            .get_listener_raw_fd()
     }
 }
 
@@ -511,10 +520,6 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
-    // Bind and set listener nonblocking
-    let channel = server.get_channel();
-    channel.bind()?;
-    channel.set_listener_nonblocking(true)?;
     ohui_register_event(OhUiListener::new(server.clone()), server.clone())?;
     info!("Successfully start listener.");
     Ok(())
