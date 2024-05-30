@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Result};
-use log::{error, warn};
+use log::error;
 use util::byte_code::ByteCode;
 
 use super::{channel::OhUiChannel, msg::*};
@@ -155,12 +155,13 @@ impl OhUiMsgHandler {
         let hdr = &reader.header;
         let body_size = hdr.size as usize;
         let event_type = hdr.event_type;
-        if body_size != event_msg_data_len(hdr.event_type) {
+        let expect_body_size = event_msg_data_len(hdr.event_type);
+        if body_size != expect_body_size {
             reader.clear();
             bail!(
                 "{:?} data len is wrong, we want {}, but receive {}",
                 event_type,
-                event_msg_data_len(hdr.event_type),
+                expect_body_size,
                 body_size
             );
         }
