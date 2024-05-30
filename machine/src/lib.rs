@@ -103,6 +103,10 @@ use virtio::{
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
 
+const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
+const WINDOWS_EMU_PID_SHUTDOWN_INTERVAL: u64 = 1000;
+const WINDOWS_EMU_PID_POWERDOWN_INTERVAL: u64 = 30000;
+
 /// Machine structure include base members.
 pub struct MachineBase {
     /// `vCPU` topology, support sockets, cores, threads.
@@ -2314,18 +2318,22 @@ fn check_windows_emu_pid(
     powerdown_req: Arc<EventFd>,
     shutdown_req: Arc<EventFd>,
 ) {
-    let mut check_delay = Duration::from_millis(4000);
+    let mut check_delay = Duration::from_millis(WINDOWS_EMU_PID_DEFAULT_INTERVAL);
     if !Path::new(&pid_path).exists() {
         log::info!("Detect emulator exited, let VM exits now");
         if get_run_stage() == VmRunningStage::Os {
+            // Wait 30s for windows normal exit.
+            check_delay = Duration::from_millis(WINDOWS_EMU_PID_POWERDOWN_INTERVAL);
             if let Err(e) = powerdown_req.write(1) {
                 log::error!("Failed to send powerdown request after emu exits: {:?}", e);
             }
-        } else if let Err(e) = shutdown_req.write(1) {
-            log::error!("Failed to send shutdown request after emu exits: {:?}", e);
+        } else {
+            // Wait 1s for windows shutdown.
+            check_delay = Duration::from_millis(WINDOWS_EMU_PID_SHUTDOWN_INTERVAL);
+            if let Err(e) = shutdown_req.write(1) {
+                log::error!("Failed to send shutdown request after emu exits: {:?}", e);
+            }
         }
-        // Continue checking to prevent exit failed.
-        check_delay = Duration::from_millis(1000);
     }
 
     let check_emu_alive = Box::new(move || {
