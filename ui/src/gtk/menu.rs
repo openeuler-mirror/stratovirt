@@ -42,7 +42,7 @@ pub(crate) struct GtkMenu {
     pub(crate) window: ApplicationWindow,
     container: gtk::Box,
     pub(crate) note_book: gtk::Notebook,
-    pub(crate) radio_group: Vec<RadioMenuItem>,
+    pub(crate) radio_group: Rc<RefCell<Vec<RadioMenuItem>>>,
     accel_group: AccelGroup,
     menu_bar: MenuBar,
     machine_menu: Menu,
@@ -64,7 +64,7 @@ impl GtkMenu {
             window,
             container: gtk::Box::new(Orientation::Vertical, 0),
             note_book: gtk::Notebook::default(),
-            radio_group: vec![],
+            radio_group: Rc::new(RefCell::new(vec![])),
             accel_group: AccelGroup::default(),
             menu_bar: MenuBar::new(),
             machine_menu: Menu::new(),
@@ -256,6 +256,11 @@ impl GtkMenu {
 
         if scale_mode.borrow().free_scale {
             self.zoom_fit.activate();
+        }
+
+        if let Some(page_num) = self.note_book.current_page() {
+            let radio_item = &self.radio_group.borrow()[page_num as usize];
+            radio_item.activate();
         }
 
         self.menu_bar.hide();
