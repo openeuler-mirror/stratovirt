@@ -2316,7 +2316,7 @@ fn check_windows_emu_pid(
 ) {
     let mut check_delay = Duration::from_millis(4000);
     if !Path::new(&pid_path).exists() {
-        log::info!("Detect windows emu exited, let VM exits now");
+        log::info!("Detect emulator exited, let VM exits now");
         if get_run_stage() == VmRunningStage::Os {
             if let Err(e) = powerdown_req.write(1) {
                 log::error!("Failed to send powerdown request after emu exits: {:?}", e);
