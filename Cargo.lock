@@ -28,6 +28,7 @@ dependencies = [
  "nix 0.26.2",
  "once_cell",
  "thiserror",
+ "trace",
  "util",
  "vmm-sys-util",
 ]
