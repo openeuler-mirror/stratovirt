@@ -777,6 +777,7 @@ impl UsbDevice for UsbCamera {
 
     fn unrealize(&mut self) -> Result<()> {
         info!("Camera {} unrealize", self.device_id());
+        self.unregister_camera_fd()?;
         self.camera_backend.lock().unwrap().reset();
         Ok(())
     }
