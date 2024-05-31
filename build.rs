@@ -16,6 +16,7 @@ fn ohos_env_configure() {
         println!("cargo:rustc-link-arg=--verbose");
         println!("cargo:rustc-link-arg=--sysroot={}/sysroot", ohos_sdk_path);
         println!("cargo:rustc-link-arg=-lpixman_static");
+        println!("cargo:rustc-link-arg=-lusb-1.0");
         println!(
             "cargo:rustc-link-search={}/sysroot/usr/lib/aarch64-linux-ohos",
             ohos_sdk_path

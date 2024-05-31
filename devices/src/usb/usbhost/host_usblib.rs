@@ -16,6 +16,8 @@ use std::{
 };
 
 use libc::{c_int, c_uint, c_void, EPOLLIN, EPOLLOUT};
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+use libusb1_sys::{constants::LIBUSB_SUCCESS, libusb_context, libusb_set_option};
 use libusb1_sys::{
     constants::{
         LIBUSB_ERROR_ACCESS, LIBUSB_ERROR_BUSY, LIBUSB_ERROR_INTERRUPTED,
@@ -379,4 +381,21 @@ pub fn free_host_transfer(transfer: *mut libusb_transfer) {
 
     // SAFETY: have checked the validity of transfer before call libusb_free_transfer.
     unsafe { libusb1_sys::libusb_free_transfer(transfer) };
+}
+
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+pub fn set_option(opt: u32) -> Result<()> {
+    // SAFETY: This function will only configure a specific option within libusb, null for ctx is valid.
+    let err = unsafe {
+        libusb_set_option(
+            std::ptr::null_mut() as *mut libusb_context,
+            opt,
+            std::ptr::null_mut() as *mut c_void,
+        )
+    };
+    if err != LIBUSB_SUCCESS {
+        return Err(from_libusb(err));
+    }
+
+    Ok(())
 }
