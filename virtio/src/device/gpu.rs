@@ -1226,6 +1226,12 @@ impl GpuIoHandler {
         scanout.width = info_set_scanout.rect.width;
         scanout.height = info_set_scanout.rect.height;
 
+        if (self.driver_features & (1 << VIRTIO_GPU_F_EDID)) == 0
+            && (info_set_scanout.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF) != 0
+        {
+            self.change_run_stage()?;
+        }
+
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
