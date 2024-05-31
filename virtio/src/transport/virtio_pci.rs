@@ -390,7 +390,9 @@ impl VirtioPciDevice {
 
                 let mut locked_msix = cloned_msix.lock().unwrap();
                 if locked_msix.enabled {
-                    locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
+                    if vector != INVALID_VECTOR_NUM {
+                        locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
+                    }
                 } else {
                     cloned_intx.lock().unwrap().notify(1);
                 }
