@@ -12,6 +12,8 @@
 
 #[cfg(feature = "usb_camera_oh")]
 pub mod camera;
+#[cfg(feature = "usb_host")]
+pub mod usb;
 
 use std::ffi::OsStr;
 use std::sync::Arc;
@@ -23,6 +25,8 @@ use once_cell::sync::Lazy;
 
 #[cfg(feature = "usb_camera_oh")]
 use camera::CamFuncTable;
+#[cfg(feature = "usb_host")]
+use usb::UsbFuncTable;
 
 static LIB_HWF_ADAPTER: Lazy<LibHwfAdapter> = Lazy::new(||
     // SAFETY: The dynamic library should be always existing.
@@ -40,6 +44,8 @@ struct LibHwfAdapter {
     library: Library,
     #[cfg(feature = "usb_camera_oh")]
     camera: Arc<CamFuncTable>,
+    #[cfg(feature = "usb_host")]
+    usb: Arc<UsbFuncTable>,
 }
 
 impl LibHwfAdapter {
@@ -52,10 +58,17 @@ impl LibHwfAdapter {
             CamFuncTable::new(&library).with_context(|| "failed to init camera function table")?,
         );
 
+        #[cfg(feature = "usb_host")]
+        let usb = Arc::new(
+            UsbFuncTable::new(&library).with_context(|| "failed to init usb function table")?,
+        );
+
         Ok(Self {
             library,
             #[cfg(feature = "usb_camera_oh")]
             camera,
+            #[cfg(feature = "usb_host")]
+            usb,
         })
     }
 
@@ -63,9 +76,19 @@ impl LibHwfAdapter {
     fn get_camera_api(&self) -> Arc<CamFuncTable> {
         self.camera.clone()
     }
+
+    #[cfg(feature = "usb_host")]
+    fn get_usb_api(&self) -> Arc<UsbFuncTable> {
+        self.usb.clone()
+    }
 }
 
 #[cfg(feature = "usb_camera_oh")]
 pub fn hwf_adapter_camera_api() -> Arc<CamFuncTable> {
     LIB_HWF_ADAPTER.get_camera_api()
+}
+
+#[cfg(feature = "usb_host")]
+pub fn hwf_adapter_usb_api() -> Arc<UsbFuncTable> {
+    LIB_HWF_ADAPTER.get_usb_api()
 }
