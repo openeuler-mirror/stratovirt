@@ -304,14 +304,17 @@ impl GtkDisplay {
         }));
         self.gtk_menu.view_menu.append(&gs_show_menu);
 
-        if !self.gtk_menu.radio_group.is_empty() {
-            let first_radio = &self.gtk_menu.radio_group[0];
+        if !self.gtk_menu.radio_group.borrow().is_empty() {
+            let first_radio = &self.gtk_menu.radio_group.borrow()[0];
             gs_show_menu.join_group(Some(first_radio));
         } else {
             note_book.set_current_page(Some(page_num));
         }
 
-        self.gtk_menu.radio_group.push(gs_show_menu.clone());
+        self.gtk_menu
+            .radio_group
+            .borrow_mut()
+            .push(gs_show_menu.clone());
         gs.borrow_mut().show_menu = gs_show_menu;
         gs.borrow_mut().draw_area = draw_area;
 
