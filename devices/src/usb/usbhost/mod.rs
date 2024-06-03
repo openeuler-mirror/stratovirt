@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 mod host_usblib;
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+mod ohusb;
 
 use std::{
     collections::LinkedList,
@@ -20,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Context as anyhowContext, Result};
 use clap::Parser;
 use libc::c_int;
 use libusb1_sys::{
@@ -50,6 +52,8 @@ use machine_manager::{
     event_loop::{register_event_helper, unregister_event_helper},
     temp_cleaner::{ExitNotifier, TempCleaner},
 };
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+use ohusb::OhUsbDev;
 use util::{
     byte_code::ByteCode,
     link_list::{List, Node},
@@ -404,6 +408,8 @@ pub struct UsbHost {
     iso_queues: Arc<Mutex<LinkedList<Arc<Mutex<IsoQueue>>>>>,
     iso_urb_frames: u32,
     iso_urb_count: u32,
+    #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+    oh_dev: OhUsbDev,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
@@ -414,6 +420,9 @@ unsafe impl Send for UsbHost {}
 
 impl UsbHost {
     pub fn new(config: UsbHostConfig) -> Result<Self> {
+        #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+        let oh_dev = OhUsbDev::new()?;
+
         let mut context = Context::new()?;
         context.set_log_level(rusb::LogLevel::None);
         let iso_urb_frames = config.iso_urb_frames;
@@ -434,9 +443,12 @@ impl UsbHost {
             iso_queues: Arc::new(Mutex::new(LinkedList::new())),
             iso_urb_frames,
             iso_urb_count,
+            #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+            oh_dev,
         })
     }
 
+    #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
     fn find_libdev(&self) -> Option<Device<Context>> {
         if self.config.vendorid != 0 && self.config.productid != 0 {
             self.find_dev_by_vendor_product()
@@ -449,6 +461,7 @@ impl UsbHost {
         }
     }
 
+    #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
     fn find_dev_by_bus_addr(&self) -> Option<Device<Context>> {
         self.context
             .devices()
@@ -465,6 +478,7 @@ impl UsbHost {
             .unwrap_or_else(|| None)
     }
 
+    #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
     fn find_dev_by_vendor_product(&self) -> Option<Device<Context>> {
         self.context
             .devices()
@@ -482,6 +496,7 @@ impl UsbHost {
             .unwrap_or_else(|| None)
     }
 
+    #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
     fn find_dev_by_bus_port(&self) -> Option<Device<Context>> {
         let hostport: Vec<&str> = self.config.hostport.as_ref().unwrap().split('.').collect();
         let mut port: Vec<u8> = Vec::new();
@@ -644,8 +659,7 @@ impl UsbHost {
         }
     }
 
-    fn open_and_init(&mut self) -> Result<()> {
-        self.handle = Some(self.libdev.as_ref().unwrap().open()?);
+    fn init_usbdev(&mut self) -> Result<()> {
         self.config.hostbus = self.libdev.as_ref().unwrap().bus_number();
         self.config.hostaddr = self.libdev.as_ref().unwrap().address();
         trace::usb_host_open_started(self.config.hostbus, self.config.hostaddr);
@@ -982,6 +996,26 @@ impl UsbHost {
 
         locked_packet.is_async = true;
     }
+
+    #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
+    fn open_usbdev(&mut self) -> Result<()> {
+        self.libdev = Some(
+            self.find_libdev()
+                .with_context(|| format!("Invalid USB host config: {:?}", self.config))?,
+        );
+        self.handle = Some(self.libdev.as_ref().unwrap().open()?);
+        Ok(())
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+    fn open_usbdev(&mut self) -> Result<()> {
+        self.handle = Some(
+            self.oh_dev
+                .open(self.config.clone(), self.context.clone())?,
+        );
+        self.libdev = Some(self.handle.as_ref().unwrap().device());
+        Ok(())
+    }
 }
 
 impl Drop for UsbHost {
@@ -1023,13 +1057,9 @@ impl UsbDevice for UsbHost {
     }
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
-        self.libdev = self.find_libdev();
-        if self.libdev.is_none() {
-            bail!("Invalid USB host config: {:?}", self.config);
-        }
-
         info!("Open and init usbhost device: {:?}", self.config);
-        self.open_and_init()?;
+        self.open_usbdev()?;
+        self.init_usbdev()?;
 
         let usbhost = Arc::new(Mutex::new(self));
         let notifiers = EventNotifierHelper::internal_notifiers(usbhost.clone());
@@ -1296,7 +1326,7 @@ impl UsbDevice for UsbHost {
     }
 }
 
-fn check_device_valid(device: &Device<Context>) -> bool {
+pub fn check_device_valid(device: &Device<Context>) -> bool {
     let ddesc = match device.device_descriptor() {
         Ok(ddesc) => ddesc,
         Err(_) => return false,
