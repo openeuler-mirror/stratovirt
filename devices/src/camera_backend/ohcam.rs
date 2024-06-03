@@ -20,6 +20,12 @@ use crate::camera_backend::{
     CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
     CameraNotifyCallback, FmtType,
 };
+#[cfg(any(
+    feature = "trace_to_logger",
+    feature = "trace_to_ftrace",
+    all(target_env = "ohos", feature = "trace_to_hitrace")
+))]
+use trace::trace_scope::Scope;
 use util::aio::Iovec;
 use util::ohos_binding::camera::*;
 
@@ -79,6 +85,33 @@ impl OhCamCallBack {
     }
 }
 
+#[cfg(any(
+    feature = "trace_to_logger",
+    feature = "trace_to_ftrace",
+    all(target_env = "ohos", feature = "trace_to_hitrace")
+))]
+#[derive(Clone, Default)]
+struct OhCameraAsyncScope {
+    next_frame_id: u64,
+    async_scope: Option<Scope>,
+}
+
+#[cfg(any(
+    feature = "trace_to_logger",
+    feature = "trace_to_ftrace",
+    all(target_env = "ohos", feature = "trace_to_hitrace")
+))]
+impl OhCameraAsyncScope {
+    fn start(&mut self) {
+        self.async_scope = Some(trace::ohcam_next_frame(true, self.next_frame_id));
+        self.next_frame_id += 1;
+    }
+
+    fn stop(&mut self) {
+        self.async_scope = None;
+    }
+}
+
 #[derive(Clone)]
 pub struct OhCameraBackend {
     id: String,
@@ -87,6 +120,12 @@ pub struct OhCameraBackend {
     ctx: OhCamera,
     fmt_list: Vec<CameraFormatList>,
     selected_profile: u8,
+    #[cfg(any(
+        feature = "trace_to_logger",
+        feature = "trace_to_ftrace",
+        all(target_env = "ohos", feature = "trace_to_hitrace")
+    ))]
+    async_scope: Box<OhCameraAsyncScope>,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type.
@@ -121,6 +160,12 @@ impl OhCameraBackend {
             ctx,
             fmt_list: vec![],
             selected_profile: 0,
+            #[cfg(any(
+                feature = "trace_to_logger",
+                feature = "trace_to_ftrace",
+                all(target_env = "ohos", feature = "trace_to_hitrace")
+            ))]
+            async_scope: Box::new(OhCameraAsyncScope::default()),
         })
     }
 }
@@ -163,6 +208,12 @@ impl CameraBackend for OhCameraBackend {
     fn video_stream_off(&mut self) -> Result<()> {
         self.ctx.stop_stream();
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
+        #[cfg(any(
+            feature = "trace_to_logger",
+            feature = "trace_to_ftrace",
+            all(target_env = "ohos", feature = "trace_to_hitrace")
+        ))]
+        self.async_scope.stop();
         Ok(())
     }
 
@@ -201,6 +252,12 @@ impl CameraBackend for OhCameraBackend {
     fn reset(&mut self) {
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
         self.ctx.reset_camera();
+        #[cfg(any(
+            feature = "trace_to_logger",
+            feature = "trace_to_ftrace",
+            all(target_env = "ohos", feature = "trace_to_hitrace")
+        ))]
+        self.async_scope.stop();
     }
 
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
@@ -240,6 +297,12 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn next_frame(&mut self) -> Result<()> {
+        #[cfg(any(
+            feature = "trace_to_logger",
+            feature = "trace_to_ftrace",
+            all(target_env = "ohos", feature = "trace_to_hitrace")
+        ))]
+        self.async_scope.start();
         self.ctx.next_frame();
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
         Ok(())
@@ -254,6 +317,8 @@ impl CameraBackend for OhCameraBackend {
         if frame_offset + len > src_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);
         }
+
+        trace::trace_scope_start!(ohcam_get_frame, args = (frame_offset, len));
 
         let mut copied = 0;
         for iov in iovecs {
