@@ -19,7 +19,7 @@ pub(crate) mod hitrace;
     feature = "trace_to_ftrace",
     all(target_env = "ohos", feature = "trace_to_hitrace")
 ))]
-pub(crate) mod trace_scope;
+pub mod trace_scope;
 
 use std::{
     fmt,
