@@ -79,8 +79,8 @@ use machine_manager::config::{
     complete_numa_node, get_chardev_socket_path, get_class_type, get_pci_bdf,
     get_value_of_parameter, parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo,
     BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
-    NetworkInterfaceConfig, NumaConfig, NumaDistance, NumaNode, NumaNodes, PciBdf, SerialConfig,
-    VirtioSerialInfo, VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo,
+    VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
@@ -1571,46 +1571,47 @@ pub trait MachineOps {
         for numa in vm_config.numa_nodes.iter() {
             match numa.0.as_str() {
                 "node" => {
-                    let numa_config: NumaConfig = parse_numa_mem(numa.1.as_str())?;
-                    if numa_nodes.contains_key(&numa_config.numa_id) {
-                        bail!("Numa node id is repeated {}", numa_config.numa_id);
+                    let node_config = parse_numa_mem(numa.1.as_str())?;
+                    if numa_nodes.contains_key(&node_config.numa_id) {
+                        bail!("Numa node id is repeated {}", node_config.numa_id);
                     }
                     let mut numa_node = NumaNode {
-                        cpus: numa_config.cpus,
-                        mem_dev: numa_config.mem_dev.clone(),
+                        cpus: node_config.cpus,
+                        mem_dev: node_config.mem_dev.clone(),
                         ..Default::default()
                     };
 
                     numa_node.size = vm_config
                         .object
                         .mem_object
-                        .remove(&numa_config.mem_dev)
+                        .remove(&node_config.mem_dev)
                         .map(|mem_conf| mem_conf.size)
                         .with_context(|| {
                             format!(
                                 "Object for memory-backend {} config not found",
-                                numa_config.mem_dev
+                                node_config.mem_dev
                             )
                         })?;
-                    numa_nodes.insert(numa_config.numa_id, numa_node);
+                    numa_nodes.insert(node_config.numa_id, numa_node);
                 }
                 "dist" => {
-                    let dist: (u32, NumaDistance) = parse_numa_distance(numa.1.as_str())?;
-                    if !numa_nodes.contains_key(&dist.0) {
-                        bail!("Numa node id is not found {}", dist.0);
+                    let dist_config = parse_numa_distance(numa.1.as_str())?;
+                    if !numa_nodes.contains_key(&dist_config.numa_id) {
+                        bail!("Numa node id is not found {}", dist_config.numa_id);
                     }
-                    if !numa_nodes.contains_key(&dist.1.destination) {
-                        bail!("Numa node id is not found {}", dist.1.destination);
+                    if !numa_nodes.contains_key(&dist_config.destination) {
+                        bail!("Numa node id is not found {}", dist_config.destination);
                     }
 
-                    if let Some(n) = numa_nodes.get_mut(&dist.0) {
-                        if n.distances.contains_key(&dist.1.destination) {
+                    if let Some(n) = numa_nodes.get_mut(&dist_config.numa_id) {
+                        if n.distances.contains_key(&dist_config.destination) {
                             bail!(
                                 "Numa destination info {} repeat settings",
-                                dist.1.destination
+                                dist_config.destination
                             );
                         }
-                        n.distances.insert(dist.1.destination, dist.1.distance);
+                        n.distances
+                            .insert(dist_config.destination, dist_config.distance);
                     }
                 }
                 _ => {

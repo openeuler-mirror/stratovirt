@@ -361,7 +361,7 @@ impl StdMachine {
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
     fn add_ohui_server(&mut self, vm_config: &VmConfig) -> Result<()> {
         if let Some(dpy) = vm_config.display.as_ref() {
-            if !dpy.ohui_config.ohui {
+            if dpy.display_type != "ohui" {
                 return Ok(());
             }
             self.ohui_server = Some(Arc::new(OhUiServer::new(dpy.get_ui_path())?));
@@ -722,7 +722,7 @@ impl MachineOps for StdMachine {
         #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
         match vm_config.display {
             #[cfg(feature = "gtk")]
-            Some(ref ds_cfg) if ds_cfg.gtk => {
+            Some(ref ds_cfg) if ds_cfg.display_type == "gtk" => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
                     power_button: Some(self.power_button.clone()),
@@ -735,7 +735,7 @@ impl MachineOps for StdMachine {
             }
             // OHUI server init.
             #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-            Some(ref ds_cfg) if ds_cfg.ohui_config.ohui => {
+            Some(ref ds_cfg) if ds_cfg.display_type == "ohui" => {
                 ohui_init(self.ohui_server.as_ref().unwrap().clone(), ds_cfg)
                     .with_context(|| "Failed to init OH UI server!")?;
             }

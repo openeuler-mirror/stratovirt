@@ -12,74 +12,138 @@
 
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{CmdParser, VmConfig};
+use super::{get_value_of_parameter, str_slip_to_clap};
+use crate::config::VmConfig;
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType0Config {
-    pub vender: Option<String>,
+    #[arg(long, alias = "type", value_parser = ["0"])]
+    pub smbios_type: String,
+    #[arg(long)]
+    pub vendor: Option<String>,
+    #[arg(long)]
     pub version: Option<String>,
+    #[arg(long)]
     pub date: Option<String>,
+    // Note: we don't set `ArgAction::Append` for `added`, so it cannot be specified
+    // from the command line, as command line will parse errors.
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType1Config {
+    #[arg(long, alias = "type", value_parser = ["1"])]
+    pub smbios_type: String,
+    #[arg(long)]
     pub manufacturer: Option<String>,
+    #[arg(long)]
     pub product: Option<String>,
+    #[arg(long)]
     pub version: Option<String>,
+    #[arg(long)]
     pub serial: Option<String>,
+    #[arg(long)]
     pub sku: Option<String>,
+    #[arg(long)]
     pub family: Option<String>,
+    #[arg(long, value_parser = get_uuid)]
     pub uuid: Option<Uuid>,
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType2Config {
+    #[arg(long, alias = "type", value_parser = ["2"])]
+    pub smbios_type: String,
+    #[arg(long)]
     pub manufacturer: Option<String>,
+    #[arg(long)]
     pub product: Option<String>,
+    #[arg(long)]
     pub version: Option<String>,
+    #[arg(long)]
     pub serial: Option<String>,
+    #[arg(long)]
     pub asset: Option<String>,
+    #[arg(long)]
     pub location: Option<String>,
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType3Config {
+    #[arg(long, alias = "type", value_parser = ["3"])]
+    pub smbios_type: String,
+    #[arg(long)]
     pub manufacturer: Option<String>,
+    #[arg(long)]
     pub version: Option<String>,
+    #[arg(long)]
     pub serial: Option<String>,
+    #[arg(long)]
     pub sku: Option<String>,
+    #[arg(long)]
     pub asset: Option<String>,
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType4Config {
+    #[arg(long, alias = "type", value_parser = ["4"])]
+    pub smbios_type: String,
+    #[arg(long)]
     pub manufacturer: Option<String>,
+    #[arg(long)]
     pub version: Option<String>,
+    #[arg(long)]
     pub serial: Option<String>,
+    #[arg(long)]
     pub asset: Option<String>,
+    #[arg(long, alias = "sock_pfx")]
     pub sock_pfx: Option<String>,
+    #[arg(long)]
     pub part: Option<String>,
+    #[arg(long)]
     pub max_speed: Option<u64>,
+    #[arg(long)]
     pub current_speed: Option<u64>,
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Parser, Clone, Default, Debug, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SmbiosType17Config {
+    #[arg(long, alias = "type", value_parser = ["17"])]
+    pub smbios_type: String,
+    #[arg(long)]
     pub manufacturer: Option<String>,
+    #[arg(long)]
     pub serial: Option<String>,
+    #[arg(long)]
     pub asset: Option<String>,
+    #[arg(long, alias = "loc_pfx")]
     pub loc_pfx: Option<String>,
+    #[arg(long)]
     pub part: Option<String>,
+    #[arg(long, default_value = "0")]
     pub speed: u16,
+    #[arg(long)]
     pub bank: Option<String>,
+    #[arg(long, default_value = "true")]
     pub added: bool,
 }
 
@@ -124,13 +188,13 @@ pub struct Uuid {
 }
 
 impl FromStr for Uuid {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(str: &str) -> std::result::Result<Self, Self::Err> {
         let name = str.to_string();
 
         if !check_valid_uuid(&name) {
-            return Err(());
+            return Err(anyhow!("Invalid uuid {}", name));
         }
 
         let mut uuid_bytes = Vec::new();
@@ -149,6 +213,11 @@ impl FromStr for Uuid {
     }
 }
 
+fn get_uuid(s: &str) -> Result<Uuid> {
+    let uuid = Uuid::from_str(s)?;
+    Ok(uuid)
+}
+
 impl VmConfig {
     /// # Arguments
     ///
@@ -158,19 +227,8 @@ impl VmConfig {
             bail!("smbios type0 has been added");
         }
 
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("vendor")
-            .push("version")
-            .push("date");
-        cmd_parser.parse(type0)?;
-
-        self.smbios.type0.vender = cmd_parser.get_value::<String>("vendor")?;
-        self.smbios.type0.version = cmd_parser.get_value::<String>("version")?;
-        self.smbios.type0.date = cmd_parser.get_value::<String>("date")?;
-        self.smbios.type0.added = true;
+        let type0_cfg = SmbiosType0Config::try_parse_from(str_slip_to_clap(type0, false, false))?;
+        self.smbios.type0 = type0_cfg;
 
         Ok(())
     }
@@ -183,27 +241,8 @@ impl VmConfig {
             bail!("smbios type1 has been added");
         }
 
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("manufacturer")
-            .push("product")
-            .push("version")
-            .push("serial")
-            .push("sku")
-            .push("uuid")
-            .push("family");
-        cmd_parser.parse(type1)?;
-
-        self.smbios.type1.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
-        self.smbios.type1.product = cmd_parser.get_value::<String>("product")?;
-        self.smbios.type1.version = cmd_parser.get_value::<String>("version")?;
-        self.smbios.type1.serial = cmd_parser.get_value::<String>("serial")?;
-        self.smbios.type1.sku = cmd_parser.get_value::<String>("sku")?;
-        self.smbios.type1.family = cmd_parser.get_value::<String>("family")?;
-        self.smbios.type1.uuid = cmd_parser.get_value::<Uuid>("uuid")?;
-        self.smbios.type1.added = true;
+        let type1_cfg = SmbiosType1Config::try_parse_from(str_slip_to_clap(type1, false, false))?;
+        self.smbios.type1 = type1_cfg;
 
         Ok(())
     }
@@ -215,26 +254,8 @@ impl VmConfig {
         if self.smbios.type2.added {
             bail!("smbios type2 has been added");
         }
-
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("manufacturer")
-            .push("product")
-            .push("version")
-            .push("serial")
-            .push("asset")
-            .push("location");
-        cmd_parser.parse(type2)?;
-
-        self.smbios.type2.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
-        self.smbios.type2.product = cmd_parser.get_value::<String>("product")?;
-        self.smbios.type2.version = cmd_parser.get_value::<String>("version")?;
-        self.smbios.type2.serial = cmd_parser.get_value::<String>("serial")?;
-        self.smbios.type2.asset = cmd_parser.get_value::<String>("asset")?;
-        self.smbios.type2.location = cmd_parser.get_value::<String>("location")?;
-        self.smbios.type2.added = true;
+        let type2_cfg = SmbiosType2Config::try_parse_from(str_slip_to_clap(type2, false, false))?;
+        self.smbios.type2 = type2_cfg;
 
         Ok(())
     }
@@ -247,23 +268,8 @@ impl VmConfig {
             bail!("smbios type3 has been added");
         }
 
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("manufacturer")
-            .push("version")
-            .push("serial")
-            .push("sku")
-            .push("asset");
-        cmd_parser.parse(type3)?;
-
-        self.smbios.type3.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
-        self.smbios.type3.version = cmd_parser.get_value::<String>("version")?;
-        self.smbios.type3.serial = cmd_parser.get_value::<String>("serial")?;
-        self.smbios.type3.sku = cmd_parser.get_value::<String>("sku")?;
-        self.smbios.type3.asset = cmd_parser.get_value::<String>("asset")?;
-        self.smbios.type3.added = true;
+        let type3_cfg = SmbiosType3Config::try_parse_from(str_slip_to_clap(type3, false, false))?;
+        self.smbios.type3 = type3_cfg;
 
         Ok(())
     }
@@ -276,29 +282,8 @@ impl VmConfig {
             bail!("smbios type4 has been added");
         }
 
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("manufacturer")
-            .push("version")
-            .push("serial")
-            .push("sock_pfx")
-            .push("max-speed")
-            .push("current-speed")
-            .push("part")
-            .push("asset");
-        cmd_parser.parse(type4)?;
-
-        self.smbios.type4.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
-        self.smbios.type4.version = cmd_parser.get_value::<String>("version")?;
-        self.smbios.type4.serial = cmd_parser.get_value::<String>("serial")?;
-        self.smbios.type4.asset = cmd_parser.get_value::<String>("asset")?;
-        self.smbios.type4.part = cmd_parser.get_value::<String>("part")?;
-        self.smbios.type4.sock_pfx = cmd_parser.get_value::<String>("sock_pfx")?;
-        self.smbios.type4.max_speed = cmd_parser.get_value::<u64>("max-speed")?;
-        self.smbios.type4.current_speed = cmd_parser.get_value::<u64>("current-speed")?;
-        self.smbios.type4.added = true;
+        let type4_cfg = SmbiosType4Config::try_parse_from(str_slip_to_clap(type4, false, false))?;
+        self.smbios.type4 = type4_cfg;
 
         Ok(())
     }
@@ -311,31 +296,9 @@ impl VmConfig {
             bail!("smbios type17 has been added");
         }
 
-        let mut cmd_parser = CmdParser::new("smbios");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("loc_pfx")
-            .push("bank")
-            .push("manufacturer")
-            .push("serial")
-            .push("speed")
-            .push("part")
-            .push("asset");
-        cmd_parser.parse(type17)?;
-
-        self.smbios.type17.manufacturer = cmd_parser.get_value::<String>("manufacturer")?;
-        self.smbios.type17.loc_pfx = cmd_parser.get_value::<String>("loc_pfx")?;
-        self.smbios.type17.serial = cmd_parser.get_value::<String>("serial")?;
-        self.smbios.type17.asset = cmd_parser.get_value::<String>("asset")?;
-        self.smbios.type17.part = cmd_parser.get_value::<String>("part")?;
-        self.smbios.type17.speed = if let Some(speed) = cmd_parser.get_value::<u16>("speed")? {
-            speed
-        } else {
-            0
-        };
-        self.smbios.type17.bank = cmd_parser.get_value::<String>("bank")?;
-        self.smbios.type17.added = true;
+        let type17_cfg =
+            SmbiosType17Config::try_parse_from(str_slip_to_clap(type17, false, false))?;
+        self.smbios.type17 = type17_cfg;
 
         Ok(())
     }
@@ -346,13 +309,7 @@ impl VmConfig {
     ///
     /// * `smbios_args` - The args of object.
     pub fn add_smbios(&mut self, smbios_args: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("smbios");
-        cmd_params.push("").push("type");
-
-        cmd_params.get_parameters(smbios_args)?;
-        let smbios_type = cmd_params
-            .get_value::<String>("type")?
-            .with_context(|| "smbios type not specified")?;
+        let smbios_type = get_value_of_parameter("type", smbios_args)?;
         match smbios_type.as_str() {
             "0" => {
                 self.add_smbios_type0(smbios_args)?;
@@ -396,5 +353,25 @@ mod test {
                 0xD7, 0x66
             ]
         );
+    }
+
+    #[test]
+    fn test_add_smbios() {
+        let mut vm_config = VmConfig::default();
+
+        let smbios0 = "type=0,vendor=fake,version=fake,date=fake";
+        let smbios1 = "type=1,manufacturer=fake,version=fake,product=fake,serial=fake,uuid=33DB4D5E-1FF7-401C-9657-7441C03DD766,sku=fake,family=fake";
+        let smbios2 = "type=2,manufacturer=fake,product=fake,version=fake,serial=fake,asset=fake,location=fake";
+        let smbios3 = "type=3,manufacturer=fake,version=fake,serial=fake,asset=fake,sku=fake";
+        let smbios4 = "type=4,sock_pfx=fake,manufacturer=fake,version=fake,serial=fake,asset=fake,part=fake,max-speed=1,current-speed=1";
+        let smbios17 = "type=17,loc_pfx=fake,bank=fake,manufacturer=fake,serial=fake,asset=fake,part=fake,speed=1";
+
+        assert!(vm_config.add_smbios(smbios0).is_ok());
+        assert!(vm_config.add_smbios(smbios1).is_ok());
+        assert!(vm_config.add_smbios(smbios2).is_ok());
+        assert!(vm_config.add_smbios(smbios3).is_ok());
+        assert!(vm_config.add_smbios(smbios4).is_ok());
+        assert!(vm_config.add_smbios(smbios17).is_ok());
+        assert!(vm_config.add_smbios(smbios0).is_err());
     }
 }

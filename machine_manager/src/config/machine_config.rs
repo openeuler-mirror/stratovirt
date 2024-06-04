@@ -17,8 +17,10 @@ use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path};
-use crate::config::{CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES};
+use super::{
+    get_value_of_parameter, parse_bool, parse_size, str_slip_to_clap, valid_id, valid_path,
+};
+use crate::config::{ConfigCheck, IntegerList, VmConfig, MAX_NODES};
 use crate::machine::HypervisorType;
 
 const DEFAULT_CPUS: u8 = 1;
@@ -45,7 +47,7 @@ pub enum MachineType {
 }
 
 impl FromStr for MachineType {
-    type Err = ();
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -55,7 +57,7 @@ impl FromStr for MachineType {
             "q35" => Ok(MachineType::StandardVm),
             #[cfg(target_arch = "aarch64")]
             "virt" => Ok(MachineType::StandardVm),
-            _ => Err(()),
+            _ => Err(anyhow!("Invalid machine type.")),
         }
     }
 }
@@ -251,6 +253,119 @@ impl ConfigCheck for MachineConfig {
     }
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct AccelConfig {
+    #[arg(long, alias = "classtype")]
+    hypervisor: HypervisorType,
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MemSizeConfig {
+    #[arg(long, alias = "classtype", value_parser = parse_size)]
+    size: u64,
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MachineCmdConfig {
+    #[arg(long, aliases = ["classtype", "type"])]
+    mach_type: MachineType,
+    #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
+    dump_guest_core: bool,
+    #[arg(long, default_value = "off", action = ArgAction::Append, value_parser = parse_bool)]
+    mem_share: bool,
+    #[arg(long, default_value = "kvm")]
+    accel: HypervisorType,
+    // The "usb" member is added for compatibility with libvirt and is currently not in use.
+    // It only supports configuration as "off". Currently, a `String` type is used to verify incoming values.
+    // When it will be used, it needs to be changed to a `bool` type.
+    #[arg(long, default_value = "off", value_parser = ["off"])]
+    usb: String,
+    #[cfg(target_arch = "aarch64")]
+    #[arg(long, default_value = "3", value_parser = clap::value_parser!(u8).range(3..=3))]
+    gic_version: u8,
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct SmpConfig {
+    #[arg(long, alias = "classtype", value_parser = clap::value_parser!(u64).range(MIN_NR_CPUS..=MAX_NR_CPUS))]
+    cpus: u64,
+    #[arg(long, default_value = "0")]
+    maxcpus: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    sockets: u64,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
+    dies: u64,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
+    clusters: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    cores: u64,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
+    threads: u64,
+}
+
+impl SmpConfig {
+    fn auto_adjust_topology(&mut self) -> Result<()> {
+        let mut max_cpus = self.maxcpus;
+        let mut sockets = self.sockets;
+        let mut cores = self.cores;
+        let mut threads = self.threads;
+
+        if max_cpus == 0 {
+            if sockets * self.dies * self.clusters * cores * threads > 0 {
+                max_cpus = sockets * self.dies * self.clusters * cores * threads;
+            } else {
+                max_cpus = self.cpus;
+            }
+        }
+
+        if cores == 0 {
+            if sockets == 0 {
+                sockets = 1;
+            }
+            if threads == 0 {
+                threads = 1;
+            }
+            cores = max_cpus / (sockets * self.dies * self.clusters * threads);
+        } else if sockets == 0 {
+            if threads == 0 {
+                threads = 1;
+            }
+            sockets = max_cpus / (self.dies * self.clusters * cores * threads);
+        }
+
+        if threads == 0 {
+            threads = max_cpus / (sockets * self.dies * self.clusters * cores);
+        }
+
+        let min_max_cpus = std::cmp::max(self.cpus, MIN_NR_CPUS);
+
+        if !(min_max_cpus..=MAX_NR_CPUS).contains(&max_cpus) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "MAX CPU number".to_string(),
+                min_max_cpus,
+                true,
+                MAX_NR_CPUS,
+                true,
+            )));
+        }
+
+        if sockets * self.dies * self.clusters * cores * threads != max_cpus {
+            bail!("sockets * dies * clusters * cores * threads must be equal to max_cpus");
+        }
+
+        self.maxcpus = max_cpus;
+        self.sockets = sockets;
+        self.cores = cores;
+        self.threads = threads;
+
+        Ok(())
+    }
+}
+
 impl VmConfig {
     /// Add argument `name` to `VmConfig`.
     ///
@@ -258,194 +373,63 @@ impl VmConfig {
     ///
     /// * `name` - The name `String` added to `VmConfig`.
     pub fn add_machine(&mut self, mach_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("machine");
-        cmd_parser
-            .push("")
-            .push("type")
-            .push("accel")
-            .push("usb")
-            .push("dump-guest-core")
-            .push("mem-share");
-        #[cfg(target_arch = "aarch64")]
-        cmd_parser.push("gic-version");
-        cmd_parser.parse(mach_config)?;
-
-        #[cfg(target_arch = "aarch64")]
-        if let Some(gic_version) = cmd_parser.get_value::<u8>("gic-version")? {
-            if gic_version != 3 {
-                bail!("Unsupported gic version, only gicv3 is supported");
-            }
+        let mut has_type_label = false;
+        if get_value_of_parameter("type", mach_config).is_ok() {
+            has_type_label = true;
         }
-
-        if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
-            // Libvirt checks the parameter types of 'kvm', 'kvm:tcg' and 'tcg'.
-            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") && accel.ne("test") {
-                bail!("Only \'kvm\', \'kvm:tcg\', \'test\' and \'tcg\' are supported for \'accel\' of \'machine\'");
-            }
-
-            match accel.as_str() {
-                "test" => self.machine_config.hypervisor = HypervisorType::Test,
-                _ => self.machine_config.hypervisor = HypervisorType::Kvm,
-            };
-        }
-        if let Some(usb) = cmd_parser.get_value::<ExBool>("usb")? {
-            if usb.into() {
-                bail!("Argument \'usb\' should be set to \'off\'");
-            }
-        }
-        if let Some(mach_type) = cmd_parser
-            .get_value::<MachineType>("")
-            .with_context(|| "Unrecognized machine type")?
-        {
-            self.machine_config.mach_type = mach_type;
-        }
-        if let Some(mach_type) = cmd_parser
-            .get_value::<MachineType>("type")
-            .with_context(|| "Unrecognized machine type")?
-        {
-            self.machine_config.mach_type = mach_type;
-        }
-        if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
-            self.machine_config.mem_config.dump_guest_core = dump_guest.into();
-        }
-        if let Some(mem_share) = cmd_parser.get_value::<ExBool>("mem-share")? {
-            self.machine_config.mem_config.mem_share = mem_share.into();
-        }
+        let mach_cfg = MachineCmdConfig::try_parse_from(str_slip_to_clap(
+            mach_config,
+            !has_type_label,
+            false,
+        ))?;
+        // TODO: The current "accel" configuration in "-machine" command line and "-accel" command line are not foolproof.
+        // Later parsing will overwrite first parsing. We will optimize this in the future.
+        self.machine_config.hypervisor = mach_cfg.accel;
+        self.machine_config.mach_type = mach_cfg.mach_type;
+        self.machine_config.mem_config.dump_guest_core = mach_cfg.dump_guest_core;
+        self.machine_config.mem_config.mem_share = mach_cfg.mem_share;
 
         Ok(())
     }
 
     /// Add '-accel' accelerator config to `VmConfig`.
     pub fn add_accel(&mut self, accel_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("accel");
-        cmd_parser.push("");
-        cmd_parser.parse(accel_config)?;
-
-        if let Some(accel) = cmd_parser
-            .get_value::<HypervisorType>("")
-            .with_context(|| "Only \'kvm\' and \'test\' is supported for \'accel\'")?
-        {
-            self.machine_config.hypervisor = accel;
-        }
-
+        let accel_cfg = AccelConfig::try_parse_from(str_slip_to_clap(accel_config, true, false))?;
+        self.machine_config.hypervisor = accel_cfg.hypervisor;
         Ok(())
     }
 
     /// Add '-m' memory config to `VmConfig`.
     pub fn add_memory(&mut self, mem_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("m");
-        cmd_parser.push("").push("size");
-
-        cmd_parser.parse(mem_config)?;
-
-        let mem = if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
-            memory_unit_conversion(&mem_size, M)?
-        } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
-            memory_unit_conversion(&mem_size, M)?
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "size".to_string(),
-                "memory".to_string()
-            )));
-        };
-
-        self.machine_config.mem_config.mem_size = mem;
+        // Is there a "size=" prefix tag in the command line.
+        let mut has_size_label = false;
+        if get_value_of_parameter("size", mem_config).is_ok() {
+            has_size_label = true;
+        }
+        let mem_cfg =
+            MemSizeConfig::try_parse_from(str_slip_to_clap(mem_config, !has_size_label, false))?;
+        self.machine_config.mem_config.mem_size = mem_cfg.size;
 
         Ok(())
     }
 
     /// Add '-smp' cpu config to `VmConfig`.
     pub fn add_cpu(&mut self, cpu_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("smp");
-        cmd_parser
-            .push("")
-            .push("maxcpus")
-            .push("sockets")
-            .push("dies")
-            .push("clusters")
-            .push("cores")
-            .push("threads")
-            .push("cpus");
-
-        cmd_parser.parse(cpu_config)?;
-
-        let cpu = if let Some(cpu) = cmd_parser.get_value::<u64>("")? {
-            cpu
-        } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
-            if cpu == 0 {
-                return Err(anyhow!(ConfigError::IllegalValue(
-                    "cpu".to_string(),
-                    1,
-                    true,
-                    MAX_NR_CPUS,
-                    true
-                )));
-            }
-            cpu
-        } else {
-            return Err(anyhow!(ConfigError::FieldIsMissing(
-                "cpus".to_string(),
-                "smp".to_string()
-            )));
-        };
-
-        let sockets = smp_read_and_check(&cmd_parser, "sockets", 0)?;
-
-        let dies = smp_read_and_check(&cmd_parser, "dies", 1)?;
-
-        let clusters = smp_read_and_check(&cmd_parser, "clusters", 1)?;
-
-        let cores = smp_read_and_check(&cmd_parser, "cores", 0)?;
-
-        let threads = smp_read_and_check(&cmd_parser, "threads", 0)?;
-
-        let max_cpus = cmd_parser.get_value::<u64>("maxcpus")?.unwrap_or_default();
-
-        let (max_cpus, sockets, cores, threads) =
-            adjust_topology(cpu, max_cpus, sockets, dies, clusters, cores, threads);
-
-        // limit cpu count
-        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "CPU number".to_string(),
-                MIN_NR_CPUS,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
+        let mut has_cpus_label = false;
+        if get_value_of_parameter("cpus", cpu_config).is_ok() {
+            has_cpus_label = true;
         }
+        let mut smp_cfg =
+            SmpConfig::try_parse_from(str_slip_to_clap(cpu_config, !has_cpus_label, false))?;
+        smp_cfg.auto_adjust_topology()?;
 
-        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&max_cpus) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "MAX CPU number".to_string(),
-                MIN_NR_CPUS,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
-        }
-
-        if max_cpus < cpu {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "maxcpus".to_string(),
-                cpu,
-                true,
-                MAX_NR_CPUS,
-                true,
-            )));
-        }
-
-        if sockets * dies * clusters * cores * threads != max_cpus {
-            bail!("sockets * dies * clusters * cores * threads must be equal to max_cpus");
-        }
-
-        self.machine_config.nr_cpus = cpu as u8;
-        self.machine_config.nr_threads = threads as u8;
-        self.machine_config.nr_cores = cores as u8;
-        self.machine_config.nr_dies = dies as u8;
-        self.machine_config.nr_clusters = clusters as u8;
-        self.machine_config.nr_sockets = sockets as u8;
-        self.machine_config.max_cpus = max_cpus as u8;
+        self.machine_config.nr_cpus = smp_cfg.cpus as u8;
+        self.machine_config.nr_threads = smp_cfg.threads as u8;
+        self.machine_config.nr_cores = smp_cfg.cores as u8;
+        self.machine_config.nr_dies = smp_cfg.dies as u8;
+        self.machine_config.nr_clusters = smp_cfg.clusters as u8;
+        self.machine_config.nr_sockets = smp_cfg.sockets as u8;
+        self.machine_config.max_cpus = smp_cfg.maxcpus as u8;
 
         Ok(())
     }
@@ -516,62 +500,6 @@ impl VmConfig {
 
         Ok(zone_config)
     }
-}
-
-fn smp_read_and_check(cmd_parser: &CmdParser, name: &str, default_val: u64) -> Result<u64> {
-    if let Some(values) = cmd_parser.get_value::<u64>(name)? {
-        if values == 0 {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                name.to_string(),
-                1,
-                true,
-                u8::MAX as u64,
-                false
-            )));
-        }
-        Ok(values)
-    } else {
-        Ok(default_val)
-    }
-}
-
-fn adjust_topology(
-    cpu: u64,
-    mut max_cpus: u64,
-    mut sockets: u64,
-    dies: u64,
-    clusters: u64,
-    mut cores: u64,
-    mut threads: u64,
-) -> (u64, u64, u64, u64) {
-    if max_cpus == 0 {
-        if sockets * dies * clusters * cores * threads > 0 {
-            max_cpus = sockets * dies * clusters * cores * threads;
-        } else {
-            max_cpus = cpu;
-        }
-    }
-
-    if cores == 0 {
-        if sockets == 0 {
-            sockets = 1;
-        }
-        if threads == 0 {
-            threads = 1;
-        }
-        cores = max_cpus / (sockets * dies * clusters * threads);
-    } else if sockets == 0 {
-        if threads == 0 {
-            threads = 1;
-        }
-        sockets = max_cpus / (dies * clusters * cores * threads);
-    }
-
-    if threads == 0 {
-        threads = max_cpus / (sockets * dies * clusters * cores);
-    }
-
-    (max_cpus, sockets, cores, threads)
 }
 
 /// Convert memory units from GiB, Mib to Byte.
@@ -902,11 +830,12 @@ mod tests {
         assert_eq!(machine_cfg.mem_config.mem_share, true);
 
         let mut vm_config = VmConfig::default();
-        let memory_cfg_str = "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
+        let memory_cfg_str = "none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
         let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
         assert!(machine_cfg_ret.is_ok());
         let machine_cfg = vm_config.machine_config;
         assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
         assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
         assert_eq!(machine_cfg.mem_config.mem_share, false);
 
@@ -1082,5 +1011,24 @@ mod tests {
         // Illegal values.
         let result = vm_config.add_cpu_feature("host,sve=false");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_accel() {
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm";
+        assert!(vm_config.add_accel(accel_cfg).is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
+
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm:tcg";
+        assert!(vm_config.add_accel(accel_cfg).is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
+
+        let mut vm_config = VmConfig::default();
+        let accel_cfg = "kvm1";
+        assert!(vm_config.add_accel(accel_cfg).is_err());
     }
 }

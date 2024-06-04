@@ -373,7 +373,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
 
 pub fn ohui_init(ohui_srv: Arc<OhUiServer>, cfg: &DisplayConfig) -> Result<()> {
     // set iothread
-    ohui_srv.set_iothread(cfg.ohui_config.iothread.clone());
+    ohui_srv.set_iothread(cfg.iothread.clone());
     // Register ohui interface
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(
         None,
