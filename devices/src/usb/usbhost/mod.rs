@@ -22,7 +22,9 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Context as anyhowContext, Result};
+#[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
+use anyhow::Context as anyhowContext;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use libc::c_int;
 use libusb1_sys::{

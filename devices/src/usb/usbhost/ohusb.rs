@@ -14,7 +14,6 @@ use std::os::fd::AsRawFd;
 use std::ptr;
 
 use anyhow::{bail, Context as anyhowContext, Result};
-use libc::c_int;
 use libusb1_sys::constants::LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
 use log::{error, info};
 use rusb::{Context, DeviceHandle, UsbContext};
