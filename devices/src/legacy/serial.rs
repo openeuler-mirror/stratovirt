@@ -296,19 +296,10 @@ impl Serial {
 
                         self.rbr.push_back(data);
                         self.state.lsr |= UART_LSR_DR;
-                    } else {
-                        let output = self.chardev.lock().unwrap().output.clone();
-                        if output.is_none() {
-                            self.update_iir();
-                            bail!("serial: failed to get output fd.");
-                        }
-                        let mut locked_output = output.as_ref().unwrap().lock().unwrap();
-                        locked_output
-                            .write_all(&[data])
-                            .with_context(|| "serial: failed to write.")?;
-                        locked_output
-                            .flush()
-                            .with_context(|| "serial: failed to flush.")?;
+                    } else if let Err(e) =
+                        self.chardev.lock().unwrap().fill_outbuf(vec![data], None)
+                    {
+                        bail!("Failed to append data to output buffer of chardev, {:?}", e);
                     }
 
                     self.update_iir();
