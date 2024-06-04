@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod ich9_lpc;
+pub mod mch;
 pub mod micro;
 pub mod standard;
-
-mod mch;

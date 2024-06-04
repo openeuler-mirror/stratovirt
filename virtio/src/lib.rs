@@ -58,6 +58,8 @@ use log::{error, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, RegionCache};
+use devices::pci::register_pcidevops_type;
+use devices::sysbus::register_sysbusdevops_type;
 use machine_manager::config::ConfigCheck;
 use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
@@ -866,4 +868,12 @@ fn gpa_hva_iovec_map_by_cache(
     }
 
     Ok((iov_size, hva_iovec))
+}
+
+pub fn virtio_register_sysbusdevops_type() -> Result<()> {
+    register_sysbusdevops_type::<VirtioMmioDevice>()
+}
+
+pub fn virtio_register_pcidevops_type() -> Result<()> {
+    register_pcidevops_type::<VirtioPciDevice>()
 }

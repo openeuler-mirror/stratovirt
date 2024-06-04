@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod micro;
+pub mod pci_host_root;
 pub mod standard;
 
 mod fdt;
-mod pci_host_root;
