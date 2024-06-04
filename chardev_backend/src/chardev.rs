@@ -16,7 +16,6 @@ use std::io::{ErrorKind, Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -90,8 +89,6 @@ pub struct Chardev {
     /// Scheduled DPC to unpause input stream.
     /// Unpause must be done inside event-loop
     unpause_timer: Option<u64>,
-    /// output stream fd is blocked
-    output_blocked: Option<Arc<AtomicBool>>,
     /// output listener to notify when output stream fd can be written
     output_listener_fd: Option<Arc<EventFd>>,
     /// output buffer queue
@@ -111,7 +108,6 @@ impl Chardev {
             dev: None,
             wait_port: false,
             unpause_timer: None,
-            output_blocked: None,
             output_listener_fd: None,
             outbuf: VecDeque::with_capacity(BUF_QUEUE_SIZE),
         }
@@ -311,33 +307,6 @@ impl Chardev {
         }
         cloned_output.lock().unwrap().flush()?;
         Ok(())
-    }
-
-    pub fn add_listen_for_tx(
-        &mut self,
-        listener_fd: Arc<EventFd>,
-        blocked: Arc<AtomicBool>,
-    ) -> Result<()> {
-        let event_notifier = EventNotifier::new(
-            NotifierOperation::AddEvents,
-            self.stream_fd.unwrap(),
-            None,
-            EventSet::OUT,
-            Vec::new(),
-        );
-
-        match EventLoop::update_event(vec![event_notifier], None) {
-            Ok(()) => {
-                self.output_blocked = Some(blocked.clone());
-                self.output_listener_fd = Some(listener_fd);
-                blocked.store(true, Ordering::Release);
-                Ok(())
-            }
-            Err(e) => {
-                blocked.store(false, Ordering::Release);
-                Err(e)
-            }
-        }
     }
 }
 
@@ -627,18 +596,12 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                 )]);
             }
 
-            if locked_cdev.output_blocked.is_some() && locked_cdev.output_listener_fd.is_some() {
+            if locked_cdev.output_listener_fd.is_some() {
                 let fd = locked_cdev.output_listener_fd.as_ref().unwrap();
                 if let Err(e) = fd.write(1) {
                     error!("Failed to write eventfd with error {:?}", e);
                     return None;
                 }
-                locked_cdev
-                    .output_blocked
-                    .as_ref()
-                    .unwrap()
-                    .store(false, Ordering::Release);
-                locked_cdev.output_blocked = None;
                 locked_cdev.output_listener_fd = None;
             }
 
