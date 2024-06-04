@@ -277,10 +277,6 @@ impl VirtioDevice for Serial {
                 device_broken: self.base.broken.clone(),
                 port: port.clone(),
                 nr,
-                outbuf: Vec::with_capacity(BUF_SIZE),
-                outbuf_consumed: 0,
-                outbuf_len: 0,
-                output_blocked: Arc::new(AtomicBool::new(false)),
             };
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
@@ -423,10 +419,6 @@ struct SerialPortHandler {
     device_broken: Arc<AtomicBool>,
     port: Option<Arc<Mutex<SerialPort>>>,
     nr: u32,
-    outbuf: Vec<u8>,
-    outbuf_consumed: usize,
-    outbuf_len: usize,
-    output_blocked: Arc<AtomicBool>,
 }
 
 /// Handler for queues which are used for control.
@@ -465,24 +457,17 @@ impl SerialPortHandler {
     }
 
     fn output_handle_internal(&mut self) -> Result<()> {
-        // If fd for tx is blocked, copy data to output buffer and wait for POLL_OUT event.
-        if self.output_blocked.load(Ordering::Acquire) {
-            return Ok(());
-        }
+        let mut queue_lock = self.output_queue.lock().unwrap();
 
-        match self.consume_outbuf() {
-            Ok(blocked) => {
-                if blocked {
-                    return Ok(());
+        loop {
+            if let Some(port) = self.port.as_ref() {
+                let locked_port = port.lock().unwrap();
+                let locked_cdev = locked_port.chardev.lock().unwrap();
+                if locked_cdev.outbuf_is_full() {
+                    break;
                 }
             }
-            Err(e) => bail!("Failed to consume out buffer with error {:?}", e),
-        }
 
-        let queue = self.output_queue.clone();
-        let mut queue_lock = queue.lock().unwrap();
-        let mut blocked = false;
-        while !blocked {
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -490,26 +475,24 @@ impl SerialPortHandler {
                 break;
             }
 
-            assert_eq!(self.outbuf_len, 0);
-
             // Discard requests when there is no port using this queue. Popping elements without
             // processing means discarding the request.
-            if self.port.is_some() {
+            if let Some(port) = self.port.as_ref() {
                 let iovec = elem.out_iovec;
                 let iovec_size = Element::iovec_size(&iovec);
-                if iovec_size as usize > self.outbuf.len() {
-                    self.outbuf.resize(iovec_size as usize, 0);
-                }
+                let mut buf = vec![0u8; iovec_size as usize];
+                let size = iov_to_buf(&self.mem_space, &iovec, &mut buf[..])? as u64;
 
-                let buffer = &mut self.outbuf[..];
-                let size = iov_to_buf(&self.mem_space, &iovec, buffer)? as u64;
-
-                assert_eq!(size, iovec_size);
-                self.outbuf_len = size as usize;
-
-                match self.consume_outbuf() {
-                    Ok(b) => blocked = b,
-                    Err(e) => bail!("Failed to consume out buffer with error {:?}", e),
+                let locked_port = port.lock().unwrap();
+                if locked_port.host_connected {
+                    if let Err(e) = locked_port
+                        .chardev
+                        .lock()
+                        .unwrap()
+                        .fill_outbuf(buf, Some(self.output_queue_evt.clone()))
+                    {
+                        error!("Failed to append elem buffer to chardev with error {:?}", e);
+                    }
                 }
                 trace::virtio_serial_output_data(iovec_size, size);
             }
@@ -540,59 +523,6 @@ impl SerialPortHandler {
         }
 
         Ok(())
-    }
-
-    fn clear_outbuf(&mut self) {
-        self.outbuf_len = 0;
-        self.outbuf_consumed = 0;
-    }
-
-    fn consume_outbuf(&mut self) -> Result<bool> {
-        if self.outbuf_len == 0 {
-            return Ok(false);
-        }
-
-        let port_cloned = self.port.clone();
-        let port_locked = port_cloned.as_ref().unwrap().lock().unwrap();
-        // Discard output buffer if this port's chardev is not connected.
-        if !port_locked.host_connected {
-            self.clear_outbuf();
-            return Ok(false);
-        }
-
-        let mut locked_chardev = port_locked.chardev.lock().unwrap();
-        if locked_chardev.output.is_none() {
-            error!("Port {} failed to get output interface", self.nr);
-            self.clear_outbuf();
-            return Ok(false);
-        }
-        let output = locked_chardev.output.clone();
-        let mut locked_output = output.as_ref().unwrap().lock().unwrap();
-
-        while self.outbuf_consumed < self.outbuf_len {
-            match locked_output.write(&self.outbuf[self.outbuf_consumed..self.outbuf_len]) {
-                Ok(size) => self.outbuf_consumed += size,
-                Err(e) => {
-                    let err_type = e.kind();
-                    if err_type != std::io::ErrorKind::WouldBlock
-                        && err_type != std::io::ErrorKind::Interrupted
-                    {
-                        self.clear_outbuf();
-                        bail!("chardev failed to write message with error {:?}", e);
-                    }
-                    if let Err(e) = locked_chardev.add_listen_for_tx(
-                        self.output_queue_evt.clone(),
-                        self.output_blocked.clone(),
-                    ) {
-                        error!("failed to wait for tx fd with error {:?}", e);
-                        continue;
-                    }
-                    return Ok(true);
-                }
-            }
-        }
-        self.clear_outbuf();
-        Ok(false)
     }
 
     fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
