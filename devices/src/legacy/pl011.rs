@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use log::{debug, error};
+use log::error;
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
@@ -352,20 +352,10 @@ impl SysBusDevOps for PL011 {
         match offset >> 2 {
             0 => {
                 let ch = value as u8;
-
-                if let Some(output) = &mut self.chardev.lock().unwrap().output {
-                    let mut locked_output = output.lock().unwrap();
-                    if let Err(e) = locked_output.write_all(&[ch]) {
-                        debug!("Failed to write to pl011 output fd, error is {:?}", e);
-                    }
-                    if let Err(e) = locked_output.flush() {
-                        debug!("Failed to flush pl011, error is {:?}", e);
-                    }
-                } else {
-                    debug!("Failed to get output fd");
+                if let Err(e) = self.chardev.lock().unwrap().fill_outbuf(vec![ch], None) {
+                    error!("Failed to append pl011 data to outbuf of chardev, {:?}", e);
                     return false;
                 }
-
                 self.state.int_level |= INT_TX;
                 self.interrupt();
             }
