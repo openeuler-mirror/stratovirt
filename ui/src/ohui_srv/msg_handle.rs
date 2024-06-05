@@ -11,13 +11,18 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::os::fd::{FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use util::byte_code::ByteCode;
 
-use super::{channel::OhUiChannel, msg::*};
+use super::{
+    channel::{recv_slice, send_obj, OhUiChannel},
+    msg::*,
+};
 use crate::{
     console::{get_active_console, graphic_hardware_ui_info},
     input::{
@@ -120,34 +125,46 @@ impl WindowState {
     }
 }
 
+#[derive(Default)]
 pub struct OhUiMsgHandler {
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
-    reader: Mutex<MsgReader>,
-    writer: MsgWriter,
+    reader: Mutex<Option<MsgReader>>,
+    writer: Mutex<Option<MsgWriter>>,
 }
 
 impl SyncLedstate for OhUiMsgHandler {
     fn sync_to_host(&self, state: u8) {
-        let body = LedstateEvent::new(state as u32);
-        if let Err(e) = self.writer.send_message(EventType::Ledstate, &body) {
-            error!("sync_to_host: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = LedstateEvent::new(state as u32);
+            if let Err(e) = writer.send_message(EventType::Ledstate, &body) {
+                error!("sync_to_host: failed to send message with error {e}");
+            }
         }
     }
 }
 
 impl OhUiMsgHandler {
-    pub fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
+    pub fn new() -> Self {
         OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
-            reader: Mutex::new(MsgReader::new(channel.clone())),
-            writer: MsgWriter::new(channel),
+            reader: Mutex::new(None),
+            writer: Mutex::new(None),
         }
     }
 
+    pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
+        let fd = channel.lock().unwrap().get_stream_raw_fd().unwrap();
+        *self.reader.lock().unwrap() = Some(MsgReader::new(fd));
+        *self.writer.lock().unwrap() = Some(MsgWriter::new(fd));
+    }
+
     pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {
-        let mut reader = self.reader.lock().unwrap();
+        let mut locked_reader = self.reader.lock().unwrap();
+        let reader = locked_reader
+            .as_mut()
+            .with_context(|| "handle_msg: no connection established")?;
         if !reader.recv()? {
             return Ok(());
         }
@@ -251,9 +268,11 @@ impl OhUiMsgHandler {
         hot_y: u32,
         size_per_pixel: u32,
     ) {
-        let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
-        if let Err(e) = self.writer.send_message(EventType::CursorDefine, &body) {
-            error!("handle_cursor_define: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
+            if let Err(e) = writer.send_message(EventType::CursorDefine, &body) {
+                error!("handle_cursor_define: failed to send message with error {e}");
+            }
         }
     }
 
@@ -321,45 +340,52 @@ impl OhUiMsgHandler {
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
-        let body = WindowInfoEvent::new(w, h);
-        if let Err(e) = self.writer.send_message(EventType::WindowInfo, &body) {
-            error!("send_windowinfo: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = WindowInfoEvent::new(w, h);
+            if let Err(e) = writer.send_message(EventType::WindowInfo, &body) {
+                error!("send_windowinfo: failed to send message with error {e}");
+            }
         }
     }
 
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
-        let body = FrameBufferDirtyEvent::new(x, y, w, h);
-        if let Err(e) = self.writer.send_message(EventType::FrameBufferDirty, &body) {
-            error!("handle_dirty_area: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = FrameBufferDirtyEvent::new(x, y, w, h);
+            if let Err(e) = writer.send_message(EventType::FrameBufferDirty, &body) {
+                error!("handle_dirty_area: failed to send message with error {e}");
+            }
         }
     }
 
     pub fn reset(&self) {
-        self.reader.lock().unwrap().clear();
+        *self.reader.lock().unwrap() = None;
+        *self.writer.lock().unwrap() = None;
     }
 }
 
 struct MsgReader {
-    /// socket to read
-    channel: Arc<Mutex<OhUiChannel>>,
     /// cache for header
-    pub header: EventMsgHdr,
+    header: EventMsgHdr,
     /// received byte size of header
-    pub header_ready: usize,
+    header_ready: usize,
     /// cache of body
-    pub body: Option<Vec<u8>>,
+    body: Option<Vec<u8>>,
     /// received byte size of body
-    pub body_ready: usize,
+    body_ready: usize,
+    /// UnixStream to read
+    sock: UnixStream,
 }
 
 impl MsgReader {
-    pub fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
+    pub fn new(fd: RawFd) -> Self {
         MsgReader {
-            channel,
             header: EventMsgHdr::default(),
             header_ready: 0,
             body: None,
             body_ready: 0,
+            // SAFETY: The fd is valid only when the new connection has been established
+            // and MsgReader instance would be destroyed when disconnected.
+            sock: unsafe { UnixStream::from_raw_fd(fd) },
         }
     }
 
@@ -382,11 +408,7 @@ impl MsgReader {
         }
 
         let buf = self.header.as_mut_bytes();
-        self.header_ready += self
-            .channel
-            .lock()
-            .unwrap()
-            .recv_slice(&mut buf[self.header_ready..])?;
+        self.header_ready += recv_slice(&mut self.sock, &mut buf[self.header_ready..])?;
         Ok(self.header_ready == EVENT_MSG_HDR_SIZE as usize)
     }
 
@@ -408,27 +430,32 @@ impl MsgReader {
         unsafe {
             buf.set_len(body_size);
         }
-        self.body_ready += self
-            .channel
-            .lock()
-            .unwrap()
-            .recv_slice(&mut buf[self.body_ready..])?;
+        self.body_ready += recv_slice(&mut self.sock, &mut buf[self.body_ready..])?;
 
         Ok(self.body_ready == body_size)
     }
 }
 
-struct MsgWriter(Arc<Mutex<OhUiChannel>>);
+struct MsgWriter {
+    sock: UnixStream,
+}
 
 impl MsgWriter {
-    fn new(channel: Arc<Mutex<OhUiChannel>>) -> Self {
-        MsgWriter(channel)
+    fn new(fd: RawFd) -> Self {
+        Self {
+            // SAFETY: The fd is valid only when the new connection has been established
+            // and MsgWriter instance would be destroyed when disconnected.
+            sock: unsafe { UnixStream::from_raw_fd(fd) },
+        }
     }
 
-    fn send_message<T: Sized + Default + ByteCode>(&self, t: EventType, body: &T) -> Result<()> {
-        let mut channel = self.0.lock().unwrap();
+    fn send_message<T: Sized + Default + ByteCode>(
+        &mut self,
+        t: EventType,
+        body: &T,
+    ) -> Result<()> {
         let hdr = EventMsgHdr::new(t);
-        channel.send_by_obj(&hdr)?;
-        channel.send_by_obj(body)
+        send_obj(&mut self.sock, &hdr)?;
+        send_obj(&mut self.sock, body)
     }
 }
