@@ -810,7 +810,7 @@ impl UsbDevice for UsbCamera {
                 }
             }
             Err(e) => {
-                warn!("Camera descriptor error {:?}", e);
+                warn!("Received incorrect USB Camera descriptor message: {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
