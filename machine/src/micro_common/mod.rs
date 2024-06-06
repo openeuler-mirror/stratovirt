@@ -157,54 +157,54 @@ impl LightMachine {
     }
 
     pub(crate) fn create_replaceable_devices(&mut self) -> Result<()> {
-        let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::new(
                 VirtioBlkDevConfig::default(),
                 DriveConfig::default(),
                 self.get_drive_files(),
             )));
-            let virtio_mmio =
-                VirtioMmioDevice::new(&self.base.sys_mem, id.to_string(), block.clone());
-            rpl_devs.push(virtio_mmio);
-
             MigrationManager::register_device_instance(
                 BlockState::descriptor(),
-                block,
+                block.clone(),
+                &id.to_string(),
+            );
+
+            let blk_mmio = self.add_virtio_mmio_device(id.to_string(), block.clone())?;
+            let info = MmioReplaceableDevInfo {
+                device: block,
+                id: id.to_string(),
+                used: false,
+            };
+            self.replaceable_info.devices.lock().unwrap().push(info);
+            MigrationManager::register_transport_instance(
+                VirtioMmioState::descriptor(),
+                blk_mmio,
                 &id.to_string(),
             );
         }
         for id in 0..MMIO_REPLACEABLE_NET_NR {
+            let total_id = id + MMIO_REPLACEABLE_BLK_NR;
             let net = Arc::new(Mutex::new(Net::new(
                 NetworkInterfaceConfig::default(),
                 NetDevcfg::default(),
             )));
-            let virtio_mmio =
-                VirtioMmioDevice::new(&self.base.sys_mem, id.to_string(), net.clone());
-            rpl_devs.push(virtio_mmio);
-
             MigrationManager::register_device_instance(
                 VirtioNetState::descriptor(),
-                net,
-                &id.to_string(),
+                net.clone(),
+                &total_id.to_string(),
             );
-        }
 
-        for (id, dev) in rpl_devs.into_iter().enumerate() {
-            self.replaceable_info
-                .devices
-                .lock()
-                .unwrap()
-                .push(MmioReplaceableDevInfo {
-                    device: dev.device.clone(),
-                    id: id.to_string(),
-                    used: false,
-                });
-
+            let net_mmio = self.add_virtio_mmio_device(total_id.to_string(), net.clone())?;
+            let info = MmioReplaceableDevInfo {
+                device: net,
+                id: total_id.to_string(),
+                used: false,
+            };
+            self.replaceable_info.devices.lock().unwrap().push(info);
             MigrationManager::register_transport_instance(
                 VirtioMmioState::descriptor(),
-                self.realize_virtio_mmio_device(dev)?,
-                &id.to_string(),
+                net_mmio,
+                &total_id.to_string(),
             );
         }
 
@@ -400,13 +400,13 @@ impl LightMachine {
             .remove(&net_cfg.netdev)
             .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
         if netdev_cfg.vhost_type().is_some() {
-            let device = if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
+            if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
                 let net = Arc::new(Mutex::new(VhostKern::Net::new(
                     &net_cfg,
                     netdev_cfg,
                     &self.base.sys_mem,
                 )));
-                VirtioMmioDevice::new(&self.base.sys_mem, net_cfg.id.clone(), net)
+                self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
             } else {
                 let chardev = netdev_cfg.chardev.clone().with_context(|| {
                     format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
@@ -422,9 +422,8 @@ impl LightMachine {
                     sock_path,
                     &self.base.sys_mem,
                 )));
-                VirtioMmioDevice::new(&self.base.sys_mem, net_cfg.id.clone(), net)
+                self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
             };
-            self.realize_virtio_mmio_device(device)?;
         } else {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
             if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
@@ -471,10 +470,14 @@ impl LightMachine {
         Ok(())
     }
 
-    pub(crate) fn realize_virtio_mmio_device(
+    pub(crate) fn add_virtio_mmio_device(
         &mut self,
-        dev: VirtioMmioDevice,
+        name: String,
+        device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
+        let sys_mem = self.get_sys_mem().clone();
+        let dev = VirtioMmioDevice::new(&sys_mem, name, device);
+
         let region_base = self.base.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         let realized_virtio_mmio_device = VirtioMmioDevice::realize(
