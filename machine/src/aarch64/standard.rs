@@ -258,7 +258,7 @@ impl StdMachine {
         Ok(())
     }
 
-    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> bool {
         let locked_vm = vm.lock().unwrap();
         let vmstate = {
             let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
@@ -270,12 +270,13 @@ impl StdMachine {
             if locked_vm.shutdown_req.write(1).is_err() {
                 error!("Failed to send shutdown request.")
             }
+            return false;
         }
 
         EventLoop::kick_all();
         info!("vm destroy");
 
-        Ok(())
+        true
     }
 
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {

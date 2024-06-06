@@ -343,7 +343,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = shutdown_req.read();
-            if StdMachine::handle_destroy_request(&clone_vm).is_ok() {
+            if StdMachine::handle_destroy_request(&clone_vm) {
                 Some(gen_delete_notifiers(&[shutdown_req_fd]))
             } else {
                 None
