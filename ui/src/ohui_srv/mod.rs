@@ -180,8 +180,8 @@ impl OhUiServer {
         Ok(OhUiServer {
             passthru: OnceCell::new(),
             surface: RwLock::new(GuestSurface::new()),
-            channel: channel.clone(),
-            msg_handler: Arc::new(OhUiMsgHandler::new(channel)),
+            channel,
+            msg_handler: Arc::new(OhUiMsgHandler::new()),
             connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
             cursorbuffer,
@@ -266,6 +266,7 @@ impl OhUiServer {
     fn set_connect(&self, conn: bool) {
         self.connected.store(conn, Ordering::Relaxed);
         if conn {
+            self.msg_handler.update_sock(self.channel.clone());
             register_led_sync(self.msg_handler.clone());
         } else {
             unregister_led_sync();

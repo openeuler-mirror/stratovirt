@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 
@@ -22,9 +22,8 @@ use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
 
 pub struct OhUiChannel {
-    pub path: String,
-    pub listener: SocketListener,
-    pub stream: Option<SocketStream>,
+    listener: SocketListener,
+    stream: Option<SocketStream>,
 }
 
 impl OhUiChannel {
@@ -41,7 +40,6 @@ impl OhUiChannel {
         });
 
         Ok(OhUiChannel {
-            path: String::from(path),
             listener,
             stream: None,
         })
@@ -60,63 +58,50 @@ impl OhUiChannel {
         Ok(())
     }
 
-    pub fn send_by_obj<T: Sized + Default + ByteCode>(&mut self, obj: &T) -> Result<()> {
-        let stream = self.get_stream()?;
-        let slice = obj.as_bytes();
-        let mut left = slice.len();
-        let mut count = 0_usize;
-
-        while left > 0 {
-            let buf = &slice[count..];
-            match stream.write(buf) {
-                Ok(n) => {
-                    left -= n;
-                    count += n;
-                }
-                Err(e) => {
-                    if std::io::Error::last_os_error().raw_os_error().unwrap() == libc::EAGAIN {
-                        continue;
-                    }
-                    bail!(e);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn recv_slice(&mut self, data: &mut [u8]) -> Result<usize> {
-        let stream = self.get_stream()?;
-        let len = data.len();
-        if len == 0 {
-            return Ok(0);
-        }
-        let ret = stream.read(data);
-        match ret {
-            Ok(n) => Ok(n),
-            Err(e) => {
-                if std::io::Error::last_os_error()
-                    .raw_os_error()
-                    .unwrap_or(libc::EIO)
-                    != libc::EAGAIN
-                {
-                    bail!("recv_slice(): error occurred: {:?}", e);
-                }
-                Ok(0)
-            }
-        }
-    }
-
     pub fn disconnect(&mut self) {
-        if self.stream.is_some() {
-            self.stream = None;
-        }
+        self.stream = None;
     }
+}
 
-    fn get_stream(&mut self) -> Result<&mut SocketStream> {
-        if self.stream.is_some() {
-            Ok(self.stream.as_mut().unwrap())
-        } else {
-            bail!("No connection established")
+pub fn recv_slice(stream: &mut dyn Read, data: &mut [u8]) -> Result<usize> {
+    let len = data.len();
+    let mut ret = 0;
+
+    while ret < len {
+        match stream.read(&mut data[ret..len]) {
+            Ok(0) => break,
+            Ok(n) => ret += n,
+            Err(e) => {
+                let ek = e.kind();
+                if ek != ErrorKind::WouldBlock && ek != ErrorKind::Interrupted {
+                    bail!("recv_slice: error occurred: {:?}", e);
+                }
+                break;
+            }
         }
     }
+    Ok(ret)
+}
+
+pub fn send_obj<T: Sized + Default + ByteCode>(stream: &mut dyn Write, obj: &T) -> Result<()> {
+    let slice = obj.as_bytes();
+    let mut left = slice.len();
+    let mut count = 0_usize;
+
+    while left > 0 {
+        match stream.write(&slice[count..]) {
+            Ok(n) => {
+                left -= n;
+                count += n;
+            }
+            Err(e) => {
+                let ek = e.kind();
+                if ek == ErrorKind::WouldBlock || ek == ErrorKind::Interrupted {
+                    continue;
+                }
+                bail!(e);
+            }
+        }
+    }
+    Ok(())
 }
