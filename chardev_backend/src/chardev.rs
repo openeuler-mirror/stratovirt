@@ -271,7 +271,7 @@ impl Chardev {
                 if self.output.is_none() {
                     bail!("chardev has no output");
                 }
-                return file_write_direct(self.output.as_ref().unwrap().clone(), buf);
+                return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
             ChardevType::Socket { .. } => (),
         }
@@ -298,9 +298,9 @@ impl Chardev {
     }
 
     fn consume_outbuf(&mut self) -> Result<()> {
-        let cloned_output = self.output.as_ref().unwrap().clone();
+        let output = self.output.as_ref().unwrap();
         while !self.outbuf.is_empty() {
-            if write_buffer_out(cloned_output.clone(), self.outbuf.front_mut().unwrap())? {
+            if write_buffer_async(output.clone(), self.outbuf.front_mut().unwrap())? {
                 break;
             }
             self.outbuf.pop_front();
@@ -309,7 +309,7 @@ impl Chardev {
     }
 }
 
-fn file_write_direct(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8>) -> Result<()> {
+fn write_buffer_sync(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8>) -> Result<()> {
     let len = buf.len();
     let mut written = 0;
     let mut locked_writer = writer.lock().unwrap();
@@ -327,7 +327,7 @@ fn file_write_direct(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8
 }
 
 // If write is blocked, return true. Otherwise return false.
-fn write_buffer_out(
+fn write_buffer_async(
     writer: Arc<Mutex<dyn CommunicatOutInterface>>,
     buf: &mut Vec<u8>,
 ) -> Result<bool> {
