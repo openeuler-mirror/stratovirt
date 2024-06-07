@@ -305,7 +305,6 @@ impl Chardev {
             }
             self.outbuf.pop_front();
         }
-        cloned_output.lock().unwrap().flush()?;
         Ok(())
     }
 }
@@ -321,6 +320,9 @@ fn file_write_direct(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8
             Err(e) => bail!("chardev failed to write file with error {:?}", e),
         }
     }
+    locked_writer
+        .flush()
+        .with_context(|| "chardev failed to flush")?;
     Ok(())
 }
 
@@ -346,6 +348,9 @@ fn write_buffer_out(
             }
         }
     }
+    locked_writer
+        .flush()
+        .with_context(|| "chardev failed to flush")?;
 
     if written == len {
         return Ok(false);
