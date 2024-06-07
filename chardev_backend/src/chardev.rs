@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::VecDeque;
 use std::fs::{read_link, File, OpenOptions};
-use std::io::{Stdin, Stdout};
+use std::io::{ErrorKind, Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,6 +40,8 @@ use util::loop_context::{
 use util::set_termi_raw_mode;
 use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
+
+const BUF_QUEUE_SIZE: usize = 128;
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
@@ -87,10 +89,10 @@ pub struct Chardev {
     /// Scheduled DPC to unpause input stream.
     /// Unpause must be done inside event-loop
     unpause_timer: Option<u64>,
-    /// output stream fd is blocked
-    output_blocked: Option<Arc<AtomicBool>>,
     /// output listener to notify when output stream fd can be written
     output_listener_fd: Option<Arc<EventFd>>,
+    /// output buffer queue
+    outbuf: VecDeque<Vec<u8>>,
 }
 
 impl Chardev {
@@ -106,8 +108,8 @@ impl Chardev {
             dev: None,
             wait_port: false,
             unpause_timer: None,
-            output_blocked: None,
             output_listener_fd: None,
+            outbuf: VecDeque::with_capacity(BUF_QUEUE_SIZE),
         }
     }
 
@@ -255,11 +257,35 @@ impl Chardev {
         }
     }
 
-    pub fn add_listen_for_tx(
-        &mut self,
-        listener_fd: Arc<EventFd>,
-        blocked: Arc<AtomicBool>,
-    ) -> Result<()> {
+    fn clear_outbuf(&mut self) {
+        self.outbuf.clear();
+    }
+
+    pub fn outbuf_is_full(&self) -> bool {
+        self.outbuf.len() == self.outbuf.capacity()
+    }
+
+    pub fn fill_outbuf(&mut self, buf: Vec<u8>, listener_fd: Option<Arc<EventFd>>) -> Result<()> {
+        match self.backend {
+            ChardevType::File { .. } | ChardevType::Pty { .. } | ChardevType::Stdio { .. } => {
+                if self.output.is_none() {
+                    bail!("chardev has no output");
+                }
+                return file_write_direct(self.output.as_ref().unwrap().clone(), buf);
+            }
+            ChardevType::Socket { .. } => (),
+        }
+
+        if self.output.is_none() {
+            return Ok(());
+        }
+
+        if self.outbuf_is_full() {
+            bail!("Failed to append buffer because output buffer queue is full");
+        }
+        self.outbuf.push_back(buf);
+        self.output_listener_fd = listener_fd;
+
         let event_notifier = EventNotifier::new(
             NotifierOperation::AddEvents,
             self.stream_fd.unwrap(),
@@ -267,20 +293,65 @@ impl Chardev {
             EventSet::OUT,
             Vec::new(),
         );
+        EventLoop::update_event(vec![event_notifier], None)?;
+        Ok(())
+    }
 
-        match EventLoop::update_event(vec![event_notifier], None) {
-            Ok(()) => {
-                self.output_blocked = Some(blocked.clone());
-                self.output_listener_fd = Some(listener_fd);
-                blocked.store(true, Ordering::Release);
-                Ok(())
+    fn consume_outbuf(&mut self) -> Result<()> {
+        let cloned_output = self.output.as_ref().unwrap().clone();
+        while !self.outbuf.is_empty() {
+            if write_buffer_out(cloned_output.clone(), self.outbuf.front_mut().unwrap())? {
+                break;
             }
+            self.outbuf.pop_front();
+        }
+        cloned_output.lock().unwrap().flush()?;
+        Ok(())
+    }
+}
+
+fn file_write_direct(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8>) -> Result<()> {
+    let len = buf.len();
+    let mut written = 0;
+    let mut locked_writer = writer.lock().unwrap();
+
+    while written < len {
+        match locked_writer.write(&buf[written..len]) {
+            Ok(n) => written += n,
+            Err(e) => bail!("chardev failed to write file with error {:?}", e),
+        }
+    }
+    Ok(())
+}
+
+// If write is blocked, return true. Otherwise return false.
+fn write_buffer_out(
+    writer: Arc<Mutex<dyn CommunicatOutInterface>>,
+    buf: &mut Vec<u8>,
+) -> Result<bool> {
+    let len = buf.len();
+    let mut locked_writer = writer.lock().unwrap();
+    let mut written = 0;
+
+    while written < len {
+        match locked_writer.write(&buf[written..len]) {
+            Ok(0) => break,
+            Ok(n) => written += n,
             Err(e) => {
-                blocked.store(false, Ordering::Release);
-                Err(e)
+                let err_type = e.kind();
+                if err_type != ErrorKind::WouldBlock && err_type != ErrorKind::Interrupted {
+                    bail!("chardev failed to write data with error {:?}", e);
+                }
+                break;
             }
         }
     }
+
+    if written == len {
+        return Ok(false);
+    }
+    buf.drain(0..written);
+    Ok(true)
 }
 
 fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
@@ -513,27 +584,38 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             }
 
             let mut locked_cdev = handling_chardev.lock().unwrap();
-            if locked_cdev.output_blocked.is_some() && locked_cdev.output_listener_fd.is_some() {
+            if let Err(e) = locked_cdev.consume_outbuf() {
+                error!("Failed to consume outbuf with error {:?}", e);
+                locked_cdev.clear_outbuf();
+                return Some(vec![EventNotifier::new(
+                    NotifierOperation::DeleteEvents,
+                    fd,
+                    None,
+                    EventSet::OUT,
+                    Vec::new(),
+                )]);
+            }
+
+            if locked_cdev.output_listener_fd.is_some() {
                 let fd = locked_cdev.output_listener_fd.as_ref().unwrap();
                 if let Err(e) = fd.write(1) {
                     error!("Failed to write eventfd with error {:?}", e);
                     return None;
                 }
-                locked_cdev
-                    .output_blocked
-                    .as_ref()
-                    .unwrap()
-                    .store(false, Ordering::Release);
-                locked_cdev.output_blocked = None;
                 locked_cdev.output_listener_fd = None;
             }
-            Some(vec![EventNotifier::new(
-                NotifierOperation::DeleteEvents,
-                fd,
-                None,
-                EventSet::OUT,
-                Vec::new(),
-            )])
+
+            if locked_cdev.outbuf.is_empty() {
+                Some(vec![EventNotifier::new(
+                    NotifierOperation::DeleteEvents,
+                    fd,
+                    None,
+                    EventSet::OUT,
+                    Vec::new(),
+                )])
+            } else {
+                None
+            }
         });
 
         Some(vec![EventNotifier::new(

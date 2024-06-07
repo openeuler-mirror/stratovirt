@@ -41,6 +41,13 @@ impl SocketStream {
             } => link_description.clone(),
         }
     }
+
+    pub fn set_nonblocking(&mut self, nonblocking: bool) -> IoResult<()> {
+        match self {
+            SocketStream::Tcp { stream, .. } => stream.set_nonblocking(nonblocking),
+            SocketStream::Unix { stream, .. } => stream.set_nonblocking(nonblocking),
+        }
+    }
 }
 
 impl AsRawFd for SocketStream {
@@ -132,6 +139,7 @@ impl SocketListener {
         match self {
             SocketListener::Tcp { listener, address } => {
                 let (stream, sock_addr) = listener.accept()?;
+                stream.set_nonblocking(true)?;
                 let peer_address = sock_addr.to_string();
                 let link_description = format!(
                     "{{ protocol: tcp, address: {}, peer: {} }}",
@@ -144,6 +152,7 @@ impl SocketListener {
             }
             SocketListener::Unix { listener, address } => {
                 let (stream, _) = listener.accept()?;
+                stream.set_nonblocking(true)?;
                 let link_description = format!("{{ protocol: unix, address: {} }}", address);
                 Ok(SocketStream::Unix {
                     link_description,
