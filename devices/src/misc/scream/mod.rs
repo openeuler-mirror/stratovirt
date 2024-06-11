@@ -40,6 +40,7 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use machine_manager::machine::PauseNotify;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
@@ -337,27 +338,29 @@ impl StreamData {
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
         let addr = hva + capt.offset as u64;
-        let mut locked_interface = interface.lock().unwrap();
 
-        locked_interface.pre_receive(addr, capt);
+        interface.lock().unwrap().pre_receive(addr, capt);
         while capt.is_started != 0 {
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
 
             let recv_chunks_cnt: i32 = if get_record_authority() {
-                locked_interface.receive(self)
+                interface.lock().unwrap().receive(self)
             } else {
-                locked_interface.destroy();
+                interface.lock().unwrap().destroy();
                 0
             };
-            if recv_chunks_cnt > 0 {
-                self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
 
-                // Make sure chunk_idx write does not bypass audio chunk write.
-                fence(Ordering::SeqCst);
-
-                capt.chunk_idx = self.chunk_idx;
+            match recv_chunks_cnt.cmp(&0) {
+                std::cmp::Ordering::Less => thread::sleep(time::Duration::from_millis(100)),
+                std::cmp::Ordering::Greater => {
+                    self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
+                    // Make sure chunk_idx write does not bypass audio chunk write.
+                    fence(Ordering::SeqCst);
+                    capt.chunk_idx = self.chunk_idx;
+                }
+                std::cmp::Ordering::Equal => continue,
             }
         }
     }
@@ -430,6 +433,16 @@ pub struct Scream {
     size: u64,
     config: ScreamConfig,
     token_id: Option<Arc<RwLock<u64>>>,
+    interface_resource: RwLock<Vec<Arc<Mutex<dyn AudioInterface>>>>,
+}
+
+impl PauseNotify for Scream {
+    fn notify(&self, paused: bool) {
+        let interfaces = self.interface_resource.read().unwrap();
+        for interface in interfaces.iter() {
+            interface.lock().unwrap().pause(paused);
+        }
+    }
 }
 
 impl Scream {
@@ -440,6 +453,7 @@ impl Scream {
             size,
             config,
             token_id,
+            interface_resource: RwLock::new(Vec::new()),
         }
     }
 
@@ -464,6 +478,10 @@ impl Scream {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
+        self.interface_resource
+            .write()
+            .unwrap()
+            .push(interface.clone());
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
@@ -490,6 +508,10 @@ impl Scream {
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         let _ti = self.token_id.clone();
+        self.interface_resource
+            .write()
+            .unwrap()
+            .push(interface.clone());
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -516,7 +538,7 @@ impl Scream {
         Ok(())
     }
 
-    pub fn realize(mut self, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
+    pub fn realize(&mut self, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
         let header_size = mem::size_of::<ShmemHeader>() as u64;
         if self.size < header_size {
             bail!(
@@ -554,4 +576,5 @@ pub trait AudioInterface: Send {
     fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
     fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
+    fn pause(&mut self, _paused: bool) {}
 }

@@ -69,7 +69,7 @@ use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface, VmState,
+    MigrateInterface, PauseNotify, VmState,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
@@ -461,6 +461,10 @@ impl MachineOps for StdMachine {
         sys_mem
             .root()
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
+    }
+
+    fn register_vm_pause_notifier(&mut self, notifier: Arc<dyn PauseNotify>) {
+        self.base.pause_notifiers.push(notifier);
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {

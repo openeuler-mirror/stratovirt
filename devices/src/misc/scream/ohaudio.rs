@@ -27,6 +27,7 @@ trait OhAudioProcess {
     fn destroy(&mut self);
     fn preprocess(&mut self, _start_addr: u64, _sh_header: &ShmemStreamHeader) {}
     fn process(&mut self, recv_data: &StreamData) -> i32;
+    fn pause(&mut self, paused: bool);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +46,7 @@ struct OhAudioRender {
     stream_data: Arc<Mutex<Vec<StreamUnit>>>,
     data_size: AtomicI32,
     start: bool,
+    pause: bool,
     flushing: AtomicBool,
 }
 
@@ -55,6 +57,7 @@ impl Default for OhAudioRender {
             stream_data: Arc::new(Mutex::new(Vec::with_capacity(STREAM_DATA_VEC_CAPACITY))),
             data_size: AtomicI32::new(0),
             start: false,
+            pause: false,
             flushing: AtomicBool::new(false),
         }
     }
@@ -117,14 +120,26 @@ impl OhAudioProcess for OhAudioRender {
         self.start
     }
 
+    fn pause(&mut self, paused: bool) {
+        self.pause = paused;
+        if paused {
+            self.destroy();
+        }
+    }
+
     fn destroy(&mut self) {
         if self.ctx.is_some() {
             if self.start {
-                self.flush();
+                if !self.pause {
+                    self.flush();
+                }
                 self.ctx.as_mut().unwrap().stop();
                 self.start = false;
             }
             self.ctx = None;
+        }
+        if self.pause {
+            return;
         }
         let mut locked_data = self.stream_data.lock().unwrap();
         locked_data.clear();
@@ -133,6 +148,9 @@ impl OhAudioProcess for OhAudioRender {
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
+        if self.pause {
+            return 0;
+        }
         self.check_fmt_update(recv_data);
 
         fence(Ordering::Acquire);
@@ -175,6 +193,7 @@ struct OhAudioCapture {
     shm_len: u64,
     cur_pos: u64,
     start: bool,
+    pause: bool,
 }
 
 impl OhAudioCapture {
@@ -220,6 +239,13 @@ impl OhAudioProcess for OhAudioCapture {
         }
     }
 
+    fn pause(&mut self, paused: bool) {
+        self.pause = paused;
+        if paused {
+            self.destroy();
+        }
+    }
+
     fn destroy(&mut self) {
         if self.ctx.is_some() {
             if self.start {
@@ -240,13 +266,16 @@ impl OhAudioProcess for OhAudioCapture {
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
+        if self.pause {
+            return -1;
+        }
         self.check_fmt_update(recv_data);
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 
         if !self.start && !self.init(recv_data) {
             self.destroy();
-            return 0;
+            return -1;
         }
         self.new_chunks.store(0, Ordering::Release);
         while self.new_chunks.load(Ordering::Acquire) == 0 {
@@ -407,6 +436,10 @@ impl AudioInterface for OhAudio {
 
     fn destroy(&mut self) {
         self.processor.destroy();
+    }
+
+    fn pause(&mut self, paused: bool) {
+        self.processor.pause(paused);
     }
 }
 
