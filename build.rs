@@ -16,7 +16,7 @@ fn ohos_env_configure() {
         println!("cargo:rustc-link-arg=--verbose");
         println!("cargo:rustc-link-arg=--sysroot={}/sysroot", ohos_sdk_path);
         println!("cargo:rustc-link-arg=-lpixman_static");
-        if cfg!(feature = "usb-host") {
+        if cfg!(feature = "usb_host") {
             println!("cargo:rustc-link-arg=-lusb-1.0");
         }
         println!(
