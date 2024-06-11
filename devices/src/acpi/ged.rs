@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
 use crate::{Device, DeviceBase};
 use acpi::{
     AcpiError, AmlActiveLevel, AmlAddressSpaceType, AmlAnd, AmlBuilder, AmlDevice, AmlEdgeLevel,
@@ -97,12 +97,12 @@ impl Ged {
         region_size: u64,
     ) -> Result<Arc<Mutex<Ged>>> {
         self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "Ged")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
         self.battery_present = battery_present;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "Ged")?;
+        sysbus.attach_device(&dev)?;
 
         let ged = dev.lock().unwrap();
         ged.register_acpi_powerdown_event(ged_event.power_button)
@@ -212,10 +212,6 @@ impl SysBusDevOps for Ged {
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

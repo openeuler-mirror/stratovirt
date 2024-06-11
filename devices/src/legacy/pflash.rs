@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
@@ -214,7 +214,7 @@ impl PFlash {
         backend: Option<File>,
     ) -> Result<()> {
         let region_size = Self::flash_region_size(region_max_size, &backend, self.read_only)?;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "PflashRom")
             .with_context(|| "Failed to allocate system resource for PFlash.")?;
 
         let host_mmap = Arc::new(HostMemMapping::new(
@@ -893,20 +893,15 @@ impl SysBusDevOps for PFlash {
         }
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        res.irq = 0;
+        self.sysbusdev_base_mut()
+            .set_sys(0, region_base, region_size, region_name);
         Ok(())
     }
 

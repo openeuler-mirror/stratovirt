@@ -124,7 +124,7 @@ impl RTC {
                 res: SysRes {
                     region_base: RTC_PORT_INDEX,
                     region_size: 8,
-                    irq: -1,
+                    ..Default::default()
                 },
                 interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
@@ -269,10 +269,10 @@ impl RTC {
     pub fn realize(mut self, sysbus: &mut SysBus) -> Result<()> {
         let region_base = self.base.res.region_base;
         let region_size = self.base.res.region_size;
-        self.set_sys_resource(sysbus, region_base, region_size)?;
+        self.set_sys_resource(sysbus, region_base, region_size, "RTC")?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "RTC")?;
+        sysbus.attach_device(&dev)?;
         Ok(())
     }
 
@@ -389,10 +389,6 @@ impl SysBusDevOps for RTC {
         } else {
             self.write_data(data)
         }
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 
     fn reset(&mut self) -> Result<()> {

@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
 use crate::{Device, DeviceBase};
 use acpi::{
     AcpiError, AcpiLocalApic, AmlAcquire, AmlAddressSpaceType, AmlArg, AmlBuffer, AmlBuilder,
@@ -99,11 +99,11 @@ impl CpuController {
         self.max_cpus = max_cpus;
         self.cpu_config = Some(cpu_config);
         self.hotplug_cpu_req = Some(hotplug_cpu_req);
-        self.set_sys_resource(sysbus, region_base, region_size)
+        self.set_sys_resource(sysbus, region_base, region_size, "CPUController")
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
         let dev = Arc::new(Mutex::new(self));
         let ret_dev = dev.clone();
-        sysbus.attach_device(&dev, region_base, region_size, "CPUController")?;
+        sysbus.attach_device(&dev)?;
         Ok(ret_dev)
     }
 
@@ -329,15 +329,11 @@ impl SysBusDevOps for CpuController {
         }
         true
     }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
 }
 
 impl AmlBuilder for CpuController {
     fn aml_bytes(&self) -> Vec<u8> {
-        let res = self.base.res;
+        let res = self.base.res.clone();
         let mut cpu_hotplug_controller = AmlDevice::new("PRES");
         cpu_hotplug_controller.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0A06")));
         cpu_hotplug_controller.append_child(AmlNameDecl::new(
