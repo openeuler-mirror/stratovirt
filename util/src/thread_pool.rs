@@ -20,7 +20,7 @@ use log::error;
 use crate::link_list::{List, Node};
 
 const MIN_THREADS: u64 = 1;
-const MAX_THREADS: u64 = 64;
+const MAX_THREADS: u64 = 10;
 type PoolTask = Box<dyn TaskOperation>;
 
 pub trait TaskOperation: Sync + Send {
