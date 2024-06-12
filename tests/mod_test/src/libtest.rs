@@ -355,7 +355,12 @@ pub fn test_init(extra_arg: Vec<&str>) -> TestState {
 
     let listener = init_socket(&test_socket);
 
-    let child = Command::new(binary_path)
+    let mut cmd = Command::new(binary_path);
+
+    #[cfg(target_env = "ohos")]
+    cmd.args(["-disable-seccomp"]);
+
+    let child = cmd
         .args(["-accel", "test"])
         .args(["-qmp", &format!("unix:{},server,nowait", qmp_socket)])
         .args(["-mod-test", &test_socket])
