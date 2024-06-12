@@ -308,7 +308,7 @@ Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: vmm-sys-util 0.11.1
+Software: vmm-sys-util 0.12.1
 Copyright notice:
 Copyright 2019 Intel Corporation. All Rights Reserved.
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -318,7 +318,7 @@ Copyright (C) 2019 Alibaba Cloud Computing. All rights reserved.
 Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Copyright 2018 The Chromium OS Authors. All rights reserved.
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-License: Apache License Version 2.0 or BSD 3-Clause
+License: BSD 3-Clause
 Please see above.
 
 Software: libusb1-sys 0.6.4
@@ -356,7 +356,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Software: kvm-ioctls 0.13.0
+Software: kvm-ioctls 0.16.0
 Copyright notice:
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Portions Copyright 2017 The Chromium OS Authors. All rights reserved.
@@ -365,7 +365,7 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: kvm-bindings 0.6.0
+Software: kvm-bindings 0.7.0
 Copyright notice:
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: The APACHE 2.0 License
