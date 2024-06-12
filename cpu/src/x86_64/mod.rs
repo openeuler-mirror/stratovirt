@@ -120,7 +120,7 @@ impl X86CPUTopology {
 /// The state of vCPU's register.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
+#[derive(Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
     max_vcpus: u32,
@@ -140,6 +140,34 @@ pub struct X86CPUState {
     pub xsave: Xsave,
     pub xcrs: Xcrs,
     pub debugregs: DebugRegs,
+}
+
+impl Clone for X86CPUState {
+    fn clone(&self) -> Self {
+        let mut xsave: Xsave = Default::default();
+        // we just clone xsave.region, because xsave.extra does not save
+        // valid values and it is not allowed to be cloned.
+        xsave.region = self.xsave.region;
+        Self {
+            max_vcpus: self.max_vcpus,
+            nr_threads: self.nr_threads,
+            nr_cores: self.nr_cores,
+            nr_dies: self.nr_dies,
+            nr_sockets: self.nr_sockets,
+            apic_id: self.apic_id,
+            regs: self.regs,
+            sregs: self.sregs,
+            fpu: self.fpu,
+            mp_state: self.mp_state,
+            lapic: self.lapic,
+            msr_len: self.msr_len,
+            msr_list: self.msr_list,
+            cpu_events: self.cpu_events,
+            xsave,
+            xcrs: self.xcrs,
+            debugregs: self.debugregs,
+        }
+    }
 }
 
 impl X86CPUState {
@@ -181,7 +209,8 @@ impl X86CPUState {
         self.msr_len = locked_cpu_state.msr_len;
         self.msr_list = locked_cpu_state.msr_list;
         self.cpu_events = locked_cpu_state.cpu_events;
-        self.xsave = locked_cpu_state.xsave;
+        self.xsave = Default::default();
+        self.xsave.region = locked_cpu_state.xsave.region;
         self.xcrs = locked_cpu_state.xcrs;
         self.debugregs = locked_cpu_state.debugregs;
     }
@@ -512,11 +541,11 @@ impl StateTransfer for CPU {
     }
 
     fn set_state(&self, state: &[u8]) -> Result<()> {
-        let cpu_state = *X86CPUState::from_bytes(state)
+        let cpu_state = X86CPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
-        *cpu_state_locked = cpu_state;
+        *cpu_state_locked = cpu_state.clone();
 
         Ok(())
     }
