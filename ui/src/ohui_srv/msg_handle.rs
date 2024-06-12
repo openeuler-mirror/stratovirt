@@ -170,18 +170,8 @@ impl OhUiMsgHandler {
         }
 
         let hdr = &reader.header;
-        let body_size = hdr.size as usize;
         let event_type = hdr.event_type;
-        let expect_body_size = event_msg_data_len(hdr.event_type);
-        if body_size != expect_body_size {
-            reader.clear();
-            bail!(
-                "{:?} data len is wrong, we want {}, but receive {}",
-                event_type,
-                expect_body_size,
-                body_size
-            );
-        }
+        let body_size = hdr.size as size;
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
@@ -391,15 +381,30 @@ impl MsgReader {
 
     pub fn recv(&mut self) -> Result<bool> {
         if self.recv_header()? {
+            self.check_header()?;
             return self.recv_body();
         }
         Ok(false)
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.header_ready = 0;
         self.body_ready = 0;
         self.body = None;
+    }
+
+    fn check_header(&mut self) -> Result<()> {
+        let expected_size = event_msg_data_len(self.header.event_type);
+        if expected_size != self.header.size as usize {
+            self.clear();
+            bail!(
+                "{:?} data len is wrong, we want {}, but receive {}",
+                self.header.event_type as EventType,
+                expected_size,
+                self.header.size as usize,
+            );
+        }
+        Ok(())
     }
 
     fn recv_header(&mut self) -> Result<bool> {
