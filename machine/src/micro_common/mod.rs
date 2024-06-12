@@ -302,7 +302,7 @@ impl LightMachine {
             if cfg_any.downcast_ref::<NetDevcfg>().is_none() {
                 return Err(anyhow!(MachineError::DevTypeErr("net".to_string())));
             }
-            let net_config = NetworkInterfaceConfig {
+            let mut net_config = NetworkInterfaceConfig {
                 classtype: driver,
                 id: id.clone(),
                 netdev: args.chardev.with_context(|| "No chardev set")?,
@@ -310,6 +310,7 @@ impl LightMachine {
                 iothread: args.iothread,
                 ..Default::default()
             };
+            net_config.auto_iothread();
             configs.push(Arc::new(net_config));
             slot + MMIO_REPLACEABLE_BLK_NR
         } else if driver.contains("blk") {
@@ -399,8 +400,9 @@ impl LightMachine {
         vm_config: &mut VmConfig,
         cfg_args: &str,
     ) -> Result<()> {
-        let net_cfg =
+        let mut net_cfg =
             NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        net_cfg.auto_iothread();
         check_arg_nonexist!(
             ("bus", net_cfg.bus),
             ("addr", net_cfg.addr),

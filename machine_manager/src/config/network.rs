@@ -151,6 +151,10 @@ pub struct NetworkInterfaceConfig {
     pub mac: Option<String>,
     #[arg(long)]
     pub iothread: Option<String>,
+    #[arg(long)]
+    pub rx_iothread: Option<String>,
+    #[arg(long)]
+    pub tx_iothread: Option<String>,
     #[arg(long, default_value="off", value_parser = parse_bool, action = ArgAction::Append)]
     pub mq: bool,
     // All queues of a net device have the same queue size now.
@@ -172,9 +176,23 @@ impl Default for NetworkInterfaceConfig {
             multifunction: None,
             mac: None,
             iothread: None,
+            rx_iothread: None,
+            tx_iothread: None,
             mq: false,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             vectors: 0,
+        }
+    }
+}
+
+impl NetworkInterfaceConfig {
+    pub fn auto_iothread(&mut self) {
+        // If rx_iothread or tx_iothread is not configured, the default iothread will be used.
+        if self.rx_iothread.is_none() {
+            self.rx_iothread = self.iothread.clone();
+        }
+        if self.tx_iothread.is_none() {
+            self.tx_iothread = self.iothread.clone();
         }
     }
 }

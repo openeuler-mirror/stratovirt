@@ -1246,6 +1246,10 @@ pub struct Net {
     update_evts: Vec<Arc<EventFd>>,
     /// The information about control command.
     ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
+    /// The deactivate events for receiving.
+    rx_deactivate_evts: Vec<RawFd>,
+    /// The deactivate events for transporting.
+    tx_deactivate_evts: Vec<RawFd>,
 }
 
 impl Net {
@@ -1698,6 +1702,14 @@ impl VirtioDevice for Net {
         unregister_event_helper(
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
+        )?;
+        unregister_event_helper(
+            self.net_cfg.rx_iothread.as_ref(),
+            &mut self.rx_deactivate_evts,
+        )?;
+        unregister_event_helper(
+            self.net_cfg.tx_iothread.as_ref(),
+            &mut self.tx_deactivate_evts,
         )?;
         self.update_evts.clear();
         self.ctrl_info = None;
