@@ -35,7 +35,7 @@ struct StreamUnit {
     pub len: u64,
 }
 
-const STREAM_DATA_VEC_CAPACITY: usize = 30;
+const STREAM_DATA_VEC_CAPACITY: usize = 15;
 const FLUSH_DELAY_THRESHOLD_MS: u64 = 100;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
@@ -144,6 +144,15 @@ impl OhAudioProcess for OhAudioRender {
             len: recv_data.audio_size as u64,
         };
         let mut locked_data = self.stream_data.lock().unwrap();
+        // When audio data is not consumed in time, we remove old chunk
+        // and push new one. So audio-playing won't delay. One chunk means
+        // 20 ms data.
+        if locked_data.len() >= STREAM_DATA_VEC_CAPACITY {
+            let remove_size = locked_data[0].len;
+            locked_data.remove(0);
+            self.data_size
+                .fetch_sub(remove_size as i32, Ordering::Relaxed);
+        }
         locked_data.push(su);
         self.data_size
             .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
