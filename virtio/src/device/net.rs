@@ -694,7 +694,7 @@ struct RxVirtio {
 impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
         RxVirtio {
-            queue_avail: false,
+            queue_avail: true,
             queue,
             queue_evt,
         }
