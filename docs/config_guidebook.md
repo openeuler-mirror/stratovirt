@@ -444,6 +444,8 @@ Eight properties are supported for virtio-net-device or virtio-net-pci.
 * id: unique net device id.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used.
 It has no effect when vhost is set.
+* rx-iothread: set the receiving task in this iothread, if not specified the former parameter iothread will be used.
+* tx-iothread: set the sending task in this iothread, if not specified the former parameter iothread will be used.
 * netdev: netdev of net device.
 * vhost: whether to run as a vhost-net device.
 * vhostfd: the file descriptor of opened tap device.
@@ -462,10 +464,10 @@ is a single function device, the function number should be set to zero.
 ```shell
 # virtio mmio net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>
--device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
+-device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>]
 # virtio pci net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
--device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
