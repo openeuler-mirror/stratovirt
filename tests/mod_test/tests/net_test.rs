@@ -2083,7 +2083,10 @@ fn virtio_net_abnormal_rx_tx_test_3() {
         vqs.push(vq);
     }
     fill_rx_vq(test_state.clone(), alloc.clone(), vqs[0].clone());
-    net.borrow().set_driver_ok();
+
+    // Set driver ok without check.
+    let status = net.borrow().get_status() | VIRTIO_CONFIG_S_DRIVER_OK;
+    net.borrow().set_status(status);
 
     let request = get_arp_request(id);
     let length = request.as_bytes().len() as u64;
