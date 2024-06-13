@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Result as IoResult, Write};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
@@ -21,6 +21,8 @@ use log::error;
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
+
+use crate::aio::Iovec;
 
 const IFF_ATTACH_QUEUE: u16 = 0x0200;
 const IFF_DETACH_QUEUE: u16 = 0x0400;
@@ -185,11 +187,67 @@ impl Tap {
         ret
     }
 
-    pub fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+    pub fn receive_packets(&self, iovecs: &[Iovec]) -> i32 {
+        // SAFETY: the arguments of readv has been checked and is correct.
+        let size = unsafe {
+            libc::readv(
+                self.as_raw_fd() as libc::c_int,
+                iovecs.as_ptr() as *const libc::iovec,
+                iovecs.len() as libc::c_int,
+            )
+        } as i32;
+        if size < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                return size;
+            }
+
+            // If the backend tap device is removed, readv returns less than 0.
+            // At this time, the content in the tap needs to be cleaned up.
+            // Here, read is called to process, otherwise handle_rx may be triggered all the time.
+            let mut buf = [0; 1024];
+            match self.read(&mut buf) {
+                Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
+                Err(e) => {
+                    // When the backend tap device is abnormally removed, read return EBADFD.
+                    error!("Failed to read tap: {:?}", e);
+                }
+            }
+            error!("Failed to call readv for net handle_rx: {:?}", e);
+        }
+
+        size
+    }
+
+    pub fn send_packets(&self, iovecs: &[Iovec]) -> i8 {
+        loop {
+            // SAFETY: the arguments of writev has been checked and is correct.
+            let size = unsafe {
+                libc::writev(
+                    self.as_raw_fd(),
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if size < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    ErrorKind::WouldBlock => return -1_i8,
+                    // Ignore other errors which can not be handled.
+                    _ => error!("Failed to call writev for net handle_tx: {:?}", e),
+                }
+            }
+            break;
+        }
+        0_i8
+    }
+
+    pub fn read(&self, buf: &mut [u8]) -> IoResult<usize> {
         self.file.as_ref().read(buf)
     }
 
-    pub fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+    pub fn write(&self, buf: &[u8]) -> IoResult<usize> {
         self.file.as_ref().write(buf)
     }
 
