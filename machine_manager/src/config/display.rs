@@ -40,8 +40,8 @@ pub struct UiContext {
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 fn get_sock_path(p: &str) -> Result<String> {
-    let path = std::fs::canonicalize(p.clone())
-        .with_context(|| format!("Failed to get real directory path: {:?}", p.clone()))?;
+    let path = std::fs::canonicalize(p)
+        .with_context(|| format!("Failed to get real directory path: {:?}", p))?;
     if !path.exists() {
         bail!(
             "The defined directory {:?} path doesn't exist",
