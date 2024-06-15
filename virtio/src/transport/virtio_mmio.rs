@@ -594,7 +594,7 @@ impl MigrationHook for VirtioMmioDevice {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::{
         check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
@@ -602,7 +602,7 @@ mod tests {
     };
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
-    fn address_space_init() -> Arc<AddressSpace> {
+    pub fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "sysmem");
         let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
         let host_mmap = Arc::new(
@@ -697,9 +697,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_virtio_mmio_device_new() {
+    fn virtio_mmio_test_init() -> (Arc<Mutex<VirtioDeviceTest>>, VirtioMmioDevice) {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
+
         let sys_space = address_space_init();
         let virtio_mmio_device = VirtioMmioDevice::new(
             &sys_space,
@@ -707,6 +707,12 @@ mod tests {
             virtio_device.clone(),
         );
 
+        (virtio_device, virtio_mmio_device)
+    }
+
+    #[test]
+    fn test_virtio_mmio_device_new() {
+        let (virtio_device, virtio_mmio_device) = virtio_mmio_test_init();
         let locked_device = virtio_device.lock().unwrap();
         assert_eq!(locked_device.device_activated(), false);
         assert_eq!(
@@ -723,13 +729,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_read_01() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // read the register of magic value
@@ -786,13 +786,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_read_02() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // read the register representing max size of the queue
@@ -882,13 +876,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_read_03() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // read the configuration atomic value
@@ -934,13 +922,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_write_01() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // write the selector for device features
@@ -1052,13 +1034,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_write_02() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // write the ready status of queue
@@ -1123,13 +1099,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_write_03() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         // write the low 32bit of queue's descriptor table address
@@ -1252,13 +1222,7 @@ mod tests {
 
     #[test]
     fn test_virtio_mmio_device_write_04() {
-        let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_space = address_space_init();
-        let mut virtio_mmio_device = VirtioMmioDevice::new(
-            &sys_space,
-            "test_virtio_mmio_device".to_string(),
-            virtio_device.clone(),
-        );
+        let (virtio_device, mut virtio_mmio_device) = virtio_mmio_test_init();
         let addr = GuestAddress(0);
 
         virtio_mmio_device.assign_interrupt_cb();

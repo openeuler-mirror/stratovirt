@@ -1385,8 +1385,9 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
+    use crate::transport::virtio_mmio::tests::address_space_init;
     use crate::VirtioBase;
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping};
+    use address_space::{AddressSpace, GuestAddress};
     use devices::pci::{
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
@@ -1468,30 +1469,39 @@ mod tests {
         };
     }
 
-    #[test]
-    fn test_common_config_dev_feature() {
+    fn virtio_pci_test_init(
+        multi_func: bool,
+    ) -> (
+        Arc<Mutex<VirtioDeviceTest>>,
+        Arc<Mutex<PciBus>>,
+        VirtioPciDevice,
+    ) {
         let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
+        let sys_mem = address_space_init();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
             Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
-        let mut virtio_pci = VirtioPciDevice::new(
+        let virtio_pci = VirtioPciDevice::new(
             String::from("test device"),
             0,
             sys_mem,
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
-            false,
+            multi_func,
             false,
         );
+
+        // Note: if parent_bus is used in the code execution during the testing process, a variable needs to
+        // be used to maintain the count and avoid rust from automatically releasing this `Arc<Mutex<PciBus>`.
+        (virtio_dev, parent_bus, virtio_pci)
+    }
+
+    #[test]
+    fn test_common_config_dev_feature() {
+        let (virtio_dev, _, mut virtio_pci) = virtio_pci_test_init(false);
 
         // Read virtio device features
         virtio_dev.lock().unwrap().set_hfeatures_sel(0_u32);
@@ -1528,28 +1538,7 @@ mod tests {
 
     #[test]
     fn test_common_config_queue() {
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (virtio_dev, _, virtio_pci) = virtio_pci_test_init(false);
 
         // Read Queue's Descriptor Table address
         virtio_dev
@@ -1579,29 +1568,7 @@ mod tests {
 
     #[test]
     fn test_common_config_queue_error() {
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let cloned_virtio_dev = virtio_dev.clone();
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            cloned_virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (virtio_dev, _, mut virtio_pci) = virtio_pci_test_init(false);
 
         assert!(init_msix(
             &mut virtio_pci.base,
@@ -1654,29 +1621,8 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_config_access() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (_, _parent_bus, mut virtio_pci) = virtio_pci_test_init(false);
+
         virtio_pci.init_write_mask(false).unwrap();
         virtio_pci.init_write_clear_mask(false).unwrap();
 
@@ -1695,69 +1641,14 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_realize() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (_, _parent_bus, virtio_pci) = virtio_pci_test_init(false);
         assert!(virtio_pci.realize().is_ok());
     }
 
     #[test]
     fn test_device_activate() {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let mem_size: u64 = 1024 * 1024;
-        let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), None, mem_size, None, false, false, false)
-                .unwrap(),
-        );
-        sys_mem
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
+        let (virtio_dev, _parent_bus, mut virtio_pci) = virtio_pci_test_init(false);
 
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
         #[cfg(target_arch = "aarch64")]
         virtio_pci.base.config.set_interrupt_pin();
 
@@ -1827,29 +1718,7 @@ mod tests {
 
     #[test]
     fn test_multifunction() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            24,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            true,
-            false,
-        );
+        let (_, _parent_bus, mut virtio_pci) = virtio_pci_test_init(true);
 
         assert!(init_multifunction(
             virtio_pci.multi_func,
