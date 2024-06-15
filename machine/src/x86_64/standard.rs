@@ -12,19 +12,16 @@
 
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
-use std::ops::Deref;
 use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
-use log::{error, info, warn};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::ich9_lpc;
 use super::mch::Mch;
 use crate::error::MachineError;
 use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{MachineBase, MachineOps};
+use crate::{MachineBase, MachineOps, StdMachine};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
@@ -44,26 +41,19 @@ use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
-use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
-};
+use machine_manager::config::{BootIndexInfo, DriveConfig, NumaNode, SerialConfig, VmConfig};
 use machine_manager::event;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{
-    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface, VmState,
-};
-use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
 #[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
-use util::loop_context::{create_new_eventfd, EventLoopManager};
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::seccomp::BpfRule;
 use util::seccomp::SeccompCmpOpt;
-use util::{gen_base_func, set_termi_canon_mode};
 
 pub(crate) const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -112,26 +102,6 @@ const IRQ_MAP: &[(i32, i32)] = &[
     (5, 15),  // Sysbus
     (16, 19), // Pcie
 ];
-
-/// Standard machine structure.
-pub struct StdMachine {
-    // Machine base members.
-    base: MachineBase,
-    /// PCI/PCIe host bridge.
-    pci_host: Arc<Mutex<PciHost>>,
-    /// Reset request, handle VM `Reset` event.
-    reset_req: Arc<EventFd>,
-    /// Shutdown_req, handle VM 'ShutDown' event.
-    shutdown_req: Arc<EventFd>,
-    /// VM power button, handle VM `Powerdown` event.
-    power_button: Arc<EventFd>,
-    /// CPU Resize request, handle vm cpu hot(un)plug event.
-    cpu_resize_req: Arc<EventFd>,
-    /// List contains the boot order of boot devices.
-    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// Cpu Controller.
-    cpu_controller: Option<Arc<Mutex<CpuController>>>,
-}
 
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
@@ -206,27 +176,6 @@ impl StdMachine {
         }
 
         Ok(())
-    }
-
-    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> bool {
-        let locked_vm = vm.lock().unwrap();
-        let vmstate = {
-            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
-            warn!("Failed to destroy guest, destroy continue.");
-            if locked_vm.shutdown_req.write(1).is_err() {
-                error!("Failed to send shutdown request.")
-            }
-            return false;
-        }
-
-        EventLoop::kick_all();
-        info!("vm destroy");
-
-        true
     }
 
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
@@ -968,92 +917,5 @@ impl AcpiBuilder for StdMachine {
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin)
-    }
-}
-
-impl MachineLifecycle for StdMachine {
-    fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
-            event!(Stop);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
-            return false;
-        }
-        event!(Resume);
-        true
-    }
-
-    fn destroy(&self) -> bool {
-        if self.shutdown_req.write(1).is_err() {
-            error!("Failed to send shutdown request.");
-            return false;
-        }
-
-        true
-    }
-
-    fn reset(&mut self) -> bool {
-        if self.reset_req.write(1).is_err() {
-            error!("X86 standard vm write reset request failed");
-            return false;
-        }
-        true
-    }
-
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
-            error!("VM state transfer failed: {:?}", e);
-            return false;
-        }
-        true
-    }
-}
-
-impl MigrateInterface for StdMachine {
-    fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
-            Ok((MigrateMode::File, path)) => migration::snapshot(path),
-            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
-            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
-            _ => Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
-                None,
-            ),
-        }
-    }
-
-    fn query_migrate(&self) -> Response {
-        migration::query_migrate()
-    }
-
-    fn cancel_migrate(&self) -> Response {
-        migration::cancel_migrate()
-    }
-}
-
-impl MachineInterface for StdMachine {}
-impl MachineExternalInterface for StdMachine {}
-impl MachineTestInterface for StdMachine {}
-
-impl EventLoopManager for StdMachine {
-    fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == VmState::Shutdown
-    }
-
-    fn loop_cleanup(&self) -> Result<()> {
-        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
-        Ok(())
     }
 }
