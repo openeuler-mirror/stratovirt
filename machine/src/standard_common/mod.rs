@@ -12,11 +12,7 @@
 
 pub mod syscall;
 
-#[cfg(target_arch = "aarch64")]
-pub use crate::aarch64::standard::StdMachine;
 pub use crate::error::MachineError;
-#[cfg(target_arch = "x86_64")]
-pub use crate::x86_64::standard::StdMachine;
 
 use std::mem::size_of;
 use std::ops::Deref;
@@ -28,7 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 
 use anyhow::{bail, Context, Result};
-use log::error;
+use log::{error, info, warn};
+use util::set_termi_canon_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -40,7 +37,7 @@ use crate::x86_64::ich9_lpc::{
 };
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
-use crate::MachineOps;
+use crate::{MachineBase, MachineOps};
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -57,18 +54,23 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "scream")]
 use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
-use devices::pci::PciBus;
+use devices::pci::{PciBus, PciHost};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
+#[cfg(target_arch = "aarch64")]
+use machine_manager::config::ShutdownAction;
 #[cfg(feature = "windows_emu_pid")]
 use machine_manager::config::VmConfig;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, memory_unit_conversion, ConfigCheck, DiskFormat,
-    DriveConfig, ExBool, NumaNode, NumaNodes, M,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri,
+    BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
+    M,
 };
+use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    DeviceInterface, MachineAddressInterface, MachineLifecycle, VmState,
+    DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
+    MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
@@ -80,11 +82,69 @@ use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
 use util::loop_context::{
-    create_new_eventfd, read_fd, EventNotifier, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventLoopManager, EventNotifier, NotifierCallback,
+    NotifierOperation,
 };
 use virtio::{qmp_balloon, qmp_query_balloon};
 
 const MAX_REGION_SIZE: u64 = 65536;
+
+/// Standard machine structure.
+pub struct StdMachine {
+    /// Machine base members.
+    pub(crate) base: MachineBase,
+    /// PCI/PCIe host bridge.
+    pub(crate) pci_host: Arc<Mutex<PciHost>>,
+    /// Reset request, handle VM `Reset` event.
+    pub(crate) reset_req: Arc<EventFd>,
+    /// Shutdown request, handle VM `shutdown` event.
+    pub(crate) shutdown_req: Arc<EventFd>,
+    /// VM power button, handle VM `Shutdown` event.
+    pub(crate) power_button: Arc<EventFd>,
+    /// List contains the boot order of boot devices.
+    pub(crate) boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// CPU Resize request, handle vm cpu hot(un)plug event.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) cpu_resize_req: Arc<EventFd>,
+    /// Cpu Controller.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) cpu_controller: Option<Arc<Mutex<CpuController>>>,
+    /// Pause request, handle VM `Pause` event.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) pause_req: Arc<EventFd>,
+    /// Resume request, handle VM `Resume` event.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) resume_req: Arc<EventFd>,
+    /// Device Tree Blob.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) dtb_vec: Vec<u8>,
+    /// OHUI server
+    #[cfg(all(target_arch = "aarch64", target_env = "ohos", feature = "ohui_srv"))]
+    pub(crate) ohui_server: Option<Arc<OhUiServer>>,
+}
+
+impl StdMachine {
+    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> bool {
+        let locked_vm = vm.lock().unwrap();
+        let vmstate = {
+            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
+            *state
+        };
+
+        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+            warn!("Failed to destroy guest, destroy continue.");
+            if locked_vm.shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request.")
+            }
+            return false;
+        }
+
+        EventLoop::kick_all();
+        info!("vm destroy");
+
+        true
+    }
+}
 
 pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
@@ -927,6 +987,114 @@ impl StdMachine {
         } else {
             bail!("Argument cpu-id is required.")
         }
+    }
+}
+
+impl MachineLifecycle for StdMachine {
+    fn pause(&self) -> bool {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
+            event!(Stop);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn resume(&self) -> bool {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
+            return false;
+        }
+        event!(Resume);
+        true
+    }
+
+    fn destroy(&self) -> bool {
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
+            return false;
+        }
+
+        true
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn powerdown(&self) -> bool {
+        if self.power_button.write(1).is_err() {
+            error!("Standard vm write power button failed");
+            return false;
+        }
+        true
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn get_shutdown_action(&self) -> ShutdownAction {
+        self.base
+            .vm_config
+            .lock()
+            .unwrap()
+            .machine_config
+            .shutdown_action
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.reset_req.write(1).is_err() {
+            error!("Standard vm write reset request failed");
+            return false;
+        }
+        true
+    }
+
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
+        if let Err(e) = self.vm_state_transfer(
+            &self.base.cpus,
+            #[cfg(target_arch = "aarch64")]
+            &self.base.irq_chip,
+            &mut self.base.vm_state.0.lock().unwrap(),
+            old,
+            new,
+        ) {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
+    }
+}
+
+impl MigrateInterface for StdMachine {
+    fn migrate(&self, uri: String) -> Response {
+        match parse_incoming_uri(&uri) {
+            Ok((MigrateMode::File, path)) => migration::snapshot(path),
+            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
+            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                None,
+            ),
+        }
+    }
+
+    fn query_migrate(&self) -> Response {
+        migration::query_migrate()
+    }
+
+    fn cancel_migrate(&self) -> Response {
+        migration::cancel_migrate()
+    }
+}
+
+impl MachineInterface for StdMachine {}
+impl MachineExternalInterface for StdMachine {}
+impl MachineTestInterface for StdMachine {}
+
+impl EventLoopManager for StdMachine {
+    fn loop_should_exit(&self) -> bool {
+        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
+        *vmstate == VmState::Shutdown
+    }
+
+    fn loop_cleanup(&self) -> Result<()> {
+        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
+        Ok(())
     }
 }
 
