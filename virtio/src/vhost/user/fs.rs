@@ -33,6 +33,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::unregister_event_helper;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 
 const MAX_TAG_LENGTH: usize = 36;
 
@@ -120,13 +121,7 @@ impl Fs {
 }
 
 impl VirtioDevice for Fs {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;

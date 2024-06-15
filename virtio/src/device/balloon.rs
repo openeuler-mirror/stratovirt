@@ -41,17 +41,15 @@ use machine_manager::{
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
 };
-use util::{
-    bitmap::Bitmap,
-    byte_code::ByteCode,
-    loop_context::{
-        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-    },
-    num_ops::round_down,
-    offset_of,
-    seccomp::BpfRule,
-    unix::host_page_size,
+use util::bitmap::Bitmap;
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+use util::num_ops::round_down;
+use util::seccomp::BpfRule;
+use util::unix::host_page_size;
+use util::{gen_base_func, offset_of};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
@@ -1053,13 +1051,7 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.bln_cfg.check()?;

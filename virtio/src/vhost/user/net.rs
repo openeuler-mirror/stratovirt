@@ -31,6 +31,7 @@ use address_space::AddressSpace;
 use machine_manager::config::{NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::EventNotifierHelper;
 
 /// Number of virtqueues.
@@ -117,13 +118,7 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let client = VhostUserClient::new(

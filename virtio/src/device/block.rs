@@ -61,7 +61,7 @@ use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use util::offset_of;
+use util::{gen_base_func, offset_of};
 
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -1122,13 +1122,7 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err

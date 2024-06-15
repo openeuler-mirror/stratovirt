@@ -35,8 +35,11 @@ use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_channel::QmpChannel;
-use util::loop_context::{create_new_eventfd, read_fd, EventNotifier, NotifierOperation};
-use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
+use util::gen_base_func;
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventNotifier, NotifierCallback, NotifierOperation,
+};
+use util::num_ops::write_data_u32;
 
 #[derive(Clone, Copy)]
 pub enum AcpiEvent {
@@ -181,23 +184,11 @@ impl Ged {
 }
 
 impl Device for Ged {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for Ged {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset != 0 {

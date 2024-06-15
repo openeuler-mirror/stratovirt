@@ -22,10 +22,9 @@ use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_
 use hypervisor::kvm::aarch64::*;
 use machine_manager::config::{SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
-use util::{
-    device_tree::{self, CompileFDT, FdtBuilder},
-    seccomp::{BpfRule, SeccompCmpOpt},
-};
+use util::device_tree::{self, CompileFDT, FdtBuilder};
+use util::gen_base_func;
+use util::seccomp::{BpfRule, SeccompCmpOpt};
 use virtio::{VirtioDevice, VirtioMmioDevice};
 
 #[repr(usize)]
@@ -54,13 +53,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 ];
 
 impl MachineOps for LightMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();

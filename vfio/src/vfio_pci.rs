@@ -45,6 +45,7 @@ use devices::pci::{
 };
 use devices::{pci::MsiVector, Device, DeviceBase};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
 use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
@@ -813,23 +814,11 @@ impl VfioPciDevice {
 }
 
 impl Device for VfioPciDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for VfioPciDevice {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;

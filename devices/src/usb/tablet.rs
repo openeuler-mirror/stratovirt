@@ -34,6 +34,7 @@ use ui::input::{
     INPUT_BUTTON_MASK, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
     INPUT_BUTTON_WHEEL_UP,
 };
+use util::gen_base_func;
 
 const INPUT_COORDINATES_MAX: u32 = 0x7fff;
 
@@ -233,13 +234,7 @@ impl PointerOpts for UsbTabletAdapter {
 }
 
 impl UsbDevice for UsbTablet {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.base.reset_usb_endpoint();

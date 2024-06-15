@@ -22,6 +22,7 @@ use block_backend::{create_block_backend, BlockDriverOps, BlockProperty};
 use machine_manager::config::{valid_id, DriveConfig, DriveFile, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use util::aio::{Aio, AioEngine, WriteZeroesState};
+use util::gen_base_func;
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -131,13 +132,7 @@ impl ScsiDevState {
 }
 
 impl Device for ScsiDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base);
 }
 
 pub struct ScsiDevice {

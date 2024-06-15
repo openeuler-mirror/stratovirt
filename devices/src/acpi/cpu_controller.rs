@@ -32,6 +32,7 @@ use acpi::{
 use address_space::GuestAddress;
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuLifecycleState, CPU};
 use migration::MigrationManager;
+use util::gen_base_func;
 
 const CPU_ENABLE_FLAG: u8 = 1;
 const CPU_INSERTING_FLAG: u8 = 2;
@@ -242,23 +243,11 @@ impl CpuController {
 }
 
 impl Device for CpuController {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for CpuController {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = 0;

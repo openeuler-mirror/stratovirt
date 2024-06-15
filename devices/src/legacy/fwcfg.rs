@@ -31,7 +31,7 @@ use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
-use util::offset_of;
+use util::{gen_base_func, offset_of};
 
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
@@ -931,24 +931,12 @@ impl FwCfgOps for FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl Device for FwCfgMem {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 #[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
@@ -1098,24 +1086,12 @@ impl FwCfgOps for FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl Device for FwCfgIO {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 #[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)

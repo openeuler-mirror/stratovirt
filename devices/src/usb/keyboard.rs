@@ -30,6 +30,7 @@ use super::{
 };
 use machine_manager::config::valid_id;
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
+use util::gen_base_func;
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -189,13 +190,7 @@ impl UsbKeyboard {
 }
 
 impl UsbDevice for UsbKeyboard {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.base.reset_usb_endpoint();

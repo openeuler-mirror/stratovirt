@@ -29,6 +29,7 @@ use devices::pci::config::{
 use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
 use devices::{Device, DeviceBase};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
@@ -229,23 +230,11 @@ impl LPCBridge {
 }
 
 impl Device for LPCBridge {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for LPCBridge {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;

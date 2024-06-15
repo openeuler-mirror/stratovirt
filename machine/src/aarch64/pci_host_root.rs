@@ -22,6 +22,7 @@ use devices::pci::{
     le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{Device, DeviceBase};
+use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
 
@@ -44,23 +45,11 @@ impl PciHostRoot {
 }
 
 impl Device for PciHostRoot {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for PciHostRoot {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;
