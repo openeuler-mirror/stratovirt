@@ -39,6 +39,7 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::aio::raw_read;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -312,13 +313,7 @@ impl Rng {
 }
 
 impl VirtioDevice for Rng {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()

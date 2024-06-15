@@ -40,6 +40,7 @@ use machine_manager::config::valid_id;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
@@ -750,13 +751,7 @@ impl UsbCamera {
 }
 
 impl UsbDevice for UsbCamera {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         let fmt_list = self.camera_backend.lock().unwrap().list_format()?;

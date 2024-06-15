@@ -26,6 +26,7 @@ use crate::pci::{
 };
 use crate::{Device, DeviceBase};
 use address_space::{GuestAddress, Region, RegionOps};
+use util::gen_base_func;
 
 const PCI_VENDOR_ID_IVSHMEM: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const PCI_DEVICE_ID_IVSHMEM: u16 = 0x1110;
@@ -92,23 +93,11 @@ impl Ivshmem {
 }
 
 impl Device for Ivshmem {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for Ivshmem {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;

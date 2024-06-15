@@ -55,10 +55,10 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::gen_delete_notifiers;
+use util::gen_base_func;
 use util::loop_context::{
-    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
-    NotifierOperation,
+    create_new_eventfd, gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper,
+    NotifierCallback, NotifierOperation,
 };
 use util::num_ops::str_to_num;
 use util::tap::{
@@ -1462,13 +1462,7 @@ fn get_tap_offload_flags(features: u64) -> u32 {
 }
 
 impl VirtioDevice for Net {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err

@@ -22,6 +22,7 @@ use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{Device, DeviceBase};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
+use util::gen_base_func;
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, round_up, write_data_u32};
 use util::unix::host_page_size;
 
@@ -691,23 +692,11 @@ impl PFlash {
 }
 
 impl Device for PFlash {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for PFlash {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let mut index: u64;

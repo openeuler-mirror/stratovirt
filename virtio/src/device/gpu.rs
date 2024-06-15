@@ -52,6 +52,7 @@ use ui::pixman::{
 use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::edid::EdidInfo;
+use util::gen_base_func;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -1733,13 +1734,7 @@ impl Gpu {
 }
 
 impl VirtioDevice for Gpu {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn device_quirk(&self) -> Option<VirtioDeviceQuirk> {
         if self.cfg.enable_bar0 {

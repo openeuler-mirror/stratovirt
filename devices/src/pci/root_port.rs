@@ -46,10 +46,9 @@ use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::{
-    byte_code::ByteCode,
-    num_ops::{ranges_overlap, str_to_num},
-};
+use util::byte_code::ByteCode;
+use util::gen_base_func;
+use util::num_ops::{ranges_overlap, str_to_num};
 
 const DEVICE_ID_RP: u16 = 0x000c;
 
@@ -345,23 +344,11 @@ impl RootPort {
 }
 
 impl Device for RootPort {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for RootPort {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(true)?;

@@ -25,6 +25,7 @@ use devices::pci::{
     le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
 use devices::{Device, DeviceBase};
+use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
 const DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
@@ -121,23 +122,11 @@ impl Mch {
 }
 
 impl Device for Mch {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for Mch {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;

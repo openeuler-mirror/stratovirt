@@ -35,6 +35,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::num_ops::read_data_u32;
 
@@ -236,23 +237,11 @@ impl InputReceiver for PL011 {
 }
 
 impl Device for PL011 {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for PL011 {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if data.len() > 4 {

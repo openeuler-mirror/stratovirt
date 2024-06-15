@@ -278,6 +278,7 @@ mod tests {
     use crate::pci::root_port::RootPort;
     use crate::pci::{PciDevBase, RootPortConfig};
     use crate::{Device, DeviceBase};
+    use util::gen_base_func;
 
     #[derive(Clone)]
     struct PciDevice {
@@ -285,23 +286,11 @@ mod tests {
     }
 
     impl Device for PciDevice {
-        fn device_base(&self) -> &DeviceBase {
-            &self.base.base
-        }
-
-        fn device_base_mut(&mut self) -> &mut DeviceBase {
-            &mut self.base.base
-        }
+        gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
     }
 
     impl PciDevOps for PciDevice {
-        fn pci_base(&self) -> &PciDevBase {
-            &self.base
-        }
-
-        fn pci_base_mut(&mut self) -> &mut PciDevBase {
-            &mut self.base
-        }
+        gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
             #[allow(unused_variables)]

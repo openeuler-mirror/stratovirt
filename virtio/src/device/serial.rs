@@ -40,6 +40,7 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -215,13 +216,7 @@ pub fn find_port_by_nr(
 }
 
 impl VirtioDevice for Serial {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.init_config_features()?;

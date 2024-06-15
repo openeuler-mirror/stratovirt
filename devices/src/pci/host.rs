@@ -34,6 +34,7 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
+use util::gen_base_func;
 
 #[cfg(target_arch = "x86_64")]
 const CONFIG_ADDRESS_ENABLE_MASK: u32 = 0x8000_0000;
@@ -231,23 +232,11 @@ impl PciHost {
 }
 
 impl Device for PciHost {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for PciHost {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let bus_num = ((offset as u32 >> ECAM_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
@@ -557,23 +546,11 @@ pub mod tests {
     }
 
     impl Device for PciDevice {
-        fn device_base(&self) -> &DeviceBase {
-            &self.base.base
-        }
-
-        fn device_base_mut(&mut self) -> &mut DeviceBase {
-            &mut self.base.base
-        }
+        gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
     }
 
     impl PciDevOps for PciDevice {
-        fn pci_base(&self) -> &PciDevBase {
-            &self.base
-        }
-
-        fn pci_base_mut(&mut self) -> &mut PciDevBase {
-            &mut self.base
-        }
+        gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
         fn init_write_mask(&mut self, _is_bridge: bool) -> Result<()> {
             let mut offset = 0_usize;

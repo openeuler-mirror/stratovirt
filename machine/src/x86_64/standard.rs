@@ -59,13 +59,11 @@ use migration::{MigrationManager, MigrationStatus};
 use ui::gtk::gtk_display_init;
 #[cfg(feature = "vnc")]
 use ui::vnc::vnc_init;
+use util::byte_code::ByteCode;
+use util::loop_context::{create_new_eventfd, EventLoopManager};
+use util::seccomp::BpfRule;
 use util::seccomp::SeccompCmpOpt;
-use util::{
-    byte_code::ByteCode,
-    loop_context::{create_new_eventfd, EventLoopManager},
-    seccomp::BpfRule,
-    set_termi_canon_mode,
-};
+use util::{gen_base_func, set_termi_canon_mode};
 
 pub(crate) const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -419,13 +417,7 @@ impl StdMachineOps for StdMachine {
 }
 
 impl MachineOps for StdMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let ram = self.get_vm_ram();
