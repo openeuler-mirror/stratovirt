@@ -19,4 +19,6 @@ pub enum SysBusError {
         #[from]
         source: address_space::error::AddressSpaceError,
     },
+    #[error("Failed to register region in {0} space: offset={1:#x},size={2:#x}")]
+    AddRegionErr(&'static str, u64, u64),
 }
