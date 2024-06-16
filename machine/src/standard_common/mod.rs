@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 
 use anyhow::{bail, Context, Result};
-use log::{error, info, warn};
+use log::error;
 use util::set_termi_canon_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -121,29 +121,6 @@ pub struct StdMachine {
     /// OHUI server
     #[cfg(all(target_arch = "aarch64", target_env = "ohos", feature = "ohui_srv"))]
     pub(crate) ohui_server: Option<Arc<OhUiServer>>,
-}
-
-impl StdMachine {
-    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> bool {
-        let locked_vm = vm.lock().unwrap();
-        let vmstate = {
-            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
-            warn!("Failed to destroy guest, destroy continue.");
-            if locked_vm.shutdown_req.write(1).is_err() {
-                error!("Failed to send shutdown request.")
-            }
-            return false;
-        }
-
-        EventLoop::kick_all();
-        info!("vm destroy");
-
-        true
-    }
 }
 
 pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
@@ -388,33 +365,6 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             None,
             EventSet::IN,
             vec![resume_req_handler],
-        );
-        EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")
-    }
-
-    fn register_shutdown_event(
-        &self,
-        shutdown_req: Arc<EventFd>,
-        clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> Result<()> {
-        use util::loop_context::gen_delete_notifiers;
-
-        let shutdown_req_fd = shutdown_req.as_raw_fd();
-        let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = shutdown_req.read();
-            if StdMachine::handle_destroy_request(&clone_vm) {
-                Some(gen_delete_notifiers(&[shutdown_req_fd]))
-            } else {
-                None
-            }
-        });
-        let notifier = EventNotifier::new(
-            NotifierOperation::AddShared,
-            shutdown_req_fd,
-            None,
-            EventSet::IN,
-            vec![shutdown_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
             .with_context(|| "Failed to register event notifier.")

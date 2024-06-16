@@ -39,7 +39,8 @@ use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use log::{error, info};
+use log::error;
+use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(target_arch = "aarch64")]
 use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
@@ -52,7 +53,6 @@ use machine_manager::config::{
     get_chardev_socket_path, parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig,
     MigrateMode, NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface, VmState,
@@ -62,7 +62,8 @@ use machine_manager::qmp::{
 };
 use machine_manager::{check_arg_nonexist, event};
 use migration::MigrationManager;
-use util::{loop_context::EventLoopManager, num_ops::str_to_num, set_termi_canon_mode};
+use util::loop_context::{create_new_eventfd, EventLoopManager};
+use util::{num_ops::str_to_num, set_termi_canon_mode};
 use virtio::device::block::VirtioBlkDevConfig;
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VhostUser,
@@ -134,6 +135,8 @@ pub struct LightMachine {
     pub(crate) base: MachineBase,
     // All replaceable device information.
     pub(crate) replaceable_info: MmioReplaceableInfo,
+    /// Shutdown request, handle VM `shutdown` event.
+    pub(crate) shutdown_req: Arc<EventFd>,
 }
 
 impl LightMachine {
@@ -153,6 +156,10 @@ impl LightMachine {
         Ok(LightMachine {
             base,
             replaceable_info: MmioReplaceableInfo::new(),
+            shutdown_req: Arc::new(
+                create_new_eventfd()
+                    .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
+            ),
         })
     }
 
@@ -514,17 +521,10 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn destroy(&self) -> bool {
-        let vmstate = {
-            let state = self.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !self.notify_lifecycle(vmstate, VmState::Shutdown) {
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
             return false;
         }
-
-        info!("vm destroy");
-        EventLoop::kick_all();
 
         true
     }

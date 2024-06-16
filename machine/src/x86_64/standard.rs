@@ -21,7 +21,7 @@ use super::mch::Mch;
 use crate::error::MachineError;
 use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{MachineBase, MachineOps, StdMachine};
+use crate::{register_shutdown_event, MachineBase, MachineOps, StdMachine};
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
@@ -179,7 +179,6 @@ impl StdMachine {
     }
 
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
-        let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let ich = ich9_lpc::LPCBridge::new(
             root_bus,
@@ -187,9 +186,9 @@ impl StdMachine {
             self.reset_req.clone(),
             self.shutdown_req.clone(),
         )?;
-        self.register_reset_event(self.reset_req.clone(), vm)
+        self.register_reset_event(self.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event in LPC")?;
-        self.register_shutdown_event(ich.shutdown_req.clone(), clone_vm)
+        register_shutdown_event(ich.shutdown_req.clone(), vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
         ich.realize()
     }
@@ -483,7 +482,6 @@ impl MachineOps for StdMachine {
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let max_cpus = vm_config.machine_config.max_cpus;
-        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
@@ -501,7 +499,7 @@ impl MachineOps for StdMachine {
             .init_pci_host()
             .with_context(|| MachineError::InitPCIeHostErr)?;
         locked_vm
-            .init_ich9_lpc(clone_vm)
+            .init_ich9_lpc(vm.clone())
             .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
 
