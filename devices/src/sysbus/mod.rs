@@ -133,40 +133,13 @@ impl SysBus {
 
             region.set_ioeventfds(&locked_dev.ioeventfds());
             match locked_dev.sysbusdev_base().dev_type {
-                SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
-                    #[cfg(target_arch = "x86_64")]
+                #[cfg(target_arch = "x86_64")]
+                SysBusDevType::Serial | SysBusDevType::FwCfg | SysBusDevType::Rtc => {
                     self.sys_io
                         .root()
                         .add_subregion(region, region_base)
                         .with_context(|| {
-                            format!(
-                                "Failed to register region in I/O space: offset={},size={}",
-                                region_base, region_size
-                            )
-                        })?;
-                }
-                SysBusDevType::FwCfg if cfg!(target_arch = "x86_64") => {
-                    #[cfg(target_arch = "x86_64")]
-                    self.sys_io
-                        .root()
-                        .add_subregion(region, region_base)
-                        .with_context(|| {
-                            format!(
-                                "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                                region_base, region_size
-                            )
-                        })?;
-                }
-                SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
-                    #[cfg(target_arch = "x86_64")]
-                    self.sys_io
-                        .root()
-                        .add_subregion(region, region_base)
-                        .with_context(|| {
-                            format!(
-                                "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                                region_base, region_size
-                            )
+                            SysBusError::AddRegionErr("I/O", region_base, region_size)
                         })?;
                 }
                 _ => self
@@ -174,10 +147,7 @@ impl SysBus {
                     .root()
                     .add_subregion(region, region_base)
                     .with_context(|| {
-                        format!(
-                            "Failed to register region in memory space: offset={},size={}",
-                            region_base, region_size
-                        )
+                        SysBusError::AddRegionErr("memory", region_base, region_size)
                     })?,
             }
         }
