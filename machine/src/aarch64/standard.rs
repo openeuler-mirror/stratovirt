@@ -24,7 +24,7 @@ use clap::Parser;
 use super::pci_host_root::PciHostRoot;
 use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{MachineBase, MachineOps, StdMachine};
+use crate::{register_shutdown_event, MachineBase, MachineOps, StdMachine};
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -524,9 +524,8 @@ impl MachineOps for StdMachine {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
-        locked_vm
-            .register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
-            .with_context(|| "Fail to register shutdown event")?;
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
         locked_vm
             .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
