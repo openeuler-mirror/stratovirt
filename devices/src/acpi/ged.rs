@@ -85,7 +85,7 @@ pub struct Ged {
 impl Ged {
     pub fn new(
         battery_present: bool,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         ged_event: GedEvent,
@@ -103,10 +103,10 @@ impl Ged {
         Ok(ged)
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Ged>>> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Ged>>> {
         let ged_event = self.ged_event.clone();
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
 
         let ged = dev.lock().unwrap();
         ged.register_acpi_powerdown_event(ged_event.power_button)

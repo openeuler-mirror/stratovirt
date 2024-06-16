@@ -83,7 +83,7 @@ pub struct PowerDev {
 impl PowerDev {
     pub fn new(
         ged_dev: Arc<Mutex<Ged>>,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
     ) -> Result<Self> {
@@ -184,9 +184,9 @@ impl PowerDev {
         self.ged.lock().unwrap().inject_acpi_event(evt);
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
 
         let pdev_available: bool;
         {

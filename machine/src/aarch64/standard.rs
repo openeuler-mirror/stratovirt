@@ -347,7 +347,7 @@ impl StdMachineOps for StdMachine {
 
         let mut fwcfg = FwCfgMem::new(
             self.base.sys_mem.clone(),
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
         )?;
@@ -383,7 +383,7 @@ impl StdMachineOps for StdMachine {
             .with_context(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
         let fwcfg_dev = fwcfg
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
@@ -447,18 +447,18 @@ impl MachineOps for StdMachine {
                 "Failed to create intx state: legacy irq manager is none."
             ));
         }
-        self.base.sysbus.irq_manager = line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = line_irq_manager;
 
         Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
         let rtc = PL031::new(
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
-        rtc.realize(&mut self.base.sysbus)
+        rtc.realize(&self.base.sysbus)
             .with_context(|| "Failed to realize PL031")
     }
 
@@ -466,22 +466,22 @@ impl MachineOps for StdMachine {
         let battery_present = self.base.vm_config.lock().unwrap().machine_config.battery;
         let ged = Ged::new(
             battery_present,
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
             MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
             GedEvent::new(self.power_button.clone()),
         )?;
         let ged_dev = ged
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize Ged")?;
         if battery_present {
             let pdev = PowerDev::new(
                 ged_dev,
-                &mut self.base.sysbus,
+                &self.base.sysbus,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
             )?;
-            pdev.realize(&mut self.base.sysbus)
+            pdev.realize(&self.base.sysbus)
                 .with_context(|| "Failed to realize PowerDev")?;
         }
         Ok(())
@@ -490,15 +490,10 @@ impl MachineOps for StdMachine {
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-        let pl011 = PL011::new(
-            config.clone(),
-            &mut self.base.sysbus,
-            region_base,
-            region_size,
-        )
-        .with_context(|| "Failed to create PL011")?;
+        let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
+            .with_context(|| "Failed to create PL011")?;
         pl011
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize PL011")?;
         let mut bs = self.base.boot_source.lock().unwrap();
         bs.kernel_cmdline.push(Param {
@@ -658,11 +653,11 @@ impl MachineOps for StdMachine {
                 4,
                 2,
                 read_only,
-                &mut self.base.sysbus,
+                &self.base.sysbus,
                 flash_base,
             )
             .with_context(|| MachineError::InitPflashErr)?;
-            PFlash::realize(pflash, &mut self.base.sysbus)
+            PFlash::realize(pflash, &self.base.sysbus)
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_base += flash_size;
         }
@@ -714,7 +709,7 @@ impl MachineOps for StdMachine {
         let mut ramfb = Ramfb::new(sys_mem.clone(), config.install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize(&mut self.base.sysbus)
+        ramfb.realize(&self.base.sysbus)
     }
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
@@ -958,7 +953,8 @@ impl AcpiBuilder for StdMachine {
         spcr.set_field(52, 1_u8 << 3);
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
-        for dev in self.base.sysbus.devices.iter() {
+        let devices = self.base.sysbus.lock().unwrap().devices.clone();
+        for dev in devices.iter() {
             let locked_dev = dev.lock().unwrap();
             if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
                 uart_irq = locked_dev.sysbusdev_base().irq_state.irq as _;
@@ -1007,7 +1003,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
         // 3. Info of devices attached to system bus.
-        dsdt.append_child(self.base.sysbus.aml_bytes().as_slice());
+        dsdt.append_child(self.base.sysbus.lock().unwrap().aml_bytes().as_slice());
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;

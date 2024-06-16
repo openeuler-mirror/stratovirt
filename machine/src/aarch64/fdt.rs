@@ -265,7 +265,8 @@ impl CompileFDTHelper for MachineBase {
         fdt.set_property_string("method", "hvc")?;
         fdt.end_node(psci_node_dep)?;
 
-        for dev in self.sysbus.devices.iter() {
+        let devices = self.sysbus.lock().unwrap().devices.clone();
+        for dev in devices.iter() {
             let locked_dev = dev.lock().unwrap();
             match locked_dev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
