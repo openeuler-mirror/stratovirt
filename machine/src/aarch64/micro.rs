@@ -101,33 +101,28 @@ impl MachineOps for LightMachine {
         self.base.irq_chip.as_ref().unwrap().realize()?;
 
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
         Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
         let pl031 = PL031::new(
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
         pl031
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize pl031.")
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-        let pl011 = PL011::new(
-            config.clone(),
-            &mut self.base.sysbus,
-            region_base,
-            region_size,
-        )
-        .with_context(|| "Failed to create PL011")?;
+        let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
+            .with_context(|| "Failed to create PL011")?;
         pl011
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize PL011")?;
         let mut bs = self.base.boot_source.lock().unwrap();
         bs.kernel_cmdline.push(Param {
@@ -140,7 +135,7 @@ impl MachineOps for LightMachine {
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
 
-        trace::sysbus(&locked_vm.base.sysbus);
+        trace::sysbus(&locked_vm.base.sysbus.lock().unwrap());
         trace::vm_state(&locked_vm.base.vm_state);
 
         let topology = CPUTopology::new().set_topology((

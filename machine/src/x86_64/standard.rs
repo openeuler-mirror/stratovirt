@@ -217,7 +217,7 @@ impl StdMachine {
         );
         let cpu_controller = CpuController::new(
             self.base.cpu_topo.max_cpus,
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             region_base,
             region_size,
             cpu_config,
@@ -225,7 +225,7 @@ impl StdMachine {
             self.base.cpus.clone(),
         )?;
         let realize_controller = cpu_controller
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize Cpu Controller")?;
         self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
         self.cpu_controller = Some(realize_controller);
@@ -275,7 +275,7 @@ impl StdMachineOps for StdMachine {
         nr_cpus: u8,
         max_cpus: u8,
     ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
-        let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone(), &mut self.base.sysbus)?;
+        let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone(), &self.base.sysbus)?;
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
@@ -285,7 +285,7 @@ impl StdMachineOps for StdMachine {
             .add_file_entry("bootorder", boot_order)
             .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.base.sysbus)
+        let fwcfg_dev = FwCfgIO::realize(fwcfg, &self.base.sysbus)
             .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
@@ -397,7 +397,7 @@ impl MachineOps for StdMachine {
         let root_bus = &self.pci_host.lock().unwrap().root_bus;
         let irq_manager = locked_hypervisor.create_irq_manager()?;
         root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
-        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
 
         Ok(())
     }
@@ -433,14 +433,13 @@ impl MachineOps for StdMachine {
     }
 
     fn add_rtc_device(&mut self, mem_size: u64) -> Result<()> {
-        let mut rtc =
-            RTC::new(&mut self.base.sysbus).with_context(|| "Failed to create RTC device")?;
+        let mut rtc = RTC::new(&self.base.sysbus).with_context(|| "Failed to create RTC device")?;
         rtc.set_memory(
             mem_size,
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        rtc.realize(&mut self.base.sysbus)
+        rtc.realize(&self.base.sysbus)
             .with_context(|| "Failed to realize RTC device")
     }
 
@@ -450,13 +449,13 @@ impl MachineOps for StdMachine {
         let ged_event = GedEvent::new(self.power_button.clone(), self.cpu_resize_req.clone());
         let ged = Ged::new(
             false,
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             region_base,
             region_size,
             ged_event,
         )?;
 
-        ged.realize(&mut self.base.sysbus)
+        ged.realize(&self.base.sysbus)
             .with_context(|| "Failed to realize Ged")?;
         Ok(())
     }
@@ -464,14 +463,9 @@ impl MachineOps for StdMachine {
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-        let serial = Serial::new(
-            config.clone(),
-            &mut self.base.sysbus,
-            region_base,
-            region_size,
-        )?;
+        let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
@@ -621,12 +615,12 @@ impl MachineOps for StdMachine {
                 4_u32,
                 1_u32,
                 config.readonly,
-                &mut self.base.sysbus,
+                &self.base.sysbus,
                 flash_end - pfl_size,
             )
             .with_context(|| MachineError::InitPflashErr)?;
             pflash
-                .realize(&mut self.base.sysbus)
+                .realize(&self.base.sysbus)
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
@@ -736,7 +730,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
         // 2. Info of devices attached to system bus.
-        dsdt.append_child(self.base.sysbus.aml_bytes().as_slice());
+        dsdt.append_child(self.base.sysbus.lock().unwrap().aml_bytes().as_slice());
 
         // 3. Add _S5 sleep state.
         let mut package = AmlPackage::new(4);

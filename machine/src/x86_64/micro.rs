@@ -83,7 +83,7 @@ impl MachineOps for LightMachine {
         locked_hypervisor.create_interrupt_controller()?;
 
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
 
         Ok(())
     }
@@ -132,14 +132,9 @@ impl MachineOps for LightMachine {
 
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-        let serial = Serial::new(
-            config.clone(),
-            &mut self.base.sysbus,
-            region_base,
-            region_size,
-        )?;
+        let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| "Failed to realize serial device.")
     }
 

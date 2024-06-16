@@ -80,7 +80,7 @@ pub struct PL031 {
 }
 
 impl PL031 {
-    pub fn new(sysbus: &mut SysBus, region_base: u64, region_size: u64) -> Result<Self> {
+    pub fn new(sysbus: &Arc<Mutex<SysBus>>, region_base: u64, region_size: u64) -> Result<Self> {
         let mut pl031 = Self {
             base: SysBusDevBase::new(SysBusDevType::Rtc),
             state: PL031State::default(),
@@ -99,9 +99,9 @@ impl PL031 {
         Ok(pl031)
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
 
         MigrationManager::register_device_instance(
             PL031State::descriptor(),
@@ -221,8 +221,8 @@ mod test {
 
     #[test]
     fn test_set_year_20xx() {
-        let mut sysbus = sysbus_init();
-        let mut rtc = PL031::new(&mut sysbus, 0x0901_0000, 0x0000_1000).unwrap();
+        let sysbus = sysbus_init();
+        let mut rtc = PL031::new(&sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time: 2013-11-13 02:04:56.
         let mut wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
         let mut data = [0; 4];
@@ -248,8 +248,8 @@ mod test {
 
     #[test]
     fn test_set_year_1970() {
-        let mut sysbus = sysbus_init();
-        let mut rtc = PL031::new(&mut sysbus, 0x0901_0000, 0x0000_1000).unwrap();
+        let sysbus = sysbus_init();
+        let mut rtc = PL031::new(&sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time (min): 1970-01-01 00:00:00.
         let wtick = mktime64(1970, 1, 1, 0, 0, 0) as u32;
         let mut data = [0; 4];

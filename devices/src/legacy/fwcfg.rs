@@ -844,7 +844,7 @@ pub struct FwCfgMem {
 impl FwCfgMem {
     pub fn new(
         sys_mem: Arc<AddressSpace>,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
     ) -> Result<Self> {
@@ -859,10 +859,12 @@ impl FwCfgMem {
         Ok(fwcfgmem)
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
+            .lock()
+            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
@@ -981,7 +983,7 @@ impl SysBusDevOps for FwCfgMem {
 
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         region_name: &str,
@@ -1006,7 +1008,7 @@ pub struct FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl FwCfgIO {
-    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &mut SysBus) -> Result<Self> {
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>) -> Result<Self> {
         let mut fwcfg = FwCfgIO {
             base: SysBusDevBase::new(SysBusDevType::FwCfg),
             fwcfg: FwCfgCommon::new(sys_mem),
@@ -1018,10 +1020,12 @@ impl FwCfgIO {
         Ok(fwcfg)
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
+            .lock()
+            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
@@ -1141,7 +1145,7 @@ impl SysBusDevOps for FwCfgIO {
 
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         region_name: &str,

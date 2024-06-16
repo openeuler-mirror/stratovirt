@@ -131,7 +131,7 @@ impl PL011 {
     /// Create a new `PL011` instance with default parameters.
     pub fn new(
         cfg: SerialConfig,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
     ) -> Result<Self> {
@@ -162,7 +162,7 @@ impl PL011 {
         }
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
@@ -170,6 +170,8 @@ impl PL011 {
             .with_context(|| "Failed to realize chardev")?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
+            .lock()
+            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach PL011 to system bus.")?;
         MigrationManager::register_device_instance(
@@ -462,8 +464,8 @@ mod test {
         let config = SerialConfig {
             chardev: chardev_cfg,
         };
-        let mut sysbus = sysbus_init();
-        let mut pl011_dev = PL011::new(config, &mut sysbus, 0x0900_0000, 0x0000_1000).unwrap();
+        let sysbus = sysbus_init();
+        let mut pl011_dev = PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap();
         assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
         assert_eq!(pl011_dev.state.flags, 0x90);
         assert_eq!(pl011_dev.state.lcr, 0);

@@ -282,14 +282,16 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
 
     fn set_sys_resource(
         &mut self,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         region_name: &str,
     ) -> Result<()> {
-        let irq = self.get_irq(sysbus)?;
+        let mut locked_sysbus = sysbus.lock().unwrap();
+        let irq = self.get_irq(&mut locked_sysbus)?;
         let interrupt_evt = self.sysbusdev_base().interrupt_evt.clone();
-        let irq_manager = sysbus.irq_manager.clone();
+        let irq_manager = locked_sysbus.irq_manager.clone();
+        drop(locked_sysbus);
 
         self.sysbusdev_base_mut().irq_state =
             IrqState::new(irq as u32, interrupt_evt, irq_manager, TriggerMode::Edge);
@@ -391,7 +393,7 @@ pub fn to_sysbusdevops(dev: &dyn Device) -> Option<&dyn SysBusDevOps> {
 }
 
 #[cfg(test)]
-pub fn sysbus_init() -> SysBus {
+pub fn sysbus_init() -> Arc<Mutex<SysBus>> {
     let sys_mem = AddressSpace::new(
         Region::init_container_region(u64::max_value(), "sys_mem"),
         "sys_mem",
@@ -407,11 +409,11 @@ pub fn sysbus_init() -> SysBus {
     .unwrap();
     let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
     let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-    SysBus::new(
+    Arc::new(Mutex::new(SysBus::new(
         #[cfg(target_arch = "x86_64")]
         &sys_io,
         &sys_mem,
         free_irqs,
         mmio_region,
-    )
+    )))
 }

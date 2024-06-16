@@ -909,14 +909,14 @@ pub fn virtio_register_pcidevops_type() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 
     pub const MEMORY_SIZE: u64 = 1024 * 1024;
 
-    pub fn sysbus_init() -> SysBus {
+    pub fn sysbus_init() -> Arc<Mutex<SysBus>> {
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sys_mem"),
             "sys_mem",
@@ -932,13 +932,13 @@ mod tests {
         .unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-        SysBus::new(
+        Arc::new(Mutex::new(SysBus::new(
             #[cfg(target_arch = "x86_64")]
             &sys_io,
             &sys_mem,
             free_irqs,
             mmio_region,
-        )
+        )))
     }
 
     pub fn address_space_init() -> Arc<AddressSpace> {
