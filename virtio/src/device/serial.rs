@@ -889,7 +889,8 @@ impl SerialControlHandler {
             return Ok(());
         }
 
-        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space)?;
+        let cache = queue_lock.vring.get_cache();
+        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space, cache)?;
         let len = size_of::<VirtioConsoleControl>() + extra.len();
         if in_size < len as u64 {
             bail!(

@@ -508,7 +508,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
 
         let mut request = VirtioScsiRequest {
             mem_space: mem_space.clone(),
-            queue,
+            queue: queue.clone(),
             desc_index: elem.index,
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
@@ -521,15 +521,18 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
             resp,
         };
 
+        let locked_queue = queue.lock().unwrap();
+        let cache = locked_queue.vring.get_cache();
+
         // Get possible dataout buffer from virtqueue Element.
         let mut iovec = elem.out_iovec.clone();
         let elemiov = iov_discard_front(&mut iovec, size_of::<T>() as u64).unwrap_or_default();
-        let (out_len, out_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(elemiov, mem_space, cache)?;
 
         // Get possible dataout buffer from virtqueue Element.
         let mut iovec = elem.in_iovec.clone();
         let elemiov = iov_discard_front(&mut iovec, size_of::<U>() as u64).unwrap_or_default();
-        let (in_len, in_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(elemiov, mem_space, cache)?;
 
         if out_len > 0 && in_len > 0 {
             warn!("Wrong scsi request! Don't support both datain and dataout buffer");

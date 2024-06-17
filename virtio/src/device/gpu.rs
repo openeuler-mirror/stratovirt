@@ -432,8 +432,8 @@ impl VirtioGpuRequest {
             iov_discard_front(&mut elem.out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
                 .unwrap_or_default();
 
-        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
-        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space, &None)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space, &None)?;
 
         // Note: in_iov and out_iov total len is no more than 1<<32, and
         // out_iov is more than 1, so in_len and out_len will not overflow.
@@ -1491,7 +1491,7 @@ impl GpuIoHandler {
                 len: ent.length,
             });
         }
-        match gpa_hva_iovec_map(&elemiovec, &self.mem_space) {
+        match gpa_hva_iovec_map(&elemiovec, &self.mem_space, &None) {
             Ok((_, iov)) => {
                 res.iov = iov;
                 self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)

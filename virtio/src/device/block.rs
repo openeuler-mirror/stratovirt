@@ -26,7 +26,7 @@ use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map_by_cache, iov_discard_back, iov_discard_front,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front,
     iov_to_buf_by_cache, read_config_default, report_virtio_error, virtio_has_feature, Element,
     Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
@@ -345,8 +345,7 @@ impl Request {
                 }
                 .with_context(|| "Empty data for block request")?;
 
-                let (data_len, iovec) =
-                    gpa_hva_iovec_map_by_cache(data_iovec, &handler.mem_space, cache)?;
+                let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, &handler.mem_space, cache)?;
                 request.data_len = data_len;
                 request.iovec = iovec;
             }
