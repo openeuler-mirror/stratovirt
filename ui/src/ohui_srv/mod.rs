@@ -155,6 +155,21 @@ impl OhUiServer {
             false,
         )?;
 
+        let ret =
+        // SAFETY: host_addr and size has already been verified during do_mmap.
+        unsafe {
+            libc::mlock(
+                host_addr as *const libc::c_void,
+                VIRTIO_GPU_ENABLE_BAR0_SIZE as libc::size_t,
+            )
+        };
+        if ret != 0 {
+            error!(
+                "Failed to lock ohui-fb, ret val as {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
         Ok((Some(fb_backend), host_addr))
     }
 
