@@ -212,6 +212,7 @@ impl XhciTransfer {
     pub fn submit_transfer(&mut self) -> Result<()> {
         // Event Data Transfer Length Accumulator.
         let mut edtla: u32 = 0;
+        let mut shortpkt = false;
         let mut left = self.packet.lock().unwrap().actual_length;
         for i in 0..self.td.len() {
             let trb = &self.td[i];
@@ -222,7 +223,9 @@ impl XhciTransfer {
                 TRBType::TrData | TRBType::TrNormal | TRBType::TrIsoch => {
                     if chunk > left {
                         chunk = left;
-                        self.status = TRBCCode::ShortPacket;
+                        if self.status == TRBCCode::Success {
+                            shortpkt = true;
+                        }
                     }
                     left -= chunk;
                     edtla = edtla.checked_add(chunk).with_context(||
@@ -238,16 +241,25 @@ impl XhciTransfer {
                 }
             }
             if (trb.control & TRB_TR_IOC == TRB_TR_IOC)
-                || (self.status == TRBCCode::ShortPacket
-                    && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
+                || (shortpkt && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
+                || (self.status != TRBCCode::Success && left == 0)
             {
-                self.send_transfer_event(trb, chunk, &mut edtla)?;
+                self.send_transfer_event(trb, chunk, &mut edtla, shortpkt)?;
+                if self.status != TRBCCode::Success {
+                    return Ok(());
+                }
             }
         }
         Ok(())
     }
 
-    fn send_transfer_event(&self, trb: &XhciTRB, transferred: u32, edtla: &mut u32) -> Result<()> {
+    fn send_transfer_event(
+        &self,
+        trb: &XhciTRB,
+        transferred: u32,
+        edtla: &mut u32,
+        shortpkt: bool,
+    ) -> Result<()> {
         let trb_type = trb.get_type();
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = self.slotid as u8;
@@ -255,7 +267,15 @@ impl XhciTransfer {
         evt.length = (trb.status & TRB_TR_LEN_MASK) - transferred;
         evt.flags = 0;
         evt.ptr = trb.addr;
-        evt.ccode = self.status;
+        evt.ccode = if self.status == TRBCCode::Success {
+            if shortpkt {
+                TRBCCode::ShortPacket
+            } else {
+                TRBCCode::Success
+            }
+        } else {
+            self.status
+        };
         if trb_type == TRBType::TrEvdata {
             evt.ptr = trb.parameter;
             evt.flags |= TRB_EV_ED;
@@ -2312,7 +2332,7 @@ impl XhciDevice {
         if xfer.running_retry {
             if report != TRBCCode::Invalid {
                 xfer.status = report;
-                xfer.report_transfer_error()?;
+                xfer.submit_transfer()?;
             }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
             epctx.retry = None;
