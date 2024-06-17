@@ -870,6 +870,35 @@ fn gpa_hva_iovec_map_by_cache(
     Ok((iov_size, hva_iovec))
 }
 
+fn get_libc_iovecs(
+    mem_space: &Arc<AddressSpace>,
+    cache: &Option<RegionCache>,
+    elem_iovecs: &[ElemIovec],
+) -> Vec<libc::iovec> {
+    let mut iovecs = Vec::new();
+    for elem_iov in elem_iovecs.iter() {
+        // elem_iov.addr has been checked in pop_avail().
+        let mut len = elem_iov.len;
+        let mut start = elem_iov.addr;
+        loop {
+            let io_vec = mem_space
+                .get_host_address_from_cache(start, cache)
+                .map(|(hva, fr_len)| libc::iovec {
+                    iov_base: hva as *mut libc::c_void,
+                    iov_len: std::cmp::min(elem_iov.len, fr_len as u32) as libc::size_t,
+                })
+                .unwrap();
+            start = start.unchecked_add(io_vec.iov_len as u64);
+            len -= io_vec.iov_len as u32;
+            iovecs.push(io_vec);
+            if len == 0 {
+                break;
+            }
+        }
+    }
+    iovecs
+}
+
 pub fn virtio_register_sysbusdevops_type() -> Result<()> {
     register_sysbusdevops_type::<VirtioMmioDevice>()
 }
