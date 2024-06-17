@@ -27,10 +27,10 @@ use once_cell::sync::Lazy;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, iov_discard_front, iov_to_buf, mem_to_buf, read_config_default,
-    report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue, VirtioBase, VirtioDevice,
-    VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
+    check_config_space_rw, get_libc_iovecs, iov_discard_front, iov_to_buf, mem_to_buf,
+    read_config_default, report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue,
+    VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
     VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
@@ -43,12 +43,9 @@ use crate::{
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
     VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
-use address_space::{AddressSpace, RegionCache};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{
-    config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig},
-    event_loop::EventLoop,
-};
+use address_space::AddressSpace;
+use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
     migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
     StateTransfer,
@@ -753,35 +750,6 @@ impl NetIoHandler {
         size
     }
 
-    fn get_libc_iovecs(
-        mem_space: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        elem_iovecs: &[ElemIovec],
-    ) -> Vec<libc::iovec> {
-        let mut iovecs = Vec::new();
-        for elem_iov in elem_iovecs.iter() {
-            // elem_iov.addr has been checked in pop_avail().
-            let mut len = elem_iov.len;
-            let mut start = elem_iov.addr;
-            loop {
-                let io_vec = mem_space
-                    .get_host_address_from_cache(start, cache)
-                    .map(|(hva, fr_len)| libc::iovec {
-                        iov_base: hva as *mut libc::c_void,
-                        iov_len: std::cmp::min(elem_iov.len, fr_len as u32) as libc::size_t,
-                    })
-                    .unwrap();
-                start = start.unchecked_add(io_vec.iov_len as u64);
-                len -= io_vec.iov_len as u32;
-                iovecs.push(io_vec);
-                if len == 0 {
-                    break;
-                }
-            }
-        }
-        iovecs
-    }
-
     fn handle_rx(&mut self) -> Result<()> {
         trace::virtio_receive_request("Net".to_string(), "to rx".to_string());
         if self.tap.is_none() {
@@ -805,11 +773,7 @@ impl NetIoHandler {
             } else if elem.in_iovec.is_empty() {
                 bail!("The length of in iovec is 0");
             }
-            let iovecs = NetIoHandler::get_libc_iovecs(
-                &self.mem_space,
-                queue.vring.get_cache(),
-                &elem.in_iovec,
-            );
+            let iovecs = get_libc_iovecs(&self.mem_space, queue.vring.get_cache(), &elem.in_iovec);
 
             if MigrationManager::is_active() {
                 // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
@@ -921,11 +885,7 @@ impl NetIoHandler {
                 bail!("The length of out iovec is 0");
             }
 
-            let iovecs = NetIoHandler::get_libc_iovecs(
-                &self.mem_space,
-                queue.vring.get_cache(),
-                &elem.out_iovec,
-            );
+            let iovecs = get_libc_iovecs(&self.mem_space, queue.vring.get_cache(), &elem.out_iovec);
             let tap_fd = if let Some(tap) = self.tap.as_mut() {
                 tap.as_raw_fd() as libc::c_int
             } else {
