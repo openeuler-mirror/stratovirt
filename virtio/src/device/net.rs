@@ -1224,7 +1224,7 @@ impl NetIoHandler {
             tap_fd,
             Some(handler),
             NotifierOperation::AddShared,
-            EventSet::OUT | EventSet::IN | EventSet::EDGE_TRIGGERED,
+            EventSet::IN | EventSet::EDGE_TRIGGERED,
         )];
 
         notifiers
