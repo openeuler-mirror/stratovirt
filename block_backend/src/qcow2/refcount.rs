@@ -791,8 +791,8 @@ mod test {
         path: &str,
         img_bits: u32,
         cluster_bits: u32,
-    ) -> (Qcow2Driver<()>, File) {
-        let file = image_create(path, img_bits, cluster_bits);
+    ) -> (Qcow2Driver<()>, Arc<File>) {
+        let file = Arc::new(image_create(path, img_bits, cluster_bits));
         let aio = Aio::new(
             Arc::new(SyncAioInfo::complete_func),
             util::aio::AioEngine::Off,
@@ -811,10 +811,9 @@ mod test {
             l2_cache_size: None,
             refcount_cache_size: None,
         };
-        let cloned_file = file.try_clone().unwrap();
-        let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone()).unwrap();
+        let mut qcow2_driver = Qcow2Driver::new(file.clone(), aio, conf.clone()).unwrap();
         qcow2_driver.load_metadata(conf).unwrap();
-        (qcow2_driver, cloned_file)
+        (qcow2_driver, file)
     }
 
     #[test]
@@ -835,6 +834,7 @@ mod test {
         // Check if the refcount of the cluster is updated to the disk.
         let mut rc_value = [0_u8; 2];
         cloned_file
+            .as_ref()
             .read_at(
                 &mut rc_value,
                 cluster_sz * 2 + 2 * free_cluster_index as u64,
@@ -873,6 +873,7 @@ mod test {
         let table_size = div_round_up(image_size, block_size * cluster_size).unwrap();
         let mut refcount_table = vec![0_u8; table_size as usize * ENTRY_SIZE as usize];
         assert!(cloned_file
+            .as_ref()
             .read_at(&mut refcount_table, table_offset)
             .is_ok());
         for i in 0..table_size {
@@ -928,9 +929,13 @@ mod test {
         let old_rct_size = cluster_sz as usize * rct_clusters as usize;
         let new_rct_size = cluster_sz as usize * new_rct_clusters as usize;
         let mut old_rc_table = vec![0_u8; old_rct_size];
-        cloned_file.read_at(&mut old_rc_table, rct_offset).unwrap();
+        cloned_file
+            .as_ref()
+            .read_at(&mut old_rc_table, rct_offset)
+            .unwrap();
         let mut new_rc_table = vec![0_u8; new_rct_size];
         cloned_file
+            .as_ref()
             .read_at(&mut new_rc_table, new_rct_offset as u64)
             .unwrap();
         for i in 0..old_rct_size {

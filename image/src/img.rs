@@ -40,7 +40,7 @@ enum SnapshotOperation {
 }
 
 pub struct ImageFile {
-    file: File,
+    file: Arc<File>,
     path: String,
 }
 
@@ -58,7 +58,7 @@ impl ImageFile {
         })?;
 
         Ok(Self {
-            file,
+            file: Arc::new(file),
             path: path.to_string(),
         })
     }
@@ -165,12 +165,14 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     }
 
     let path = create_options.path.clone();
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_CREAT | libc::O_TRUNC)
-        .mode(0o660)
-        .open(path)?;
+    let file = Arc::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+            .mode(0o660)
+            .open(path)?,
+    );
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
     let image_info = match disk_fmt {
@@ -221,10 +223,9 @@ pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
         ..Default::default()
     };
     let mut driver: Box<dyn BlockDriverOps<()>> = match detect_fmt {
-        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
+        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.clone(), aio, conf)),
         DiskFormat::Qcow2 => {
-            let mut qocw2_driver =
-                Qcow2Driver::new(image_file.file.try_clone()?, aio, conf.clone())?;
+            let mut qocw2_driver = Qcow2Driver::new(image_file.file.clone(), aio, conf.clone())?;
             qocw2_driver.load_metadata(conf)?;
             Box::new(qocw2_driver)
         }
@@ -291,7 +292,7 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     let real_fmt = image_file.check_img_format(disk_fmt, detect_fmt)?;
 
     let mut check_res = CheckResult::default();
-    let file = image_file.file.try_clone()?;
+    let file = image_file.file.clone();
     match real_fmt {
         DiskFormat::Raw => {
             bail!("stratovirt-img: This image format does not support checks");
@@ -347,10 +348,9 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
         ..Default::default()
     };
     let mut driver: Box<dyn BlockDriverOps<()>> = match real_fmt {
-        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
+        DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.clone(), aio, conf)),
         DiskFormat::Qcow2 => {
-            let mut qocw2_driver =
-                Qcow2Driver::new(image_file.file.try_clone()?, aio, conf.clone())?;
+            let mut qocw2_driver = Qcow2Driver::new(image_file.file.clone(), aio, conf.clone())?;
             qocw2_driver.load_metadata(conf)?;
             Box::new(qocw2_driver)
         }
@@ -457,7 +457,7 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     };
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
-    let mut qcow2_driver = Qcow2Driver::new(image_file.file.try_clone()?, aio, qcow2_conf.clone())?;
+    let mut qcow2_driver = Qcow2Driver::new(image_file.file.clone(), aio, qcow2_conf.clone())?;
     qcow2_driver.load_metadata(qcow2_conf)?;
 
     match snapshot_operation {
@@ -482,7 +482,7 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
 }
 
 pub(crate) fn create_qcow2_driver_for_check(
-    file: File,
+    file: Arc<File>,
     conf: BlockProperty,
 ) -> Result<Qcow2Driver<()>> {
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
@@ -577,7 +577,7 @@ mod test {
         pub header: QcowHeader,
         pub cluster_bits: u64,
         pub path: String,
-        pub file: File,
+        pub file: Arc<File>,
     }
 
     impl TestQcow2Image {
@@ -606,7 +606,7 @@ mod test {
                 header,
                 cluster_bits,
                 path: path.to_string(),
-                file,
+                file: Arc::new(file),
             }
         }
 
@@ -616,14 +616,13 @@ mod test {
                 ..Default::default()
             };
             let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
-            let mut qcow2_driver =
-                Qcow2Driver::new(self.file.try_clone().unwrap(), aio, conf.clone()).unwrap();
+            let mut qcow2_driver = Qcow2Driver::new(self.file.clone(), aio, conf.clone()).unwrap();
             qcow2_driver.load_metadata(conf).unwrap();
             qcow2_driver
         }
 
         fn create_driver_for_check(&self) -> Qcow2Driver<()> {
-            let file = self.file.try_clone().unwrap();
+            let file = self.file.clone();
             let conf = BlockProperty {
                 format: DiskFormat::Qcow2,
                 ..Default::default()
@@ -669,7 +668,7 @@ mod test {
         }
 
         fn file_len(&mut self) -> u64 {
-            let file_len = self.file.seek(SeekFrom::End(0)).unwrap();
+            let file_len = self.file.as_ref().seek(SeekFrom::End(0)).unwrap();
             file_len
         }
 
@@ -706,12 +705,12 @@ mod test {
         }
 
         fn create_driver(&mut self) -> RawDriver<()> {
-            let mut conf = BlockProperty::default();
+            let conf = BlockProperty::default();
 
             let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
 
             let file = open_file(&self.path, false, false).unwrap();
-            let raw_driver = RawDriver::new(file, aio, conf);
+            let raw_driver = RawDriver::new(Arc::new(file), aio, conf);
             raw_driver
         }
     }

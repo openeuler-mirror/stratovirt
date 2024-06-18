@@ -64,6 +64,7 @@ use std::fs::{canonicalize, File};
 use std::io::Read;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
@@ -305,7 +306,7 @@ impl VmConfig {
         }
         let drive_file = DriveFile {
             id: id.to_string(),
-            file,
+            file: Arc::new(file),
             count: 1,
             read_only,
             path: path.to_string(),
@@ -337,12 +338,12 @@ impl VmConfig {
     }
 
     /// Get a file from drive file store.
-    pub fn fetch_drive_file(drive_files: &HashMap<String, DriveFile>, path: &str) -> Result<File> {
+    pub fn fetch_drive_file(
+        drive_files: &HashMap<String, DriveFile>,
+        path: &str,
+    ) -> Result<Arc<File>> {
         match drive_files.get(path) {
-            Some(drive_file) => drive_file
-                .file
-                .try_clone()
-                .with_context(|| format!("Failed to clone drive backend file {}", path)),
+            Some(drive_file) => Ok(drive_file.file.clone()),
             None => Err(anyhow!("The file {} is not in drive backend", path)),
         }
     }

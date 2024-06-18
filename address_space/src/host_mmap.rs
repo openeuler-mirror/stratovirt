@@ -59,9 +59,9 @@ impl FileBackend {
     /// # Arguments
     ///
     /// * `fd` - Opened backend file.
-    pub fn new_common(fd: File) -> Self {
+    pub fn new_common(fd: Arc<File>) -> Self {
         Self {
-            file: Arc::new(fd),
+            file: fd,
             offset: 0,
             page_size: 0,
         }

@@ -1983,7 +1983,7 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     /// Fetch a cloned file from drive backend files.
-    fn fetch_drive_file(&self, path: &str) -> Result<File> {
+    fn fetch_drive_file(&self, path: &str) -> Result<Arc<File>> {
         let files = self.get_drive_files();
         let drive_files = files.lock().unwrap();
         VmConfig::fetch_drive_file(&drive_files, path)

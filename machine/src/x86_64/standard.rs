@@ -575,8 +575,8 @@ impl MachineOps for StdMachine {
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         for config in configs_vec {
-            let mut fd = self.fetch_drive_file(&config.path_on_host)?;
-            let pfl_size = fd.metadata().unwrap().len();
+            let file = self.fetch_drive_file(&config.path_on_host)?;
+            let pfl_size = file.as_ref().metadata()?.len();
 
             if config.unit.unwrap() == 0 {
                 // According to the Linux/x86 boot protocol, the memory region of
@@ -584,7 +584,7 @@ impl MachineOps for StdMachine {
                 // KiB is for BIOS code which is stored in the first PFlash.
                 let rom_base = 0xe0000;
                 let rom_size = 0x20000;
-                fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
+                file.as_ref().seek(SeekFrom::Start(pfl_size - rom_size))?;
 
                 let ram1 = Arc::new(HostMemMapping::new(
                     GuestAddress(rom_base),
@@ -596,18 +596,18 @@ impl MachineOps for StdMachine {
                     false,
                 )?);
                 let rom_region = Region::init_ram_region(ram1, "PflashRam");
-                rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
+                rom_region.write(&mut file.as_ref(), GuestAddress(rom_base), 0, rom_size)?;
                 rom_region.set_priority(10);
                 self.base
                     .sys_mem
                     .root()
                     .add_subregion(rom_region, rom_base)?;
 
-                fd.rewind()?
+                file.as_ref().rewind()?
             }
 
             let sector_len: u32 = 1024 * 4;
-            let backend = Some(fd);
+            let backend = Some(file);
             let pflash = PFlash::new(
                 pfl_size,
                 backend,

@@ -394,7 +394,7 @@ pub trait BlockDriverOps<T: Clone>: Send {
 }
 
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
-    file: File,
+    file: Arc<File>,
     aio: Aio<T>,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
