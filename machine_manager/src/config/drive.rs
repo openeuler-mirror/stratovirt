@@ -14,6 +14,7 @@ use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
@@ -37,7 +38,7 @@ pub struct DriveFile {
     /// Drive id.
     pub id: String,
     /// The opened file.
-    pub file: File,
+    pub file: Arc<File>,
     /// The num of drives share same file.
     pub count: u32,
     /// File path.

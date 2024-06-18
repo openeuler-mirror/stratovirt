@@ -269,7 +269,7 @@ pub fn qcow2_flush_metadata<T: Clone + 'static>(
 }
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
-    pub fn new(file: File, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
+    pub fn new(file: Arc<File>, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
         let fd = file.as_raw_fd();
         let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(fd, conf.clone())?));
         Ok(Self {
@@ -1614,19 +1614,25 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         // Write zero.
         for i in 0..3 {
             let offset = i * cluster_size;
-            self.driver.file.seek(SeekFrom::Start(offset))?;
-            self.driver.file.write_all(&zero_buf.to_vec())?
+            self.driver.file.as_ref().seek(SeekFrom::Start(offset))?;
+            self.driver.file.as_ref().write_all(&zero_buf.to_vec())?
         }
-        self.driver.file.rewind()?;
-        self.driver.file.write_all(&self.header.to_vec())?;
+        self.driver.file.as_ref().rewind()?;
+        self.driver.file.as_ref().write_all(&self.header.to_vec())?;
 
         // Refcount table.
-        self.driver.file.seek(SeekFrom::Start(cluster_size))?;
-        self.driver.file.write_all(&rc_table)?;
+        self.driver
+            .file
+            .as_ref()
+            .seek(SeekFrom::Start(cluster_size))?;
+        self.driver.file.as_ref().write_all(&rc_table)?;
 
         // Refcount block table.
-        self.driver.file.seek(SeekFrom::Start(cluster_size * 2))?;
-        self.driver.file.write_all(&rc_block)?;
+        self.driver
+            .file
+            .as_ref()
+            .seek(SeekFrom::Start(cluster_size * 2))?;
+        self.driver.file.as_ref().write_all(&rc_block)?;
 
         // Create qcow2 driver.
         self.load_refcount_table()?;
@@ -2015,11 +2021,13 @@ mod test {
         }
 
         fn create_qcow2_driver(&self, conf: BlockProperty) -> Qcow2Driver<()> {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&self.path)
-                .unwrap();
+            let file = Arc::new(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&self.path)
+                    .unwrap(),
+            );
             let aio = Aio::new(
                 Arc::new(SyncAioInfo::complete_func),
                 util::aio::AioEngine::Off,
@@ -2090,11 +2098,13 @@ mod test {
 
     pub fn create_qcow2(path: &str) -> (TestImage, Qcow2Driver<()>) {
         let mut image = TestImage::new(path, 30, 16);
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
+        let file = Arc::new(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap(),
+        );
         let aio = Aio::new(
             Arc::new(SyncAioInfo::complete_func),
             util::aio::AioEngine::Off,

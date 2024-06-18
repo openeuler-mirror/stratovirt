@@ -65,14 +65,14 @@ pub struct PFlash {
 impl PFlash {
     fn flash_region_size(
         region_max_size: u64,
-        backend: &Option<File>,
+        backend: &Option<Arc<File>>,
         read_only: bool,
     ) -> Result<u64> {
         // We don't have to occupy the whole memory region.
         // If flash is read-only, expose just real data size,
         // rounded up to page_size
         if let Some(fd) = backend.as_ref() {
-            let len = fd.metadata().unwrap().len();
+            let len = fd.as_ref().metadata().unwrap().len();
             if len > region_max_size || len == 0 || (!read_only && len != region_max_size) {
                 bail!(
                     "Invalid flash file: Region size 0x{region_max_size:X}, file size 0x{len:X}; read_only {read_only}"
@@ -104,7 +104,7 @@ impl PFlash {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         region_max_size: u64,
-        backend: Option<File>,
+        backend: Option<Arc<File>>,
         block_len: u32,
         bank_width: u32,
         device_width: u32,
@@ -937,13 +937,13 @@ mod test {
         fd.set_len(flash_size).unwrap();
         drop(fd);
 
-        let fd = Some(
+        let fd = Some(Arc::new(
             std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(file_name)
                 .unwrap(),
-        );
+        ));
         let sysbus = sysbus_init();
         let pflash = PFlash::new(
             flash_size, fd, sector_len, 4, 2, read_only, &sysbus, flash_base,

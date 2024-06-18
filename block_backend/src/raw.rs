@@ -45,7 +45,7 @@ unsafe impl<T: Clone + 'static> Send for RawDriver<T> {}
 unsafe impl<T: Clone + 'static> Sync for RawDriver<T> {}
 
 impl<T: Clone + 'static> RawDriver<T> {
-    pub fn new(file: File, aio: Aio<T>, prop: BlockProperty) -> Self {
+    pub fn new(file: Arc<File>, aio: Aio<T>, prop: BlockProperty) -> Self {
         Self {
             driver: FileDriver::new(file, aio, prop),
             status: Arc::new(Mutex::new(BlockStatus::Init)),
