@@ -466,7 +466,7 @@ impl KvmCpu {
                             return Ok(true);
                         } else {
                             error!(
-                            "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
+                            "Vcpu{} received unexpected system event with type 0x{:x}, flags {:#x?}",
                             cpu.id(),
                             event,
                             flags

@@ -8,7 +8,7 @@ license = "Mulan PSL v2"
 [dependencies]
 thiserror = "1.0"
 anyhow = "1.0"
-kvm-bindings = { version = "0.6.0", features = ["fam-wrappers"] }
+kvm-bindings = { version = "0.7.0", features = ["fam-wrappers"] }
 log = "0.4"
 address_space = { path = "../address_space" }
 devices = { path = "../devices" }
