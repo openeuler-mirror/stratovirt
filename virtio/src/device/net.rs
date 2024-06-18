@@ -1167,32 +1167,11 @@ impl NetIoHandler {
 
             if events.contains(EventSet::OUT) {
                 net_queue.listen_state.lock().unwrap().set_tap_full(false);
-                let mut locked_queue = net_queue.tx.queue.lock().unwrap();
-
-                if let Err(ref err) = locked_queue.vring.suppress_queue_notify(
-                    &net_queue.mem_space,
-                    net_queue.driver_features,
-                    false,
-                ) {
-                    error!("Failed to enable tx queue notify: {:?}", err);
-                    report_virtio_error(
-                        net_queue.interrupt_cb.clone(),
-                        net_queue.driver_features,
-                        &device_broken,
-                    );
-                    return None;
-                };
-
-                drop(locked_queue);
-
-                if let Err(ref e) = net_queue.handle_tx(&tap) {
-                    error!("Failed to handle tx(tx event) for net, {:?}", e);
-                    report_virtio_error(
-                        net_queue.interrupt_cb.clone(),
-                        net_queue.driver_features,
-                        &device_broken,
-                    );
-                }
+                net_queue
+                    .tx
+                    .queue_evt
+                    .write(1)
+                    .unwrap_or_else(|e| error!("Failed to notify tx thread: {:?}", e));
             }
 
             if events.contains(EventSet::IN) {
