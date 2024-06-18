@@ -633,13 +633,15 @@ impl AddressSpace {
         trace::trace_scope_start!(address_space_write, args = (&addr, count));
         let view = self.flat_view.load();
 
+        let mut buf = Vec::new();
+        src.read_to_end(&mut buf).unwrap();
+
         if !*self.hyp_ioevtfd_enabled.get_or_init(|| false) {
             let ioeventfds = self.ioeventfds.lock().unwrap();
-            if let Ok(index) = ioeventfds
-                .as_slice()
-                .binary_search_by(|ioevtfd| ioevtfd.addr_range.base.cmp(&addr))
-            {
-                let evtfd = &ioeventfds[index];
+            for evtfd in ioeventfds.as_slice() {
+                if evtfd.addr_range.base != addr {
+                    continue;
+                }
                 if count == evtfd.addr_range.size || evtfd.addr_range.size == 0 {
                     if !evtfd.data_match {
                         if let Err(e) = evtfd.fd.write(1) {
@@ -648,26 +650,27 @@ impl AddressSpace {
                         return Ok(());
                     }
 
-                    let mut buf = Vec::new();
-                    src.read_to_end(&mut buf).unwrap();
+                    let mut buf_temp = buf.clone();
 
-                    if buf.len() <= 8 {
-                        buf.resize(8, 0);
-                        let data = u64::from_bytes(buf.as_slice()).unwrap();
+                    if buf_temp.len() <= 8 {
+                        buf_temp.resize(8, 0);
+                        let data = u64::from_bytes(buf_temp.as_slice()).unwrap();
                         if *data == evtfd.data {
                             if let Err(e) = evtfd.fd.write(1) {
                                 error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
                             }
                             return Ok(());
+                        } else {
+                            continue;
                         }
                     }
-                    view.write(&mut buf.as_slice(), addr, count)?;
+                    view.write(&mut buf_temp.as_slice(), addr, count)?;
                     return Ok(());
                 }
             }
         }
 
-        view.write(src, addr, count)?;
+        view.write(&mut buf.as_slice(), addr, count)?;
         Ok(())
     }
 
