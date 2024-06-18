@@ -23,11 +23,11 @@ use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
-    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_read_object,
+    read_config_default, ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
@@ -418,13 +418,7 @@ impl VirtioGpuRequest {
             );
         }
 
-        let mut header = VirtioGpuCtrlHdr::default();
-        iov_to_buf(mem_space, &elem.out_iovec, header.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<VirtioGpuCtrlHdr>() {
-                bail!("Invalid header for gpu request: len {}.", size)
-            }
-            Ok(())
-        })?;
+        let header = iov_read_object::<VirtioGpuCtrlHdr>(mem_space, &elem.out_iovec, &None)?;
 
         // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
         // it is possible to get none back.

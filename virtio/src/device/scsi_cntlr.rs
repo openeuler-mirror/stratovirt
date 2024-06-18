@@ -22,10 +22,10 @@ use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    report_virtio_error, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_SCSI,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_read_object,
+    read_config_default, report_virtio_error, Element, Queue, VirtioBase, VirtioDevice,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
 use address_space::{AddressSpace, GuestAddress};
 use block_backend::BlockIoErrorCallback;
@@ -479,32 +479,13 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
                 elem.desc_num
             );
         }
+        let locked_queue = queue.lock().unwrap();
+        let cache = locked_queue.vring.get_cache();
 
         // Get request from virtqueue Element.
-        let mut req = T::default();
-        iov_to_buf(mem_space, &elem.out_iovec, req.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<T>() {
-                bail!(
-                    "Invalid length for request: get {}, expected {}",
-                    size,
-                    size_of::<T>(),
-                );
-            }
-            Ok(())
-        })?;
-
+        let req = iov_read_object::<T>(mem_space, &elem.out_iovec, cache)?;
         // Get response from virtqueue Element.
-        let mut resp = U::default();
-        iov_to_buf(mem_space, &elem.in_iovec, resp.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<U>() {
-                bail!(
-                    "Invalid length for response: get {}, expected {}",
-                    size,
-                    size_of::<U>(),
-                );
-            }
-            Ok(())
-        })?;
+        let resp = iov_read_object::<U>(mem_space, &elem.in_iovec, cache)?;
 
         let mut request = VirtioScsiRequest {
             mem_space: mem_space.clone(),
@@ -515,14 +496,11 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
             mode: ScsiXferMode::ScsiXferNone,
             interrupt_cb,
             driver_features,
-            // Safety: in_iovec will not be empty since it has been checked after "iov_to_buf".
+            // Safety: in_iovec will not be empty since it has been checked after "iov_read_object".
             resp_addr: elem.in_iovec[0].addr,
             req,
             resp,
         };
-
-        let locked_queue = queue.lock().unwrap();
-        let cache = locked_queue.vring.get_cache();
 
         // Get possible dataout buffer from virtqueue Element.
         let mut iovec = elem.out_iovec.clone();
