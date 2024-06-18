@@ -67,6 +67,10 @@ impl FromStr for HypervisorType {
     }
 }
 
+pub trait PauseNotify: Send + Sync {
+    fn notify(&self, paused: bool);
+}
+
 /// Trait to handle virtual machine lifecycle.
 ///
 /// # Notes
