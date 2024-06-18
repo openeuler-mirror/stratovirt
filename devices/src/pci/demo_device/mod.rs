@@ -59,6 +59,7 @@ use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
 use crate::{Device, DeviceBase};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
+use util::gen_base_func;
 
 /// Config struct for `demo_dev`.
 /// Contains demo_dev device's attr.
@@ -195,23 +196,11 @@ const DEVICE_ID_DEMO: u16 = 0xBEEF;
 const CLASS_CODE_DEMO: u16 = 0xEE;
 
 impl Device for DemoDev {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for DemoDev {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     /// Realize PCI/PCIe device.
     fn realize(mut self) -> Result<()> {

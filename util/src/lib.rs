@@ -95,6 +95,60 @@ pub fn set_termi_canon_mode() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Macro: Generate base getting function.
+///
+/// # Arguments
+///
+/// * `get_func` - Name of getting `&base` function.
+/// * `get_mut_func` - Name of getting `&mut base` function.
+/// * `base_type` - Type of `base`.
+/// * `base` - `base` in self.
+///
+/// # Examples
+///
+/// ```rust
+/// use util::gen_base_func;
+/// struct TestBase(u8);
+/// struct Test {
+///     base: TestBase,
+/// }
+///
+/// impl Test {
+///     gen_base_func!(test_base, test_base_mut, TestBase, base);
+/// }
+/// ```
+///
+/// This is equivalent to:
+///
+/// ```rust
+/// struct TestBase(u8);
+/// struct Test {
+///     base: TestBase,
+/// }
+///
+/// impl Test {
+///     fn test_base(&self) -> &TestBase {
+///         &self.base
+///     }
+///
+///     fn test_base_mut(&mut self) -> &mut TestBase {
+///         &mut self.base
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! gen_base_func {
+    ($get_func: ident, $get_mut_func: ident, $base_type: ty, $($base: tt).*) => {
+        fn $get_func(&self) -> &$base_type {
+            &self.$($base).*
+        }
+
+        fn $get_mut_func(&mut self) -> &mut $base_type {
+            &mut self.$($base).*
+        }
+    };
+}
+
 /// This trait is to cast trait object to struct.
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;

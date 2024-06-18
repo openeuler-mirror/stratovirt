@@ -274,10 +274,11 @@ mod tests {
     use super::*;
     use crate::pci::bus::PciBus;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::pci::host::tests::create_pci_host;
     use crate::pci::root_port::RootPort;
-    use crate::pci::{PciDevBase, PciHost, RootPortConfig};
+    use crate::pci::{PciDevBase, RootPortConfig};
     use crate::{Device, DeviceBase};
-    use address_space::{AddressSpace, Region};
+    use util::gen_base_func;
 
     #[derive(Clone)]
     struct PciDevice {
@@ -285,23 +286,11 @@ mod tests {
     }
 
     impl Device for PciDevice {
-        fn device_base(&self) -> &DeviceBase {
-            &self.base.base
-        }
-
-        fn device_base_mut(&mut self) -> &mut DeviceBase {
-            &mut self.base.base
-        }
+        gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
     }
 
     impl PciDevOps for PciDevice {
-        fn pci_base(&self) -> &PciDevBase {
-            &self.base
-        }
-
-        fn pci_base_mut(&mut self) -> &mut PciDevBase {
-            &mut self.base
-        }
+        gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
             #[allow(unused_variables)]
@@ -337,34 +326,6 @@ mod tests {
         fn unrealize(&mut self) -> Result<()> {
             Ok(())
         }
-    }
-
-    pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(
-            Region::init_container_region(1 << 16, "sysio"),
-            "sysio",
-            None,
-        )
-        .unwrap();
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        Arc::new(Mutex::new(PciHost::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            (0xB000_0000, 0x1000_0000),
-            (0xC000_0000, 0x3000_0000),
-            #[cfg(target_arch = "aarch64")]
-            (0xF000_0000, 0x1000_0000),
-            #[cfg(target_arch = "aarch64")]
-            (512 << 30, 512 << 30),
-            16,
-        )))
     }
 
     #[test]

@@ -44,6 +44,7 @@ use crate::{
 };
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 
 // Size of UasIUBody
 const UAS_IU_BODY_SIZE: usize = 30;
@@ -1025,13 +1026,7 @@ impl UsbUas {
 }
 
 impl UsbDevice for UsbUas {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         info!("UAS {} device realize.", self.device_id());

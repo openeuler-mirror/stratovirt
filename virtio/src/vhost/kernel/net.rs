@@ -34,6 +34,7 @@ use address_space::AddressSpace;
 use machine_manager::config::{NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::tap::Tap;
 
@@ -123,13 +124,7 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let queue_pairs = self.netdev_cfg.queues / 2;
@@ -415,35 +410,8 @@ mod tests {
     use std::fs::File;
 
     use super::*;
-    use address_space::*;
+    use crate::tests::address_space_init;
     use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
-
-    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
-
-    fn vhost_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     #[test]
     fn test_vhost_net_realize() {
@@ -465,7 +433,7 @@ mod tests {
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
             ..Default::default()
         };
-        let vhost_net_space = vhost_address_space_init();
+        let vhost_net_space = address_space_init();
         let mut vhost_net = Net::new(&vhost_net_conf, netdev_cfg1, &vhost_net_space);
         // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
         assert!(vhost_net.realize().is_err());

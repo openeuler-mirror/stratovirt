@@ -41,17 +41,15 @@ use machine_manager::{
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
 };
-use util::{
-    bitmap::Bitmap,
-    byte_code::ByteCode,
-    loop_context::{
-        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-    },
-    num_ops::round_down,
-    offset_of,
-    seccomp::BpfRule,
-    unix::host_page_size,
+use util::bitmap::Bitmap;
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+use util::num_ops::round_down;
+use util::seccomp::BpfRule;
+use util::unix::host_page_size;
+use util::{gen_base_func, offset_of};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
@@ -1053,13 +1051,7 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.bln_cfg.check()?;
@@ -1245,38 +1237,12 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
-    pub use crate::*;
-
+    use super::*;
+    use crate::tests::{address_space_init, MEMORY_SIZE};
+    use crate::*;
     use address_space::{AddressRange, HostMemMapping, Region};
 
-    const MEMORY_SIZE: u64 = 1024 * 1024;
     const QUEUE_SIZE: u16 = 256;
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "space");
-        let sys_space = AddressSpace::new(root, "space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                MEMORY_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "space"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
         let mem_mapping = Arc::new(

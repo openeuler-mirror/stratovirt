@@ -877,3 +877,37 @@ pub fn virtio_register_sysbusdevops_type() -> Result<()> {
 pub fn virtio_register_pcidevops_type() -> Result<()> {
     register_pcidevops_type::<VirtioPciDevice>()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+
+    pub const MEMORY_SIZE: u64 = 1024 * 1024;
+
+    pub fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36, "root");
+        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                MEMORY_SIZE,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone(), "region_1"),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+}

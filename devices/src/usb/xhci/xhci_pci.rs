@@ -38,6 +38,7 @@ use crate::{Device, DeviceBase};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
 use machine_manager::config::{get_pci_df, valid_id};
 use machine_manager::event_loop::register_event_helper;
+use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
@@ -237,23 +238,11 @@ impl XhciPciDevice {
 }
 
 impl Device for XhciPciDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for XhciPciDevice {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         self.init_write_mask(false)?;

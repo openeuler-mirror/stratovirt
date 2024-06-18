@@ -33,6 +33,7 @@ use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
@@ -391,23 +392,11 @@ impl VirtioMmioDevice {
 }
 
 impl Device for VirtioMmioDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for VirtioMmioDevice {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
@@ -594,53 +583,28 @@ impl MigrationHook for VirtioMmioDevice {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
+    use crate::tests::address_space_init;
     use crate::{
         check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
         VIRTIO_TYPE_BLOCK,
     };
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use address_space::{AddressSpace, GuestAddress};
 
-    pub fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
-
-    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
     const CONFIG_SPACE_SIZE: usize = 16;
     const QUEUE_NUM: usize = 2;
     const QUEUE_SIZE: u16 = 256;
 
-    pub struct VirtioDeviceTest {
+    struct VirtioDeviceTest {
         base: VirtioBase,
-        pub config_space: Vec<u8>,
-        pub b_active: bool,
-        pub b_realized: bool,
+        config_space: Vec<u8>,
+        b_active: bool,
+        b_realized: bool,
     }
 
     impl VirtioDeviceTest {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let mut config_space = Vec::new();
             for i in 0..CONFIG_SPACE_SIZE {
                 config_space.push(i as u8);
@@ -656,13 +620,7 @@ pub mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
-        fn virtio_base(&self) -> &VirtioBase {
-            &self.base
-        }
-
-        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-            &mut self.base
-        }
+        gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
         fn realize(&mut self) -> Result<()> {
             self.b_realized = true;

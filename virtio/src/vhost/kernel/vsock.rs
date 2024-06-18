@@ -32,6 +32,7 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 
 /// Number of virtqueues.
@@ -193,13 +194,7 @@ impl Vsock {
 }
 
 impl VirtioDevice for Vsock {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
@@ -414,14 +409,8 @@ impl MigrationHook for Vsock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use address_space::*;
+    use crate::tests::address_space_init;
     use machine_manager::config::str_slip_to_clap;
-
-    fn vsock_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(u64::max_value(), "sysmem");
-        let sys_mem = AddressSpace::new(root, "sysmem", None).unwrap();
-        sys_mem
-    }
 
     fn vsock_create_instance() -> Vsock {
         let vsock_conf = VsockConfig {
@@ -430,7 +419,7 @@ mod tests {
             vhost_fd: None,
             ..Default::default()
         };
-        let sys_mem = vsock_address_space_init();
+        let sys_mem = address_space_init();
         let vsock = Vsock::new(&vsock_conf, &sys_mem);
         vsock
     }

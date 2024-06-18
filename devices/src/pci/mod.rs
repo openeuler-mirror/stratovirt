@@ -406,6 +406,7 @@ mod tests {
     use super::*;
     use crate::DeviceBase;
     use address_space::{AddressSpace, Region};
+    use util::gen_base_func;
 
     #[test]
     fn test_le_write_u16_01() {
@@ -453,23 +454,11 @@ mod tests {
         }
 
         impl Device for PciDev {
-            fn device_base(&self) -> &DeviceBase {
-                &self.base.base
-            }
-
-            fn device_base_mut(&mut self) -> &mut DeviceBase {
-                &mut self.base.base
-            }
+            gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
         }
 
         impl PciDevOps for PciDev {
-            fn pci_base(&self) -> &PciDevBase {
-                &self.base
-            }
-
-            fn pci_base_mut(&mut self) -> &mut PciDevBase {
-                &mut self.base
-            }
+            gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
 

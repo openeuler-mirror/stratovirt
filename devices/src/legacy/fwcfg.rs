@@ -31,7 +31,7 @@ use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
-use util::offset_of;
+use util::{gen_base_func, offset_of};
 
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
@@ -931,24 +931,12 @@ impl FwCfgOps for FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl Device for FwCfgMem {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 #[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
@@ -1098,24 +1086,12 @@ impl FwCfgOps for FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl Device for FwCfgIO {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 #[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
@@ -1292,58 +1268,8 @@ impl AmlBuilder for FwCfgIO {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
-    use address_space::{AddressSpace, HostMemMapping, Region};
-
-    fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sys_mem"),
-            "sys_mem",
-            None,
-        )
-        .unwrap();
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(
-            Region::init_container_region(1 << 16, "sys_io"),
-            "sys_io",
-            None,
-        )
-        .unwrap();
-        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
-        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-        SysBus::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            free_irqs,
-            mmio_region,
-        )
-    }
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                0x1000_0000,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "region_1"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
+    use crate::sysbus::sysbus_init;
+    use crate::test::address_space_init;
 
     #[test]
     fn test_entry_functions() {

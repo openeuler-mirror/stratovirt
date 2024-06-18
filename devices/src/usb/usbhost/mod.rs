@@ -56,12 +56,11 @@ use machine_manager::{
 };
 #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
 use ohusb::OhUsbDev;
-use util::{
-    byte_code::ByteCode,
-    link_list::{List, Node},
-    loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback},
-    num_ops::str_to_num,
-};
+use util::byte_code::ByteCode;
+use util::gen_base_func;
+use util::link_list::{List, Node};
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback};
+use util::num_ops::str_to_num;
 
 const NON_ISO_PACKETS_NUMS: c_int = 0;
 const HANDLE_TIMEOUT_MS: u64 = 2;
@@ -1050,13 +1049,7 @@ impl EventNotifierHelper for UsbHost {
 }
 
 impl UsbDevice for UsbHost {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         info!("Open and init usbhost device: {:?}", self.config);

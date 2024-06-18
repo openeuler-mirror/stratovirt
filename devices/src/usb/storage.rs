@@ -37,6 +37,7 @@ use crate::{
 };
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::aio::AioEngine;
+use util::gen_base_func;
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -541,13 +542,7 @@ impl UsbStorage {
 }
 
 impl UsbDevice for UsbStorage {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.base.reset_usb_endpoint();

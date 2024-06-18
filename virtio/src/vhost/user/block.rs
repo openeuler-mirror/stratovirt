@@ -37,6 +37,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::unregister_event_helper;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 
 #[derive(Parser, Debug, Clone, Default)]
 #[command(no_binary_name(true))]
@@ -119,13 +120,7 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.init_client()?;

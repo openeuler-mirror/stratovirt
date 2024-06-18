@@ -52,9 +52,8 @@ use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::num_ops::ranges_overlap;
-use util::num_ops::{read_data_u32, write_data_u32};
-use util::offset_of;
+use util::num_ops::{ranges_overlap, read_data_u32, write_data_u32};
+use util::{gen_base_func, offset_of};
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
@@ -1005,23 +1004,11 @@ impl VirtioPciDevice {
 }
 
 impl Device for VirtioPciDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl PciDevOps for VirtioPciDevice {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn realize(mut self) -> Result<()> {
         info!("func: realize, id: {:?}", &self.base.base.id);
@@ -1385,7 +1372,7 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::transport::virtio_mmio::tests::address_space_init;
+    use crate::tests::address_space_init;
     use crate::VirtioBase;
     use address_space::{AddressSpace, GuestAddress};
     use devices::pci::{
@@ -1397,13 +1384,13 @@ mod tests {
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
     const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
 
-    pub struct VirtioDeviceTest {
+    struct VirtioDeviceTest {
         base: VirtioBase,
-        pub is_activated: bool,
+        is_activated: bool,
     }
 
     impl VirtioDeviceTest {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let mut base = VirtioBase::new(
                 VIRTIO_DEVICE_TEST_TYPE,
                 VIRTIO_DEVICE_QUEUE_NUM,
@@ -1418,13 +1405,7 @@ mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
-        fn virtio_base(&self) -> &VirtioBase {
-            &self.base
-        }
-
-        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-            &mut self.base
-        }
+        gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
         fn realize(&mut self) -> Result<()> {
             self.init_config_features()?;

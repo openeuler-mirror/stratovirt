@@ -32,6 +32,7 @@ use ui::console::{
     DisplaySurface, HardWareOperations,
 };
 use ui::input::{key_event, KEYCODE_RET};
+use util::gen_base_func;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;
@@ -258,23 +259,11 @@ impl Ramfb {
 }
 
 impl Device for Ramfb {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
-
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 }
 
 impl SysBusDevOps for Ramfb {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be read!");

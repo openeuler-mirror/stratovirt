@@ -61,7 +61,7 @@ use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use util::offset_of;
+use util::{gen_base_func, offset_of};
 
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -1122,13 +1122,7 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err
@@ -1446,8 +1440,9 @@ mod tests {
     use vmm_sys_util::tempfile::TempFile;
 
     use super::*;
+    use crate::tests::address_space_init;
     use crate::*;
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use address_space::GuestAddress;
     use machine_manager::config::{
         str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     };
@@ -1456,33 +1451,6 @@ mod tests {
     const CONFIG_SPACE_SIZE: usize = 60;
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
-    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
-
-    // build dummy address space of vm
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     fn init_default_block() -> Block {
         Block::new(

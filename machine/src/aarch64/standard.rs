@@ -83,7 +83,7 @@ use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::{create_new_eventfd, EventLoopManager};
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use util::set_termi_canon_mode;
+use util::{gen_base_func, set_termi_canon_mode};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -446,13 +446,7 @@ impl StdMachineOps for StdMachine {
 }
 
 impl MachineOps for StdMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
