@@ -26,13 +26,13 @@ use log::{error, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front,
-    iov_to_buf_by_cache, read_config_default, report_virtio_error, virtio_has_feature, Element,
-    Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
-    VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR,
-    VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_back, iov_discard_front, iov_read_object,
+    read_config_default, report_virtio_error, virtio_has_feature, Element, Queue, VirtioBase,
+    VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_DISCARD,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
+    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID,
+    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
     VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
@@ -286,19 +286,8 @@ impl Request {
             );
         }
 
-        let mut out_header = RequestOutHeader::default();
-        iov_to_buf_by_cache(
-            &handler.mem_space,
-            cache,
-            &elem.out_iovec,
-            out_header.as_mut_bytes(),
-        )
-        .and_then(|size| {
-            if size < size_of::<RequestOutHeader>() {
-                bail!("Invalid out header for block request: length {}", size);
-            }
-            Ok(())
-        })?;
+        let mut out_header =
+            iov_read_object::<RequestOutHeader>(&handler.mem_space, &elem.out_iovec, cache)?;
         out_header.request_type = LittleEndian::read_u32(out_header.request_type.as_bytes());
         out_header.sector = LittleEndian::read_u64(out_header.sector.as_bytes());
 

@@ -466,7 +466,7 @@ fn get_buf_and_discard(
     iovec: &mut [ElemIovec],
     buf: &mut [u8],
 ) -> Result<Vec<ElemIovec>> {
-    iov_to_buf(mem_space, iovec, buf).and_then(|size| {
+    iov_to_buf(mem_space, &None, iovec, buf).and_then(|size| {
         if size < buf.len() {
             error!("Invalid length {}, expected length {}", size, buf.len());
             bail!("Invalid length {}, expected length {}", size, buf.len());

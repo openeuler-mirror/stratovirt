@@ -49,6 +49,7 @@ pub use vhost::user as VhostUser;
 
 use std::cmp;
 use std::io::Write;
+use std::mem::size_of;
 use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
@@ -63,6 +64,7 @@ use devices::sysbus::register_sysbusdevops_type;
 use machine_manager::config::ConfigCheck;
 use migration_derive::ByteCode;
 use util::aio::{mem_to_buf, Iovec};
+use util::byte_code::ByteCode;
 use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
 
@@ -790,12 +792,23 @@ pub fn report_virtio_error(
     broken.store(true, Ordering::SeqCst);
 }
 
-/// Read iovec to buf and return the read number of bytes.
-pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8]) -> Result<usize> {
-    iov_to_buf_by_cache(mem_space, &None, iovec, buf)
+/// Read object typed `T` from iovec.
+pub fn iov_read_object<T: ByteCode>(
+    mem_space: &Arc<AddressSpace>,
+    iovec: &[ElemIovec],
+    cache: &Option<RegionCache>,
+) -> Result<T> {
+    let mut obj = T::default();
+    let count = iov_to_buf(mem_space, cache, iovec, obj.as_mut_bytes())?;
+    let size = size_of::<T>();
+    if count < size {
+        bail!("Read length error: expected {}, read {}.", size, count);
+    }
+    Ok(obj)
 }
 
-pub fn iov_to_buf_by_cache(
+/// Read iovec to buf and return the read number of bytes.
+pub fn iov_to_buf(
     mem_space: &AddressSpace,
     cache: &Option<RegionCache>,
     iovec: &[ElemIovec],
