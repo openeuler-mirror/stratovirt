@@ -115,7 +115,7 @@ impl Drop for ImageFile {
 pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     let mut create_options = CreateOptions::default();
     let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f"], vec!["o"]);
-    arg_parser.parse(args.clone())?;
+    arg_parser.parse(args)?;
 
     if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
         print_help();
@@ -170,7 +170,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         .write(true)
         .custom_flags(libc::O_CREAT | libc::O_TRUNC)
         .mode(0o660)
-        .open(path.clone())?;
+        .open(path)?;
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
     let image_info = match disk_fmt {
@@ -191,7 +191,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
 }
 
 pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
-    if args.len() < 1 {
+    if args.is_empty() {
         bail!("Not enough arguments");
     }
     let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec![], vec![]);
@@ -216,9 +216,10 @@ pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
     let image_file = ImageFile::create(&img_path, false)?;
     let detect_fmt = image_file.detect_img_format()?;
-
-    let mut conf = BlockProperty::default();
-    conf.format = detect_fmt;
+    let conf = BlockProperty {
+        format: detect_fmt,
+        ..Default::default()
+    };
     let mut driver: Box<dyn BlockDriverOps<()>> = match detect_fmt {
         DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
         DiskFormat::Qcow2 => {
@@ -229,8 +230,10 @@ pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
         }
     };
 
-    let mut image_info = ImageInfo::default();
-    image_info.path = img_path;
+    let mut image_info = ImageInfo {
+        path: img_path,
+        ..Default::default()
+    };
     driver.query_image(&mut image_info)?;
     print!("{}", image_info);
     Ok(())
@@ -258,9 +261,9 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
     }
 
     if let Some(kind) = arg_parser.opt_str("r") {
-        if kind == "leaks".to_string() {
+        if kind == *"leaks" {
             fix |= FIX_LEAKS;
-        } else if kind == "all".to_string() {
+        } else if kind == *"all" {
             fix |= FIX_LEAKS;
             fix |= FIX_ERRORS;
         } else {
@@ -294,8 +297,10 @@ pub(crate) fn image_check(args: Vec<String>) -> Result<()> {
             bail!("stratovirt-img: This image format does not support checks");
         }
         DiskFormat::Qcow2 => {
-            let mut conf = BlockProperty::default();
-            conf.format = DiskFormat::Qcow2;
+            let conf = BlockProperty {
+                format: DiskFormat::Qcow2,
+                ..Default::default()
+            };
             let mut qcow2_driver = create_qcow2_driver_for_check(file, conf)?;
             let ret = qcow2_driver.check_image(&mut check_res, quite, fix);
             let check_message = check_res.collect_check_message();
@@ -337,9 +342,10 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
     let image_file = ImageFile::create(&img_path, false)?;
     let detect_fmt = image_file.detect_img_format()?;
     let real_fmt = image_file.check_img_format(disk_fmt, detect_fmt)?;
-
-    let mut conf = BlockProperty::default();
-    conf.format = real_fmt;
+    let conf = BlockProperty {
+        format: real_fmt,
+        ..Default::default()
+    };
     let mut driver: Box<dyn BlockDriverOps<()>> = match real_fmt {
         DiskFormat::Raw => Box::new(RawDriver::new(image_file.file.try_clone()?, aio, conf)),
         DiskFormat::Qcow2 => {
@@ -352,12 +358,12 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
 
     let old_size = driver.disk_size()?;
     // Only expansion is supported currently.
-    let new_size = if size_str.starts_with("+") {
+    let new_size = if size_str.starts_with('+') {
         let size = memory_unit_conversion(&size_str, 1)?;
         old_size
             .checked_add(size)
             .ok_or_else(|| anyhow!("Disk size is too large for chosen offset"))?
-    } else if size_str.starts_with("-") {
+    } else if size_str.starts_with('-') {
         bail!("The shrink operation is not supported");
     } else {
         let new_size = memory_unit_conversion(&size_str, 1)?;
@@ -443,10 +449,12 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     }
 
     // Create qcow2 driver.
-    let mut qcow2_conf = BlockProperty::default();
-    qcow2_conf.format = DiskFormat::Qcow2;
-    qcow2_conf.discard = true;
-    qcow2_conf.write_zeroes = WriteZeroesState::Unmap;
+    let qcow2_conf = BlockProperty {
+        format: DiskFormat::Qcow2,
+        discard: true,
+        write_zeroes: WriteZeroesState::Unmap,
+        ..Default::default()
+    };
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
     let mut qcow2_driver = Qcow2Driver::new(image_file.file.try_clone()?, aio, qcow2_conf.clone())?;
@@ -603,8 +611,10 @@ mod test {
         }
 
         fn create_driver(&self) -> Qcow2Driver<()> {
-            let mut conf = BlockProperty::default();
-            conf.format = DiskFormat::Qcow2;
+            let conf = BlockProperty {
+                format: DiskFormat::Qcow2,
+                ..Default::default()
+            };
             let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
             let mut qcow2_driver =
                 Qcow2Driver::new(self.file.try_clone().unwrap(), aio, conf.clone()).unwrap();
@@ -614,8 +624,10 @@ mod test {
 
         fn create_driver_for_check(&self) -> Qcow2Driver<()> {
             let file = self.file.try_clone().unwrap();
-            let mut conf = BlockProperty::default();
-            conf.format = DiskFormat::Qcow2;
+            let conf = BlockProperty {
+                format: DiskFormat::Qcow2,
+                ..Default::default()
+            };
             let qcow2_driver = create_qcow2_driver_for_check(file, conf).unwrap();
             qcow2_driver
         }
@@ -695,7 +707,6 @@ mod test {
 
         fn create_driver(&mut self) -> RawDriver<()> {
             let mut conf = BlockProperty::default();
-            conf.format = DiskFormat::Raw;
 
             let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
 

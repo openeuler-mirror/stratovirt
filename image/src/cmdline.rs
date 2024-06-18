@@ -71,15 +71,15 @@ impl ArgsParse {
 
         for idx in 0..len {
             let str = args[idx as usize].clone();
-            if str.starts_with("-") && str.len() > 1 {
-                if pre_opt.1.len() != 0 {
+            if str.starts_with('-') && str.len() > 1 {
+                if !pre_opt.1.is_empty() {
                     bail!("missing argument for option '{}'", pre_opt.1);
                 }
 
                 let name = if str.starts_with("--") && str.len() > 2 {
-                    (&str[2..]).to_string()
-                } else if str.starts_with("-") && str.len() > 1 {
-                    (&str[1..]).to_string()
+                    str[2..].to_string()
+                } else if str.starts_with('-') && str.len() > 1 {
+                    str[1..].to_string()
                 } else {
                     bail!("unrecognized option '{}'", str);
                 };
@@ -100,7 +100,7 @@ impl ArgsParse {
                 continue;
             }
 
-            if pre_opt.0 + 1 == idx && pre_opt.1.len() != 0 {
+            if pre_opt.0 + 1 == idx && !pre_opt.1.is_empty() {
                 let name = pre_opt.1.to_string();
                 let value = str.to_string();
                 if let Some(arg) = self.args.get_mut(&name) {
@@ -117,14 +117,14 @@ impl ArgsParse {
                     }
                 }
                 pre_opt = (0, "".to_string());
-            } else if pre_opt.1.len() == 0 {
+            } else if pre_opt.1.is_empty() {
                 self.free.push(str.to_string());
             } else {
                 bail!("unrecognized option '{}'", pre_opt.1);
             }
         }
 
-        if pre_opt.0 == 0 && pre_opt.1.len() != 0 {
+        if pre_opt.0 == 0 && !pre_opt.1.is_empty() {
             bail!("unrecognized option '{}'", pre_opt.1);
         }
 
