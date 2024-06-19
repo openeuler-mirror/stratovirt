@@ -781,7 +781,7 @@ impl NetIoHandler {
                 // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
                 for iov in iovecs.iter() {
                     // Mark vmm dirty page manually if live migration is active.
-                    MigrationManager::mark_dirty_log(iov.iov_base as u64, iov.iov_len as u64);
+                    MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                 }
             }
 
@@ -1016,7 +1016,7 @@ fn get_net_header(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
             .checked_add(elem.iov_len as usize)
             .with_context(|| "Overflow when getting the net header")?;
         end = cmp::min(end, buf.len());
-        mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
+        mem_to_buf(&mut buf[start..end], elem.iov_base)?;
         if end >= buf.len() {
             break;
         }
