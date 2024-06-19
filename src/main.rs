@@ -103,7 +103,13 @@ fn run() -> Result<()> {
         exit_with_code(VM_EXIT_GENE_ERR);
     }));
 
-    let mut vm_config: VmConfig = create_vmconfig(&cmd_args)?;
+    let mut vm_config: VmConfig = match create_vmconfig(&cmd_args) {
+        Ok(vm_cfg) => vm_cfg,
+        Err(e) => {
+            error!("Failed to create vmconfig {:?}", e);
+            return Err(e);
+        }
+    };
     info!("VmConfig is {:?}", vm_config);
 
     match real_main(&cmd_args, &mut vm_config) {
