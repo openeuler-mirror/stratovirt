@@ -14,9 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::{
-    micro_common::syscall::syscall_whitelist, LightMachine, MachineBase, MachineError, MachineOps,
-};
+use crate::micro_common::syscall::syscall_whitelist;
+use crate::{register_shutdown_event, LightMachine, MachineBase, MachineError, MachineOps};
 use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
 use devices::legacy::FwCfgOps;
@@ -179,6 +178,8 @@ impl MachineOps for LightMachine {
             &topology,
             &boot_config,
         )?);
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
 
         MigrationManager::register_vm_instance(vm.clone());
         let migration_hyp = locked_vm.base.migration_hypervisor.clone();

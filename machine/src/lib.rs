@@ -27,16 +27,18 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
 use std::ops::Deref;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use log::warn;
-#[cfg(feature = "windows_emu_pid")]
+use log::{info, warn};
+use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
@@ -83,16 +85,19 @@ use machine_manager::config::{
     VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{HypervisorType, MachineInterface, PauseNotify, VmState};
+use machine_manager::machine::{
+    HypervisorType, MachineInterface, MachineLifecycle, PauseNotify, VmState,
+};
 use machine_manager::{check_arg_exist, check_arg_nonexist};
 use migration::{MigrateOps, MigrationManager};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
+use util::arg_parser;
 use util::file::{clear_file, lock_file, unlock_file};
-use util::{
-    arg_parser,
-    seccomp::{BpfRule, SeccompOpt, SyscallFilter},
+use util::loop_context::{
+    gen_delete_notifiers, EventNotifier, NotifierCallback, NotifierOperation,
 };
+use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
@@ -304,7 +309,7 @@ macro_rules! create_device_add_matches {
     };
 }
 
-pub trait MachineOps {
+pub trait MachineOps: MachineLifecycle {
     fn machine_base(&self) -> &MachineBase;
 
     fn machine_base_mut(&mut self) -> &mut MachineBase;
@@ -2249,6 +2254,47 @@ pub trait MachineOps {
 
         Ok(())
     }
+}
+
+fn register_shutdown_event(
+    shutdown_req: Arc<EventFd>,
+    vm: Arc<Mutex<dyn MachineOps>>,
+) -> Result<()> {
+    let shutdown_req_fd = shutdown_req.as_raw_fd();
+    let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+        let _ret = shutdown_req.read();
+        if handle_destroy_request(&vm) {
+            Some(gen_delete_notifiers(&[shutdown_req_fd]))
+        } else {
+            None
+        }
+    });
+    let notifier = EventNotifier::new(
+        NotifierOperation::AddShared,
+        shutdown_req_fd,
+        None,
+        EventSet::IN,
+        vec![shutdown_req_handler],
+    );
+    EventLoop::update_event(vec![notifier], None)
+        .with_context(|| "Failed to register event notifier.")
+}
+
+fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
+    let locked_vm = vm.lock().unwrap();
+    let vmstate: VmState = {
+        let state = locked_vm.machine_base().vm_state.deref().0.lock().unwrap();
+        *state
+    };
+
+    if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+        return false;
+    }
+
+    info!("vm destroy");
+    EventLoop::kick_all();
+
+    true
 }
 
 /// Normal run or resume virtual machine from migration/snapshot.

@@ -13,7 +13,6 @@
 pub use crate::error::MachineError;
 
 use std::mem::size_of;
-use std::ops::Deref;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
@@ -21,11 +20,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 #[cfg(feature = "ramfb")]
 use clap::Parser;
-use log::{error, info, warn};
-use vmm_sys_util::eventfd::EventFd;
 
+use super::pci_host_root::PciHostRoot;
+use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{MachineBase, MachineOps};
+use crate::{register_shutdown_event, MachineBase, MachineOps, StdMachine};
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -42,9 +41,6 @@ use acpi::{
 use address_space::FileBackend;
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
-
-use super::pci_host_root::PciHostRoot;
-use crate::standard_common::syscall::syscall_whitelist;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
 use devices::legacy::{
@@ -59,19 +55,12 @@ use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
 use machine_manager::config::str_slip_to_clap;
-use machine_manager::config::ShutdownAction;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
-use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
-};
+use machine_manager::config::{BootIndexInfo, DriveConfig, NumaNode, SerialConfig, VmConfig};
 use machine_manager::event;
-use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{
-    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface, PauseNotify, VmState,
-};
-use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
+use machine_manager::machine::{MachineLifecycle, PauseNotify};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
@@ -81,9 +70,9 @@ use ui::ohui_srv::{ohui_init, OhUiServer};
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::{create_new_eventfd, EventLoopManager};
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use util::{gen_base_func, set_termi_canon_mode};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -136,31 +125,6 @@ const IRQ_MAP: &[(i32, i32)] = &[
     (5, 15),  // Sysbus
     (16, 19), // Pcie
 ];
-
-/// Standard machine structure.
-pub struct StdMachine {
-    /// Machine base members.
-    base: MachineBase,
-    /// PCI/PCIe host bridge.
-    pci_host: Arc<Mutex<PciHost>>,
-    /// VM power button, handle VM `Shutdown` event.
-    pub power_button: Arc<EventFd>,
-    /// Shutdown request, handle VM `shutdown` event.
-    shutdown_req: Arc<EventFd>,
-    /// Reset request, handle VM `Reset` event.
-    reset_req: Arc<EventFd>,
-    /// Pause request, handle VM `Pause` event.
-    pause_req: Arc<EventFd>,
-    /// Resume request, handle VM `Resume` event.
-    resume_req: Arc<EventFd>,
-    /// Device Tree Blob.
-    dtb_vec: Vec<u8>,
-    /// List contains the boot order of boot devices.
-    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// OHUI server
-    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-    ohui_server: Option<Arc<OhUiServer>>,
-}
 
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
@@ -256,27 +220,6 @@ impl StdMachine {
         }
 
         Ok(())
-    }
-
-    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> bool {
-        let locked_vm = vm.lock().unwrap();
-        let vmstate = {
-            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
-            warn!("Failed to destroy guest, destroy continue.");
-            if locked_vm.shutdown_req.write(1).is_err() {
-                error!("Failed to send shutdown request.")
-            }
-            return false;
-        }
-
-        EventLoop::kick_all();
-        info!("vm destroy");
-
-        true
     }
 
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
@@ -581,9 +524,8 @@ impl MachineOps for StdMachine {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
-        locked_vm
-            .register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
-            .with_context(|| "Fail to register shutdown event")?;
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
         locked_vm
             .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
@@ -1193,111 +1135,6 @@ impl AcpiBuilder for StdMachine {
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin)
-    }
-}
-
-impl MachineLifecycle for StdMachine {
-    fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
-            event!(Stop);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
-            return false;
-        }
-        event!(Resume);
-        true
-    }
-
-    fn destroy(&self) -> bool {
-        if self.shutdown_req.write(1).is_err() {
-            error!("Failed to send shutdown request.");
-            return false;
-        }
-
-        true
-    }
-
-    fn powerdown(&self) -> bool {
-        if self.power_button.write(1).is_err() {
-            error!("ARM standard vm write power button failed");
-            return false;
-        }
-        true
-    }
-
-    fn get_shutdown_action(&self) -> ShutdownAction {
-        self.base
-            .vm_config
-            .lock()
-            .unwrap()
-            .machine_config
-            .shutdown_action
-    }
-
-    fn reset(&mut self) -> bool {
-        if self.reset_req.write(1).is_err() {
-            error!("ARM standard vm write reset req failed");
-            return false;
-        }
-        true
-    }
-
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
-            error!("VM state transfer failed: {:?}", e);
-            return false;
-        }
-        true
-    }
-}
-
-impl MigrateInterface for StdMachine {
-    fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
-            Ok((MigrateMode::File, path)) => migration::snapshot(path),
-            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
-            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
-            _ => Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
-                None,
-            ),
-        }
-    }
-
-    fn query_migrate(&self) -> Response {
-        migration::query_migrate()
-    }
-
-    fn cancel_migrate(&self) -> Response {
-        migration::cancel_migrate()
-    }
-}
-
-impl MachineInterface for StdMachine {}
-impl MachineExternalInterface for StdMachine {}
-impl MachineTestInterface for StdMachine {}
-
-impl EventLoopManager for StdMachine {
-    fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == VmState::Shutdown
-    }
-
-    fn loop_cleanup(&self) -> Result<()> {
-        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
-        Ok(())
     }
 }
 
