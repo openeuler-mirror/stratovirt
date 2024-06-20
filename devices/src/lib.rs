@@ -74,6 +74,13 @@ pub trait Device: Any + AsAny + Send + Sync {
 
     fn device_base_mut(&mut self) -> &mut DeviceBase;
 
+    /// `Any` trait requires a `'static` lifecycle. Error "argument requires that `device` is borrowed for `'static`"
+    /// will be reported when using `as_any` directly for local variables which don't have `'static` lifecycle.
+    /// Encapsulation of `as_any` can solve this problem.
+    fn device_as_any(&mut self) -> &mut dyn Any {
+        self.as_any_mut()
+    }
+
     /// Get device name.
     fn name(&self) -> String {
         self.device_base().id.clone()
@@ -93,6 +100,44 @@ pub trait Device: Any + AsAny + Send + Sync {
     fn child_bus(&self) -> Option<Arc<Mutex<dyn Bus>>> {
         self.device_base().child.clone()
     }
+}
+
+/// Macro `convert_device_ref!`: Convert from Arc<Mutex<dyn Device>> to &$device_type.
+///
+/// # Arguments
+///
+/// * `$trait_device` - Variable defined as Arc<Mutex<dyn Device>>.
+/// * `$lock_device` - Variable used to get MutexGuard<'_, dyn Device>.
+/// * `$struct_device` - Variable used to get &$device_type.
+/// * `$device_type` - Struct corresponding to device type.
+#[macro_export]
+macro_rules! convert_device_ref {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident, $device_type: ident) => {
+        let mut $lock_device = $trait_device.lock().unwrap();
+        let $struct_device = $lock_device
+            .device_as_any()
+            .downcast_ref::<$device_type>()
+            .unwrap();
+    };
+}
+
+/// Macro `convert_device_mut!`: Convert from Arc<Mutex<dyn Device>> to &mut $device_type.
+///
+/// # Arguments
+///
+/// * `$trait_device` - Variable defined as Arc<Mutex<dyn Device>>.
+/// * `$lock_device` - Variable used to get MutexGuard<'_, dyn Device>.
+/// * `$struct_device` - Variable used to get &mut $device_type.
+/// * `$device_type` - Struct corresponding to device type.
+#[macro_export]
+macro_rules! convert_device_mut {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident, $device_type: ident) => {
+        let mut $lock_device = $trait_device.lock().unwrap();
+        let $struct_device = $lock_device
+            .device_as_any()
+            .downcast_mut::<$device_type>()
+            .unwrap();
+    };
 }
 
 #[derive(Default)]
@@ -121,10 +166,17 @@ impl BusBase {
     }
 }
 
-pub trait Bus: Send + Sync {
+pub trait Bus: Any + AsAny + Send + Sync {
     fn bus_base(&self) -> &BusBase;
 
     fn bus_base_mut(&mut self) -> &mut BusBase;
+
+    /// `Any` trait requires a `'static` lifecycle. Error "argument requires that `bus` is borrowed for `'static`"
+    /// will be reported when using `as_any` directly for local variables which don't have `'static` lifecycle.
+    /// Encapsulation of `as_any` can solve this problem.
+    fn bus_as_any(&mut self) -> &mut dyn Any {
+        self.as_any_mut()
+    }
 
     /// Get the name of this bus.
     fn name(&self) -> String {
@@ -170,6 +222,38 @@ pub trait Bus: Send + Sync {
 
         Ok(())
     }
+}
+
+/// Macro `convert_bus_ref!`: Convert from Arc<Mutex<dyn Bus>> to &$bus_type.
+///
+/// # Arguments
+///
+/// * `$trait_bus` - Variable defined as Arc<Mutex<dyn Bus>>.
+/// * `$lock_bus` - Variable used to get MutexGuard<'_, dyn Bus>.
+/// * `$struct_bus` - Variable used to get &$bus_type.
+/// * `$bus_type` - Struct corresponding to bus type.
+#[macro_export]
+macro_rules! convert_bus_ref {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident, $bus_type: ident) => {
+        let mut $lock_bus = $trait_bus.lock().unwrap();
+        let $struct_bus = $lock_bus.bus_as_any().downcast_ref::<$bus_type>().unwrap();
+    };
+}
+
+/// Macro `convert_bus_mut!`: Convert from Arc<Mutex<dyn Bus>> to &mut $bus_type.
+///
+/// # Arguments
+///
+/// * `$trait_bus` - Variable defined as Arc<Mutex<dyn Bus>>.
+/// * `$lock_bus` - Variable used to get MutexGuard<'_, dyn Bus>.
+/// * `$struct_bus` - Variable used to get &mut $bus_type.
+/// * `$bus_type` - Struct corresponding to bus type.
+#[macro_export]
+macro_rules! convert_bus_mut {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident, $bus_type: ident) => {
+        let mut $lock_bus = $trait_bus.lock().unwrap();
+        let $struct_bus = $lock_bus.bus_as_any().downcast_mut::<$bus_type>().unwrap();
+    };
 }
 
 #[cfg(test)]
