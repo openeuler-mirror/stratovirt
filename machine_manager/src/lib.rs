@@ -26,6 +26,7 @@ pub mod config;
 pub mod error;
 pub mod event_loop;
 pub mod machine;
+pub mod notifier;
 pub mod qmp;
 pub mod signal_handler;
 pub mod socket;

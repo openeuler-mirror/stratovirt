@@ -61,7 +61,7 @@ use machine_manager::config::{
     BootIndexInfo, DriveConfig, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::machine::{MachineLifecycle, PauseNotify};
+use machine_manager::machine::MachineLifecycle;
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
@@ -407,10 +407,6 @@ impl MachineOps for StdMachine {
         sys_mem
             .root()
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
-    }
-
-    fn register_vm_pause_notifier(&mut self, notifier: Arc<dyn PauseNotify>) {
-        self.base.pause_notifiers.push(notifier);
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {

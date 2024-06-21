@@ -40,7 +40,7 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
-use machine_manager::machine::PauseNotify;
+use machine_manager::notifier::register_vm_pause_notifier;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
@@ -433,16 +433,8 @@ pub struct Scream {
     size: u64,
     config: ScreamConfig,
     token_id: Option<Arc<RwLock<u64>>>,
-    interface_resource: RwLock<Vec<Arc<Mutex<dyn AudioInterface>>>>,
-}
-
-impl PauseNotify for Scream {
-    fn notify(&self, paused: bool) {
-        let interfaces = self.interface_resource.read().unwrap();
-        for interface in interfaces.iter() {
-            interface.lock().unwrap().pause(paused);
-        }
-    }
+    interface_resource: Vec<Arc<Mutex<dyn AudioInterface>>>,
+    notify_id: u64,
 }
 
 impl Scream {
@@ -465,7 +457,8 @@ impl Scream {
             size,
             config,
             token_id,
-            interface_resource: RwLock::new(Vec::new()),
+            interface_resource: Vec::new(),
+            notify_id: 0,
         })
     }
 
@@ -486,14 +479,11 @@ impl Scream {
         }
     }
 
-    fn start_play_thread_fn(&self) -> Result<()> {
+    fn start_play_thread_fn(&mut self) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
-        self.interface_resource
-            .write()
-            .unwrap()
-            .push(interface.clone());
+        self.interface_resource.push(interface.clone());
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
@@ -515,15 +505,12 @@ impl Scream {
         Ok(())
     }
 
-    fn start_record_thread_fn(&self) -> Result<()> {
+    fn start_record_thread_fn(&mut self) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         let _ti = self.token_id.clone();
-        self.interface_resource
-            .write()
-            .unwrap()
-            .push(interface.clone());
+        self.interface_resource.push(interface.clone());
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -568,7 +555,17 @@ impl Scream {
         ivshmem.realize()?;
 
         self.start_play_thread_fn()?;
-        self.start_record_thread_fn()
+        self.start_record_thread_fn()?;
+
+        let cloned_interfaces = self.interface_resource.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            for interface in cloned_interfaces.iter() {
+                interface.lock().unwrap().pause(paused);
+            }
+        });
+        self.notify_id = register_vm_pause_notifier(pause_notify);
+
+        Ok(())
     }
 }
 

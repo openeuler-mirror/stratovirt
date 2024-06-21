@@ -85,9 +85,8 @@ use machine_manager::config::{
     VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{
-    HypervisorType, MachineInterface, MachineLifecycle, PauseNotify, VmState,
-};
+use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
+use machine_manager::notifier::pause_notify;
 use machine_manager::{check_arg_exist, check_arg_nonexist};
 use migration::{MigrateOps, MigrationManager};
 #[cfg(feature = "windows_emu_pid")]
@@ -153,8 +152,6 @@ pub struct MachineBase {
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
     /// migrate hypervisor.
     migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
-    /// vm pause notifiers.
-    pause_notifiers: Vec<Arc<dyn PauseNotify>>,
 }
 
 impl MachineBase {
@@ -231,7 +228,6 @@ impl MachineBase {
             machine_ram,
             hypervisor,
             migration_hypervisor,
-            pause_notifiers: Vec::new(),
         })
     }
 
@@ -1654,9 +1650,6 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
-    /// Register vm pause listener.
-    fn register_vm_pause_notifier(&mut self, _listener: Arc<dyn PauseNotify>) {}
-
     /// Add scream sound based on ivshmem.
     ///
     /// # Arguments
@@ -1691,9 +1684,7 @@ pub trait MachineOps: MachineLifecycle {
         let mut scream = Scream::new(mem_cfg.size, config, token_id)?;
         scream
             .realize(parent_bus)
-            .with_context(|| "Failed to realize scream device")?;
-        self.register_vm_pause_notifier(Arc::new(scream));
-        Ok(())
+            .with_context(|| "Failed to realize scream device")
     }
 
     /// Get the corresponding device from the PCI bus based on the device id and device type name.
@@ -1992,13 +1983,6 @@ pub trait MachineOps: MachineLifecycle {
         self.machine_base().drive_files.clone()
     }
 
-    //// Trigger vm pause notifiers.
-    fn notify_vm_pause_notifiers(&self, paused: bool) {
-        for notifier in self.machine_base().pause_notifiers.iter() {
-            notifier.notify(paused);
-        }
-    }
-
     /// Fetch a cloned file from drive backend files.
     fn fetch_drive_file(&self, path: &str) -> Result<File> {
         let files = self.get_drive_files();
@@ -2148,7 +2132,7 @@ pub trait MachineOps: MachineLifecycle {
         *vm_state = VmState::Paused;
 
         // Notify VM paused.
-        self.notify_vm_pause_notifiers(true);
+        pause_notify(true);
 
         Ok(())
     }
@@ -2164,6 +2148,9 @@ pub trait MachineOps: MachineLifecycle {
 
         self.active_drive_files()?;
 
+        // Notify VM resumed.
+        pause_notify(false);
+
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.resume() {
                 self.deactive_drive_files()?;
@@ -2172,9 +2159,6 @@ pub trait MachineOps: MachineLifecycle {
         }
 
         *vm_state = VmState::Running;
-
-        // Notify VM resumed.
-        self.notify_vm_pause_notifiers(false);
 
         Ok(())
     }
