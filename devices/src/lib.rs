@@ -40,6 +40,7 @@ pub use scsi::bus as ScsiBus;
 pub use scsi::disk as ScsiDisk;
 
 use std::any::Any;
+use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -79,6 +80,10 @@ pub trait Device: Any + AsAny + Send + Sync {
     /// Encapsulation of `as_any` can solve this problem.
     fn device_as_any(&mut self) -> &mut dyn Any {
         self.as_any_mut()
+    }
+
+    fn device_type_id(&self) -> TypeId {
+        self.type_id()
     }
 
     /// Get device name.

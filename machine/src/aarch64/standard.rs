@@ -49,8 +49,8 @@ use devices::legacy::{
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
 use devices::pci::{PciDevOps, PciHost, PciIntxState};
-use devices::sysbus::SysBusDevType;
-use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
+use devices::sysbus::{to_sysbusdevops, SysBusDevType};
+use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, SYS_BUS_DEVICE};
 use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
@@ -953,11 +953,11 @@ impl AcpiBuilder for StdMachine {
         spcr.set_field(52, 1_u8 << 3);
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
-        let devices = self.base.sysbus.lock().unwrap().devices.clone();
-        for dev in devices.iter() {
-            let locked_dev = dev.lock().unwrap();
-            if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as _;
+        let devices = self.get_sysbus_devices();
+        for dev in devices.values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            if sysbusdev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
+                uart_irq = sysbusdev.sysbusdev_base().irq_state.irq as _;
                 break;
             }
         }

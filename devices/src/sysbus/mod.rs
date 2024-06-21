@@ -55,10 +55,11 @@ pub const IRQ_MAX: i32 = 191;
 
 pub struct SysBus {
     pub base: BusBase,
+    // Record the largest key used in the BTreemap of the busbase(children field).
+    max_key: u64,
     #[cfg(target_arch = "x86_64")]
     pub sys_io: Arc<AddressSpace>,
     pub sys_mem: Arc<AddressSpace>,
-    pub devices: Vec<Arc<Mutex<dyn SysBusDevOps>>>,
     pub free_irqs: (i32, i32),
     pub min_free_irq: i32,
     pub mmio_region: (u64, u64),
@@ -92,10 +93,10 @@ impl SysBus {
     ) -> Self {
         Self {
             base: BusBase::new("sysbus".to_string()),
+            max_key: 0,
             #[cfg(target_arch = "x86_64")]
             sys_io: sys_io.clone(),
             sys_mem: sys_mem.clone(),
-            devices: Vec::new(),
             free_irqs,
             min_free_irq: free_irqs.0,
             mmio_region,
@@ -155,7 +156,17 @@ impl SysBus {
             }
         }
 
-        self.devices.push(dev.clone());
+        self.sysbus_attach_child(dev.clone())?;
+        Ok(())
+    }
+
+    pub fn sysbus_attach_child(&mut self, dev: Arc<Mutex<dyn Device>>) -> Result<()> {
+        self.attach_child(self.max_key, dev.clone())?;
+        // Note: Incrementally generate a number that has no substantive effect, and is only used for the
+        // key of Btreemap in the busbase(children field).
+        // The number of system-bus devices is limited, and it is also difficult to reach the `u64` range for
+        // hot-plug times. So, `u64` is currently sufficient for using and don't consider overflow issues for now.
+        self.max_key += 1;
         Ok(())
     }
 }
@@ -326,26 +337,37 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
     }
 }
 
+/// Convert from Arc<Mutex<dyn Device>> to &mut dyn SysBusDevOps.
+#[macro_export]
+macro_rules! SYS_BUS_DEVICE {
+    ($trait_device:expr, $lock_device: ident, $trait_sysbusdevops: ident) => {
+        let mut $lock_device = $trait_device.lock().unwrap();
+        let $trait_sysbusdevops = to_sysbusdevops(&mut *$lock_device).unwrap();
+    };
+}
+
 impl AmlBuilder for SysBus {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut scope = AmlScope::new("_SB");
-        self.devices.iter().for_each(|dev| {
-            scope.append(&dev.lock().unwrap().aml_bytes());
-        });
+        let child_devices = self.base.children.clone();
+        for dev in child_devices.values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            scope.append(&sysbusdev.aml_bytes());
+        }
 
         scope.aml_bytes()
     }
 }
 
-pub type ToSysBusDevOpsFunc = fn(&dyn Any) -> &dyn SysBusDevOps;
+pub type ToSysBusDevOpsFunc = fn(&mut dyn Any) -> &mut dyn SysBusDevOps;
 
 static mut SYSBUSDEVTYPE_HASHMAP: Option<HashMap<TypeId, ToSysBusDevOpsFunc>> = None;
 
-pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &dyn Any) -> &dyn SysBusDevOps {
+pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &mut dyn Any) -> &mut dyn SysBusDevOps {
     // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
     // the conversion is its own structure type, so the conversion result will definitely not be `None`.
-    let t = item.downcast_ref::<T>().unwrap();
-    t as &dyn SysBusDevOps
+    let t = item.downcast_mut::<T>().unwrap();
+    t as &mut dyn SysBusDevOps
 }
 
 pub fn register_sysbusdevops_type<T: SysBusDevOps>() -> Result<()> {
@@ -388,13 +410,12 @@ pub fn devices_register_sysbusdevops_type() -> Result<()> {
     register_sysbusdevops_type::<PciHost>()
 }
 
-pub fn to_sysbusdevops(dev: &dyn Device) -> Option<&dyn SysBusDevOps> {
-    let type_id = dev.type_id();
+pub fn to_sysbusdevops(dev: &mut dyn Device) -> Option<&mut dyn SysBusDevOps> {
     // SAFETY: SYSBUSDEVTYPE_HASHMAP has been built. And this function is called without changing hashmap.
     unsafe {
         let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
-        let func = types.get(&type_id)?;
-        let sysbusdev = func(dev.as_any());
+        let func = types.get(&dev.device_type_id())?;
+        let sysbusdev = func(dev.as_any_mut());
         Some(sysbusdev)
     }
 }

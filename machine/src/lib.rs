@@ -60,7 +60,9 @@ use devices::pci::{
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
-use devices::sysbus::{devices_register_sysbusdevops_type, SysBus, SysBusDevOps, SysBusDevType};
+use devices::sysbus::{
+    devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevOps, SysBusDevType,
+};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
@@ -71,11 +73,11 @@ use devices::usb::uas::{UsbUas, UsbUasConfig};
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 use devices::usb::UsbDevice;
-use devices::Bus;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use devices::ScsiBus::get_scsi_key;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
+use devices::{Bus, Device, SYS_BUS_DEVICE};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -778,9 +780,9 @@ pub trait MachineOps: MachineLifecycle {
         let mut virtio_device = None;
         if serial_cfg.bus.is_none() {
             // Micro_vm.
-            for dev in self.get_sysbus_devices().iter() {
-                let locked_busdev = dev.lock().unwrap();
-                if locked_busdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
+            for dev in self.get_sysbus_devices().values() {
+                SYS_BUS_DEVICE!(dev, locked_busdev, sysbusdev);
+                if sysbusdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
                     let virtio_mmio_dev = locked_busdev
                         .as_any()
                         .downcast_ref::<VirtioMmioDevice>()
@@ -940,8 +942,8 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
-    fn get_sysbus_devices(&mut self) -> Vec<Arc<Mutex<dyn SysBusDevOps>>> {
-        self.machine_base().sysbus.lock().unwrap().devices.clone()
+    fn get_sysbus_devices(&self) -> BTreeMap<u64, Arc<Mutex<dyn Device>>> {
+        self.machine_base().sysbus.lock().unwrap().child_devices()
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
@@ -953,9 +955,9 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     fn reset_all_devices(&mut self) -> Result<()> {
-        for dev in self.get_sysbus_devices().iter() {
-            dev.lock()
-                .unwrap()
+        for dev in self.get_sysbus_devices().values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            sysbusdev
                 .reset()
                 .with_context(|| "Fail to reset sysbus device")?;
         }
