@@ -184,6 +184,9 @@ pub trait CameraBackend: Send + Sync {
 
     /// Register broken callback which is called when backend is broken.
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
+
+    /// Pause/resume stream.
+    fn pause(&mut self, _paused: bool) {}
 }
 
 #[allow(unused_variables)]
