@@ -120,6 +120,8 @@ pub struct OhCameraBackend {
     ctx: OhCamera,
     fmt_list: Vec<CameraFormatList>,
     selected_profile: u8,
+    stream_on: bool,
+    paused: bool,
     #[cfg(any(
         feature = "trace_to_logger",
         feature = "trace_to_ftrace",
@@ -160,6 +162,8 @@ impl OhCameraBackend {
             ctx,
             fmt_list: vec![],
             selected_profile: 0,
+            stream_on: false,
+            paused: false,
             #[cfg(any(
                 feature = "trace_to_logger",
                 feature = "trace_to_ftrace",
@@ -202,12 +206,15 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn video_stream_on(&mut self) -> Result<()> {
-        self.ctx.start_stream(on_buffer_available, on_broken)
+        self.ctx.start_stream(on_buffer_available, on_broken)?;
+        self.stream_on = true;
+        Ok(())
     }
 
     fn video_stream_off(&mut self) -> Result<()> {
         self.ctx.stop_stream();
         OHCAM_CALLBACK.write().unwrap().clear_buffer();
+        self.stream_on = false;
         #[cfg(any(
             feature = "trace_to_logger",
             feature = "trace_to_ftrace",
@@ -342,6 +349,30 @@ impl CameraBackend for OhCameraBackend {
 
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback) {
         OHCAM_CALLBACK.write().unwrap().set_broken_cb(cb);
+    }
+
+    fn pause(&mut self, paused: bool) {
+        if self.paused == paused {
+            return;
+        }
+
+        if paused {
+            // If stream is off, we don't need to set self.paused.
+            // Because it's not required to re-open stream while
+            // vm is resuming.
+            if !self.stream_on {
+                return;
+            }
+            self.paused = true;
+            self.video_stream_off().unwrap_or_else(|e| {
+                error!("ohcam pause: failed to pause stream {:?}", e);
+            });
+        } else {
+            self.paused = false;
+            self.video_stream_on().unwrap_or_else(|e| {
+                error!("ohcam resume: failed to resume stream {:?}", e);
+            })
+        }
     }
 }
 
