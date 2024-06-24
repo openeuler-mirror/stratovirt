@@ -121,12 +121,7 @@ fn run() -> Result<()> {
         }
         Err(ref e) => {
             set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
-            if cmd_args.is_present("display log") {
-                error!("{}", format!("{:?}\r\n", e));
-            } else {
-                write!(&mut std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
-                    .expect("Failed to write to stderr");
-            }
+            error!("{}", format!("{:?}\r\n", e));
             // clean temporary file
             TempCleaner::clean();
             exit_with_code(VM_EXIT_GENE_ERR);
