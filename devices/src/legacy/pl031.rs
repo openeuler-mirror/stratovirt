@@ -79,9 +79,9 @@ pub struct PL031 {
     base_time: Instant,
 }
 
-impl Default for PL031 {
-    fn default() -> Self {
-        Self {
+impl PL031 {
+    pub fn new(sysbus: &mut SysBus, region_base: u64, region_size: u64) -> Result<Self> {
+        let mut pl031 = Self {
             base: SysBusDevBase::new(SysBusDevType::Rtc),
             state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
@@ -90,21 +90,16 @@ impl Default for PL031 {
                 .expect("time wrong")
                 .as_secs() as u32,
             base_time: Instant::now(),
-        }
-    }
-}
-
-impl PL031 {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
-        self.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
-        self.set_sys_resource(sysbus, region_base, region_size, "PL031")
+        };
+        pl031.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        pl031
+            .set_sys_resource(sysbus, region_base, region_size, "PL031")
             .with_context(|| LegacyError::SetSysResErr)?;
 
+        Ok(pl031)
+    }
+
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 
@@ -219,13 +214,15 @@ impl MigrationHook for PL031 {}
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use util::time::mktime64;
 
     const WIGGLE: u32 = 2;
 
     #[test]
     fn test_set_year_20xx() {
-        let mut rtc = PL031::default();
+        let mut sysbus = sysbus_init();
+        let mut rtc = PL031::new(&mut sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time: 2013-11-13 02:04:56.
         let mut wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
         let mut data = [0; 4];
@@ -251,7 +248,8 @@ mod test {
 
     #[test]
     fn test_set_year_1970() {
-        let mut rtc = PL031::default();
+        let mut sysbus = sysbus_init();
+        let mut rtc = PL031::new(&mut sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time (min): 1970-01-01 00:00:00.
         let wtick = mktime64(1970, 1, 1, 0, 0, 0) as u32;
         let mut data = [0; 4];

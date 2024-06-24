@@ -446,15 +446,27 @@ impl PauseNotify for Scream {
 }
 
 impl Scream {
-    pub fn new(size: u64, config: ScreamConfig, token_id: Option<Arc<RwLock<u64>>>) -> Self {
+    pub fn new(
+        size: u64,
+        config: ScreamConfig,
+        token_id: Option<Arc<RwLock<u64>>>,
+    ) -> Result<Self> {
         set_record_authority(config.record_auth);
-        Self {
+        let header_size = mem::size_of::<ShmemHeader>() as u64;
+        if size < header_size {
+            bail!(
+                "The size {} of the shared memory is smaller than audio header {}",
+                size,
+                header_size
+            );
+        }
+        Ok(Self {
             hva: 0,
             size,
             config,
             token_id,
             interface_resource: RwLock::new(Vec::new()),
-        }
+        })
     }
 
     #[allow(unused_variables)]
@@ -538,16 +550,7 @@ impl Scream {
         Ok(())
     }
 
-    pub fn realize(&mut self, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
-        let header_size = mem::size_of::<ShmemHeader>() as u64;
-        if self.size < header_size {
-            bail!(
-                "The size {} of the shared memory is smaller then audio header {}",
-                self.size,
-                header_size
-            );
-        }
-
+    pub fn realize(&mut self, parent_bus: Weak<Mutex<PciBus>>) -> Result<()> {
         let host_mmap = Arc::new(HostMemMapping::new(
             GuestAddress(0),
             None,
@@ -559,8 +562,8 @@ impl Scream {
         )?);
         self.hva = host_mmap.host_address();
 
+        let devfn = (self.config.addr.0 << 3) + self.config.addr.1;
         let mem_region = Region::init_ram_region(host_mmap, "ivshmem_ram");
-
         let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
         ivshmem.realize()?;
 

@@ -621,6 +621,7 @@ impl UsbUas {
                 scsi_dev_cfg,
                 drive_cfg,
                 drive_files,
+                None,
             ))),
             commands_high: VecDeque::new(),
             commands_super: array::from_fn(|_| None),
@@ -1050,7 +1051,7 @@ impl UsbDevice for UsbUas {
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
         let mut locked_scsi_device = self.scsi_device.lock().unwrap();
-        locked_scsi_device.realize(None)?;
+        locked_scsi_device.realize()?;
         locked_scsi_device.parent_bus = Arc::downgrade(&self.scsi_bus);
         drop(locked_scsi_device);
         self.scsi_bus

@@ -142,6 +142,10 @@ impl IrqState {
     }
 
     pub fn register_irq(&mut self) -> Result<()> {
+        if self.irq_handler.is_none() {
+            return Ok(());
+        }
+
         let irq_handler = self.irq_handler.as_ref().unwrap();
         if !irq_handler.irqfd_enable() {
             self.irq_fd = None;

@@ -48,7 +48,11 @@ use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::{MachineBase, MachineError, MachineOps};
 use cpu::CpuLifecycleState;
+#[cfg(target_arch = "x86_64")]
+use devices::sysbus::SysBusDevOps;
 use devices::sysbus::{IRQ_BASE, IRQ_MAX};
+#[cfg(target_arch = "x86_64")]
+use machine_manager::config::Param;
 use machine_manager::config::{
     get_chardev_socket_path, parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig,
     MigrateMode, NetDevcfg, NetworkInterfaceConfig, VmConfig,
@@ -483,21 +487,30 @@ impl LightMachine {
         device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
         let sys_mem = self.get_sys_mem().clone();
-        let dev = VirtioMmioDevice::new(&sys_mem, name, device);
-
         let region_base = self.base.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-        let realized_virtio_mmio_device = VirtioMmioDevice::realize(
-            dev,
+        let dev = VirtioMmioDevice::new(
+            &sys_mem,
+            name,
+            device,
             &mut self.base.sysbus,
             region_base,
             region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.base.boot_source,
-        )
-        .with_context(|| MachineError::RlzVirtioMmioErr)?;
+        )?;
+        let mmio_device = dev
+            .realize(&mut self.base.sysbus)
+            .with_context(|| MachineError::RlzVirtioMmioErr)?;
+        #[cfg(target_arch = "x86_64")]
+        {
+            let res = mmio_device.lock().unwrap().get_sys_resource().clone();
+            let mut bs = self.base.boot_source.lock().unwrap();
+            bs.kernel_cmdline.push(Param {
+                param_type: "virtio_mmio.device".to_string(),
+                value: format!("{}@0x{:08x}:{}", res.region_size, res.region_base, res.irq),
+            });
+        }
         self.base.sysbus.min_free_base += region_size;
-        Ok(realized_virtio_mmio_device)
+        Ok(mmio_device)
     }
 }
 

@@ -18,9 +18,10 @@ use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError}
 use crate::{register_shutdown_event, LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
-use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
+use devices::legacy::{PL011, PL031};
+use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
-use machine_manager::config::{SerialConfig, VmConfig};
+use machine_manager::config::{Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::gen_base_func;
@@ -105,30 +106,35 @@ impl MachineOps for LightMachine {
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
-        PL031::realize(
-            PL031::default(),
+        let pl031 = PL031::new(
             &mut self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-        )
-        .with_context(|| "Failed to realize pl031.")
+        )?;
+        pl031
+            .realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize pl031.")
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
-        use devices::legacy::PL011;
-
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-
-        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
+        let pl011 = PL011::new(
+            config.clone(),
+            &mut self.base.sysbus,
+            region_base,
+            region_size,
+        )
+        .with_context(|| "Failed to create PL011")?;
         pl011
-            .realize(
-                &mut self.base.sysbus,
-                region_base,
-                region_size,
-                &self.base.boot_source,
-            )
-            .with_context(|| "Failed to realize PL011")
+            .realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize PL011")?;
+        let mut bs = self.base.boot_source.lock().unwrap();
+        bs.kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("pl011,mmio,0x{:08x}", region_base),
+        });
+        Ok(())
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {

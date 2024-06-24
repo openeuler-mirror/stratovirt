@@ -88,20 +88,30 @@ pub struct CpuController {
 }
 
 impl CpuController {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
+    pub fn new(
         max_cpus: u8,
+        sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
         cpu_config: CpuConfig,
         hotplug_cpu_req: Arc<EventFd>,
-    ) -> Result<Arc<Mutex<CpuController>>> {
-        self.max_cpus = max_cpus;
-        self.cpu_config = Some(cpu_config);
-        self.hotplug_cpu_req = Some(hotplug_cpu_req);
-        self.set_sys_resource(sysbus, region_base, region_size, "CPUController")
+        boot_vcpus: Vec<Arc<CPU>>,
+    ) -> Result<Self> {
+        let mut cpu_controller = CpuController {
+            max_cpus,
+            cpu_config: Some(cpu_config),
+            hotplug_cpu_req: Some(hotplug_cpu_req),
+            ..Default::default()
+        };
+        cpu_controller
+            .set_sys_resource(sysbus, region_base, region_size, "CPUController")
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
+        cpu_controller.set_boot_vcpu(boot_vcpus)?;
+
+        Ok(cpu_controller)
+    }
+
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<CpuController>>> {
         let dev = Arc::new(Mutex::new(self));
         let ret_dev = dev.clone();
         sysbus.attach_device(&dev)?;

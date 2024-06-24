@@ -842,23 +842,25 @@ pub struct FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl FwCfgMem {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
-        FwCfgMem {
-            base: SysBusDevBase::new(SysBusDevType::FwCfg),
-            fwcfg: FwCfgCommon::new(sys_mem),
-        }
-    }
-
-    pub fn realize(
-        mut self,
+    pub fn new(
+        sys_mem: Arc<AddressSpace>,
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> Result<Arc<Mutex<Self>>> {
-        self.fwcfg.common_realize()?;
-        self.set_sys_resource(sysbus, region_base, region_size, "FwCfgMem")
+    ) -> Result<Self> {
+        let mut fwcfgmem = FwCfgMem {
+            base: SysBusDevBase::new(SysBusDevType::FwCfg),
+            fwcfg: FwCfgCommon::new(sys_mem),
+        };
+        fwcfgmem
+            .set_sys_resource(sysbus, region_base, region_size, "FwCfgMem")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
+        Ok(fwcfgmem)
+    }
+
+    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
+        self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
             .attach_device(&dev)
@@ -1004,18 +1006,20 @@ pub struct FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl FwCfgIO {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
-        FwCfgIO {
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &mut SysBus) -> Result<Self> {
+        let mut fwcfg = FwCfgIO {
             base: SysBusDevBase::new(SysBusDevType::FwCfg),
             fwcfg: FwCfgCommon::new(sys_mem),
-        }
+        };
+        fwcfg
+            .set_sys_resource(sysbus, FW_CFG_IO_BASE, FW_CFG_IO_SIZE, "FwCfgIO")
+            .with_context(|| "Failed to allocate system resource for FwCfg.")?;
+
+        Ok(fwcfg)
     }
 
     pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
-        self.set_sys_resource(sysbus, FW_CFG_IO_BASE, FW_CFG_IO_SIZE, "FwCfgIO")
-            .with_context(|| "Failed to allocate system resource for FwCfg.")?;
-
         let dev = Arc::new(Mutex::new(self));
         sysbus
             .attach_device(&dev)
@@ -1478,9 +1482,9 @@ mod test {
     fn test_read_write_aarch64() {
         let mut sys_bus = sysbus_init();
         let sys_mem = address_space_init();
-        let fwcfg = FwCfgMem::new(sys_mem);
+        let fwcfg = FwCfgMem::new(sys_mem, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
 
-        let fwcfg_dev = FwCfgMem::realize(fwcfg, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
+        let fwcfg_dev = fwcfg.realize(&mut sys_bus).unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.
         let base = GuestAddress(0x0000);
         let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
@@ -1518,7 +1522,7 @@ mod test {
     fn test_read_write_x86_64() {
         let mut sys_bus = sysbus_init();
         let sys_mem = address_space_init();
-        let fwcfg = FwCfgIO::new(sys_mem);
+        let fwcfg = FwCfgIO::new(sys_mem, &mut sys_bus).unwrap();
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut sys_bus).unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.

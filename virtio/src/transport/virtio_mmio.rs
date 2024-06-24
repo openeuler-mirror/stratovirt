@@ -28,8 +28,6 @@ use crate::{
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use devices::{Device, DeviceBase};
-#[cfg(target_arch = "x86_64")]
-use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -140,38 +138,32 @@ impl VirtioMmioDevice {
         mem_space: &Arc<AddressSpace>,
         name: String,
         device: Arc<Mutex<dyn VirtioDevice>>,
-    ) -> Self {
-        let device_clone = device.clone();
-        let queue_num = device_clone.lock().unwrap().queue_num();
-
-        VirtioMmioDevice {
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        if region_base >= sysbus.mmio_region.1 {
+            bail!("Mmio region space exhausted.");
+        }
+        let queue_num = device.lock().unwrap().queue_num();
+        let mut mmio_device = VirtioMmioDevice {
             base: SysBusDevBase {
-                base: DeviceBase {
-                    id: name,
-                    hotpluggable: false,
-                },
+                base: DeviceBase::new(name, false),
                 dev_type: SysBusDevType::VirtioMmio,
-                interrupt_evt: Some(Arc::new(create_new_eventfd().unwrap())),
+                interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
             },
             device,
             host_notify_info: HostNotifyInfo::new(queue_num),
             mem_space: mem_space.clone(),
             interrupt_cb: None,
-        }
+        };
+        mmio_device.set_sys_resource(sysbus, region_base, region_size, "VirtioMmio")?;
+
+        Ok(mmio_device)
     }
 
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-        #[cfg(target_arch = "x86_64")] bs: &Arc<Mutex<BootSource>>,
-    ) -> Result<Arc<Mutex<Self>>> {
-        if region_base >= sysbus.mmio_region.1 {
-            bail!("Mmio region space exhausted.");
-        }
-        self.set_sys_resource(sysbus, region_base, region_size, "VirtioMmio")?;
+    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
         self.assign_interrupt_cb();
         self.device
             .lock()
@@ -182,16 +174,6 @@ impl VirtioMmioDevice {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 
-        #[cfg(target_arch = "x86_64")]
-        bs.lock().unwrap().kernel_cmdline.push(Param {
-            param_type: "virtio_mmio.device".to_string(),
-            value: format!(
-                "{}@0x{:08x}:{}",
-                region_size,
-                region_base,
-                dev.lock().unwrap().base.res.irq
-            ),
-        });
         Ok(dev)
     }
 
@@ -585,7 +567,7 @@ impl MigrationHook for VirtioMmioDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::address_space_init;
+    use crate::tests::{address_space_init, sysbus_init};
     use crate::{
         check_config_space_rw, read_config_default, VirtioBase, QUEUE_TYPE_SPLIT_VRING,
         VIRTIO_TYPE_BLOCK,
@@ -659,11 +641,16 @@ mod tests {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
 
         let sys_space = address_space_init();
+        let mut sysbus = sysbus_init();
         let virtio_mmio_device = VirtioMmioDevice::new(
             &sys_space,
             "test_virtio_mmio_device".to_string(),
             virtio_device.clone(),
-        );
+            &mut sysbus,
+            0x0A00_0000,
+            0x0000_0200,
+        )
+        .unwrap();
 
         (virtio_device, virtio_mmio_device)
     }

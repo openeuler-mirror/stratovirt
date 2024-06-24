@@ -81,8 +81,13 @@ pub struct PowerDev {
 }
 
 impl PowerDev {
-    pub fn new(ged_dev: Arc<Mutex<Ged>>) -> Self {
-        Self {
+    pub fn new(
+        ged_dev: Arc<Mutex<Ged>>,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut pdev = Self {
             base: SysBusDevBase::default(),
             regs: vec![0; POWERDEV_REGS_SIZE],
             state: PowerDevState {
@@ -91,7 +96,10 @@ impl PowerDev {
                 last_bat_lvl: 0xffffffff,
             },
             ged: ged_dev,
-        }
+        };
+        pdev.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
+            .with_context(|| AcpiError::Alignment(region_size as u32))?;
+        Ok(pdev)
     }
 
     fn read_sysfs_power_props(
@@ -175,18 +183,8 @@ impl PowerDev {
     fn send_power_event(&self, evt: AcpiEvent) {
         self.ged.lock().unwrap().inject_acpi_event(evt);
     }
-}
 
-impl PowerDev {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
-        self.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
-            .with_context(|| AcpiError::Alignment(region_size as u32))?;
-
+    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 

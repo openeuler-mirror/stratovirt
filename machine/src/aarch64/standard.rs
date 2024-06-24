@@ -57,7 +57,9 @@ use hypervisor::kvm::*;
 use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
-use machine_manager::config::{BootIndexInfo, DriveConfig, NumaNode, SerialConfig, VmConfig};
+use machine_manager::config::{
+    BootIndexInfo, DriveConfig, NumaNode, Param, SerialConfig, VmConfig,
+};
 use machine_manager::event;
 use machine_manager::machine::{MachineLifecycle, PauseNotify};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
@@ -343,7 +345,12 @@ impl StdMachineOps for StdMachine {
             return Ok(None);
         }
 
-        let mut fwcfg = FwCfgMem::new(self.base.sys_mem.clone());
+        let mut fwcfg = FwCfgMem::new(
+            self.base.sys_mem.clone(),
+            &mut self.base.sysbus,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
+        )?;
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
             .with_context(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
@@ -375,13 +382,9 @@ impl StdMachineOps for StdMachine {
             .add_file_entry("bios-geometry", bios_geometry)
             .with_context(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
-        let fwcfg_dev = FwCfgMem::realize(
-            fwcfg,
-            &mut self.base.sysbus,
-            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
-            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
-        )
-        .with_context(|| "Failed to realize fwcfg device")?;
+        let fwcfg_dev = fwcfg
+            .realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
@@ -454,36 +457,36 @@ impl MachineOps for StdMachine {
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
-        let rtc = PL031::default();
-        PL031::realize(
-            rtc,
+        let rtc = PL031::new(
             &mut self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-        )
-        .with_context(|| "Failed to realize PL031")
+        )?;
+        rtc.realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize PL031")
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
         let battery_present = self.base.vm_config.lock().unwrap().machine_config.battery;
-        let ged = Ged::default();
+        let ged = Ged::new(
+            battery_present,
+            &mut self.base.sysbus,
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
+            GedEvent::new(self.power_button.clone()),
+        )?;
         let ged_dev = ged
-            .realize(
-                &mut self.base.sysbus,
-                GedEvent::new(self.power_button.clone()),
-                battery_present,
-                MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
-                MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
-            )
+            .realize(&mut self.base.sysbus)
             .with_context(|| "Failed to realize Ged")?;
         if battery_present {
-            let pdev = PowerDev::new(ged_dev);
-            pdev.realize(
+            let pdev = PowerDev::new(
+                ged_dev,
                 &mut self.base.sysbus,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
-            )
-            .with_context(|| "Failed to realize PowerDev")?;
+            )?;
+            pdev.realize(&mut self.base.sysbus)
+                .with_context(|| "Failed to realize PowerDev")?;
         }
         Ok(())
     }
@@ -491,16 +494,22 @@ impl MachineOps for StdMachine {
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-
-        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
+        let pl011 = PL011::new(
+            config.clone(),
+            &mut self.base.sysbus,
+            region_base,
+            region_size,
+        )
+        .with_context(|| "Failed to create PL011")?;
         pl011
-            .realize(
-                &mut self.base.sysbus,
-                region_base,
-                region_size,
-                &self.base.boot_source,
-            )
-            .with_context(|| "Failed to realize PL011")
+            .realize(&mut self.base.sysbus)
+            .with_context(|| "Failed to realize PL011")?;
+        let mut bs = self.base.boot_source.lock().unwrap();
+        bs.kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("pl011,mmio,0x{:08x}", region_base),
+        });
+        Ok(())
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
@@ -646,9 +655,18 @@ impl MachineOps for StdMachine {
                 (None, false)
             };
 
-            let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
-                .with_context(|| MachineError::InitPflashErr)?;
-            PFlash::realize(pflash, &mut self.base.sysbus, flash_base, flash_size, fd)
+            let pflash = PFlash::new(
+                flash_size,
+                fd,
+                sector_len,
+                4,
+                2,
+                read_only,
+                &mut self.base.sysbus,
+                flash_base,
+            )
+            .with_context(|| MachineError::InitPflashErr)?;
+            PFlash::realize(pflash, &mut self.base.sysbus)
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_base += flash_size;
         }
