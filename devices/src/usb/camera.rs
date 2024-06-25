@@ -38,6 +38,7 @@ use crate::usb::{
 use machine_manager::config::camera::CameraDevConfig;
 use machine_manager::config::valid_id;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -115,6 +116,7 @@ pub struct UsbCamera {
     broken: Arc<AtomicBool>,                       // if the device broken or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
+    notifier_id: u64,
 }
 
 #[derive(Debug)]
@@ -515,6 +517,7 @@ impl UsbCamera {
             broken: Arc::new(AtomicBool::new(false)),
             iothread: config.iothread,
             delete_evts: Vec::new(),
+            notifier_id: 0,
         })
     }
 
@@ -767,6 +770,13 @@ impl UsbDevice for UsbCamera {
         self.register_cb();
 
         let camera = Arc::new(Mutex::new(self));
+        let cloned_camera = camera.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            let locked_cam = cloned_camera.lock().unwrap();
+            locked_cam.camera_backend.lock().unwrap().pause(paused);
+        });
+        camera.lock().unwrap().notifier_id = register_vm_pause_notifier(pause_notify);
+
         Ok(camera)
     }
 
@@ -774,6 +784,8 @@ impl UsbDevice for UsbCamera {
         info!("Camera {} unrealize", self.device_id());
         self.unregister_camera_fd()?;
         self.camera_backend.lock().unwrap().reset();
+        unregister_vm_pause_notifier(self.notifier_id);
+        self.notifier_id = 0;
         Ok(())
     }
 
