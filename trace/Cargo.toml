@@ -13,6 +13,7 @@ regex = "1"
 anyhow = "1.0"
 trace_generator = { path = "trace_generator" }
 vmm-sys-util = "0.12.1"
+libloading = "0.7.4"
 
 [features]
 trace_to_logger = []

@@ -1736,6 +1736,7 @@ version = "2.4.0"
 dependencies = [
  "anyhow",
  "lazy_static",
+ "libloading",
  "log",
  "regex",
  "trace_generator",

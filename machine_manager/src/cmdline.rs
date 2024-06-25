@@ -447,8 +447,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("trace")
             .multiple(false)
             .long("trace")
-            .value_name("file=<file>")
-            .help("specify the file lists trace state to enable")
+            .value_name("file=<file>|type=<all|events|scopes>")
+            .help("specify the trace state to enable")
             .takes_value(true),
         )
         .arg(
