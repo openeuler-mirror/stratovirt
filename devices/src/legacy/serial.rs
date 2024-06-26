@@ -126,7 +126,7 @@ pub struct Serial {
 impl Serial {
     pub fn new(
         cfg: SerialConfig,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
     ) -> Result<Self> {
@@ -144,14 +144,14 @@ impl Serial {
         Ok(serial)
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
 
         MigrationManager::register_device_instance(
             SerialState::descriptor(),
@@ -472,11 +472,11 @@ mod test {
                 id: "chardev".to_string(),
             },
         };
-        let mut sysbus = sysbus_init();
+        let sysbus = sysbus_init();
         let config = SerialConfig {
             chardev: chardev_cfg.clone(),
         };
-        let mut usart = Serial::new(config, &mut sysbus, SERIAL_ADDR, 8).unwrap();
+        let mut usart = Serial::new(config, &sysbus, SERIAL_ADDR, 8).unwrap();
         assert_eq!(usart.state.ier, 0);
         assert_eq!(usart.state.iir, 1);
         assert_eq!(usart.state.lcr, 3);
@@ -533,8 +533,8 @@ mod test {
         let config = SerialConfig {
             chardev: chardev_cfg,
         };
-        let mut sysbus = sysbus_init();
-        let mut usart = Serial::new(config, &mut sysbus, SERIAL_ADDR, 8).unwrap();
+        let sysbus = sysbus_init();
+        let mut usart = Serial::new(config, &sysbus, SERIAL_ADDR, 8).unwrap();
         // Get state vector for usart
         let serial_state_result = usart.get_state_vec();
         assert!(serial_state_result.is_ok());

@@ -487,18 +487,18 @@ impl LightMachine {
         device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
         let sys_mem = self.get_sys_mem().clone();
-        let region_base = self.base.sysbus.min_free_base;
+        let region_base = self.base.sysbus.lock().unwrap().min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         let dev = VirtioMmioDevice::new(
             &sys_mem,
             name,
             device,
-            &mut self.base.sysbus,
+            &self.base.sysbus,
             region_base,
             region_size,
         )?;
         let mmio_device = dev
-            .realize(&mut self.base.sysbus)
+            .realize(&self.base.sysbus)
             .with_context(|| MachineError::RlzVirtioMmioErr)?;
         #[cfg(target_arch = "x86_64")]
         {
@@ -509,7 +509,7 @@ impl LightMachine {
                 value: format!("{}@0x{:08x}:{}", res.region_size, res.region_base, res.irq),
             });
         }
-        self.base.sysbus.min_free_base += region_size;
+        self.base.sysbus.lock().unwrap().min_free_base += region_size;
         Ok(mmio_device)
     }
 }

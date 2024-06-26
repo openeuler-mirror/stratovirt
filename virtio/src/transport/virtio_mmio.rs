@@ -138,11 +138,11 @@ impl VirtioMmioDevice {
         mem_space: &Arc<AddressSpace>,
         name: String,
         device: Arc<Mutex<dyn VirtioDevice>>,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
     ) -> Result<Self> {
-        if region_base >= sysbus.mmio_region.1 {
+        if region_base >= sysbus.lock().unwrap().mmio_region.1 {
             bail!("Mmio region space exhausted.");
         }
         let queue_num = device.lock().unwrap().queue_num();
@@ -163,7 +163,7 @@ impl VirtioMmioDevice {
         Ok(mmio_device)
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
         self.assign_interrupt_cb();
         self.device
             .lock()
@@ -172,7 +172,7 @@ impl VirtioMmioDevice {
             .with_context(|| "Failed to realize virtio.")?;
 
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
 
         Ok(dev)
     }
@@ -641,12 +641,12 @@ mod tests {
         let virtio_device = Arc::new(Mutex::new(VirtioDeviceTest::new()));
 
         let sys_space = address_space_init();
-        let mut sysbus = sysbus_init();
+        let sysbus = sysbus_init();
         let virtio_mmio_device = VirtioMmioDevice::new(
             &sys_space,
             "test_virtio_mmio_device".to_string(),
             virtio_device.clone(),
-            &mut sysbus,
+            &sysbus,
             0x0A00_0000,
             0x0000_0200,
         )

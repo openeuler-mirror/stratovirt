@@ -109,7 +109,7 @@ impl PFlash {
         bank_width: u32,
         device_width: u32,
         read_only: bool,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
     ) -> Result<Self> {
         if block_len == 0 {
@@ -230,19 +230,21 @@ impl PFlash {
         Ok(pflash)
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<PFlash>>> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<PFlash>>> {
         let region_base = self.base.res.region_base;
         let host_mmap = self.host_mmap.clone();
         let dev = Arc::new(Mutex::new(self));
-        let region_ops = sysbus.build_region_ops(&dev);
+        let region_ops = sysbus.lock().unwrap().build_region_ops(&dev);
         let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
         dev.lock().unwrap().rom = Some(rom_region.clone());
         sysbus
+            .lock()
+            .unwrap()
             .sys_mem
             .root()
             .add_subregion(rom_region, region_base)
             .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.devices.push(dev.clone());
+        sysbus.lock().unwrap().devices.push(dev.clone());
 
         Ok(dev)
     }
@@ -888,7 +890,7 @@ impl SysBusDevOps for PFlash {
 
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         region_name: &str,
@@ -942,19 +944,12 @@ mod test {
                 .open(file_name)
                 .unwrap(),
         );
-        let mut sysbus = sysbus_init();
+        let sysbus = sysbus_init();
         let pflash = PFlash::new(
-            flash_size,
-            fd,
-            sector_len,
-            4,
-            2,
-            read_only,
-            &mut sysbus,
-            flash_base,
+            flash_size, fd, sector_len, 4, 2, read_only, &sysbus, flash_base,
         )
         .unwrap();
-        let dev = pflash.realize(&mut sysbus).unwrap();
+        let dev = pflash.realize(&sysbus).unwrap();
 
         dev
     }

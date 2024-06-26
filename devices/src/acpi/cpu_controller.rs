@@ -90,7 +90,7 @@ pub struct CpuController {
 impl CpuController {
     pub fn new(
         max_cpus: u8,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         cpu_config: CpuConfig,
@@ -111,10 +111,10 @@ impl CpuController {
         Ok(cpu_controller)
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<Arc<Mutex<CpuController>>> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<CpuController>>> {
         let dev = Arc::new(Mutex::new(self));
         let ret_dev = dev.clone();
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
         Ok(ret_dev)
     }
 

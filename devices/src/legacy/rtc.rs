@@ -118,7 +118,7 @@ pub struct RTC {
 
 impl RTC {
     /// Construct function of RTC device.
-    pub fn new(sysbus: &mut SysBus) -> Result<RTC> {
+    pub fn new(sysbus: &Arc<Mutex<SysBus>>) -> Result<RTC> {
         let mut rtc = RTC {
             base: SysBusDevBase {
                 dev_type: SysBusDevType::Rtc,
@@ -264,9 +264,9 @@ impl RTC {
         true
     }
 
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
+    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
+        sysbus.lock().unwrap().attach_device(&dev)?;
         Ok(())
     }
 
@@ -427,8 +427,8 @@ mod test {
 
     #[test]
     fn test_set_year_20xx() -> Result<()> {
-        let mut sysbus = sysbus_init();
-        let mut rtc = RTC::new(&mut sysbus).with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc time: 2013-11-13 02:04:56
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x20);
         cmos_write(&mut rtc, RTC_YEAR, 0x13);
@@ -462,8 +462,8 @@ mod test {
 
     #[test]
     fn test_set_year_1970() -> Result<()> {
-        let mut sysbus = sysbus_init();
-        let mut rtc = RTC::new(&mut sysbus).with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc time (min): 1970-01-01 00:00:00
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
         cmos_write(&mut rtc, RTC_YEAR, 0x70);
@@ -486,8 +486,8 @@ mod test {
 
     #[test]
     fn test_invalid_rtc_time() -> Result<()> {
-        let mut sysbus = sysbus_init();
-        let mut rtc = RTC::new(&mut sysbus).with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc year: 1969
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
         cmos_write(&mut rtc, RTC_YEAR, 0x69);

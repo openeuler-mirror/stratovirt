@@ -133,7 +133,7 @@ pub struct MachineBase {
     #[cfg(target_arch = "x86_64")]
     sys_io: Arc<AddressSpace>,
     /// System bus.
-    sysbus: SysBus,
+    sysbus: Arc<Mutex<SysBus>>,
     /// VM running state.
     vm_state: Arc<(Mutex<VmState>, Condvar)>,
     /// Vm boot_source config.
@@ -218,7 +218,7 @@ impl MachineBase {
             sys_mem,
             #[cfg(target_arch = "x86_64")]
             sys_io,
-            sysbus,
+            sysbus: Arc::new(Mutex::new(sysbus)),
             vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
@@ -776,7 +776,7 @@ pub trait MachineOps: MachineLifecycle {
         let mut virtio_device = None;
         if serial_cfg.bus.is_none() {
             // Micro_vm.
-            for dev in self.get_sys_bus().devices.iter() {
+            for dev in self.get_sysbus_devices().iter() {
                 let locked_busdev = dev.lock().unwrap();
                 if locked_busdev.sysbusdev_base().dev_type == SysBusDevType::VirtioMmio {
                     let virtio_mmio_dev = locked_busdev
@@ -938,8 +938,8 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.machine_base().sysbus
+    fn get_sysbus_devices(&mut self) -> Vec<Arc<Mutex<dyn SysBusDevOps>>> {
+        self.machine_base().sysbus.lock().unwrap().devices.clone()
     }
 
     fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
@@ -951,8 +951,7 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     fn reset_all_devices(&mut self) -> Result<()> {
-        let sysbus = self.get_sys_bus();
-        for dev in sysbus.devices.iter() {
+        for dev in self.get_sysbus_devices().iter() {
             dev.lock()
                 .unwrap()
                 .reset()
