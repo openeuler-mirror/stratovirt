@@ -892,6 +892,10 @@ impl VringOps for SplitVring {
         features: u64,
         suppress: bool,
     ) -> Result<()> {
+        if !self.is_enabled() {
+            bail!("queue is not ready");
+        }
+
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             self.set_avail_event(sys_mem, self.get_avail_idx(sys_mem)?)?;
         } else {
