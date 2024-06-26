@@ -197,7 +197,7 @@ impl PowerDev {
             }
         }
         if pdev_available {
-            power_status_update(&dev.clone());
+            power_status_update(&dev);
         } else {
             let mut pdev = dev.lock().unwrap();
             pdev.power_load_static_status();
