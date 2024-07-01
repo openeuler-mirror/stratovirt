@@ -25,8 +25,8 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    gpa_hva_iovec_map, iov_to_buf, read_config_default, report_virtio_error, Element, Queue,
-    VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    gpa_hva_iovec_map, iov_read_object, iov_to_buf, read_config_default, report_virtio_error,
+    Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 use address_space::AddressSpace;
@@ -476,7 +476,8 @@ impl SerialPortHandler {
                 let iovec = elem.out_iovec;
                 let iovec_size = Element::iovec_size(&iovec);
                 let mut buf = vec![0u8; iovec_size as usize];
-                let size = iov_to_buf(&self.mem_space, &iovec, &mut buf[..])? as u64;
+                let cache = queue_lock.vring.get_cache();
+                let size = iov_to_buf(&self.mem_space, cache, &iovec, &mut buf[..])? as u64;
 
                 let locked_port = port.lock().unwrap();
                 if locked_port.host_connected {
@@ -739,17 +740,11 @@ impl SerialControlHandler {
                 break;
             }
 
-            let mut req = VirtioConsoleControl::default();
-            iov_to_buf(&self.mem_space, &elem.out_iovec, req.as_mut_bytes()).and_then(|size| {
-                if size < size_of::<VirtioConsoleControl>() {
-                    bail!(
-                        "Invalid length for request: get {}, expected {}",
-                        size,
-                        size_of::<VirtioConsoleControl>(),
-                    );
-                }
-                Ok(())
-            })?;
+            let mut req = iov_read_object::<VirtioConsoleControl>(
+                &self.mem_space,
+                &elem.out_iovec,
+                queue_lock.vring.get_cache(),
+            )?;
             req.id = LittleEndian::read_u32(req.id.as_bytes());
             req.event = LittleEndian::read_u16(req.event.as_bytes());
             req.value = LittleEndian::read_u16(req.value.as_bytes());
@@ -889,7 +884,8 @@ impl SerialControlHandler {
             return Ok(());
         }
 
-        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space)?;
+        let cache = queue_lock.vring.get_cache();
+        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space, cache)?;
         let len = size_of::<VirtioConsoleControl>() + extra.len();
         if in_size < len as u64 {
             bail!(

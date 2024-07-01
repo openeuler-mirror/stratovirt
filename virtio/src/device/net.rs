@@ -24,10 +24,11 @@ use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
 use once_cell::sync::Lazy;
+use util::aio::Iovec;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, get_libc_iovecs, iov_discard_front, iov_to_buf, mem_to_buf,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, mem_to_buf,
     read_config_default, report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue,
     VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
@@ -465,7 +466,7 @@ fn get_buf_and_discard(
     iovec: &mut [ElemIovec],
     buf: &mut [u8],
 ) -> Result<Vec<ElemIovec>> {
-    iov_to_buf(mem_space, iovec, buf).and_then(|size| {
+    iov_to_buf(mem_space, &None, iovec, buf).and_then(|size| {
         if size < buf.len() {
             error!("Invalid length {}, expected length {}", size, buf.len());
             bail!("Invalid length {}, expected length {}", size, buf.len());
@@ -718,7 +719,7 @@ struct NetIoHandler {
 }
 
 impl NetIoHandler {
-    fn read_from_tap(iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
+    fn read_from_tap(iovecs: &[Iovec], tap: &mut Tap) -> i32 {
         // SAFETY: the arguments of readv has been checked and is correct.
         let size = unsafe {
             libc::readv(
@@ -773,7 +774,8 @@ impl NetIoHandler {
             } else if elem.in_iovec.is_empty() {
                 bail!("The length of in iovec is 0");
             }
-            let iovecs = get_libc_iovecs(&self.mem_space, queue.vring.get_cache(), &elem.in_iovec);
+            let (_, iovecs) =
+                gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space, queue.vring.get_cache())?;
 
             if MigrationManager::is_active() {
                 // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
@@ -845,7 +847,7 @@ impl NetIoHandler {
         Ok(())
     }
 
-    fn send_packets(&self, tap_fd: libc::c_int, iovecs: &[libc::iovec]) -> i8 {
+    fn send_packets(&self, tap_fd: libc::c_int, iovecs: &[Iovec]) -> i8 {
         loop {
             // SAFETY: the arguments of writev has been checked and is correct.
             let size = unsafe {
@@ -885,7 +887,8 @@ impl NetIoHandler {
                 bail!("The length of out iovec is 0");
             }
 
-            let iovecs = get_libc_iovecs(&self.mem_space, queue.vring.get_cache(), &elem.out_iovec);
+            let (_, iovecs) =
+                gpa_hva_iovec_map(&elem.out_iovec, &self.mem_space, queue.vring.get_cache())?;
             let tap_fd = if let Some(tap) = self.tap.as_mut() {
                 tap.as_raw_fd() as libc::c_int
             } else {
@@ -1004,13 +1007,13 @@ impl NetIoHandler {
     }
 }
 
-fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
+fn get_net_header(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
     let mut start: usize = 0;
     let mut end: usize = 0;
 
     for elem in iovec {
         end = start
-            .checked_add(elem.iov_len)
+            .checked_add(elem.iov_len as usize)
             .with_context(|| "Overflow when getting the net header")?;
         end = cmp::min(end, buf.len());
         mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;

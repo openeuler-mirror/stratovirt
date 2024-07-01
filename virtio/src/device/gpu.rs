@@ -23,11 +23,11 @@ use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
-    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_read_object,
+    read_config_default, ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
@@ -418,13 +418,7 @@ impl VirtioGpuRequest {
             );
         }
 
-        let mut header = VirtioGpuCtrlHdr::default();
-        iov_to_buf(mem_space, &elem.out_iovec, header.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<VirtioGpuCtrlHdr>() {
-                bail!("Invalid header for gpu request: len {}.", size)
-            }
-            Ok(())
-        })?;
+        let header = iov_read_object::<VirtioGpuCtrlHdr>(mem_space, &elem.out_iovec, &None)?;
 
         // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
         // it is possible to get none back.
@@ -432,8 +426,8 @@ impl VirtioGpuRequest {
             iov_discard_front(&mut elem.out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
                 .unwrap_or_default();
 
-        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
-        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space, &None)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space, &None)?;
 
         // Note: in_iov and out_iov total len is no more than 1<<32, and
         // out_iov is more than 1, so in_len and out_len will not overflow.
@@ -1491,7 +1485,7 @@ impl GpuIoHandler {
                 len: ent.length,
             });
         }
-        match gpa_hva_iovec_map(&elemiovec, &self.mem_space) {
+        match gpa_hva_iovec_map(&elemiovec, &self.mem_space, &None) {
             Ok((_, iov)) => {
                 res.iov = iov;
                 self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
