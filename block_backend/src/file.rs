@@ -55,7 +55,7 @@ impl CombineRequest {
 }
 
 pub struct FileDriver<T: Clone + 'static> {
-    pub file: File,
+    pub file: Arc<File>,
     aio: Rc<RefCell<Aio<T>>>,
     pub incomplete: Arc<AtomicU64>,
     delete_evts: Vec<RawFd>,
@@ -63,7 +63,7 @@ pub struct FileDriver<T: Clone + 'static> {
 }
 
 impl<T: Clone + 'static> FileDriver<T> {
-    pub fn new(file: File, aio: Aio<T>, block_prop: BlockProperty) -> Self {
+    pub fn new(file: Arc<File>, aio: Aio<T>, block_prop: BlockProperty) -> Self {
         Self {
             file,
             incomplete: aio.incomplete_cnt.clone(),
@@ -199,13 +199,14 @@ impl<T: Clone + 'static> FileDriver<T> {
     pub fn disk_size(&mut self) -> Result<u64> {
         let disk_size = self
             .file
+            .as_ref()
             .seek(SeekFrom::End(0))
             .with_context(|| "Failed to seek the end for file")?;
         Ok(disk_size)
     }
 
     pub fn extend_to_len(&mut self, len: u64) -> Result<()> {
-        let file_end = self.file.seek(SeekFrom::End(0))?;
+        let file_end = self.file.as_ref().seek(SeekFrom::End(0))?;
         if len > file_end {
             self.file.set_len(len)?;
         }
