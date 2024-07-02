@@ -13,13 +13,17 @@
 use std::os::raw::c_void;
 use std::sync::{
     atomic::{fence, AtomicBool, AtomicI32, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
-use std::{cmp, ptr, thread, time};
+use std::{
+    cmp, ptr, thread,
+    time::{Duration, Instant},
+};
 
-use log::error;
+use log::{error, warn};
 
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
+use machine_manager::notifier::register_vm_pause_notifier;
 use util::ohos_binding::audio::*;
 
 trait OhAudioProcess {
@@ -27,7 +31,6 @@ trait OhAudioProcess {
     fn destroy(&mut self);
     fn preprocess(&mut self, _start_addr: u64, _sh_header: &ShmemStreamHeader) {}
     fn process(&mut self, recv_data: &StreamData) -> i32;
-    fn pause(&mut self, paused: bool);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,13 +44,27 @@ const FLUSH_DELAY_THRESHOLD_MS: u64 = 100;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
 
+#[derive(Copy, Clone, Default, PartialEq, PartialOrd)]
+enum OhAudioStatus {
+    // Processor is ready and waiting for play/capture.
+    #[default]
+    READY,
+    // Processor is started and doing job.
+    STARTED,
+    // Processor is paused.
+    PAUSED,
+    // OH audio framework error occurred.
+    ERROR,
+}
+
 struct OhAudioRender {
     ctx: Option<AudioContext>,
     stream_data: Arc<Mutex<Vec<StreamUnit>>>,
     data_size: AtomicI32,
-    start: bool,
-    pause: bool,
     flushing: AtomicBool,
+    status: Arc<RwLock<OhAudioStatus>>,
+    last_called_time: Option<Instant>,
+    pause_notifier_id: u64,
 }
 
 impl Default for OhAudioRender {
@@ -56,9 +73,10 @@ impl Default for OhAudioRender {
             ctx: None,
             stream_data: Arc::new(Mutex::new(Vec::with_capacity(STREAM_DATA_VEC_CAPACITY))),
             data_size: AtomicI32::new(0),
-            start: false,
-            pause: false,
             flushing: AtomicBool::new(false),
+            status: Arc::new(RwLock::new(OhAudioStatus::default())),
+            last_called_time: None,
+            pause_notifier_id: 0,
         }
     }
 }
@@ -80,13 +98,39 @@ impl OhAudioRender {
         self.flushing.store(true, Ordering::Release);
         let mut cnt = 0;
         while (cnt < FLUSH_DELAY_CNT) && (self.flushing.load(Ordering::Acquire)) {
-            thread::sleep(time::Duration::from_millis(FLUSH_DELAY_MS));
+            thread::sleep(Duration::from_millis(FLUSH_DELAY_MS));
             cnt += 1;
         }
         // We need to wait for 100ms to ensure the audio data has
         // been flushed before stop renderer.
-        thread::sleep(time::Duration::from_millis(FLUSH_DELAY_THRESHOLD_MS));
+        thread::sleep(Duration::from_millis(FLUSH_DELAY_THRESHOLD_MS));
         let _ = self.ctx.as_ref().unwrap().flush_renderer();
+    }
+
+    #[inline(always)]
+    fn get_status(&self) -> OhAudioStatus {
+        *self.status.read().unwrap()
+    }
+
+    #[inline(always)]
+    fn set_status(&self, status: OhAudioStatus) {
+        *self.status.write().unwrap() = status;
+    }
+
+    fn register_pause_notifier(&mut self) {
+        let status = self.status.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            let s = *status.read().unwrap();
+            if paused {
+                if s == OhAudioStatus::PAUSED {
+                    return;
+                }
+                *status.write().unwrap() = OhAudioStatus::PAUSED;
+            } else {
+                *status.write().unwrap() = OhAudioStatus::ERROR;
+            }
+        });
+        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
     }
 }
 
@@ -110,47 +154,43 @@ impl OhAudioProcess for OhAudioRender {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.start = true;
+                self.set_status(OhAudioStatus::STARTED);
                 trace::oh_scream_render_init(&self.ctx);
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
             }
         }
-        self.start
-    }
-
-    fn pause(&mut self, paused: bool) {
-        self.pause = paused;
-        if paused {
-            self.destroy();
-        }
+        self.last_called_time = None;
+        self.get_status() == OhAudioStatus::STARTED
     }
 
     fn destroy(&mut self) {
-        if self.ctx.is_some() {
-            if self.start {
-                if !self.pause {
-                    self.flush();
-                }
-                self.ctx.as_mut().unwrap().stop();
-                self.start = false;
+        let status = self.get_status();
+
+        match status {
+            OhAudioStatus::PAUSED => return,
+            OhAudioStatus::ERROR => {
+                self.ctx = None;
+                self.set_status(OhAudioStatus::READY);
+                return;
             }
-            self.ctx = None;
+            OhAudioStatus::STARTED => self.flush(),
+            _ => {}
         }
-        if self.pause {
-            return;
-        }
-        let mut locked_data = self.stream_data.lock().unwrap();
-        locked_data.clear();
+        self.ctx = None;
+        self.stream_data.lock().unwrap().clear();
         self.data_size.store(0, Ordering::Relaxed);
+        self.set_status(OhAudioStatus::READY);
         trace::oh_scream_render_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
-        if self.pause {
+        let mut status = self.get_status();
+        if status == OhAudioStatus::PAUSED {
             return 0;
         }
+
         self.check_fmt_update(recv_data);
 
         fence(Ordering::Acquire);
@@ -176,7 +216,13 @@ impl OhAudioProcess for OhAudioRender {
             .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
         drop(locked_data);
 
-        if !self.start && !self.init(recv_data) {
+        if status == OhAudioStatus::ERROR {
+            error!("Audio server error occurred. Destroy and reconnect it.");
+            self.destroy();
+            status = self.get_status();
+        }
+
+        if status == OhAudioStatus::READY && !self.init(recv_data) {
             error!("failed to init oh audio");
             self.destroy();
         }
@@ -192,8 +238,9 @@ struct OhAudioCapture {
     shm_addr: u64,
     shm_len: u64,
     cur_pos: u64,
-    start: bool,
-    pause: bool,
+    status: Arc<RwLock<OhAudioStatus>>,
+    last_called_time: Option<Instant>,
+    pause_notifier_id: u64,
 }
 
 impl OhAudioCapture {
@@ -207,6 +254,33 @@ impl OhAudioCapture {
         {
             self.destroy();
         }
+    }
+
+    #[inline(always)]
+    fn get_status(&self) -> OhAudioStatus {
+        *self.status.write().unwrap()
+    }
+
+    #[inline(always)]
+    fn set_status(&self, status: OhAudioStatus) {
+        *self.status.write().unwrap() = status;
+    }
+
+    fn register_pause_notifier(&mut self) {
+        let status = self.status.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            let s = *status.read().unwrap();
+            if paused {
+                if s == OhAudioStatus::PAUSED {
+                    return;
+                }
+                *status.write().unwrap() = OhAudioStatus::PAUSED;
+            } else {
+                // Set error status to recreate capture context.
+                *status.write().unwrap() = OhAudioStatus::ERROR;
+            }
+        });
+        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
     }
 }
 
@@ -228,7 +302,8 @@ impl OhAudioProcess for OhAudioCapture {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.start = true;
+                self.last_called_time = None;
+                self.set_status(OhAudioStatus::STARTED);
                 trace::oh_scream_capture_init(&self.ctx);
                 true
             }
@@ -239,20 +314,14 @@ impl OhAudioProcess for OhAudioCapture {
         }
     }
 
-    fn pause(&mut self, paused: bool) {
-        self.pause = paused;
-        if paused {
-            self.destroy();
-        }
-    }
-
     fn destroy(&mut self) {
-        if self.ctx.is_some() {
-            if self.start {
-                self.start = false;
-                self.ctx.as_mut().unwrap().stop();
+        let status = self.get_status();
+        match status {
+            OhAudioStatus::PAUSED => return,
+            _ => {
+                self.ctx = None;
+                self.set_status(OhAudioStatus::READY);
             }
-            self.ctx = None;
         }
         trace::oh_scream_capture_destroy();
     }
@@ -266,20 +335,30 @@ impl OhAudioProcess for OhAudioCapture {
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
-        if self.pause {
+        let mut status = self.get_status();
+        if status == OhAudioStatus::PAUSED {
             return -1;
         }
         self.check_fmt_update(recv_data);
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 
-        if !self.start && !self.init(recv_data) {
+        if status == OhAudioStatus::ERROR {
+            self.destroy();
+            status = self.get_status();
+        }
+
+        if status == OhAudioStatus::READY && !self.init(recv_data) {
             self.destroy();
             return -1;
         }
         self.new_chunks.store(0, Ordering::Release);
         while self.new_chunks.load(Ordering::Acquire) == 0 {
-            thread::sleep(time::Duration::from_millis(10));
+            status = self.get_status();
+            if status == OhAudioStatus::PAUSED || status == OhAudioStatus::ERROR {
+                return -1;
+            }
+            thread::sleep(Duration::from_millis(10));
         }
 
         self.new_chunks.load(Ordering::Acquire)
@@ -298,6 +377,20 @@ extern "C" fn on_write_data_cb(
             .as_mut()
             .unwrap_unchecked()
     };
+
+    match &render.last_called_time {
+        None => render.last_called_time = Some(Instant::now()),
+        Some(last) => {
+            let elapsed = last.elapsed().as_millis();
+            if elapsed >= 1000 {
+                warn!("{elapsed}ms elapsed after last on_write called. Will restart render.");
+                render.set_status(OhAudioStatus::ERROR);
+                return 0;
+            }
+            render.last_called_time = Some(Instant::now());
+        }
+    }
+
     let data_size = render.data_size.load(Ordering::Relaxed);
 
     trace::trace_scope_start!(ohaudio_write_cb, args = (length, data_size));
@@ -358,10 +451,23 @@ extern "C" fn on_read_data_cb(
             .unwrap_unchecked()
     };
 
+    match &capture.last_called_time {
+        None => capture.last_called_time = Some(Instant::now()),
+        Some(last) => {
+            let elapsed = last.elapsed().as_millis();
+            if elapsed >= 1000 {
+                warn!("{elapsed}ms elapsed after last on_read called. Will restart capture.");
+                capture.set_status(OhAudioStatus::ERROR);
+                return 0;
+            }
+            capture.last_called_time = Some(Instant::now());
+        }
+    }
+
     trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
     loop {
-        if !capture.start {
+        if capture.get_status() != OhAudioStatus::STARTED {
             return 0;
         }
         if capture.new_chunks.load(Ordering::Acquire) == 0 {
@@ -411,12 +517,16 @@ unsafe impl Send for OhAudio {}
 impl OhAudio {
     pub fn init(dir: ScreamDirection) -> Self {
         match dir {
-            ScreamDirection::Playback => Self {
-                processor: Box::<OhAudioRender>::default(),
-            },
-            ScreamDirection::Record => Self {
-                processor: Box::<OhAudioCapture>::default(),
-            },
+            ScreamDirection::Playback => {
+                let mut processor = Box::<OhAudioRender>::default();
+                processor.register_pause_notifier();
+                Self { processor }
+            }
+            ScreamDirection::Record => {
+                let mut processor = Box::<OhAudioCapture>::default();
+                processor.register_pause_notifier();
+                Self { processor }
+            }
         }
     }
 }
@@ -436,10 +546,6 @@ impl AudioInterface for OhAudio {
 
     fn destroy(&mut self) {
         self.processor.destroy();
-    }
-
-    fn pause(&mut self, paused: bool) {
-        self.processor.pause(paused);
     }
 }
 

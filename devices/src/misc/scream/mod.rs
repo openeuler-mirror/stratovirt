@@ -40,7 +40,6 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{PciBus, PciDevOps};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
-use machine_manager::notifier::register_vm_pause_notifier;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::OhAudio;
 #[cfg(feature = "scream_pulseaudio")]
@@ -434,7 +433,6 @@ pub struct Scream {
     config: ScreamConfig,
     token_id: Option<Arc<RwLock<u64>>>,
     interface_resource: Vec<Arc<Mutex<dyn AudioInterface>>>,
-    notify_id: u64,
 }
 
 impl Scream {
@@ -458,7 +456,6 @@ impl Scream {
             config,
             token_id,
             interface_resource: Vec::new(),
-            notify_id: 0,
         })
     }
 
@@ -555,17 +552,7 @@ impl Scream {
         ivshmem.realize()?;
 
         self.start_play_thread_fn()?;
-        self.start_record_thread_fn()?;
-
-        let cloned_interfaces = self.interface_resource.clone();
-        let pause_notify = Arc::new(move |paused: bool| {
-            for interface in cloned_interfaces.iter() {
-                interface.lock().unwrap().pause(paused);
-            }
-        });
-        self.notify_id = register_vm_pause_notifier(pause_notify);
-
-        Ok(())
+        self.start_record_thread_fn()
     }
 }
 
@@ -576,5 +563,4 @@ pub trait AudioInterface: Send {
     fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
     fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
-    fn pause(&mut self, _paused: bool) {}
 }
