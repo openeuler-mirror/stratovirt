@@ -1257,8 +1257,9 @@ pub trait MachineOps: MachineLifecycle {
         cfg_args: &str,
         hotplug: bool,
     ) -> Result<()> {
-        let net_cfg =
+        let mut net_cfg =
             NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        net_cfg.auto_iothread();
         let netdev_cfg = vm_config
             .netdevs
             .remove(&net_cfg.netdev)
