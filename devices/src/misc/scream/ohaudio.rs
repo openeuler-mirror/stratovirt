@@ -48,13 +48,13 @@ const FLUSH_DELAY_CNT: u64 = 200;
 enum OhAudioStatus {
     // Processor is ready and waiting for play/capture.
     #[default]
-    READY,
+    Ready,
     // Processor is started and doing job.
-    STARTED,
+    Started,
     // Processor is paused.
-    PAUSED,
+    Paused,
     // OH audio framework error occurred.
-    ERROR,
+    Error,
 }
 
 struct OhAudioRender {
@@ -122,12 +122,12 @@ impl OhAudioRender {
         let pause_notify = Arc::new(move |paused: bool| {
             let s = *status.read().unwrap();
             if paused {
-                if s == OhAudioStatus::PAUSED {
+                if s == OhAudioStatus::Paused {
                     return;
                 }
-                *status.write().unwrap() = OhAudioStatus::PAUSED;
+                *status.write().unwrap() = OhAudioStatus::Paused;
             } else {
-                *status.write().unwrap() = OhAudioStatus::ERROR;
+                *status.write().unwrap() = OhAudioStatus::Error;
             }
         });
         self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
@@ -154,7 +154,7 @@ impl OhAudioProcess for OhAudioRender {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.set_status(OhAudioStatus::STARTED);
+                self.set_status(OhAudioStatus::Started);
                 trace::oh_scream_render_init(&self.ctx);
             }
             Err(e) => {
@@ -162,32 +162,32 @@ impl OhAudioProcess for OhAudioRender {
             }
         }
         self.last_called_time = None;
-        self.get_status() == OhAudioStatus::STARTED
+        self.get_status() == OhAudioStatus::Started
     }
 
     fn destroy(&mut self) {
         let status = self.get_status();
 
         match status {
-            OhAudioStatus::PAUSED => return,
-            OhAudioStatus::ERROR => {
+            OhAudioStatus::Paused => return,
+            OhAudioStatus::Error => {
                 self.ctx = None;
-                self.set_status(OhAudioStatus::READY);
+                self.set_status(OhAudioStatus::Ready);
                 return;
             }
-            OhAudioStatus::STARTED => self.flush(),
+            OhAudioStatus::Started => self.flush(),
             _ => {}
         }
         self.ctx = None;
         self.stream_data.lock().unwrap().clear();
         self.data_size.store(0, Ordering::Relaxed);
-        self.set_status(OhAudioStatus::READY);
+        self.set_status(OhAudioStatus::Ready);
         trace::oh_scream_render_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
         let mut status = self.get_status();
-        if status == OhAudioStatus::PAUSED {
+        if status == OhAudioStatus::Paused {
             return 0;
         }
 
@@ -216,13 +216,13 @@ impl OhAudioProcess for OhAudioRender {
             .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
         drop(locked_data);
 
-        if status == OhAudioStatus::ERROR {
+        if status == OhAudioStatus::Error {
             error!("Audio server error occurred. Destroy and reconnect it.");
             self.destroy();
             status = self.get_status();
         }
 
-        if status == OhAudioStatus::READY && !self.init(recv_data) {
+        if status == OhAudioStatus::Ready && !self.init(recv_data) {
             error!("failed to init oh audio");
             self.destroy();
         }
@@ -271,13 +271,13 @@ impl OhAudioCapture {
         let pause_notify = Arc::new(move |paused: bool| {
             let s = *status.read().unwrap();
             if paused {
-                if s == OhAudioStatus::PAUSED {
+                if s == OhAudioStatus::Paused {
                     return;
                 }
-                *status.write().unwrap() = OhAudioStatus::PAUSED;
+                *status.write().unwrap() = OhAudioStatus::Paused;
             } else {
                 // Set error status to recreate capture context.
-                *status.write().unwrap() = OhAudioStatus::ERROR;
+                *status.write().unwrap() = OhAudioStatus::Error;
             }
         });
         self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
@@ -303,7 +303,7 @@ impl OhAudioProcess for OhAudioCapture {
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 self.last_called_time = None;
-                self.set_status(OhAudioStatus::STARTED);
+                self.set_status(OhAudioStatus::Started);
                 trace::oh_scream_capture_init(&self.ctx);
                 true
             }
@@ -317,10 +317,10 @@ impl OhAudioProcess for OhAudioCapture {
     fn destroy(&mut self) {
         let status = self.get_status();
         match status {
-            OhAudioStatus::PAUSED => return,
+            OhAudioStatus::Paused => return,
             _ => {
                 self.ctx = None;
-                self.set_status(OhAudioStatus::READY);
+                self.set_status(OhAudioStatus::Ready);
             }
         }
         trace::oh_scream_capture_destroy();
@@ -336,26 +336,26 @@ impl OhAudioProcess for OhAudioCapture {
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
         let mut status = self.get_status();
-        if status == OhAudioStatus::PAUSED {
+        if status == OhAudioStatus::Paused {
             return -1;
         }
         self.check_fmt_update(recv_data);
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 
-        if status == OhAudioStatus::ERROR {
+        if status == OhAudioStatus::Error {
             self.destroy();
             status = self.get_status();
         }
 
-        if status == OhAudioStatus::READY && !self.init(recv_data) {
+        if status == OhAudioStatus::Ready && !self.init(recv_data) {
             self.destroy();
             return -1;
         }
         self.new_chunks.store(0, Ordering::Release);
         while self.new_chunks.load(Ordering::Acquire) == 0 {
             status = self.get_status();
-            if status == OhAudioStatus::PAUSED || status == OhAudioStatus::ERROR {
+            if status == OhAudioStatus::Paused || status == OhAudioStatus::Error {
                 return -1;
             }
             thread::sleep(Duration::from_millis(10));
@@ -384,7 +384,7 @@ extern "C" fn on_write_data_cb(
             let elapsed = last.elapsed().as_millis();
             if elapsed >= 1000 {
                 warn!("{elapsed}ms elapsed after last on_write called. Will restart render.");
-                render.set_status(OhAudioStatus::ERROR);
+                render.set_status(OhAudioStatus::Error);
                 return 0;
             }
             render.last_called_time = Some(Instant::now());
@@ -457,7 +457,7 @@ extern "C" fn on_read_data_cb(
             let elapsed = last.elapsed().as_millis();
             if elapsed >= 1000 {
                 warn!("{elapsed}ms elapsed after last on_read called. Will restart capture.");
-                capture.set_status(OhAudioStatus::ERROR);
+                capture.set_status(OhAudioStatus::Error);
                 return 0;
             }
             capture.last_called_time = Some(Instant::now());
@@ -467,7 +467,7 @@ extern "C" fn on_read_data_cb(
     trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
     loop {
-        if capture.get_status() != OhAudioStatus::STARTED {
+        if capture.get_status() != OhAudioStatus::Started {
             return 0;
         }
         if capture.new_chunks.load(Ordering::Acquire) == 0 {
