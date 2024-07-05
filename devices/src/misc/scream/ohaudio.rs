@@ -10,13 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::VecDeque;
 use std::os::raw::c_void;
 use std::sync::{
     atomic::{fence, AtomicBool, AtomicI32, Ordering},
     Arc, Mutex, RwLock,
 };
 use std::{
-    cmp, ptr, thread,
+    cmp,
+    io::Read,
+    ptr, thread,
     time::{Duration, Instant},
 };
 
@@ -25,6 +28,10 @@ use log::{error, warn};
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
 use machine_manager::notifier::register_vm_pause_notifier;
 use util::ohos_binding::audio::*;
+
+const STREAM_DATA_VEC_CAPACITY: usize = 15;
+const FLUSH_DELAY_MS: u64 = 5;
+const FLUSH_DELAY_CNT: u64 = 200;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
@@ -35,14 +42,121 @@ trait OhAudioProcess {
 
 #[derive(Debug, Clone, Copy)]
 struct StreamUnit {
-    pub addr: u64,
-    pub len: u64,
+    addr: usize,
+    len: usize,
 }
 
-const STREAM_DATA_VEC_CAPACITY: usize = 15;
-const FLUSH_DELAY_THRESHOLD_MS: u64 = 100;
-const FLUSH_DELAY_MS: u64 = 5;
-const FLUSH_DELAY_CNT: u64 = 200;
+impl Read for StreamUnit {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = cmp::min(self.len, buf.len());
+        // SAFETY: all the source data are in scream BAR.
+        unsafe { ptr::copy_nonoverlapping(self.addr as *const u8, buf.as_mut_ptr(), len) };
+        self.len -= len;
+        self.addr += len;
+        Ok(len)
+    }
+}
+
+impl StreamUnit {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn new(addr: usize, len: usize) -> Self {
+        Self { addr, len }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+struct StreamQueue {
+    queue: VecDeque<StreamUnit>,
+    data_size: usize,
+}
+
+impl Read for StreamQueue {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = buf.len();
+        let mut ret = 0;
+        while ret < len {
+            if self.queue.len() == 0 {
+                break;
+            }
+            let unit = match self.queue.front_mut() {
+                Some(u) => u,
+                None => break,
+            };
+            ret += unit.read(&mut buf[ret..len]).unwrap();
+            self.data_size -= ret;
+            if unit.is_empty() {
+                self.pop_front();
+            }
+        }
+        Ok(ret)
+    }
+
+    // If there's no enough data, let's fill the whole buffer with 0.
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        let len = buf.len();
+        match self.read(buf) {
+            Ok(ret) => {
+                if ret < len {
+                    self.read_zero(&mut buf[ret..len]);
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl StreamQueue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            queue: VecDeque::with_capacity(capacity),
+            data_size: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
+    }
+
+    #[inline]
+    fn data_size(&self) -> usize {
+        self.data_size
+    }
+
+    fn pop_front(&mut self) {
+        if let Some(elem) = self.queue.pop_front() {
+            self.data_size -= elem.len();
+        }
+    }
+
+    fn push_back(&mut self, unit: StreamUnit) {
+        // When audio data is not consumed in time, this buffer
+        // might be full. So let's keep the max size by dropping
+        // the old data. This can guarantee sound playing can't
+        // be delayed too much and the buffer won't become too
+        // large.
+        if self.queue.len() == self.queue.capacity() {
+            self.pop_front();
+        }
+        self.data_size += unit.len;
+        self.queue.push_back(unit);
+    }
+
+    fn read_zero(&mut self, buf: &mut [u8]) {
+        // SAFETY: the buffer is guaranteed by the caller.
+        unsafe {
+            ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
+        }
+    }
+}
 
 #[derive(Copy, Clone, Default, PartialEq, PartialOrd)]
 enum OhAudioStatus {
@@ -59,8 +173,7 @@ enum OhAudioStatus {
 
 struct OhAudioRender {
     ctx: Option<AudioContext>,
-    stream_data: Arc<Mutex<Vec<StreamUnit>>>,
-    data_size: AtomicI32,
+    stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
     status: Arc<RwLock<OhAudioStatus>>,
     last_called_time: Option<Instant>,
@@ -71,8 +184,7 @@ impl Default for OhAudioRender {
     fn default() -> OhAudioRender {
         OhAudioRender {
             ctx: None,
-            stream_data: Arc::new(Mutex::new(Vec::with_capacity(STREAM_DATA_VEC_CAPACITY))),
-            data_size: AtomicI32::new(0),
+            stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
             status: Arc::new(RwLock::new(OhAudioStatus::default())),
             last_called_time: None,
@@ -95,16 +207,29 @@ impl OhAudioRender {
     }
 
     fn flush(&mut self) {
-        self.flushing.store(true, Ordering::Release);
+        self.set_flushing(true);
         let mut cnt = 0;
-        while (cnt < FLUSH_DELAY_CNT) && (self.flushing.load(Ordering::Acquire)) {
+        while cnt < FLUSH_DELAY_CNT {
             thread::sleep(Duration::from_millis(FLUSH_DELAY_MS));
             cnt += 1;
+            if self.stream_data.lock().unwrap().data_size() == 0 {
+                break;
+            }
         }
-        // We need to wait for 100ms to ensure the audio data has
-        // been flushed before stop renderer.
-        thread::sleep(Duration::from_millis(FLUSH_DELAY_THRESHOLD_MS));
+    }
+
+    fn flush_renderer(&self) {
         let _ = self.ctx.as_ref().unwrap().flush_renderer();
+    }
+
+    #[inline(always)]
+    fn is_flushing(&self) -> bool {
+        self.flushing.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    fn set_flushing(&mut self, flush: bool) {
+        self.flushing.store(flush, Ordering::Release);
     }
 
     #[inline(always)]
@@ -180,7 +305,7 @@ impl OhAudioProcess for OhAudioRender {
         }
         self.ctx = None;
         self.stream_data.lock().unwrap().clear();
-        self.data_size.store(0, Ordering::Relaxed);
+        self.set_flushing(false);
         self.set_status(OhAudioStatus::Ready);
         trace::oh_scream_render_destroy();
     }
@@ -197,24 +322,10 @@ impl OhAudioProcess for OhAudioRender {
 
         trace::trace_scope_start!(ohaudio_render_process, args = (recv_data));
 
-        let su = StreamUnit {
-            addr: recv_data.audio_base,
-            len: recv_data.audio_size as u64,
-        };
-        let mut locked_data = self.stream_data.lock().unwrap();
-        // When audio data is not consumed in time, we remove old chunk
-        // and push new one. So audio-playing won't delay. One chunk means
-        // 20 ms data.
-        if locked_data.len() >= STREAM_DATA_VEC_CAPACITY {
-            let remove_size = locked_data[0].len;
-            locked_data.remove(0);
-            self.data_size
-                .fetch_sub(remove_size as i32, Ordering::Relaxed);
-        }
-        locked_data.push(su);
-        self.data_size
-            .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
-        drop(locked_data);
+        self.stream_data.lock().unwrap().push_back(StreamUnit::new(
+            recv_data.audio_base as usize,
+            recv_data.audio_size as usize,
+        ));
 
         if status == OhAudioStatus::Error {
             error!("Audio server error occurred. Destroy and reconnect it.");
@@ -391,49 +502,18 @@ extern "C" fn on_write_data_cb(
         }
     }
 
-    let data_size = render.data_size.load(Ordering::Relaxed);
+    let len = length as usize;
+    // SAFETY: the buffer is guaranteed by OH audio framework.
+    let wbuf = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, len) };
 
-    trace::trace_scope_start!(ohaudio_write_cb, args = (length, data_size));
-
-    if !render.flushing.load(Ordering::Acquire) && data_size < length {
-        // SAFETY: we checked len.
-        unsafe { ptr::write_bytes(buffer as *mut u8, 0, length as usize) };
-        return 0;
-    }
-
-    // Copy stream data from shared memory to buffer.
-    let mut dst_addr = buffer as u64;
-    let mut left = length as u64;
-    let mut su_list = render.stream_data.lock().unwrap();
-    while left > 0 && su_list.len() > 0 {
-        let su = &mut su_list[0];
-        let len = cmp::min(left, su.len);
-
-        // SAFETY: we checked len.
-        unsafe {
-            ptr::copy_nonoverlapping(su.addr as *const u8, dst_addr as *mut u8, len as usize)
-        };
-        trace::oh_scream_on_write_data_cb(len as usize);
-
-        dst_addr += len;
-        left -= len;
-        su.len -= len;
-        if su.len == 0 {
-            su_list.remove(0);
-        } else {
-            su.addr += len;
+    trace::trace_scope_start!(ohaudio_write_cb, args = (len));
+    match render.stream_data.lock().unwrap().read_exact(wbuf) {
+        Ok(()) => {
+            if render.is_flushing() {
+                render.flush_renderer();
+            }
         }
-    }
-    render
-        .data_size
-        .fetch_sub(length - left as i32, Ordering::Relaxed);
-
-    if left > 0 {
-        // SAFETY: we checked len.
-        unsafe { ptr::write_bytes(dst_addr as *mut u8, 0, left as usize) };
-    }
-    if render.flushing.load(Ordering::Acquire) && su_list.is_empty() {
-        render.flushing.store(false, Ordering::Release);
+        Err(e) => error!("Failed to read stream data {:?}", e),
     }
     0
 }
