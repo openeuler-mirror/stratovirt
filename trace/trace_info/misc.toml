@@ -78,8 +78,8 @@ enabled = true
 
 [[scopes]]
 name = "ohaudio_write_cb"
-args = "to_copy: i32, len: i32"
-message = "OH audio expect audio data {} bytes, we have {} bytes"
+args = "to_copy: i32"
+message = "OH audio expect audio data {} bytes"
 enabled = true
 
 [[scopes]]
