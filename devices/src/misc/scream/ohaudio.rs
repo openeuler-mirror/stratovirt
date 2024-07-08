@@ -507,6 +507,7 @@ extern "C" fn on_write_data_cb(
     // SAFETY: the buffer is guaranteed by OH audio framework.
     let wbuf = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, len) };
 
+    trace::oh_scream_on_write_data_cb(len);
     trace::trace_scope_start!(ohaudio_write_cb, args = (len));
     match render.stream_data.lock().unwrap().read_exact(wbuf) {
         Ok(()) => {
