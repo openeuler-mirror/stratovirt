@@ -90,8 +90,9 @@ impl Read for StreamQueue {
                 Some(u) => u,
                 None => break,
             };
-            ret += unit.read(&mut buf[ret..len]).unwrap();
-            self.data_size -= ret;
+            let rlen = unit.read(&mut buf[ret..len]).unwrap();
+            ret += rlen;
+            self.data_size -= rlen;
             if unit.is_empty() {
                 self.pop_front();
             }
