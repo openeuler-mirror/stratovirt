@@ -83,7 +83,7 @@ impl Read for StreamQueue {
         let len = buf.len();
         let mut ret = 0;
         while ret < len {
-            if self.queue.len() == 0 {
+            if self.queue.is_empty() {
                 break;
             }
             let unit = match self.queue.front_mut() {
