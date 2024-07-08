@@ -273,11 +273,14 @@ impl Chardev {
                 }
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
-            ChardevType::Socket { .. } => (),
-        }
-
-        if self.output.is_none() {
-            return Ok(());
+            ChardevType::Socket { .. } => {
+                if self.output.is_none() {
+                    return Ok(());
+                }
+                if listener_fd.is_none() {
+                    return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
+                }
+            }
         }
 
         if self.outbuf_is_full() {
