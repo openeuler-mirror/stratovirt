@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{bail, Context, Result};
 
@@ -138,8 +138,8 @@ impl MachineOps for LightMachine {
             .with_context(|| "Failed to realize serial device.")
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
-        let mut locked_vm = vm.lock().unwrap();
+    fn realize(vm: &Arc<RwLock<Self>>, vm_config: &mut VmConfig) -> Result<()> {
+        let mut locked_vm = vm.write().unwrap();
 
         trace::sysbus(&locked_vm.base.sysbus);
         trace::vm_state(&locked_vm.base.vm_state);

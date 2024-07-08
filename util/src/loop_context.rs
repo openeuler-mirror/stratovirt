@@ -202,7 +202,7 @@ pub struct EventLoopContext {
     /// Epoll file descriptor.
     epoll: Epoll,
     /// Control epoll loop running.
-    manager: Option<Arc<Mutex<dyn EventLoopManager>>>,
+    manager: Option<Arc<RwLock<dyn EventLoopManager>>>,
     /// Used to wakeup epoll to re-evaluate events or timers.
     kick_event: EventFd,
     /// Used to avoid unnecessary kick operation when the
@@ -290,7 +290,7 @@ impl EventLoopContext {
         }
     }
 
-    pub fn set_manager(&mut self, manager: Arc<Mutex<dyn EventLoopManager>>) {
+    pub fn set_manager(&mut self, manager: Arc<RwLock<dyn EventLoopManager>>) {
         self.manager = Some(manager);
     }
 
@@ -547,8 +547,8 @@ impl EventLoopContext {
     /// Executes `epoll.wait()` to wait for events, and call the responding callbacks.
     pub fn run(&mut self) -> Result<bool> {
         if let Some(manager) = &self.manager {
-            if manager.lock().unwrap().loop_should_exit() {
-                manager.lock().unwrap().loop_cleanup()?;
+            if manager.read().unwrap().loop_should_exit() {
+                manager.read().unwrap().loop_cleanup()?;
                 return Ok(false);
             }
         }
@@ -558,8 +558,8 @@ impl EventLoopContext {
 
     pub fn iothread_run(&mut self) -> Result<bool> {
         if let Some(manager) = &self.manager {
-            if manager.lock().unwrap().loop_should_exit() {
-                manager.lock().unwrap().loop_cleanup()?;
+            if manager.read().unwrap().loop_should_exit() {
+                manager.read().unwrap().loop_cleanup()?;
                 return Ok(false);
             }
         }

@@ -544,7 +544,7 @@ impl MachineLifecycle for LightMachine {
         true
     }
 
-    fn reset(&mut self) -> bool {
+    fn reset(&self) -> bool {
         // For micro vm, the reboot command is equivalent to the shutdown command.
         for cpu in self.base.cpus.iter() {
             let (cpu_state, _) = cpu.state();
