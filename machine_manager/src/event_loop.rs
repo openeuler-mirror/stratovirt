@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::os::unix::prelude::RawFd;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, RwLock};
 use std::{process, thread};
 
 use anyhow::{bail, Result};
@@ -126,7 +126,7 @@ impl EventLoop {
     /// # Arguments
     ///
     /// * `manager` - The main part to manager the event loop.
-    pub fn set_manager(manager: Arc<Mutex<dyn EventLoopManager>>) {
+    pub fn set_manager(manager: Arc<RwLock<dyn EventLoopManager>>) {
         // SAFETY: All concurrently accessed data of EventLoopContext is protected.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {

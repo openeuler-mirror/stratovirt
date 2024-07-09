@@ -338,7 +338,7 @@ impl GICDevice for GICv3 {
         Ok(())
     }
 
-    fn reset(&self) -> Result<()> {
+    fn reset_state(&self) -> Result<()> {
         info!("Reset gicv3its");
         self.reset_its_state()?;
         info!("Reset gicv3");
