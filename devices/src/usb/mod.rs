@@ -51,20 +51,15 @@ const USB_MAX_ADDRESS: u8 = 127;
 pub const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
 
 /// USB packet return status.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum UsbPacketStatus {
     Success,
+    #[default]
     NoDev,
     Nak,
     Stall,
     Babble,
     IoError,
-}
-
-impl Default for UsbPacketStatus {
-    fn default() -> Self {
-        Self::NoDev
-    }
 }
 
 /// USB request used to transfer to USB device.
@@ -386,7 +381,7 @@ pub trait UsbDevice: Send + Sync {
         locked_packet.status = UsbPacketStatus::Success;
         let ep_nr = locked_packet.ep_number;
         drop(locked_packet);
-        debug!("handle packet endpointer number {}", ep_nr);
+        debug!("handle packet endpoint number {}", ep_nr);
         if ep_nr == 0 {
             if let Err(e) = self.do_parameter(packet) {
                 error!("Failed to handle control packet {:?}", e);
@@ -482,7 +477,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
             locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
-    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
+    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep, 0) {
         error!("Failed to wakeup endpoint {:?}", e);
     }
     Ok(())
@@ -496,9 +491,9 @@ pub trait TransferOps: Send + Sync {
 /// Usb packet used for device transfer data.
 #[derive(Default)]
 pub struct UsbPacket {
-    /// USB packet unique identifier.
+    /// Unique number for packet tracking.
     pub packet_id: u32,
-    /// USB packet id.
+    /// USB packet id (direction of the transfer).
     pub pid: u32,
     pub is_async: bool,
     pub iovecs: Vec<Iovec>,
@@ -510,12 +505,12 @@ pub struct UsbPacket {
     pub actual_length: u32,
     /// Endpoint number.
     pub ep_number: u8,
+    /// Stream id.
+    pub stream: u32,
     /// Transfer for complete packet.
     pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
     /// Target USB device for this packet.
     pub target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
-    /// Stream id.
-    pub stream: u32,
 }
 
 impl std::fmt::Display for UsbPacket {
@@ -533,6 +528,7 @@ impl UsbPacket {
         packet_id: u32,
         pid: u32,
         ep_number: u8,
+        stream: u32,
         iovecs: Vec<Iovec>,
         xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
         target_dev: Option<Weak<Mutex<dyn UsbDevice>>>,
@@ -546,9 +542,9 @@ impl UsbPacket {
             status: UsbPacketStatus::Success,
             actual_length: 0,
             ep_number,
+            stream,
             xfer_ops,
             target_dev,
-            stream: 0,
         }
     }
 

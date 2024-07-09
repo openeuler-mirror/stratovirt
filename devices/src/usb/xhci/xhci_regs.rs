@@ -103,6 +103,9 @@ const XHCI_INTR_REG_SHIFT: u64 = 5;
 /// Doorbell Register Bit Field.
 /// DB Target.
 const DB_TARGET_MASK: u32 = 0xff;
+/// DB Stream.
+const DB_STREAM_ID_SHIFT: u32 = 16;
+const DB_STREAM_ID_MASK: u32 = 0xffff;
 /// Port Registers.
 const XHCI_PORTSC: u64 = 0x0;
 const XHCI_PORTPMSC: u64 = 0x4;
@@ -378,7 +381,9 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_CAP_REG_HCSPARAMS3 => 0x0,
             XHCI_CAP_REG_HCCPARAMS1 => {
-                0x8 << CAP_HCCP_EXCP_SHIFT | (0 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
+                // The offset of the first extended capability is (base) + (0x8 << 2)
+                // The primary stream array size is 1 << (0x7 + 1)
+                0x8 << CAP_HCCP_EXCP_SHIFT | (0x7 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,
@@ -703,7 +708,8 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             return false;
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+            let stream_id = (value >> DB_STREAM_ID_SHIFT) & DB_STREAM_ID_MASK;
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id, stream_id) {
                 error!("Failed to kick endpoint: {:?}", e);
                 xhci.host_controller_error();
                 return false;

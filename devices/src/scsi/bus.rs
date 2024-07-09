@@ -824,7 +824,7 @@ fn scsi_cdb_lba(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i64 {
     }
 }
 
-pub fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
+fn scsi_cdb_xfer_mode(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> ScsiXferMode {
     match cdb[0] {
         WRITE_6
         | WRITE_10
