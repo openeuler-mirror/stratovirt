@@ -95,6 +95,12 @@ message = "port={:?} pls={:?}"
 enabled = true
 
 [[events]]
+name = "usb_xhci_kick_endpoint_error"
+args = "ep_id: u32, ccode: &dyn fmt::Debug"
+message = "ep_id={:?} ccode={:?}"
+enabled = true
+
+[[events]]
 name = "usb_xhci_ep_kick"
 args = "slotid: &dyn fmt::Debug, epid: &dyn fmt::Debug, dequeue: &dyn fmt::Debug"
 message = "slotid={:?} epid={:?} dequeue={:x?}"
