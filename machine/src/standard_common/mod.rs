@@ -77,6 +77,8 @@ use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_
 #[cfg(feature = "gtk")]
 use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use ui::ohui_srv::OhUiServer;
 #[cfg(feature = "vnc")]
 use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
