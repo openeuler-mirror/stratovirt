@@ -535,70 +535,10 @@ pub mod tests {
 
     use super::*;
     use crate::pci::bus::PciBus;
-    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
+    use crate::pci::config::SECONDARY_BUS_NUM;
     use crate::pci::root_port::{RootPort, RootPortConfig};
-    use crate::pci::{PciDevBase, Result};
-    use crate::{Device, DeviceBase};
+    use crate::pci::tests::TestPciDevice;
     use address_space::Region;
-
-    struct PciDevice {
-        base: PciDevBase,
-    }
-
-    impl Device for PciDevice {
-        gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-    }
-
-    impl PciDevOps for PciDevice {
-        gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-        fn init_write_mask(&mut self, _is_bridge: bool) -> Result<()> {
-            let mut offset = 0_usize;
-            while offset < self.base.config.config.len() {
-                LittleEndian::write_u32(
-                    &mut self.base.config.write_mask[offset..offset + 4],
-                    0xffff_ffff,
-                );
-                offset += 4;
-            }
-            Ok(())
-        }
-
-        fn init_write_clear_mask(&mut self, _is_bridge: bool) -> Result<()> {
-            Ok(())
-        }
-
-        fn write_config(&mut self, offset: usize, data: &[u8]) {
-            #[allow(unused_variables)]
-            self.base.config.write(
-                offset,
-                data,
-                0,
-                #[cfg(target_arch = "x86_64")]
-                None,
-                None,
-            );
-        }
-
-        fn realize(mut self) -> Result<()> {
-            let devfn = self.base.devfn;
-            self.init_write_mask(false)?;
-            self.init_write_clear_mask(false)?;
-
-            let dev = Arc::new(Mutex::new(self));
-            dev.lock()
-                .unwrap()
-                .base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .devices
-                .insert(devfn, dev.clone());
-            Ok(())
-        }
-    }
 
     pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
         #[cfg(target_arch = "x86_64")]
@@ -735,14 +675,7 @@ pub mod tests {
         root_port.realize().unwrap();
 
         let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
-        let pci_dev = PciDevice {
-            base: PciDevBase {
-                base: DeviceBase::new("PCI device".to_string(), false),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-                devfn: 8,
-                parent_bus: Arc::downgrade(&bus),
-            },
-        };
+        let pci_dev = TestPciDevice::new("PCI device", 8, Arc::downgrade(&bus));
         pci_dev.realize().unwrap();
 
         let addr: u64 = 8_u64 << ECAM_DEVFN_SHIFT | SECONDARY_BUS_NUM as u64;
