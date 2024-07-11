@@ -137,7 +137,8 @@ define_qmp_command_enum!(
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal, FALSE),
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg, FALSE),
     trace_get_state("trace-get-state", trace_get_state, FALSE),
-    trace_set_state("trace-set-state", trace_set_state, FALSE)
+    trace_set_state("trace-set-state", trace_set_state, FALSE),
+    query_workloads("query-workloads", query_workloads, FALSE)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -1985,6 +1986,21 @@ pub struct trace_set_state {
     pub enable: bool,
 }
 pub type TraceSetArgument = trace_set_state;
+
+/// query_workloads
+///
+/// Query the current workloads of the running VM.
+///
+/// # Examples
+///
+/// ```text
+/// -> {"execute": "query-workloads", "arguments": {}}
+/// <- {"return":[{"module":"scream-play","state":"Off"},{"module":"tap-0","state":"upload: 0 download: 0"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_workloads {}
+generate_command_impl!(query_workloads, Empty);
 
 #[cfg(test)]
 mod tests {
