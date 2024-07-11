@@ -25,6 +25,7 @@ use std::u64;
 
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
+use serde_json::json;
 use util::set_termi_canon_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -73,6 +74,7 @@ use machine_manager::machine::{
 };
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
+use machine_manager::state_query::query_workloads;
 #[cfg(feature = "gtk")]
 use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
@@ -2027,6 +2029,21 @@ impl DeviceInterface for StdMachine {
                 ),
                 None,
             ),
+        }
+    }
+
+    fn query_workloads(&self) -> Response {
+        let workloads = query_workloads();
+
+        if !workloads.is_empty() {
+            let status = workloads
+                .iter()
+                .map(|(module, state)| json!({ "module": module, "state": state }))
+                .collect();
+
+            Response::create_response(serde_json::Value::Array(status), None)
+        } else {
+            Response::create_empty_response()
         }
     }
 }

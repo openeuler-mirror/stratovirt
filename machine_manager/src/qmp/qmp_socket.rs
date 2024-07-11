@@ -466,7 +466,8 @@ fn qmp_command_exec(
         (query_vnc, query_vnc),
         (query_display_image, query_display_image),
         (list_type, list_type),
-        (query_hotpluggable_cpus, query_hotpluggable_cpus);
+        (query_hotpluggable_cpus, query_hotpluggable_cpus),
+        (query_workloads, query_workloads);
         (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
