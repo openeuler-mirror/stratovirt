@@ -242,6 +242,18 @@ impl PciHost {
 
 impl Device for PciHost {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        let root_bus = self.child_bus().unwrap();
+        for dev in root_bus.lock().unwrap().child_devices().values() {
+            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+            pci_dev
+                .reset(true)
+                .with_context(|| "Fail to reset pci device under pci host")?;
+        }
+
+        Ok(())
+    }
 }
 
 impl SysBusDevOps for PciHost {
@@ -279,18 +291,6 @@ impl SysBusDevOps for PciHost {
             }
             None => true,
         }
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        let root_bus = self.child_bus().unwrap();
-        for dev in root_bus.lock().unwrap().child_devices().values() {
-            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
-            pci_dev
-                .reset(true)
-                .with_context(|| "Fail to reset pci device under pci host")?;
-        }
-
-        Ok(())
     }
 }
 

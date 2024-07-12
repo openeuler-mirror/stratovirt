@@ -238,6 +238,14 @@ impl XhciPciDevice {
 
 impl Device for XhciPciDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.xhci.lock().unwrap().reset();
+
+        self.base.config.reset()?;
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for XhciPciDevice {
@@ -360,14 +368,6 @@ impl PciDevOps for XhciPciDevice {
             Some(&pci_bus.io_region),
             Some(&pci_bus.mem_region),
         );
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        self.xhci.lock().unwrap().reset();
-
-        self.base.config.reset()?;
-
-        Ok(())
     }
 }
 

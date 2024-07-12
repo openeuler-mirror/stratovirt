@@ -339,6 +339,37 @@ impl RootPort {
 
 impl Device for RootPort {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    /// Only set slot status to on, and no other device reset actions are implemented.
+    fn reset(&mut self, reset_child_device: bool) -> Result<()> {
+        if reset_child_device {
+            let child_bus = self.child_bus().unwrap();
+            MUT_PCI_BUS!(child_bus, locked_child_bus, child_pci_bus);
+            child_pci_bus
+                .reset()
+                .with_context(|| "Fail to reset child_bus in root port")?;
+        } else {
+            let cap_offset = self.base.config.pci_express_cap_offset;
+            le_write_u16(
+                &mut self.base.config.config,
+                (cap_offset + PCI_EXP_SLTSTA) as usize,
+                PCI_EXP_SLTSTA_PDS,
+            )?;
+            le_write_u16(
+                &mut self.base.config.config,
+                (cap_offset + PCI_EXP_SLTCTL) as usize,
+                !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
+            )?;
+            le_write_u16(
+                &mut self.base.config.config,
+                (cap_offset + PCI_EXP_LNKSTA) as usize,
+                PCI_EXP_LNKSTA_DLLLA,
+            )?;
+        }
+
+        self.base.config.reset_bridge_regs()?;
+        self.base.config.reset()
+    }
 }
 
 /// Convert from Arc<Mutex<dyn Device>> to &mut RootPort.
@@ -504,37 +535,6 @@ impl PciDevOps for RootPort {
             self.hotplug_event_clear();
         }
         self.do_unplug(offset, data, old_ctl, old_status);
-    }
-
-    /// Only set slot status to on, and no other device reset actions are implemented.
-    fn reset(&mut self, reset_child_device: bool) -> Result<()> {
-        if reset_child_device {
-            let child_bus = self.child_bus().unwrap();
-            MUT_PCI_BUS!(child_bus, locked_child_bus, child_pci_bus);
-            child_pci_bus
-                .reset()
-                .with_context(|| "Fail to reset child_bus in root port")?;
-        } else {
-            let cap_offset = self.base.config.pci_express_cap_offset;
-            le_write_u16(
-                &mut self.base.config.config,
-                (cap_offset + PCI_EXP_SLTSTA) as usize,
-                PCI_EXP_SLTSTA_PDS,
-            )?;
-            le_write_u16(
-                &mut self.base.config.config,
-                (cap_offset + PCI_EXP_SLTCTL) as usize,
-                !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
-            )?;
-            le_write_u16(
-                &mut self.base.config.config,
-                (cap_offset + PCI_EXP_LNKSTA) as usize,
-                PCI_EXP_LNKSTA_DLLLA,
-            )?;
-        }
-
-        self.base.config.reset_bridge_regs()?;
-        self.base.config.reset()
     }
 
     fn get_dev_path(&self) -> Option<String> {

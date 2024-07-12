@@ -105,6 +105,10 @@ pub trait Device: Any + AsAny + Send + Sync {
     fn child_bus(&self) -> Option<Arc<Mutex<dyn Bus>>> {
         self.device_base().child.clone()
     }
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Macro `convert_device_ref!`: Convert from Arc<Mutex<dyn Device>> to &$device_type.
@@ -224,6 +228,18 @@ pub trait Bus: Any + AsAny + Send + Sync {
             .children
             .remove(&key)
             .with_context(|| format!("No such device using key {} in bus {}.", key, self.name()))?;
+
+        Ok(())
+    }
+
+    /// Bus reset means that all devices attached to this bus should reset.
+    fn reset(&self) -> Result<()> {
+        for dev in self.child_devices().values() {
+            let mut locked_dev = dev.lock().unwrap();
+            locked_dev
+                .reset(true)
+                .with_context(|| format!("Failed to reset device {}", locked_dev.name()))?;
+        }
 
         Ok(())
     }

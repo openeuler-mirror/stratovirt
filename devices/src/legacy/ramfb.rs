@@ -260,6 +260,11 @@ impl Ramfb {
 
 impl Device for Ramfb {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.ramfb_state.reset_ramfb_state();
+        Ok(())
+    }
 }
 
 impl SysBusDevOps for Ramfb {
@@ -273,11 +278,6 @@ impl SysBusDevOps for Ramfb {
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be written!");
         false
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.ramfb_state.reset_ramfb_state();
-        Ok(())
     }
 }
 

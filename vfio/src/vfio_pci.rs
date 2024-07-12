@@ -815,6 +815,12 @@ impl VfioPciDevice {
 
 impl Device for VfioPciDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+            "Fail to reset vfio dev"
+        })
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
@@ -987,12 +993,6 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         }
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
-            "Fail to reset vfio dev"
-        })
     }
 }
 

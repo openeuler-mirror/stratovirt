@@ -936,6 +936,11 @@ impl FwCfgOps for FwCfgMem {
 #[cfg(target_arch = "aarch64")]
 impl Device for FwCfgMem {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -990,11 +995,6 @@ impl SysBusDevOps for FwCfgMem {
     ) -> Result<()> {
         self.sysbusdev_base_mut()
             .set_sys(-1, region_base, region_size, region_name);
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
 }
@@ -1095,6 +1095,11 @@ impl FwCfgOps for FwCfgIO {
 #[cfg(target_arch = "x86_64")]
 impl Device for FwCfgIO {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1152,11 +1157,6 @@ impl SysBusDevOps for FwCfgIO {
     ) -> Result<()> {
         self.sysbusdev_base_mut()
             .set_sys(-1, region_base, region_size, region_name);
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
 }
