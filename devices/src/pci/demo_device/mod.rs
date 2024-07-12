@@ -186,6 +186,10 @@ const CLASS_CODE_DEMO: u16 = 0xEE;
 
 impl Device for DemoDev {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.base.config.reset_common_regs()
+    }
 }
 
 impl PciDevOps for DemoDev {
@@ -223,11 +227,6 @@ impl PciDevOps for DemoDev {
             None,
             Some(&pci_bus.mem_region),
         );
-    }
-
-    /// Reset device
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        self.base.config.reset_common_regs()
     }
 }
 

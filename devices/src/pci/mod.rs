@@ -213,11 +213,6 @@ pub trait PciDevOps: Device + Send {
         ((bus_num as u16) << bus_shift) | (devfn as u16)
     }
 
-    /// Reset device
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Ok(())
-    }
-
     /// Get the path of the PCI bus where the device resides.
     fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<dyn Bus>>) -> String {
         PCI_BUS!(parent_bus, locked_bus, pci_bus);

@@ -331,10 +331,6 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
             )
         });
     }
-
-    fn reset(&mut self) -> Result<()> {
-        Ok(())
-    }
 }
 
 /// Convert from Arc<Mutex<dyn Device>> to &mut dyn SysBusDevOps.

@@ -1002,6 +1002,19 @@ impl VirtioPciDevice {
 
 impl Device for VirtioPciDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        info!("func: reset, id: {:?}", &self.base.base.id);
+        self.deactivate_device();
+        self.device
+            .lock()
+            .unwrap()
+            .reset()
+            .with_context(|| "Failed to reset virtio device")?;
+        self.base.config.reset()?;
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {
@@ -1212,19 +1225,6 @@ impl PciDevOps for VirtioPciDevice {
             Some(&pci_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        info!("func: reset, id: {:?}", &self.base.base.id);
-        self.deactivate_device();
-        self.device
-            .lock()
-            .unwrap()
-            .reset()
-            .with_context(|| "Failed to reset virtio device")?;
-        self.base.config.reset()?;
-
-        Ok(())
     }
 
     fn get_dev_path(&self) -> Option<String> {

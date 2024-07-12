@@ -699,6 +699,18 @@ impl PFlash {
 
 impl Device for PFlash {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.rom
+            .as_ref()
+            .unwrap()
+            .set_rom_device_romd(true)
+            .with_context(|| "Fail to set PFlash rom region read only")?;
+        self.cmd = 0x00;
+        self.write_cycle = 0;
+        self.status = 0x80;
+        Ok(())
+    }
 }
 
 impl SysBusDevOps for PFlash {
@@ -897,18 +909,6 @@ impl SysBusDevOps for PFlash {
     ) -> Result<()> {
         self.sysbusdev_base_mut()
             .set_sys(0, region_base, region_size, region_name);
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.rom
-            .as_ref()
-            .unwrap()
-            .set_rom_device_romd(true)
-            .with_context(|| "Fail to set PFlash rom region read only")?;
-        self.cmd = 0x00;
-        self.write_cycle = 0;
-        self.status = 0x80;
         Ok(())
     }
 }

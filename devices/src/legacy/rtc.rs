@@ -346,6 +346,13 @@ impl RTC {
 
 impl Device for RTC {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.cmos_data.fill(0);
+        self.init_rtc_reg();
+        self.set_memory(self.mem_size, self.gap_start);
+        Ok(())
+    }
 }
 
 impl SysBusDevOps for RTC {
@@ -371,13 +378,6 @@ impl SysBusDevOps for RTC {
         } else {
             self.write_data(data)
         }
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.cmos_data.fill(0);
-        self.init_rtc_reg();
-        self.set_memory(self.mem_size, self.gap_start);
-        Ok(())
     }
 }
 
