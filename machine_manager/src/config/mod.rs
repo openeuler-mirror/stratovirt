@@ -135,6 +135,7 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
+    pub hardware_signature: Option<u32>,
     #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
     #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]

@@ -285,6 +285,14 @@ The SMBIOS specification defines the data structures and information that will e
 
 ```
 
+### 1.12 Hardware Signature
+This option is used for configuring ACPI Hardware Signature, which is used for VM S4 state. It's an 32 bit integer. For more information, please refer to https://uefi.org/htmlspecs/ACPI_Spec_6_4_html/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#firmware-acpi-control-structure-facs-table.
+
+```shell
+# cmdline
+-hardware-signature 1
+```
+
 ## 2. Device Configuration
 
 For machine type "microvm", only virtio-mmio and legacy devices are supported.

@@ -459,6 +459,11 @@ impl VmConfig {
         self.machine_config.battery = true;
         true
     }
+
+    pub fn add_hw_signature(&mut self, config: &str) -> Result<()> {
+        self.hardware_signature = Some(u32::from_str(config)?);
+        Ok(())
+    }
 }
 
 impl VmConfig {

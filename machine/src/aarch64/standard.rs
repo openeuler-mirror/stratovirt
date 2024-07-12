@@ -1150,6 +1150,11 @@ impl AcpiBuilder for StdMachine {
             .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin)
     }
+
+    fn get_hardware_signature(&self) -> Option<u32> {
+        let vm_config = self.machine_base().vm_config.lock().unwrap();
+        vm_config.hardware_signature
+    }
 }
 
 /// Function that helps to generate flash node in device-tree.
