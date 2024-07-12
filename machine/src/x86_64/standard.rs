@@ -914,4 +914,9 @@ impl AcpiBuilder for StdMachine {
             .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin)
     }
+
+    fn get_hardware_signature(&self) -> Option<u32> {
+        let vm_config = self.machine_base().vm_config.lock().unwrap();
+        vm_config.hardware_signature
+    }
 }

@@ -142,7 +142,8 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let mut xsdt_entries = Vec::new();
 
-        let facs_addr = Self::build_facs_table(&acpi_tables)
+        let facs_addr = self
+            .build_facs_table(&acpi_tables)
             .with_context(|| "Failed to build ACPI FACS table")?;
 
         let dsdt_addr = self
@@ -697,12 +698,15 @@ pub(crate) trait AcpiBuilder {
         Ok(fadt_begin as u64)
     }
 
+    /// Get the Hardware Signature used to build FACS table.
+    fn get_hardware_signature(&self) -> Option<u32>;
+
     /// Build ACPI FACS table, returns the offset of ACPI FACS table in `acpi_data`.
     ///
     /// # Arguments
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
-    fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>) -> Result<u64>
+    fn build_facs_table(&self, acpi_data: &Arc<Mutex<Vec<u8>>>) -> Result<u64>
     where
         Self: Sized,
     {
@@ -714,6 +718,15 @@ pub(crate) trait AcpiBuilder {
         facs_data[3] = b'S';
         // FACS table length.
         facs_data[4] = 0x40;
+
+        // FACS table Hardware Signature.
+        if let Some(signature) = self.get_hardware_signature() {
+            let signature = signature.as_bytes();
+            facs_data[8] = signature[0];
+            facs_data[9] = signature[1];
+            facs_data[10] = signature[2];
+            facs_data[11] = signature[3];
+        }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let facs_begin = locked_acpi_data.len() as u32;
