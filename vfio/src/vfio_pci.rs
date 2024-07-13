@@ -821,6 +821,14 @@ impl Device for VfioPciDevice {
             "Fail to reset vfio dev"
         })
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        if let Err(e) = VfioPciDevice::unrealize(self) {
+            error!("{:?}", e);
+            bail!("Failed to unrealize vfio-pci.");
+        }
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
@@ -874,14 +882,6 @@ impl PciDevOps for VfioPciDevice {
         let mut locked_bus = parent_bus.lock().unwrap();
         locked_bus.attach_child(devfn, dev)?;
 
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
-        if let Err(e) = VfioPciDevice::unrealize(self) {
-            error!("{:?}", e);
-            bail!("Failed to unrealize vfio-pci.");
-        }
         Ok(())
     }
 

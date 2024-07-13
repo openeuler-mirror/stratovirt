@@ -246,6 +246,11 @@ impl Device for XhciPciDevice {
 
         Ok(())
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        trace::usb_xhci_exit();
+        Ok(())
+    }
 }
 
 impl PciDevOps for XhciPciDevice {
@@ -347,11 +352,6 @@ impl PciDevOps for XhciPciDevice {
         // Attach to the PCI bus.
         let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
         bus.lock().unwrap().attach_child(devfn, dev)?;
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
-        trace::usb_xhci_exit();
         Ok(())
     }
 

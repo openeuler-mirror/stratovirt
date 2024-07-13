@@ -165,6 +165,10 @@ impl PvPanicPci {
 
 impl Device for PvPanicPci {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn unrealize(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl PciDevOps for PvPanicPci {
@@ -224,10 +228,6 @@ impl PciDevOps for PvPanicPci {
             .store(device_id, Ordering::Release);
         locked_bus.attach_child(devfn as u64, dev)?;
 
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
 

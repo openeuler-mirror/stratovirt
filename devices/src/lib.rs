@@ -109,6 +109,11 @@ pub trait Device: Any + AsAny + Send + Sync {
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         Ok(())
     }
+
+    /// Unrealize device.
+    fn unrealize(&mut self) -> Result<()> {
+        bail!("Unrealize of the device {} is not implemented", self.name());
+    }
 }
 
 /// Macro `convert_device_ref!`: Convert from Arc<Mutex<dyn Device>> to &$device_type.
