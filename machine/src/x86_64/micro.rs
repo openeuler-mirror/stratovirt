@@ -134,7 +134,7 @@ impl MachineOps for LightMachine {
         let region_size: u64 = 8;
         let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize serial device.")
     }
 

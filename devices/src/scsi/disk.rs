@@ -24,6 +24,8 @@ use machine_manager::event_loop::EventLoop;
 use util::aio::{Aio, AioEngine, WriteZeroesState};
 use util::gen_base_func;
 
+use super::bus::ScsiBus;
+
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
 pub const SCSI_TYPE_TAPE: u32 = 0x01;
@@ -143,6 +145,7 @@ macro_rules! SCSI_DEVICE {
     };
 }
 
+#[derive(Default)]
 pub struct ScsiDevice {
     pub base: DeviceBase,
     /// Configuration of the scsi device.
@@ -181,30 +184,30 @@ impl ScsiDevice {
         drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
         iothread: Option<String>,
+        scsi_bus: Arc<Mutex<ScsiBus>>,
     ) -> ScsiDevice {
         let scsi_type = match dev_cfg.classtype.as_str() {
             "scsi-hd" => SCSI_TYPE_DISK,
             _ => SCSI_TYPE_ROM,
         };
 
-        ScsiDevice {
+        let mut scsi_dev = ScsiDevice {
             base: DeviceBase::new(dev_cfg.id.clone(), false, None),
             dev_cfg,
             drive_cfg,
             state: ScsiDevState::new(),
-            block_backend: None,
             req_align: 1,
             buf_align: 1,
-            disk_sectors: 0,
-            block_size: 0,
             scsi_type,
             drive_files,
-            aio: None,
             iothread,
-        }
+            ..Default::default()
+        };
+        scsi_dev.set_parent_bus(scsi_bus);
+        scsi_dev
     }
 
-    pub fn realize(&mut self) -> Result<()> {
+    pub fn realize(mut self) -> Result<Arc<Mutex<ScsiDevice>>> {
         match self.scsi_type {
             SCSI_TYPE_DISK => {
                 self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
@@ -231,6 +234,7 @@ impl ScsiDevice {
         self.req_align = alignments.0;
         self.buf_align = alignments.1;
         let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
+        drop(drive_files);
 
         let mut thread_pool = None;
         if self.drive_cfg.aio != AioEngine::Off {
@@ -254,7 +258,8 @@ impl ScsiDevice {
         self.block_backend = Some(backend);
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
 
-        Ok(())
+        let dev = Arc::new(Mutex::new(self));
+        Ok(dev)
     }
 }
 

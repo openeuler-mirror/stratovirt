@@ -28,14 +28,12 @@ use super::descriptor::{
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
-use crate::{
-    Bus,
-    ScsiBus::{
-        get_scsi_key, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
-        EMULATE_SCSI_OPS, GOOD, SCSI_CMD_BUF_SIZE,
-    },
-    ScsiDisk::{ScsiDevConfig, ScsiDevice},
+use crate::Bus;
+use crate::ScsiBus::{
+    get_scsi_key, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS,
+    GOOD, SCSI_CMD_BUF_SIZE,
 };
+use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::aio::AioEngine;
 use util::gen_base_func;
@@ -258,7 +256,9 @@ pub struct UsbStorage {
     // (usb-storage/scsi bus/scsi device) correspond one-to-one, add scsi device member here
     // for the execution efficiency (No need to find a unique device from the hash table of the
     // unique bus).
-    scsi_dev: Arc<Mutex<ScsiDevice>>,
+    scsi_dev: Option<Arc<Mutex<ScsiDevice>>>,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 #[derive(Debug)]
@@ -334,29 +334,15 @@ impl UsbStorage {
             bail!("USB-storage: \"aio=off,direct=false\" must be configured.");
         }
 
-        let scsidev_classtype = match &drive_cfg.media as &str {
-            "disk" => "scsi-hd".to_string(),
-            _ => "scsi-cd".to_string(),
-        };
-        let scsi_dev_cfg = ScsiDevConfig {
-            classtype: scsidev_classtype,
-            drive: dev_cfg.drive.clone(),
-            ..Default::default()
-        };
-
         Ok(Self {
             base: UsbDeviceBase::new(dev_cfg.id.clone(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
             dev_cfg,
-            drive_cfg: drive_cfg.clone(),
+            drive_cfg,
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
-            scsi_dev: Arc::new(Mutex::new(ScsiDevice::new(
-                scsi_dev_cfg,
-                drive_cfg,
-                drive_files,
-                None,
-            ))),
+            scsi_dev: None,
+            drive_files,
         })
     }
 
@@ -513,7 +499,7 @@ impl UsbStorage {
             0,
             packet.iovecs.clone(),
             self.state.iovec_len,
-            self.scsi_dev.clone(),
+            self.scsi_dev.as_ref().unwrap().clone(),
             csw,
         )
         .with_context(|| "Error in creating scsirequest.")?;
@@ -556,13 +542,29 @@ impl UsbDevice for UsbStorage {
 
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
-        let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
-        locked_scsi_dev.realize()?;
-        drop(locked_scsi_dev);
+        let scsidev_classtype = match self.drive_cfg.media.as_str() {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: self.dev_cfg.drive.clone(),
+            ..Default::default()
+        };
+        let scsi_device = ScsiDevice::new(
+            scsi_dev_cfg,
+            self.drive_cfg.clone(),
+            self.drive_files.clone(),
+            None,
+            self.scsi_bus.clone(),
+        );
+        let realized_scsi = scsi_device.realize()?;
+        self.scsi_dev = Some(realized_scsi.clone());
+
         self.scsi_bus
             .lock()
             .unwrap()
-            .attach_child(get_scsi_key(0, 0), self.scsi_dev.clone())?;
+            .attach_child(get_scsi_key(0, 0), realized_scsi)?;
 
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)

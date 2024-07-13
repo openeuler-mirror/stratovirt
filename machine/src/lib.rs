@@ -1221,16 +1221,15 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Wrong! Two scsi devices have the same scsi-id and lun!");
         }
         let iothread = cntlr.config.iothread.clone();
-
-        let device = Arc::new(Mutex::new(ScsiDevice::new(
+        let scsi_device = ScsiDevice::new(
             device_cfg.clone(),
             drive_arg,
             self.get_drive_files(),
             iothread,
-        )));
-        device.lock().unwrap().realize()?;
-        bus.lock().unwrap().attach_child(key, device.clone())?;
-        device.lock().unwrap().base.parent = Some(Arc::downgrade(bus) as Weak<Mutex<dyn Bus>>);
+            bus.clone(),
+        );
+        let device = scsi_device.realize()?;
+        bus.lock().unwrap().attach_child(key, device)?;
 
         if let Some(bootindex) = device_cfg.bootindex {
             // Eg: OpenFirmware device path(virtio-scsi disk):

@@ -22,7 +22,7 @@ use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::valid_id;
@@ -244,16 +244,20 @@ pub struct Ramfb {
 }
 
 impl Ramfb {
-    pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
-        Ramfb {
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>, install: bool) -> Self {
+        let mut ramfb = Ramfb {
             base: SysBusDevBase::new(SysBusDevType::Ramfb),
             ramfb_state: RamfbState::new(sys_mem, install),
-        }
+        };
+        ramfb.set_parent_bus(sysbus.clone());
+        ramfb
     }
 
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
+    pub fn realize(self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
+        sysbus.attach_device(&dev)?;
         Ok(())
     }
 }

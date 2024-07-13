@@ -18,7 +18,7 @@ use log::{debug, error};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
     AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
@@ -141,17 +141,20 @@ impl Serial {
         serial
             .set_sys_resource(sysbus, region_base, region_size, "Serial")
             .with_context(|| LegacyError::SetSysResErr)?;
+        serial.set_parent_bus(sysbus.clone());
         Ok(serial)
     }
 
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
+    pub fn realize(self) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
+        sysbus.attach_device(&dev)?;
 
         MigrationManager::register_device_instance(
             SerialState::descriptor(),

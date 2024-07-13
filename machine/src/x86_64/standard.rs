@@ -226,7 +226,7 @@ impl StdMachine {
             self.base.cpus.clone(),
         )?;
         let realize_controller = cpu_controller
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize Cpu Controller")?;
         self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
         self.cpu_controller = Some(realize_controller);
@@ -286,7 +286,8 @@ impl StdMachineOps for StdMachine {
             .add_file_entry("bootorder", boot_order)
             .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &self.base.sysbus)
+        let fwcfg_dev = fwcfg
+            .realize()
             .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
@@ -441,7 +442,7 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        rtc.realize(&self.base.sysbus)
+        rtc.realize()
             .with_context(|| "Failed to realize RTC device")
     }
 
@@ -457,8 +458,7 @@ impl MachineOps for StdMachine {
             ged_event,
         )?;
 
-        ged.realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize Ged")?;
+        ged.realize().with_context(|| "Failed to realize Ged")?;
         Ok(())
     }
 
@@ -467,7 +467,7 @@ impl MachineOps for StdMachine {
         let region_size: u64 = 8;
         let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
@@ -623,7 +623,7 @@ impl MachineOps for StdMachine {
             )
             .with_context(|| MachineError::InitPflashErr)?;
             pflash
-                .realize(&self.base.sysbus)
+                .realize()
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
