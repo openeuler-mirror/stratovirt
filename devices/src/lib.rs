@@ -101,6 +101,10 @@ pub trait Device: Any + AsAny + Send + Sync {
         self.device_base().parent.clone()
     }
 
+    fn set_parent_bus(&mut self, bus: Arc<Mutex<dyn Bus>>) {
+        self.device_base_mut().parent = Some(Arc::downgrade(&bus));
+    }
+
     /// Get the bus which this device has.
     fn child_bus(&self) -> Option<Arc<Mutex<dyn Bus>>> {
         self.device_base().child.clone()

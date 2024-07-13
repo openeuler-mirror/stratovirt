@@ -19,7 +19,7 @@ use log::info;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldAccessType,
     AmlFieldLockRule, AmlFieldUnit, AmlFieldUpdateRule, AmlIndex, AmlInteger, AmlMethod, AmlName,
@@ -99,6 +99,7 @@ impl PowerDev {
         };
         pdev.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
+        pdev.set_parent_bus(sysbus.clone());
         Ok(pdev)
     }
 
@@ -184,9 +185,11 @@ impl PowerDev {
         self.ged.lock().unwrap().inject_acpi_event(evt);
     }
 
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
+    pub fn realize(self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
+        sysbus.attach_device(&dev)?;
 
         let pdev_available: bool;
         {

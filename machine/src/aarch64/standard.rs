@@ -385,7 +385,7 @@ impl StdMachineOps for StdMachine {
             .with_context(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
         let fwcfg_dev = fwcfg
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
@@ -461,8 +461,7 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
-        rtc.realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize PL031")
+        rtc.realize().with_context(|| "Failed to realize PL031")
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
@@ -474,9 +473,7 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
             GedEvent::new(self.power_button.clone()),
         )?;
-        let ged_dev = ged
-            .realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize Ged")?;
+        let ged_dev = ged.realize().with_context(|| "Failed to realize Ged")?;
         if battery_present {
             let pdev = PowerDev::new(
                 ged_dev,
@@ -484,7 +481,7 @@ impl MachineOps for StdMachine {
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
             )?;
-            pdev.realize(&self.base.sysbus)
+            pdev.realize()
                 .with_context(|| "Failed to realize PowerDev")?;
         }
         Ok(())
@@ -495,9 +492,7 @@ impl MachineOps for StdMachine {
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
         let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
             .with_context(|| "Failed to create PL011")?;
-        pl011
-            .realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize PL011")?;
+        pl011.realize().with_context(|| "Failed to realize PL011")?;
         let mut bs = self.base.boot_source.lock().unwrap();
         bs.kernel_cmdline.push(Param {
             param_type: "earlycon".to_string(),
@@ -661,7 +656,8 @@ impl MachineOps for StdMachine {
                 flash_base,
             )
             .with_context(|| MachineError::InitPflashErr)?;
-            PFlash::realize(pflash, &self.base.sysbus)
+            pflash
+                .realize()
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_base += flash_size;
         }
@@ -710,10 +706,10 @@ impl MachineOps for StdMachine {
             .get_fwcfg_dev()
             .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
-        let mut ramfb = Ramfb::new(sys_mem.clone(), config.install);
+        let mut ramfb = Ramfb::new(sys_mem.clone(), &self.base.sysbus, config.install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize(&self.base.sysbus)
+        ramfb.realize()
     }
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {

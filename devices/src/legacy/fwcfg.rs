@@ -20,7 +20,7 @@ use log::{error, warn};
 
 use crate::legacy::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
@@ -855,16 +855,17 @@ impl FwCfgMem {
         fwcfgmem
             .set_sys_resource(sysbus, region_base, region_size, "FwCfgMem")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
+        fwcfgmem.set_parent_bus(sysbus.clone());
 
         Ok(fwcfgmem)
     }
 
-    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .lock()
-            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
@@ -1016,16 +1017,17 @@ impl FwCfgIO {
         fwcfg
             .set_sys_resource(sysbus, FW_CFG_IO_BASE, FW_CFG_IO_SIZE, "FwCfgIO")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
+        fwcfg.set_parent_bus(sysbus.clone());
 
         Ok(fwcfg)
     }
 
-    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .lock()
-            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
@@ -1488,7 +1490,7 @@ mod test {
         let sys_mem = address_space_init();
         let fwcfg = FwCfgMem::new(sys_mem, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
 
-        let fwcfg_dev = fwcfg.realize(&mut sys_bus).unwrap();
+        let fwcfg_dev = fwcfg.realize().unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.
         let base = GuestAddress(0x0000);
         let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
@@ -1528,7 +1530,7 @@ mod test {
         let sys_mem = address_space_init();
         let fwcfg = FwCfgIO::new(sys_mem, &mut sys_bus).unwrap();
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut sys_bus).unwrap();
+        let fwcfg_dev = fwcfg.realize().unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.
         let base = GuestAddress(0x0000);
         let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];

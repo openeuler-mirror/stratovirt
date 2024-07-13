@@ -35,14 +35,12 @@ use super::{
     USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use crate::Bus;
-use crate::{
-    ScsiBus::{
-        get_scsi_key, scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
-        CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
-        SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE,
-    },
-    ScsiDisk::{ScsiDevConfig, ScsiDevice},
+use crate::ScsiBus::{
+    get_scsi_key, scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
+    CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
+    SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE,
 };
+use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -108,8 +106,11 @@ pub struct UsbUasConfig {
 
 pub struct UsbUas {
     base: UsbDeviceBase,
+    uas_config: UsbUasConfig,
     scsi_bus: Arc<Mutex<ScsiBus>>,
-    scsi_device: Arc<Mutex<ScsiDevice>>,
+    scsi_device: Option<Arc<Mutex<ScsiDevice>>>,
+    drive_cfg: DriveConfig,
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     commands: [Option<UasIU>; UAS_MAX_STREAMS + 1],
     statuses: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
     data: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
@@ -462,25 +463,16 @@ impl UsbUas {
         drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
     ) -> Self {
-        let scsidev_classtype = match &drive_cfg.media as &str {
-            "disk" => "scsi-hd".to_string(),
-            _ => "scsi-cd".to_string(),
-        };
-        let scsi_dev_cfg = ScsiDevConfig {
-            classtype: scsidev_classtype,
-            drive: uas_config.drive.clone(),
-            ..Default::default()
-        };
-
         Self {
-            base: UsbDeviceBase::new(uas_config.id.unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
+            base: UsbDeviceBase::new(
+                uas_config.id.as_ref().unwrap().clone(),
+                USB_DEVICE_BUFFER_DEFAULT_LEN,
+            ),
+            uas_config,
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
-            scsi_device: Arc::new(Mutex::new(ScsiDevice::new(
-                scsi_dev_cfg,
-                drive_cfg,
-                drive_files,
-                None,
-            ))),
+            scsi_device: None,
+            drive_cfg,
+            drive_files,
             commands: array::from_fn(|_| None),
             statuses: array::from_fn(|_| None),
             data: array::from_fn(|_| None),
@@ -543,7 +535,7 @@ impl UsbUas {
             lun,
             scsi_iovec,
             scsi_iovec_size,
-            self.scsi_device.clone(),
+            self.scsi_device.as_ref().unwrap().clone(),
             uas_request,
         )
         .with_context(|| "failed to create SCSI request")?;
@@ -704,7 +696,7 @@ impl UsbUas {
         let command = self.commands[stream].as_ref().unwrap();
         // SAFETY: IU is guaranteed to be of type command.
         let cdb = unsafe { &command.body.command.cdb };
-        let xfer_len = scsi_cdb_xfer(cdb, self.scsi_device.clone());
+        let xfer_len = scsi_cdb_xfer(cdb, self.scsi_device.as_ref().unwrap().clone());
         trace::usb_uas_try_start_next_transfer(self.device_id(), xfer_len);
 
         if xfer_len == 0 {
@@ -761,15 +753,28 @@ impl UsbDevice for UsbUas {
 
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
-        let mut locked_scsi_device = self.scsi_device.lock().unwrap();
-        locked_scsi_device.realize()?;
-        locked_scsi_device.base.parent =
-            Some(Arc::downgrade(&self.scsi_bus) as Weak<Mutex<dyn Bus>>);
-        drop(locked_scsi_device);
+        let scsidev_classtype = match self.drive_cfg.media.as_str() {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: self.uas_config.drive.clone(),
+            ..Default::default()
+        };
+        let scsi_device = ScsiDevice::new(
+            scsi_dev_cfg,
+            self.drive_cfg.clone(),
+            self.drive_files.clone(),
+            None,
+            self.scsi_bus.clone(),
+        );
+        let realized_scsi = scsi_device.realize()?;
+        self.scsi_device = Some(realized_scsi.clone());
         self.scsi_bus
             .lock()
             .unwrap()
-            .attach_child(get_scsi_key(0, 0), self.scsi_device.clone())?;
+            .attach_child(get_scsi_key(0, 0), realized_scsi)?;
         let uas = Arc::new(Mutex::new(self));
         Ok(uas)
     }

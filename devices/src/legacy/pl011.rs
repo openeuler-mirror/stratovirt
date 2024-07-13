@@ -17,7 +17,7 @@ use log::error;
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
     AmlInteger, AmlMemory32Fixed, AmlNameDecl, AmlReadAndWrite, AmlResTemplate, AmlResourceUsage,
@@ -148,6 +148,7 @@ impl PL011 {
         pl011
             .set_sys_resource(sysbus, region_base, region_size, "PL011")
             .with_context(|| "Failed to set system resource for PL011.")?;
+        pl011.set_parent_bus(sysbus.clone());
 
         Ok(pl011)
     }
@@ -162,18 +163,19 @@ impl PL011 {
         }
     }
 
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
+    pub fn realize(self) -> Result<()> {
         self.chardev
             .lock()
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
         sysbus
-            .lock()
-            .unwrap()
             .attach_device(&dev)
             .with_context(|| "Failed to attach PL011 to system bus.")?;
+        drop(locked_bus);
         MigrationManager::register_device_instance(
             PL011State::descriptor(),
             dev.clone(),

@@ -500,7 +500,7 @@ impl LightMachine {
             region_size,
         )?;
         let mmio_device = dev
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| MachineError::RlzVirtioMmioErr)?;
         #[cfg(target_arch = "x86_64")]
         {
