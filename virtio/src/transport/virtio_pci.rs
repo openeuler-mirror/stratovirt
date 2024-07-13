@@ -1015,6 +1015,23 @@ impl Device for VirtioPciDevice {
 
         Ok(())
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        info!("func: unrealize, id: {:?}", &self.base.base.id);
+        self.device
+            .lock()
+            .unwrap()
+            .unrealize()
+            .with_context(|| "Failed to unrealize the virtio device")?;
+
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        self.base.config.unregister_bars(&bus)?;
+
+        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
+        MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name());
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {
@@ -1175,23 +1192,6 @@ impl PciDevOps for VirtioPciDevice {
         bus.lock().unwrap().attach_child(devfn, dev.clone())?;
 
         MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
-
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
-        info!("func: unrealize, id: {:?}", &self.base.base.id);
-        self.device
-            .lock()
-            .unwrap()
-            .unrealize()
-            .with_context(|| "Failed to unrealize the virtio device")?;
-
-        let bus = self.parent_bus().unwrap().upgrade().unwrap();
-        self.base.config.unregister_bars(&bus)?;
-
-        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
-        MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name());
 
         Ok(())
     }

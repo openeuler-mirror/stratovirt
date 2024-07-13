@@ -190,6 +190,10 @@ impl Device for DemoDev {
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.base.config.reset_common_regs()
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.device.lock().unwrap().unrealize()
+    }
 }
 
 impl PciDevOps for DemoDev {
@@ -207,11 +211,6 @@ impl PciDevOps for DemoDev {
 
         self.attach_to_parent_bus()?;
         Ok(())
-    }
-
-    /// Unrealize PCI/PCIe device.
-    fn unrealize(&mut self) -> Result<()> {
-        self.device.lock().unwrap().unrealize()
     }
 
     /// write the pci configuration space

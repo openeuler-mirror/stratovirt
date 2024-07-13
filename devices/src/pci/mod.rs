@@ -175,11 +175,6 @@ pub trait PciDevOps: Device + Send {
     /// Realize PCI/PCIe device.
     fn realize(self) -> Result<()>;
 
-    /// Unrealize PCI/PCIe device.
-    fn unrealize(&mut self) -> Result<()> {
-        bail!("Unrealize of the pci device is not implemented");
-    }
-
     /// Configuration space read.
     ///
     /// # Arguments
@@ -428,6 +423,10 @@ mod tests {
 
     impl Device for TestPciDevice {
         gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+        fn unrealize(&mut self) -> Result<()> {
+            Ok(())
+        }
     }
 
     impl PciDevOps for TestPciDevice {
@@ -453,10 +452,6 @@ mod tests {
             let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
             parent_bus.lock().unwrap().attach_child(devfn, dev)?;
 
-            Ok(())
-        }
-
-        fn unrealize(&mut self) -> Result<()> {
             Ok(())
         }
 
