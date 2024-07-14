@@ -247,16 +247,7 @@ impl Device for XhciPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> Result<()> {
-        trace::usb_xhci_exit();
-        Ok(())
-    }
-}
-
-impl PciDevOps for XhciPciDevice {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         le_write_u16(
@@ -351,9 +342,18 @@ impl PciDevOps for XhciPciDevice {
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
         let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
-        bus.lock().unwrap().attach_child(devfn, dev)?;
+        bus.lock().unwrap().attach_child(devfn, dev.clone())?;
+        Ok(dev)
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
+        trace::usb_xhci_exit();
         Ok(())
     }
+}
+
+impl PciDevOps for XhciPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();

@@ -164,22 +164,6 @@ impl VirtioMmioDevice {
         Ok(mmio_device)
     }
 
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        self.assign_interrupt_cb();
-        self.device
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize virtio.")?;
-
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-
-        Ok(dev)
-    }
-
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
@@ -378,6 +362,22 @@ impl VirtioMmioDevice {
 
 impl Device for VirtioMmioDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        self.assign_interrupt_cb();
+        self.device
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize virtio.")?;
+
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for VirtioMmioDevice {

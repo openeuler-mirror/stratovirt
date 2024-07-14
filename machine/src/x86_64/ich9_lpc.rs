@@ -230,12 +230,8 @@ impl LPCBridge {
 
 impl Device for LPCBridge {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for LPCBridge {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -278,9 +274,14 @@ impl PciDevOps for LPCBridge {
 
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = parent_bus.lock().unwrap();
-        locked_bus.attach_child(0x1F << 3, Arc::new(Mutex::new(self)))?;
-        Ok(())
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(0x1F << 3, dev.clone())?;
+        Ok(dev)
     }
+}
+
+impl PciDevOps for LPCBridge {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None, None);

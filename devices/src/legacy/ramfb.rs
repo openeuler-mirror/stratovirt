@@ -252,14 +252,6 @@ impl Ramfb {
         ramfb.set_parent_bus(sysbus.clone());
         ramfb
     }
-
-    pub fn realize(self) -> Result<()> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-        Ok(())
-    }
 }
 
 impl Device for Ramfb {
@@ -268,6 +260,14 @@ impl Device for Ramfb {
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.ramfb_state.reset_ramfb_state();
         Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
     }
 }
 

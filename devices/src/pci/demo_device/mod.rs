@@ -126,16 +126,6 @@ impl DemoDev {
         Ok(())
     }
 
-    fn attach_to_parent_bus(self) -> Result<()> {
-        let devfn = self.base.devfn as u64;
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        let mut locked_bus = parent_bus.lock().unwrap();
-        let demo_pci_dev = Arc::new(Mutex::new(self));
-        locked_bus.attach_child(devfn, demo_pci_dev)?;
-
-        Ok(())
-    }
-
     fn register_data_handling_bar(&mut self) -> Result<()> {
         let device = self.device.clone();
         let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
@@ -191,16 +181,7 @@ impl Device for DemoDev {
         self.base.config.reset_common_regs()
     }
 
-    fn unrealize(&mut self) -> Result<()> {
-        self.device.lock().unwrap().unrealize()
-    }
-}
-
-impl PciDevOps for DemoDev {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    /// Realize PCI/PCIe device.
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_pci_config()?;
         if self.cmd_cfg.bar_num > 0 {
             init_msix(&mut self.base, 0, 1, self.dev_id.clone(), None, None)?;
@@ -209,9 +190,22 @@ impl PciDevOps for DemoDev {
         self.register_data_handling_bar()?;
         self.device.lock().unwrap().realize()?;
 
-        self.attach_to_parent_bus()?;
-        Ok(())
+        let devfn = self.base.devfn as u64;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        let demo_pci_dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(devfn, demo_pci_dev.clone())?;
+
+        Ok(demo_pci_dev)
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.device.lock().unwrap().unrealize()
+    }
+}
+
+impl PciDevOps for DemoDev {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {

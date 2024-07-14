@@ -51,6 +51,7 @@ use cpu::CpuLifecycleState;
 #[cfg(target_arch = "x86_64")]
 use devices::sysbus::SysBusDevOps;
 use devices::sysbus::{IRQ_BASE, IRQ_MAX};
+use devices::Device;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{

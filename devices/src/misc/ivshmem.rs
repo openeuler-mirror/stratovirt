@@ -91,12 +91,8 @@ impl Ivshmem {
 
 impl Device for Ivshmem {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for Ivshmem {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         le_write_u16(
@@ -122,9 +118,14 @@ impl PciDevOps for Ivshmem {
         // Attach to the PCI bus.
         let bus = self.parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = bus.lock().unwrap();
-        locked_bus.attach_child(self.base.devfn as u64, Arc::new(Mutex::new(self)))?;
-        Ok(())
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(dev.lock().unwrap().base.devfn as u64, dev.clone())?;
+        Ok(dev)
     }
+}
+
+impl PciDevOps for Ivshmem {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();

@@ -1945,7 +1945,8 @@ pub trait MachineOps: MachineLifecycle {
         let sys_mem = self.get_sys_mem().clone();
         let demo_dev = DemoDev::new(config, devfn, sys_mem, parent_bus);
 
-        demo_dev.realize()
+        demo_dev.realize()?;
+        Ok(())
     }
 
     /// Return the syscall whitelist for seccomp.

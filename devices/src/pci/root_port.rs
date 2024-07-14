@@ -370,28 +370,8 @@ impl Device for RootPort {
         self.base.config.reset_bridge_regs()?;
         self.base.config.reset()
     }
-}
 
-/// Convert from Arc<Mutex<dyn Device>> to &mut RootPort.
-#[macro_export]
-macro_rules! MUT_ROOT_PORT {
-    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
-        convert_device_mut!($trait_device, $lock_device, $struct_device, RootPort);
-    };
-}
-
-/// Convert from Arc<Mutex<dyn Device>> to &RootPort.
-#[macro_export]
-macro_rules! ROOT_PORT {
-    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
-        convert_device_ref!($trait_device, $lock_device, $struct_device, RootPort);
-    };
-}
-
-impl PciDevOps for RootPort {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(true)?;
         self.init_write_clear_mask(true)?;
@@ -456,10 +436,34 @@ impl PciDevOps for RootPort {
         parent_pci_bus.attach_child(locked_root_port.base.devfn as u64, root_port.clone())?;
         // Need to drop locked_root_port in order to register root_port instance.
         drop(locked_root_port);
-        MigrationManager::register_device_instance(RootPortState::descriptor(), root_port, &name);
+        MigrationManager::register_device_instance(
+            RootPortState::descriptor(),
+            root_port.clone(),
+            &name,
+        );
 
-        Ok(())
+        Ok(root_port)
     }
+}
+
+/// Convert from Arc<Mutex<dyn Device>> to &mut RootPort.
+#[macro_export]
+macro_rules! MUT_ROOT_PORT {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+        convert_device_mut!($trait_device, $lock_device, $struct_device, RootPort);
+    };
+}
+
+/// Convert from Arc<Mutex<dyn Device>> to &RootPort.
+#[macro_export]
+macro_rules! ROOT_PORT {
+    ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+        convert_device_ref!($trait_device, $lock_device, $struct_device, RootPort);
+    };
+}
+
+impl PciDevOps for RootPort {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();

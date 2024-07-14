@@ -48,7 +48,7 @@ use devices::legacy::{
 };
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
-use devices::pci::{PciBus, PciDevOps, PciHost, PciIntxState};
+use devices::pci::{PciBus, PciHost, PciIntxState};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 use devices::{
     convert_bus_mut, Device, ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, MUT_PCI_BUS, SYS_BUS_DEVICE,
@@ -339,7 +339,8 @@ impl StdMachineOps for StdMachine {
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
-            .with_context(|| "Failed to realize pcihost root device.")
+            .with_context(|| "Failed to realize pcihost root device.")?;
+        Ok(())
     }
 
     fn add_fwcfg_device(&mut self, nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
@@ -461,7 +462,8 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
-        rtc.realize().with_context(|| "Failed to realize PL031")
+        rtc.realize().with_context(|| "Failed to realize PL031")?;
+        Ok(())
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
@@ -709,7 +711,8 @@ impl MachineOps for StdMachine {
         let mut ramfb = Ramfb::new(sys_mem.clone(), &self.base.sysbus, config.install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize()
+        ramfb.realize()?;
+        Ok(())
     }
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {

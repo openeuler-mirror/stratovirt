@@ -265,14 +265,6 @@ impl RTC {
         true
     }
 
-    pub fn realize(self) -> Result<()> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-        Ok(())
-    }
-
     /// Get current clock value.
     fn get_current_value(&self) -> i64 {
         (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
@@ -355,6 +347,14 @@ impl Device for RTC {
         self.init_rtc_reg();
         self.set_memory(self.mem_size, self.gap_start);
         Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
     }
 }
 

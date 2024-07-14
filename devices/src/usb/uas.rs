@@ -34,13 +34,13 @@ use super::{
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
     USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
-use crate::Bus;
 use crate::ScsiBus::{
     get_scsi_key, scsi_cdb_xfer, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode,
     CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD, SCSI_SENSE_INVALID_PARAM_VALUE,
     SCSI_SENSE_INVALID_TAG, SCSI_SENSE_NO_SENSE,
 };
 use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
+use crate::{Bus, Device};
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::byte_code::ByteCode;
 use util::gen_base_func;

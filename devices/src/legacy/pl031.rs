@@ -100,21 +100,6 @@ impl PL031 {
         Ok(pl031)
     }
 
-    pub fn realize(self) -> Result<()> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-
-        MigrationManager::register_device_instance(
-            PL031State::descriptor(),
-            dev,
-            PL031_SNAPSHOT_ID,
-        );
-
-        Ok(())
-    }
-
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
         (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
@@ -123,6 +108,21 @@ impl PL031 {
 
 impl Device for PL031 {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            PL031State::descriptor(),
+            dev.clone(),
+            PL031_SNAPSHOT_ID,
+        );
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for PL031 {
