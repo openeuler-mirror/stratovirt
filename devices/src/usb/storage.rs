@@ -28,12 +28,12 @@ use super::descriptor::{
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
-use crate::Bus;
 use crate::ScsiBus::{
     get_scsi_key, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS,
     GOOD, SCSI_CMD_BUF_SIZE,
 };
 use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
+use crate::{Bus, Device};
 use machine_manager::config::{DriveConfig, DriveFile};
 use util::aio::AioEngine;
 use util::gen_base_func;

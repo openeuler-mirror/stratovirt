@@ -112,14 +112,6 @@ impl CpuController {
         Ok(cpu_controller)
     }
 
-    pub fn realize(self) -> Result<Arc<Mutex<CpuController>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-        Ok(dev)
-    }
-
     fn eject_cpu(&mut self, vcpu_id: u8) -> Result<()> {
         let vcpu = self.vcpu_map.get(&vcpu_id).unwrap();
         vcpu.destroy()?;
@@ -256,6 +248,14 @@ impl CpuController {
 
 impl Device for CpuController {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for CpuController {

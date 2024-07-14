@@ -104,22 +104,6 @@ impl Ged {
         Ok(ged)
     }
 
-    pub fn realize(self) -> Result<Arc<Mutex<Ged>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let ged_event = self.ged_event.clone();
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev)?;
-
-        let ged = dev.lock().unwrap();
-        ged.register_acpi_powerdown_event(ged_event.power_button)
-            .with_context(|| "Failed to register ACPI powerdown event.")?;
-        #[cfg(target_arch = "x86_64")]
-        ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
-            .with_context(|| "Failed to register ACPI cpu resize event.")?;
-        Ok(dev.clone())
-    }
-
     fn register_acpi_powerdown_event(&self, power_button: Arc<EventFd>) -> Result<()> {
         let power_down_fd = power_button.as_raw_fd();
         let ged_clone = self.clone();
@@ -189,6 +173,22 @@ impl Ged {
 
 impl Device for Ged {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let ged_event = self.ged_event.clone();
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        let ged = dev.lock().unwrap();
+        ged.register_acpi_powerdown_event(ged_event.power_button)
+            .with_context(|| "Failed to register ACPI powerdown event.")?;
+        #[cfg(target_arch = "x86_64")]
+        ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
+            .with_context(|| "Failed to register ACPI cpu resize event.")?;
+        Ok(dev.clone())
+    }
 }
 
 impl SysBusDevOps for Ged {

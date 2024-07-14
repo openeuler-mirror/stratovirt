@@ -19,7 +19,7 @@ use crate::{register_shutdown_event, LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
-use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
+use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
 use machine_manager::config::{Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
@@ -111,7 +111,10 @@ impl MachineOps for LightMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
-        pl031.realize().with_context(|| "Failed to realize pl031.")
+        pl031
+            .realize()
+            .with_context(|| "Failed to realize pl031.")?;
+        Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {

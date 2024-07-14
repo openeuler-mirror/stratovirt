@@ -1016,28 +1016,7 @@ impl Device for VirtioPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> Result<()> {
-        info!("func: unrealize, id: {:?}", &self.base.base.id);
-        self.device
-            .lock()
-            .unwrap()
-            .unrealize()
-            .with_context(|| "Failed to unrealize the virtio device")?;
-
-        let bus = self.parent_bus().unwrap().upgrade().unwrap();
-        self.base.config.unregister_bars(&bus)?;
-
-        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
-        MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name());
-
-        Ok(())
-    }
-}
-
-impl PciDevOps for VirtioPciDevice {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         info!("func: realize, id: {:?}", &self.base.base.id);
         let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
@@ -1191,10 +1170,35 @@ impl PciDevOps for VirtioPciDevice {
         let bus = parent_bus.upgrade().unwrap();
         bus.lock().unwrap().attach_child(devfn, dev.clone())?;
 
-        MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
+        MigrationManager::register_transport_instance(
+            VirtioPciState::descriptor(),
+            dev.clone(),
+            &name,
+        );
+
+        Ok(dev)
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
+        info!("func: unrealize, id: {:?}", &self.base.base.id);
+        self.device
+            .lock()
+            .unwrap()
+            .unrealize()
+            .with_context(|| "Failed to unrealize the virtio device")?;
+
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        self.base.config.unregister_bars(&bus)?;
+
+        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
+        MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name());
 
         Ok(())
     }
+}
+
+impl PciDevOps for VirtioPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         trace::virtio_tpt_read_config(&self.base.base.id, offset as u64, data.len());

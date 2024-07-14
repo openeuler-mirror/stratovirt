@@ -231,25 +231,6 @@ impl PFlash {
         Ok(pflash)
     }
 
-    pub fn realize(self) -> Result<Arc<Mutex<PFlash>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let region_base = self.base.res.region_base;
-        let host_mmap = self.host_mmap.clone();
-        let dev = Arc::new(Mutex::new(self));
-        let region_ops = sysbus.build_region_ops(&dev);
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
-        dev.lock().unwrap().rom = Some(rom_region.clone());
-        sysbus
-            .sys_mem
-            .root()
-            .add_subregion(rom_region, region_base)
-            .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.sysbus_attach_child(dev.clone())?;
-
-        Ok(dev)
-    }
-
     fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
         if is_illegal_cmd {
             warn!(
@@ -711,6 +692,25 @@ impl Device for PFlash {
         self.write_cycle = 0;
         self.status = 0x80;
         Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let region_base = self.base.res.region_base;
+        let host_mmap = self.host_mmap.clone();
+        let dev = Arc::new(Mutex::new(self));
+        let region_ops = sysbus.build_region_ops(&dev);
+        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
+        dev.lock().unwrap().rom = Some(rom_region.clone());
+        sysbus
+            .sys_mem
+            .root()
+            .add_subregion(rom_region, region_base)
+            .with_context(|| "Failed to attach PFlash to system bus")?;
+        sysbus.sysbus_attach_child(dev.clone())?;
+
+        Ok(dev)
     }
 }
 

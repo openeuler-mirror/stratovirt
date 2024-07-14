@@ -43,12 +43,8 @@ impl PciHostRoot {
 
 impl Device for PciHostRoot {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for PciHostRoot {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -71,10 +67,15 @@ impl PciDevOps for PciHostRoot {
 
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = parent_bus.lock().unwrap();
-        locked_bus.attach_child(0, Arc::new(Mutex::new(self)))?;
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(0, dev.clone())?;
 
-        Ok(())
+        Ok(dev)
     }
+}
+
+impl PciDevOps for PciHostRoot {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None);

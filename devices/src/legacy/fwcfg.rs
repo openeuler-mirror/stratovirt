@@ -859,17 +859,6 @@ impl FwCfgMem {
 
         Ok(fwcfgmem)
     }
-
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        self.fwcfg.common_realize()?;
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev)
-            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
-        Ok(dev)
-    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -941,6 +930,17 @@ impl Device for FwCfgMem {
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        self.fwcfg.common_realize()?;
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
     }
 }
 
@@ -1021,17 +1021,6 @@ impl FwCfgIO {
 
         Ok(fwcfg)
     }
-
-    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        self.fwcfg.common_realize()?;
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev)
-            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
-        Ok(dev)
-    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1101,6 +1090,17 @@ impl Device for FwCfgIO {
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        self.fwcfg.common_realize()?;
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
     }
 }
 

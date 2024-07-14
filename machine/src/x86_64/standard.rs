@@ -36,7 +36,7 @@ use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
-use devices::pci::{PciBus, PciDevOps, PciHost};
+use devices::pci::{PciBus, PciHost};
 use devices::{convert_bus_mut, Device, MUT_PCI_BUS};
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
@@ -191,7 +191,8 @@ impl StdMachine {
             .with_context(|| "Fail to register reset event in LPC")?;
         register_shutdown_event(ich.shutdown_req.clone(), vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
-        ich.realize()
+        ich.realize()?;
+        Ok(())
     }
 
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
@@ -268,7 +269,8 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
-        mch.realize()
+        mch.realize()?;
+        Ok(())
     }
 
     fn add_fwcfg_device(
@@ -443,7 +445,8 @@ impl MachineOps for StdMachine {
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
         rtc.realize()
-            .with_context(|| "Failed to realize RTC device")
+            .with_context(|| "Failed to realize RTC device")?;
+        Ok(())
     }
 
     fn add_ged_device(&mut self) -> Result<()> {

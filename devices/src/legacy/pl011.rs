@@ -163,34 +163,6 @@ impl PL011 {
         }
     }
 
-    pub fn realize(self) -> Result<()> {
-        self.chardev
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize chardev")?;
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev)
-            .with_context(|| "Failed to attach PL011 to system bus.")?;
-        drop(locked_bus);
-        MigrationManager::register_device_instance(
-            PL011State::descriptor(),
-            dev.clone(),
-            PL011_SNAPSHOT_ID,
-        );
-        let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
-            None,
-        )
-        .with_context(|| LegacyError::RegNotifierErr)?;
-        Ok(())
-    }
-
     fn unpause_rx(&mut self) {
         if self.paused {
             trace::pl011_unpause_rx();
@@ -236,6 +208,35 @@ impl InputReceiver for PL011 {
 
 impl Device for PL011 {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        self.chardev
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach PL011 to system bus.")?;
+        drop(locked_bus);
+        MigrationManager::register_device_instance(
+            PL011State::descriptor(),
+            dev.clone(),
+            PL011_SNAPSHOT_ID,
+        );
+        let locked_dev = dev.lock().unwrap();
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
+            None,
+        )
+        .with_context(|| LegacyError::RegNotifierErr)?;
+        drop(locked_dev);
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for PL011 {

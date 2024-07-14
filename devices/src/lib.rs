@@ -114,6 +114,16 @@ pub trait Device: Any + AsAny + Send + Sync {
         Ok(())
     }
 
+    /// Realize device.
+    fn realize(self) -> Result<Arc<Mutex<Self>>>
+    where
+        Self: Sized,
+    {
+        // Note: Only PciHost does not have its own realization logic,
+        // but it will not be called.
+        bail!("Realize of the device {} is not implemented", self.name());
+    }
+
     /// Unrealize device.
     fn unrealize(&mut self) -> Result<()> {
         bail!("Unrealize of the device {} is not implemented", self.name());

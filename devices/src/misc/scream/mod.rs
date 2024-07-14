@@ -18,15 +18,10 @@ mod ohaudio;
 #[cfg(feature = "scream_pulseaudio")]
 mod pulseaudio;
 
-use std::{
-    mem,
-    str::FromStr,
-    sync::{
-        atomic::{fence, Ordering},
-        Arc, Mutex, RwLock, Weak,
-    },
-    thread,
-};
+use std::str::FromStr;
+use std::sync::atomic::{fence, Ordering};
+use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::{mem, thread};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
@@ -37,7 +32,7 @@ use log::{error, warn};
 use self::alsa::AlsaStreamData;
 use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
-use crate::{pci::PciDevOps, Bus};
+use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
