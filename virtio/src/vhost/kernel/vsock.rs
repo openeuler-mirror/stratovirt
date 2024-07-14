@@ -23,8 +23,8 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 use super::super::{VhostIoHandler, VhostNotify, VhostOps};
 use super::{VhostBackend, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use crate::{
-    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
+    Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
 };
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE};
@@ -234,10 +234,7 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        check_config_space_rw(&self.config_space, offset, data)?;
-        let data_len = data.len();
-        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+    fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
         Ok(())
     }
 
