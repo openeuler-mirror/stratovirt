@@ -70,7 +70,7 @@ impl ArgsParse {
         let mut pre_opt = (0, "".to_string());
 
         for idx in 0..len {
-            let str = args[idx as usize].clone();
+            let str = args[idx].clone();
             if str.starts_with('-') && str.len() > 1 {
                 if !pre_opt.1.is_empty() {
                     bail!("missing argument for option '{}'", pre_opt.1);
