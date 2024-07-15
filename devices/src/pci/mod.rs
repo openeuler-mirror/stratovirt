@@ -404,9 +404,83 @@ pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
     use crate::DeviceBase;
     use address_space::{AddressSpace, Region};
     use util::gen_base_func;
+
+    #[derive(Clone)]
+    pub struct TestPciDevice {
+        base: PciDevBase,
+    }
+
+    impl TestPciDevice {
+        pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+            Self {
+                base: PciDevBase {
+                    base: DeviceBase::new(name.to_string(), false),
+                    config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                    devfn,
+                    parent_bus,
+                },
+            }
+        }
+    }
+
+    impl Device for TestPciDevice {
+        gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+    }
+
+    impl PciDevOps for TestPciDevice {
+        gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
+
+        fn write_config(&mut self, offset: usize, data: &[u8]) {
+            self.base.config.write(
+                offset,
+                data,
+                0,
+                #[cfg(target_arch = "x86_64")]
+                None,
+                None,
+            );
+        }
+
+        fn realize(mut self) -> Result<()> {
+            let devfn = self.base.devfn;
+            self.init_write_mask(false)?;
+            self.init_write_clear_mask(false)?;
+
+            let dev = Arc::new(Mutex::new(self));
+            let parent_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
+            parent_bus
+                .lock()
+                .unwrap()
+                .devices
+                .insert(devfn, dev.clone());
+
+            Ok(())
+        }
+
+        fn unrealize(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn init_write_mask(&mut self, _is_bridge: bool) -> Result<()> {
+            let mut offset = 0_usize;
+            while offset < self.base.config.config.len() {
+                LittleEndian::write_u32(
+                    &mut self.base.config.write_mask[offset..offset + 4],
+                    0xffff_ffff,
+                );
+                offset += 4;
+            }
+            Ok(())
+        }
+
+        fn init_write_clear_mask(&mut self, _is_bridge: bool) -> Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_le_write_u16_01() {
@@ -449,24 +523,6 @@ mod tests {
 
     #[test]
     fn set_dev_id() {
-        struct PciDev {
-            base: PciDevBase,
-        }
-
-        impl Device for PciDev {
-            gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-        }
-
-        impl PciDevOps for PciDev {
-            gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-            fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
-
-            fn realize(self) -> Result<()> {
-                Ok(())
-            }
-        }
-
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
@@ -480,14 +536,7 @@ mod tests {
             sys_mem.root().clone(),
         )));
 
-        let dev = PciDev {
-            base: PciDevBase {
-                base: DeviceBase::new("PCI device".to_string(), false),
-                config: PciConfig::new(1, 1),
-                devfn: 0,
-                parent_bus: Arc::downgrade(&parent_bus),
-            },
-        };
+        let dev = TestPciDevice::new("PCI device", 0, Arc::downgrade(&parent_bus));
         assert_eq!(dev.set_dev_id(1, 2), 258);
     }
 }
