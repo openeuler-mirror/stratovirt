@@ -110,6 +110,8 @@ impl ByteCode for MouseMotionEvent {}
 pub struct KeyboardEvent {
     pub key_action: u16,
     pub keycode: u16,
+    pub led_state: u8,
+    pad: [u8; 3],
 }
 
 impl ByteCode for KeyboardEvent {}
@@ -131,12 +133,6 @@ pub struct LedstateEvent {
 }
 
 impl ByteCode for LedstateEvent {}
-
-impl LedstateEvent {
-    pub fn new(state: u32) -> Self {
-        LedstateEvent { state }
-    }
-}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
