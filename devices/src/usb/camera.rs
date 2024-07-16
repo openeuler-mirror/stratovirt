@@ -32,9 +32,7 @@ use crate::camera_backend::{
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
-use crate::usb::{
-    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
-};
+use crate::usb::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 use machine_manager::config::camera::CameraDevConfig;
 use machine_manager::config::valid_id;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -858,10 +856,6 @@ impl UsbDevice for UsbCamera {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         None
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }
 

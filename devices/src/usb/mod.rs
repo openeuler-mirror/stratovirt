@@ -76,7 +76,7 @@ pub struct UsbDeviceRequest {
 impl ByteCode for UsbDeviceRequest {}
 
 /// The data transmission channel.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Copy)]
 pub struct UsbEndpoint {
     pub ep_number: u8,
     pub in_direction: bool,
@@ -366,9 +366,6 @@ pub trait UsbDevice: Send + Sync {
     /// Get the controller which the USB device attached.
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
 
-    /// Get the endpoint to wakeup.
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint;
-
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
         let usb_dev = self.usb_device_base_mut();
@@ -445,7 +442,7 @@ pub trait UsbDevice: Send + Sync {
 }
 
 /// Notify controller to process data request.
-pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
+pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<()> {
     let locked_dev = dev.lock().unwrap();
     let xhci = if let Some(cntlr) = &locked_dev.get_controller() {
         cntlr.upgrade().unwrap()
@@ -460,7 +457,6 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
     };
     let slot_id = usb_dev.addr;
     let wakeup = usb_dev.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP;
-    let ep = locked_dev.get_wakeup_endpoint().clone();
     // Drop the small lock.
     drop(locked_dev);
     let mut locked_xhci = xhci.lock().unwrap();
@@ -477,7 +473,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>) -> Result<()> {
             locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
-    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep, 0) {
+    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, ep_id as u32, 0) {
         error!("Failed to wakeup endpoint {:?}", e);
     }
     Ok(())

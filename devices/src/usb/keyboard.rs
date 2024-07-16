@@ -22,11 +22,10 @@ use super::descriptor::{
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
-use super::xhci::xhci_controller::XhciDevice;
+use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
-    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket,
-    UsbPacketStatus,
+    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
 };
 use machine_manager::config::valid_id;
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
@@ -175,7 +174,9 @@ impl KeyboardOpts for UsbKeyboardAdapter {
         }
         drop(locked_kbd);
         let clone_kbd = self.usb_kbd.clone();
-        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDevice>>))
+        // Wakeup endpoint.
+        let ep_id = endpoint_number_to_id(true, 1);
+        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDevice>>), ep_id)
     }
 }
 
@@ -259,9 +260,5 @@ impl UsbDevice for UsbKeyboard {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

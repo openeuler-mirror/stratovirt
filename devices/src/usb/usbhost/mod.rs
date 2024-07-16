@@ -1097,10 +1097,6 @@ impl UsbDevice for UsbHost {
         None
     }
 
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
-    }
-
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
         trace::usb_host_req_control(self.config.hostbus, self.config.hostaddr, device_req);
         let mut locked_packet = packet.lock().unwrap();
