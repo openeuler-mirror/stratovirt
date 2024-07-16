@@ -148,7 +148,7 @@ impl VirtioMmioDevice {
         let queue_num = device.lock().unwrap().queue_num();
         let mut mmio_device = VirtioMmioDevice {
             base: SysBusDevBase {
-                base: DeviceBase::new(name, false),
+                base: DeviceBase::new(name, false, None),
                 dev_type: SysBusDevType::VirtioMmio,
                 interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()

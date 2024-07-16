@@ -33,6 +33,8 @@ use devices::ScsiBus::{
     ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, CHECK_CONDITION,
     EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
 };
+use devices::ScsiDisk::ScsiDevice;
+use devices::{convert_device_ref, Bus, SCSI_DEVICE};
 use machine_manager::config::{
     get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, MAX_VIRTIO_QUEUE,
 };
@@ -296,11 +298,11 @@ impl VirtioDevice for ScsiCntlr {
         // Register event notifier for device aio.
         let bus = self.bus.as_ref().unwrap();
         let locked_bus = bus.lock().unwrap();
-        for device in locked_bus.devices.values() {
-            let locked_device = device.lock().unwrap();
+        for device in locked_bus.child_devices().values() {
+            SCSI_DEVICE!(device, locked_dev, scsi_dev);
             let err_cb = self.gen_error_cb(interrupt_cb.clone());
             // SAFETY: the disk_image is assigned after device realized.
-            let disk_image = locked_device.block_backend.as_ref().unwrap();
+            let disk_image = scsi_dev.block_backend.as_ref().unwrap();
             let mut locked_backend = disk_image.lock().unwrap();
             locked_backend.register_io_event(self.base.broken.clone(), err_cb)?;
         }
@@ -314,10 +316,10 @@ impl VirtioDevice for ScsiCntlr {
         )?;
         let bus = self.bus.as_ref().unwrap();
         let locked_bus = bus.lock().unwrap();
-        for device in locked_bus.devices.values() {
-            let locked_dev = device.lock().unwrap();
+        for device in locked_bus.child_devices().values() {
+            SCSI_DEVICE!(device, locked_dev, scsi_dev);
             // SAFETY: the disk_image is assigned after device realized.
-            let disk_image = locked_dev.block_backend.as_ref().unwrap();
+            let disk_image = scsi_dev.block_backend.as_ref().unwrap();
             let mut locked_backend = disk_image.lock().unwrap();
             locked_backend.unregister_io_event()?;
         }

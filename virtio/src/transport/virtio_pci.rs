@@ -332,7 +332,7 @@ impl VirtioPciDevice {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
-                base: DeviceBase::new(name, true),
+                base: DeviceBase::new(name, true, Some(parent_bus.clone())),
                 config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
                 parent_bus,

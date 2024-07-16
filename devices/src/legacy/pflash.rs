@@ -244,7 +244,7 @@ impl PFlash {
             .root()
             .add_subregion(rom_region, region_base)
             .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.lock().unwrap().devices.push(dev.clone());
+        sysbus.lock().unwrap().sysbus_attach_child(dev.clone())?;
 
         Ok(dev)
     }

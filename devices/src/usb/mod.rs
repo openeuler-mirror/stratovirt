@@ -130,7 +130,7 @@ pub struct UsbDeviceBase {
 impl UsbDeviceBase {
     pub fn new(id: String, data_buf_len: usize) -> Self {
         let mut dev = UsbDeviceBase {
-            base: DeviceBase::new(id, false),
+            base: DeviceBase::new(id, false, None),
             port: None,
             speed: 0,
             addr: 0,
