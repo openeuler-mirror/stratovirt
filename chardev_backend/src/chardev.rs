@@ -301,6 +301,9 @@ impl Chardev {
     }
 
     fn consume_outbuf(&mut self) -> Result<()> {
+        if self.output.is_none() {
+            bail!("no output interface");
+        }
         let output = self.output.as_ref().unwrap();
         while !self.outbuf.is_empty() {
             if write_buffer_async(output.clone(), self.outbuf.front_mut().unwrap())? {
