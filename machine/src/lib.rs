@@ -2365,10 +2365,21 @@ fn check_windows_emu_pid(
     pid_path: String,
     powerdown_req: Arc<EventFd>,
     shutdown_req: Arc<EventFd>,
+    vm: Arc<RwLock<dyn MachineOps>>,
 ) {
     let mut check_delay = Duration::from_millis(WINDOWS_EMU_PID_DEFAULT_INTERVAL);
     if !Path::new(&pid_path).exists() {
-        log::info!("Detect emulator exited, let VM exits now");
+        info!("Detect emulator exited, let VM exits now");
+        let locked_vm = vm.read().unwrap();
+        let mut vm_state = locked_vm.get_vm_state().deref().0.lock().unwrap();
+        if *vm_state == VmState::Paused {
+            info!("VM state is paused, resume VM before exit");
+            if let Err(e) = locked_vm.vm_resume(&locked_vm.machine_base().cpus, &mut vm_state) {
+                log::error!("Failed to resume VM when check windows emu pid: {:?}", e);
+            }
+        }
+        drop(vm_state);
+        drop(locked_vm);
         if get_run_stage() == VmRunningStage::Os {
             // Wait 30s for windows normal exit.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_POWERDOWN_INTERVAL);
@@ -2389,6 +2400,35 @@ fn check_windows_emu_pid(
             pid_path.clone(),
             powerdown_req.clone(),
             shutdown_req.clone(),
+            vm.clone(),
+        );
+    });
+    EventLoop::get_ctx(None)
+        .unwrap()
+        .timer_add(check_emu_alive, check_delay);
+}
+
+/// When windows emu exits, stratovirt should exits too.
+#[cfg(feature = "windows_emu_pid")]
+pub(crate) fn watch_windows_emu_pid(
+    vm_config: &VmConfig,
+    power_button: Arc<EventFd>,
+    shutdown_req: Arc<EventFd>,
+    vm: Arc<RwLock<dyn MachineOps>>,
+) {
+    let emu_pid = vm_config.emulator_pid.as_ref();
+    if emu_pid.is_none() {
+        return;
+    }
+    info!("Watching on emulator lifetime");
+    let pid_path = "/proc/".to_owned() + emu_pid.unwrap();
+    let check_delay = Duration::from_millis(WINDOWS_EMU_PID_DEFAULT_INTERVAL);
+    let check_emu_alive = Box::new(move || {
+        check_windows_emu_pid(
+            pid_path.clone(),
+            power_button.clone(),
+            shutdown_req.clone(),
+            vm.clone(),
         );
     });
     EventLoop::get_ctx(None)
