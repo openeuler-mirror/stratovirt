@@ -59,8 +59,6 @@ use devices::pci::{PciBus, PciHost};
 use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::ShutdownAction;
-#[cfg(feature = "windows_emu_pid")]
-use machine_manager::config::VmConfig;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri,
     BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
@@ -886,26 +884,6 @@ impl StdMachine {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
-    }
-
-    /// When windows emu exits, stratovirt should exits too.
-    #[cfg(feature = "windows_emu_pid")]
-    pub(crate) fn watch_windows_emu_pid(
-        &self,
-        vm_config: &VmConfig,
-        power_button: Arc<EventFd>,
-        shutdown_req: Arc<EventFd>,
-    ) {
-        let emu_pid = vm_config.emulator_pid.as_ref();
-        if emu_pid.is_none() {
-            return;
-        }
-        log::info!("Watching on emulator lifetime");
-        crate::check_windows_emu_pid(
-            "/proc/".to_owned() + emu_pid.unwrap(),
-            power_button,
-            shutdown_req,
-        );
     }
 
     #[cfg(target_arch = "x86_64")]

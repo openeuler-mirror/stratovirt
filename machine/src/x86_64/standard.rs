@@ -550,10 +550,11 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to init display")?;
 
         #[cfg(feature = "windows_emu_pid")]
-        locked_vm.watch_windows_emu_pid(
+        crate::watch_windows_emu_pid(
             vm_config,
             locked_vm.shutdown_req.clone(),
             locked_vm.shutdown_req.clone(),
+            vm.clone(),
         );
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
