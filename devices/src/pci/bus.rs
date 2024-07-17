@@ -10,11 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use log::debug;
 
 use super::{
@@ -22,21 +21,19 @@ use super::{
     hotplug::HotplugOps,
     PciDevOps, PciIntxState,
 };
-use crate::{Bus, BusBase, MsiIrqManager};
+use crate::pci::{to_pcidevops, RootPort};
+use crate::{
+    convert_bus_mut, convert_bus_ref, convert_device_mut, convert_device_ref, Bus, BusBase, Device,
+    MsiIrqManager, MUT_ROOT_PORT, PCI_BUS_DEVICE, ROOT_PORT,
+};
 use address_space::Region;
 use util::gen_base_func;
 
-type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
+type DeviceBusInfo = (Arc<Mutex<dyn Bus>>, Arc<Mutex<dyn Device>>);
 
 /// PCI bus structure.
 pub struct PciBus {
     pub base: BusBase,
-    /// Devices attached to the bus.
-    pub devices: HashMap<u8, Arc<Mutex<dyn PciDevOps>>>,
-    /// Child buses of the bus.
-    pub child_buses: Vec<Arc<Mutex<PciBus>>>,
-    /// Pci bridge which the bus originates from.
-    pub parent_bridge: Option<Weak<Mutex<dyn PciDevOps>>>,
     /// IO region which the parent bridge manages.
     #[cfg(target_arch = "x86_64")]
     pub io_region: Region,
@@ -51,6 +48,22 @@ pub struct PciBus {
 
 impl Bus for PciBus {
     gen_base_func!(bus_base, bus_base_mut, BusBase, base);
+}
+
+/// Convert from Arc<Mutex<dyn Bus>> to &mut PciBus.
+#[macro_export]
+macro_rules! MUT_PCI_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_mut!($trait_bus, $lock_bus, $struct_bus, PciBus);
+    };
+}
+
+/// Convert from Arc<Mutex<dyn Bus>> to &PciBus.
+#[macro_export]
+macro_rules! PCI_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_ref!($trait_bus, $lock_bus, $struct_bus, PciBus);
+    };
 }
 
 impl PciBus {
@@ -68,9 +81,6 @@ impl PciBus {
     ) -> Self {
         Self {
             base: BusBase::new(name),
-            devices: HashMap::new(),
-            child_buses: Vec::new(),
-            parent_bridge: None,
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
@@ -99,9 +109,9 @@ impl PciBus {
     ///
     /// * `bus_num` - The bus number.
     /// * `devfn` - Slot number << 3 | Function number.
-    pub fn get_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
-        if let Some(dev) = self.devices.get(&devfn) {
-            return Some((*dev).clone());
+    pub fn get_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn Device>>> {
+        if let Some(dev) = self.child_dev(devfn as u64) {
+            return Some(dev.clone());
         }
         debug!("Can't find device {}:{}", bus_num, devfn);
         None
@@ -126,15 +136,18 @@ impl PciBus {
     ///
     /// * `bus` - Bus to find from.
     /// * `bus_number` - The bus number.
-    pub fn find_bus_by_num(bus: &Arc<Mutex<Self>>, bus_num: u8) -> Option<Arc<Mutex<Self>>> {
-        let locked_bus = bus.lock().unwrap();
-        if locked_bus.number(SECONDARY_BUS_NUM as usize) == bus_num {
-            return Some((*bus).clone());
+    pub fn find_bus_by_num(bus: &Arc<Mutex<dyn Bus>>, bus_num: u8) -> Option<Arc<Mutex<dyn Bus>>> {
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        if pci_bus.number(SECONDARY_BUS_NUM as usize) == bus_num {
+            return Some(bus.clone());
         }
-        if locked_bus.in_range(bus_num) {
-            for sub_bus in &locked_bus.child_buses {
-                if let Some(b) = PciBus::find_bus_by_num(sub_bus, bus_num) {
-                    return Some(b);
+        if pci_bus.in_range(bus_num) {
+            for dev in pci_bus.child_devices().values() {
+                let child_bus = dev.lock().unwrap().child_bus();
+                if let Some(sub_bus) = child_bus {
+                    if let Some(b) = PciBus::find_bus_by_num(&sub_bus, bus_num) {
+                        return Some(b);
+                    }
                 }
             }
         }
@@ -147,14 +160,20 @@ impl PciBus {
     ///
     /// * `bus` - Bus to find from.
     /// * `name` - Bus name.
-    pub fn find_bus_by_name(bus: &Arc<Mutex<Self>>, bus_name: &str) -> Option<Arc<Mutex<Self>>> {
+    pub fn find_bus_by_name(
+        bus: &Arc<Mutex<dyn Bus>>,
+        bus_name: &str,
+    ) -> Option<Arc<Mutex<dyn Bus>>> {
         let locked_bus = bus.lock().unwrap();
         if locked_bus.name().as_str() == bus_name {
-            return Some((*bus).clone());
+            return Some(bus.clone());
         }
-        for sub_bus in &locked_bus.child_buses {
-            if let Some(b) = PciBus::find_bus_by_name(sub_bus, bus_name) {
-                return Some(b);
+        for dev in locked_bus.child_devices().values() {
+            let child_bus = dev.lock().unwrap().child_bus();
+            if let Some(sub_bus) = child_bus {
+                if let Some(b) = PciBus::find_bus_by_name(&sub_bus, bus_name) {
+                    return Some(b);
+                }
             }
         }
         None
@@ -164,20 +183,22 @@ impl PciBus {
     ///
     /// # Arguments
     ///
-    /// * `pci_bus` - On which bus to find.
+    /// * `bus` - On which bus to find.
     /// * `name` - Device name.
-    pub fn find_attached_bus(pci_bus: &Arc<Mutex<PciBus>>, name: &str) -> Option<DeviceBusInfo> {
-        // Device is attached in pci_bus.
-        let locked_bus = pci_bus.lock().unwrap();
-        for dev in locked_bus.devices.values() {
+    pub fn find_attached_bus(bus: &Arc<Mutex<dyn Bus>>, name: &str) -> Option<DeviceBusInfo> {
+        // Device is attached in bus.
+        let locked_bus = bus.lock().unwrap();
+        for dev in locked_bus.child_devices().values() {
             if dev.lock().unwrap().name() == name {
-                return Some((pci_bus.clone(), dev.clone()));
+                return Some((bus.clone(), dev.clone()));
             }
-        }
-        // Find in child bus.
-        for bus in &locked_bus.child_buses {
-            if let Some(found) = PciBus::find_attached_bus(bus, name) {
-                return Some(found);
+
+            // Find in child bus.
+            let child_bus = dev.lock().unwrap().child_bus();
+            if let Some(sub_bus) = child_bus {
+                if let Some(found) = PciBus::find_attached_bus(&sub_bus, name) {
+                    return Some(found);
+                }
             }
         }
         None
@@ -189,38 +210,32 @@ impl PciBus {
     ///
     /// * `bus` - Bus to detach from.
     /// * `dev` - Device attached to the bus.
-    pub fn detach_device(bus: &Arc<Mutex<Self>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-        let mut dev_locked = dev.lock().unwrap();
-        dev_locked
+    pub fn detach_device(bus: &Arc<Mutex<dyn Bus>>, dev: &Arc<Mutex<dyn Device>>) -> Result<()> {
+        PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+        pci_dev
             .unrealize()
-            .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+            .with_context(|| format!("Failed to unrealize device {}", pci_dev.name()))?;
 
-        let devfn = dev_locked.pci_base().devfn;
+        let devfn = pci_dev.pci_base().devfn as u64;
         let mut locked_bus = bus.lock().unwrap();
-        if locked_bus.devices.get(&devfn).is_some() {
-            locked_bus.devices.remove(&devfn);
-        } else {
-            bail!("Device {} not found in the bus", dev_locked.name());
-        }
+        locked_bus
+            .detach_child(devfn)
+            .with_context(|| format!("Device {} not found in the bus", pci_dev.name()))?;
 
         Ok(())
     }
 
     pub fn reset(&mut self) -> Result<()> {
-        for (_id, pci_dev) in self.devices.iter() {
+        for dev in self.child_devices().values() {
+            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
             pci_dev
-                .lock()
-                .unwrap()
                 .reset(false)
-                .with_context(|| "Fail to reset pci dev")?;
-        }
+                .with_context(|| format!("Fail to reset pci dev {}", pci_dev.name()))?;
 
-        for child_bus in self.child_buses.iter_mut() {
-            child_bus
-                .lock()
-                .unwrap()
-                .reset()
-                .with_context(|| "Fail to reset child bus")?;
+            if let Some(bus) = pci_dev.child_bus() {
+                MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+                pci_bus.reset().with_context(|| "Fail to reset child bus")?;
+            }
         }
 
         Ok(())
@@ -236,18 +251,11 @@ impl PciBus {
     }
 
     fn get_bridge_control_reg(&self, offset: usize, data: &mut [u8]) {
-        if self.parent_bridge.is_none() {
-            return;
+        if let Some(parent_bridge) = self.parent_device() {
+            let bridge = parent_bridge.upgrade().unwrap();
+            MUT_ROOT_PORT!(bridge, locked_bridge, rootport);
+            rootport.read_config(offset, data);
         }
-
-        self.parent_bridge
-            .as_ref()
-            .unwrap()
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .read_config(offset, data);
     }
 
     pub fn generate_dev_id(&self, devfn: u8) -> u16 {
@@ -260,11 +268,11 @@ impl PciBus {
     }
 
     pub fn get_msi_irq_manager(&self) -> Option<Arc<dyn MsiIrqManager>> {
-        match &self.parent_bridge {
+        match self.parent_device().as_ref() {
             Some(parent_bridge) => {
-                let parent_bridge = parent_bridge.upgrade().unwrap();
-                let locked_parent_bridge = parent_bridge.lock().unwrap();
-                locked_parent_bridge.get_msi_irq_manager()
+                let bridge = parent_bridge.upgrade().unwrap();
+                ROOT_PORT!(bridge, locked_bridge, rootport);
+                rootport.get_msi_irq_manager()
             }
             None => self.msi_irq_manager.clone(),
         }
@@ -278,12 +286,13 @@ mod tests {
     use crate::pci::host::tests::create_pci_host;
     use crate::pci::root_port::{RootPort, RootPortConfig};
     use crate::pci::tests::TestPciDevice;
+    use crate::pci::{clean_pcidevops_type, register_pcidevops_type};
 
     #[test]
     fn test_find_attached_bus() {
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let root_port_config = RootPortConfig {
             addr: (1, 0),
             id: "pcie.1".to_string(),
@@ -297,20 +306,21 @@ mod tests {
         pci_dev.realize().unwrap();
 
         // Test device is attached to the root port.
-        let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
+        let bus =
+            PciBus::find_bus_by_name(&locked_pci_host.child_bus().unwrap(), "pcie.1").unwrap();
         let pci_dev = TestPciDevice::new("test2", 12, Arc::downgrade(&bus));
         pci_dev.realize().unwrap();
 
-        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test0");
+        let info = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), "test0");
         assert!(info.is_none());
 
-        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        let info = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), "test1");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name(), "pcie.0");
         assert_eq!(dev.lock().unwrap().name(), "test1");
 
-        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test2");
+        let info = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), "test2");
         assert!(info.is_some());
         let (bus, dev) = info.unwrap();
         assert_eq!(bus.lock().unwrap().name(), "pcie.1");
@@ -319,9 +329,11 @@ mod tests {
 
     #[test]
     fn test_detach_device() {
+        register_pcidevops_type::<TestPciDevice>().unwrap();
+
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
 
         let root_port_config = RootPortConfig {
             id: "pcie.1".to_string(),
@@ -331,18 +343,21 @@ mod tests {
         let root_port = RootPort::new(root_port_config, root_bus.clone());
         root_port.realize().unwrap();
 
-        let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
+        let bus =
+            PciBus::find_bus_by_name(&locked_pci_host.child_bus().unwrap(), "pcie.1").unwrap();
         let pci_dev = TestPciDevice::new("test1", 0, Arc::downgrade(&bus));
-        let dev_ops: Arc<Mutex<dyn PciDevOps>> = Arc::new(Mutex::new(pci_dev.clone()));
+        let dev_ops: Arc<Mutex<dyn Device>> = Arc::new(Mutex::new(pci_dev.clone()));
         pci_dev.realize().unwrap();
 
-        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        let info = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), "test1");
         assert!(info.is_some());
 
         let res = PciBus::detach_device(&bus, &dev_ops);
         assert!(res.is_ok());
 
-        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        let info = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), "test1");
         assert!(info.is_none());
+
+        clean_pcidevops_type();
     }
 }

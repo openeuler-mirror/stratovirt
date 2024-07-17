@@ -14,14 +14,12 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 
-use devices::pci::{
-    config::{
-        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
-        REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    le_write_u16, PciBus, PciDevBase, PciDevOps,
+use devices::pci::config::{
+    PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
+    REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
 use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
@@ -32,12 +30,11 @@ pub struct PciHostRoot {
 }
 
 impl PciHostRoot {
-    pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new("PCI Host Root".to_string(), false, Some(parent_bus.clone())),
+                base: DeviceBase::new("PCI Host Root".to_string(), false, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-                parent_bus,
                 devfn: 0,
             },
         }
@@ -72,12 +69,10 @@ impl PciDevOps for PciHostRoot {
         )?;
         le_write_u16(&mut self.base.config.config, REVISION_ID, 0)?;
 
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        parent_bus
-            .lock()
-            .unwrap()
-            .devices
-            .insert(0, Arc::new(Mutex::new(self)));
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0, Arc::new(Mutex::new(self)))?;
+
         Ok(())
     }
 

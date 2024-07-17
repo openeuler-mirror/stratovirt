@@ -44,7 +44,9 @@ use crate::misc::ivshmem::Ivshmem;
 use crate::misc::pvpanic::PvPanicPci;
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
-use crate::{Bus, Device, DeviceBase, MsiIrqManager};
+use crate::{
+    convert_bus_ref, convert_device_ref, Bus, Device, DeviceBase, MsiIrqManager, PCI_BUS, ROOT_PORT,
+};
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
 
@@ -141,8 +143,6 @@ pub struct PciDevBase {
     pub config: PciConfig,
     /// Devfn.
     pub devfn: u8,
-    /// Primary Bus.
-    pub parent_bus: Weak<Mutex<PciBus>>,
 }
 
 pub trait PciDevOps: Device + Send {
@@ -219,24 +219,17 @@ pub trait PciDevOps: Device + Send {
     }
 
     /// Get the path of the PCI bus where the device resides.
-    fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<PciBus>>) -> String {
-        let locked_parent_bus = parent_bus.lock().unwrap();
-        let parent_dev_path = if locked_parent_bus.name().eq("pcie.0") {
+    fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<dyn Bus>>) -> String {
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        let parent_dev_path = if pci_bus.name().eq("pcie.0") {
             String::from("/pci@ffffffffffffffff")
         } else {
             // This else branch will not be executed currently,
             // which is mainly to be compatible with new PCI bridge devices.
             // unwrap is safe because pci bus under root port will not return null.
-            locked_parent_bus
-                .parent_bridge
-                .as_ref()
-                .unwrap()
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .get_dev_path()
-                .unwrap()
+            let parent_bridge = pci_bus.parent_device().unwrap().upgrade().unwrap();
+            ROOT_PORT!(parent_bridge, locked_bridge, rootport);
+            rootport.get_dev_path().unwrap()
         };
         parent_dev_path
     }
@@ -273,15 +266,15 @@ pub trait PciDevOps: Device + Send {
     }
 }
 
-pub type ToPciDevOpsFunc = fn(&dyn Any) -> &dyn PciDevOps;
+pub type ToPciDevOpsFunc = fn(&mut dyn Any) -> &mut dyn PciDevOps;
 
 static mut PCIDEVOPS_HASHMAP: Option<HashMap<TypeId, ToPciDevOpsFunc>> = None;
 
-pub fn convert_to_pcidevops<T: PciDevOps>(item: &dyn Any) -> &dyn PciDevOps {
+pub fn convert_to_pcidevops<T: PciDevOps>(item: &mut dyn Any) -> &mut dyn PciDevOps {
     // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
     // the conversion is its own structure type, so the conversion result will definitely not be `None`.
-    let t = item.downcast_ref::<T>().unwrap();
-    t as &dyn PciDevOps
+    let t = item.downcast_mut::<T>().unwrap();
+    t as &mut dyn PciDevOps
 }
 
 pub fn register_pcidevops_type<T: PciDevOps>() -> Result<()> {
@@ -313,15 +306,30 @@ pub fn devices_register_pcidevops_type() -> Result<()> {
     register_pcidevops_type::<XhciPciDevice>()
 }
 
-pub fn to_pcidevops(dev: &dyn Device) -> Option<&dyn PciDevOps> {
-    let type_id = dev.type_id();
+#[cfg(test)]
+pub fn clean_pcidevops_type() {
+    unsafe {
+        PCIDEVOPS_HASHMAP = None;
+    }
+}
+
+pub fn to_pcidevops(dev: &mut dyn Device) -> Option<&mut dyn PciDevOps> {
     // SAFETY: PCIDEVOPS_HASHMAP has been built. And this function is called without changing hashmap.
     unsafe {
         let types = PCIDEVOPS_HASHMAP.as_mut().unwrap();
-        let func = types.get(&type_id)?;
-        let pcidev = func(dev.as_any());
+        let func = types.get(&dev.device_type_id())?;
+        let pcidev = func(dev.as_any_mut());
         Some(pcidev)
     }
+}
+
+/// Convert from Arc<Mutex<dyn Device>> to &mut dyn PciDevOps.
+#[macro_export]
+macro_rules! PCI_BUS_DEVICE {
+    ($trait_device:expr, $lock_device: ident, $trait_pcidevops: ident) => {
+        let mut $lock_device = $trait_device.lock().unwrap();
+        let $trait_pcidevops = to_pcidevops(&mut *$lock_device).unwrap();
+    };
 }
 
 /// Init multifunction for pci devices.
@@ -336,7 +344,7 @@ pub fn init_multifunction(
     multifunction: bool,
     config: &mut [u8],
     devfn: u8,
-    parent_bus: Weak<Mutex<PciBus>>,
+    parent_bus: Weak<Mutex<dyn Bus>>,
 ) -> Result<()> {
     let mut header_type =
         le_read_u16(config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
@@ -351,24 +359,21 @@ pub fn init_multifunction(
     // leave the bit to 0.
     let slot = pci_slot(devfn);
     let bus = parent_bus.upgrade().unwrap();
-    let locked_bus = bus.lock().unwrap();
+    PCI_BUS!(bus, locked_bus, pci_bus);
     if pci_func(devfn) != 0 {
-        let pci_dev = locked_bus.devices.get(&pci_devfn(slot, 0));
-        if pci_dev.is_none() {
+        let dev = pci_bus.child_dev(pci_devfn(slot, 0) as u64);
+        if dev.is_none() {
             return Ok(());
         }
 
         let mut data = vec![0_u8; 2];
-        pci_dev
-            .unwrap()
-            .lock()
-            .unwrap()
-            .read_config(HEADER_TYPE as usize, data.as_mut_slice());
+        PCI_BUS_DEVICE!(dev.unwrap(), locked_dev, pci_dev);
+        pci_dev.read_config(HEADER_TYPE as usize, data.as_mut_slice());
         if LittleEndian::read_u16(&data) & HEADER_TYPE_MULTIFUNC as u16 == 0 {
             // Function 0 should set multifunction bit.
             bail!(
                 "PCI: single function device can't be populated in bus {} function {}.{}",
-                &locked_bus.name(),
+                &pci_bus.name(),
                 slot,
                 devfn & 0x07
             );
@@ -382,7 +387,7 @@ pub fn init_multifunction(
 
     // If function 0 is set to single function, the rest function should be None.
     for func in 1..MAX_FUNC {
-        if locked_bus.devices.get(&pci_devfn(slot, func)).is_some() {
+        if pci_bus.child_dev(pci_devfn(slot, func) as u64).is_some() {
             bail!(
                 "PCI: {}.0 indicates single function, but {}.{} is already populated",
                 slot,
@@ -415,13 +420,12 @@ mod tests {
     }
 
     impl TestPciDevice {
-        pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+        pub fn new(name: &str, devfn: u8, parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
             Self {
                 base: PciDevBase {
-                    base: DeviceBase::new(name.to_string(), false, Some(parent_bus.clone())),
+                    base: DeviceBase::new(name.to_string(), false, Some(parent_bus)),
                     config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                     devfn,
-                    parent_bus,
                 },
             }
         }
@@ -446,17 +450,13 @@ mod tests {
         }
 
         fn realize(mut self) -> Result<()> {
-            let devfn = self.base.devfn;
+            let devfn = self.base.devfn as u64;
             self.init_write_mask(false)?;
             self.init_write_clear_mask(false)?;
 
             let dev = Arc::new(Mutex::new(self));
-            let parent_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-            parent_bus
-                .lock()
-                .unwrap()
-                .devices
-                .insert(devfn, dev.clone());
+            let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+            parent_bus.lock().unwrap().attach_child(devfn, dev)?;
 
             Ok(())
         }
@@ -529,12 +529,12 @@ mod tests {
             None,
         )
         .unwrap();
-        let parent_bus: Arc<Mutex<PciBus>> = Arc::new(Mutex::new(PciBus::new(
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
             Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
-        )));
+        ))) as Arc<Mutex<dyn Bus>>;
 
         let dev = TestPciDevice::new("PCI device", 0, Arc::downgrade(&parent_bus));
         assert_eq!(dev.set_dev_id(1, 2), 258);

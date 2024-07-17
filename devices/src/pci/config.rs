@@ -22,6 +22,7 @@ use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
 };
+use crate::{convert_bus_ref, Bus, PCI_BUS};
 use address_space::Region;
 use util::num_ops::ranges_overlap;
 
@@ -804,8 +805,8 @@ impl PciConfig {
     /// # Arguments
     ///
     /// * `bus` - The bus which region registered.
-    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<PciBus>>) -> Result<()> {
-        let locked_bus = bus.lock().unwrap();
+    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<dyn Bus>>) -> Result<()> {
+        PCI_BUS!(bus, locked_bus, pci_bus);
         for bar in self.bars.iter_mut() {
             if bar.address == BAR_SPACE_UNMAPPED || bar.size == 0 {
                 continue;
@@ -815,7 +816,7 @@ impl PciConfig {
                 {
                     #[cfg(target_arch = "x86_64")]
                     if let Some(region) = bar.region.as_ref() {
-                        locked_bus
+                        pci_bus
                             .io_region
                             .delete_subregion(region)
                             .with_context(|| "Failed to unregister io bar")?;
@@ -823,7 +824,7 @@ impl PciConfig {
                 }
                 _ => {
                     if let Some(region) = bar.region.as_ref() {
-                        locked_bus
+                        pci_bus
                             .mem_region
                             .delete_subregion(region)
                             .with_context(|| "Failed to unregister mem bar")?;
@@ -1510,7 +1511,7 @@ mod tests {
             #[cfg(target_arch = "x86_64")]
             io_region.clone(),
             mem_region.clone(),
-        )));
+        ))) as Arc<Mutex<dyn Bus>>;
 
         assert!(pci_config.unregister_bars(&bus).is_ok());
 

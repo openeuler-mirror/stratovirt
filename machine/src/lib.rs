@@ -55,8 +55,8 @@ use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{
-    devices_register_pcidevops_type, register_pcidevops_type, PciBus, PciDevOps, PciHost, RootPort,
-    RootPortConfig,
+    devices_register_pcidevops_type, register_pcidevops_type, to_pcidevops, PciBus, PciDevOps,
+    PciHost, RootPort, RootPortConfig,
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
@@ -77,7 +77,7 @@ use devices::usb::UsbDevice;
 use devices::InterruptController;
 use devices::ScsiBus::get_scsi_key;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
-use devices::{Bus, Device, SYS_BUS_DEVICE};
+use devices::{convert_bus_ref, Bus, Device, PCI_BUS, PCI_BUS_DEVICE, SYS_BUS_DEVICE};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -931,8 +931,10 @@ pub trait MachineOps: MachineLifecycle {
                 check_arg_exist!(("bus", dev_cfg.bus), ("addr", dev_cfg.addr));
                 let bdf = PciBdf::new(dev_cfg.bus.clone().unwrap(), dev_cfg.addr.unwrap());
                 let multi_func = dev_cfg.multifunction.unwrap_or_default();
-                let root_bus = self.get_pci_host()?.lock().unwrap().root_bus.clone();
-                let msi_irq_manager = root_bus.lock().unwrap().msi_irq_manager.clone();
+                let root_bus = self.get_pci_host()?.lock().unwrap().child_bus().unwrap();
+                PCI_BUS!(root_bus, locked_bus, root_pci_bus);
+                let msi_irq_manager = root_pci_bus.msi_irq_manager.clone();
+                drop(locked_bus);
                 let need_irqfd = msi_irq_manager.as_ref().unwrap().irqfd_enable();
                 self.add_virtio_pci_device(&dev_cfg.id, &bdf, device, multi_func, need_irqfd)
                     .with_context(|| "Failed to add pci fs device")?;
@@ -997,7 +999,9 @@ pub trait MachineOps: MachineLifecycle {
             if name.is_empty() {
                 bail!("Device id is empty");
             }
-            if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
+            if PciBus::find_attached_bus(&pci_host.lock().unwrap().child_bus().unwrap(), name)
+                .is_some()
+            {
                 bail!("Device id {} existed", name);
             }
             if self.check_id_existed_in_xhci(name).unwrap_or_default() {
@@ -1209,11 +1213,11 @@ pub trait MachineOps: MachineLifecycle {
             .get_pci_dev_by_id_and_type(vm_config, Some(&cntlr), "virtio-scsi-pci")
             .with_context(|| format!("Can not find scsi controller from pci bus {}", cntlr))?;
         let locked_pcidev = pci_dev.lock().unwrap();
-        let prefix = locked_pcidev.get_dev_path().unwrap();
         let virtio_pcidev = locked_pcidev
             .as_any()
             .downcast_ref::<VirtioPciDevice>()
             .unwrap();
+        let prefix = virtio_pcidev.get_dev_path().unwrap();
         let virtio_device = virtio_pcidev.get_virtio_device().lock().unwrap();
         let cntlr = virtio_device.as_any().downcast_ref::<ScsiCntlr>().unwrap();
         let bus = cntlr.bus.as_ref().unwrap();
@@ -1446,9 +1450,9 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
-    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<PciBus>>)> {
+    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<dyn Bus>>)> {
         let pci_host = self.get_pci_host()?;
-        let bus = pci_host.lock().unwrap().root_bus.clone();
+        let bus = pci_host.lock().unwrap().child_bus().unwrap().clone();
         let pci_bus = PciBus::find_bus_by_name(&bus, &bdf.bus);
         if pci_bus.is_none() {
             bail!("Parent bus :{} not found", &bdf.bus);
@@ -1463,7 +1467,7 @@ pub trait MachineOps: MachineLifecycle {
         let bdf = PciBdf::new(dev_cfg.bus.clone(), dev_cfg.addr);
         let (_, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let pci_host = self.get_pci_host()?;
-        let bus = pci_host.lock().unwrap().root_bus.clone();
+        let bus = pci_host.lock().unwrap().child_bus().unwrap().clone();
         if PciBus::find_bus_by_name(&bus, &dev_cfg.id).is_some() {
             bail!("ID {} already exists.", &dev_cfg.id);
         }
@@ -1504,7 +1508,7 @@ pub trait MachineOps: MachineLifecycle {
     fn reset_bus(&mut self, dev_id: &str) -> Result<()> {
         let pci_host = self.get_pci_host()?;
         let locked_pci_host = pci_host.lock().unwrap();
-        let bus = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id)
+        let bus = PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), dev_id)
             .with_context(|| format!("Bus not found, dev id {}", dev_id))?
             .0;
         let locked_bus = bus.lock().unwrap();
@@ -1513,16 +1517,16 @@ pub trait MachineOps: MachineLifecycle {
             return Ok(());
         }
         let parent_bridge = locked_bus
-            .parent_bridge
-            .as_ref()
+            .parent_device()
             .with_context(|| format!("Parent bridge does not exist, dev id {}", dev_id))?;
         let dev = parent_bridge.upgrade().unwrap();
         let locked_dev = dev.lock().unwrap();
         let name = locked_dev.name();
         drop(locked_dev);
         let mut devfn = None;
-        let locked_bus = locked_pci_host.root_bus.lock().unwrap();
-        for (id, dev) in &locked_bus.devices {
+        let bus = locked_pci_host.child_bus().unwrap();
+        let locked_bus = bus.lock().unwrap();
+        for (id, dev) in &locked_bus.child_devices() {
             if dev.lock().unwrap().name() == name {
                 devfn = Some(*id);
                 break;
@@ -1530,12 +1534,11 @@ pub trait MachineOps: MachineLifecycle {
         }
         drop(locked_bus);
         // It's safe to call devfn.unwrap(), because the bus exists.
-        match locked_pci_host.find_device(0, devfn.unwrap()) {
-            Some(dev) => dev
-                .lock()
-                .unwrap()
-                .reset(false)
-                .with_context(|| "Failed to reset bus"),
+        match locked_pci_host.find_device(0, devfn.unwrap() as u8) {
+            Some(dev) => {
+                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+                pci_dev.reset(false).with_context(|| "Failed to reset bus")
+            }
             None => bail!("Failed to found device"),
         }
     }
@@ -1696,7 +1699,7 @@ pub trait MachineOps: MachineLifecycle {
         vm_config: &VmConfig,
         id: Option<&str>,
         dev_type: &str,
-    ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+    ) -> Option<Arc<Mutex<dyn Device>>> {
         let (id_check, id_str) = if id.is_some() {
             (true, format! {"id={}", id.unwrap()})
         } else {
@@ -1712,9 +1715,10 @@ pub trait MachineOps: MachineLifecycle {
             let bdf = get_pci_bdf(cfg_args).ok()?;
             let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
             let pci_host = self.get_pci_host().ok()?;
-            let root_bus = pci_host.lock().unwrap().root_bus.clone();
-            if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
-                return pci_bus.lock().unwrap().get_device(0, devfn);
+            let root_bus = pci_host.lock().unwrap().child_bus().unwrap().clone();
+            if let Some(bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
+                PCI_BUS!(bus, locked_bus, pci_bus);
+                return pci_bus.get_device(0, devfn);
             } else {
                 return None;
             }

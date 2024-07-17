@@ -26,8 +26,8 @@ use devices::pci::config::{
     PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, le_write_u32, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
@@ -57,21 +57,16 @@ pub struct LPCBridge {
 
 impl LPCBridge {
     pub fn new(
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         sys_io: Arc<AddressSpace>,
         reset_req: Arc<EventFd>,
         shutdown_req: Arc<EventFd>,
     ) -> Result<Self> {
         Ok(Self {
             base: PciDevBase {
-                base: DeviceBase::new(
-                    "ICH9 LPC bridge".to_string(),
-                    false,
-                    Some(parent_bus.clone()),
-                ),
+                base: DeviceBase::new("ICH9 LPC bridge".to_string(), false, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
-                parent_bus,
             },
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
@@ -281,14 +276,9 @@ impl PciDevOps for LPCBridge {
         self.init_pm_ctrl_reg()
             .with_context(|| "Fail to init IO region for PM control register")?;
 
-        let parent_bus = self.base.parent_bus.clone();
-        parent_bus
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .devices
-            .insert(0x1F << 3, Arc::new(Mutex::new(self)));
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0x1F << 3, Arc::new(Mutex::new(self)))?;
         Ok(())
     }
 

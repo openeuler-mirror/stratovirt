@@ -21,9 +21,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::pci::config::{CapId, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
 use crate::pci::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciDevBase,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+    PciDevBase,
 };
-use crate::MsiIrqManager;
+use crate::{convert_bus_ref, MsiIrqManager, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
@@ -552,7 +553,7 @@ pub fn init_msix(
     offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
     let config = &mut pcidev_base.config;
-    let parent_bus = &pcidev_base.parent_bus;
+    let parent_bus = pcidev_base.base.parent.as_ref().unwrap();
     if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!(
             "invalid msix vectors, which should be in [1, {}]",
@@ -586,9 +587,9 @@ pub fn init_msix(
     offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
-    let msi_irq_manager = if let Some(pci_bus) = parent_bus.upgrade() {
-        let locked_pci_bus = pci_bus.lock().unwrap();
-        locked_pci_bus.get_msi_irq_manager()
+    let msi_irq_manager = if let Some(bus) = parent_bus.upgrade() {
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        pci_bus.get_msi_irq_manager()
     } else {
         error!("Msi irq controller is none");
         None
@@ -633,21 +634,20 @@ pub fn init_msix(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use super::*;
-    use crate::{
-        pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE},
-        DeviceBase,
-    };
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::pci::host::tests::create_pci_host;
+    use crate::{Device, DeviceBase};
 
     #[test]
     fn test_init_msix() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false, None),
+            base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
-            parent_bus: Weak::new(),
         };
         // Too many vectors.
         assert!(init_msix(
@@ -746,11 +746,13 @@ mod tests {
 
     #[test]
     fn test_write_config() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false, None),
+            base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
-            parent_bus: Weak::new(),
         };
         init_msix(&mut base, 0, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
         let msix = base.config.msix.as_ref().unwrap();

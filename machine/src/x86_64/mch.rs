@@ -24,7 +24,7 @@ use devices::pci::{
     },
     le_read_u64, le_write_u16, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{Device, DeviceBase};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
@@ -51,20 +51,15 @@ pub struct Mch {
 
 impl Mch {
     pub fn new(
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         mmconfig_region: Region,
         mmconfig_ops: RegionOps,
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(
-                    "Memory Controller Hub".to_string(),
-                    false,
-                    Some(parent_bus.clone()),
-                ),
+                base: DeviceBase::new("Memory Controller Hub".to_string(), false, Some(parent_bus)),
                 config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
-                parent_bus,
             },
             mmconfig_region: Some(mmconfig_region),
             mmconfig_ops,
@@ -90,27 +85,17 @@ impl Mch {
         }
 
         if let Some(region) = self.mmconfig_region.as_ref() {
-            self.base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .mem_region
-                .delete_subregion(region)?;
+            let bus = self.parent_bus().unwrap().upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.mem_region.delete_subregion(region)?;
             self.mmconfig_region = None;
         }
         if enable == 0x1 {
             let region = Region::init_io_region(length, self.mmconfig_ops.clone(), "PcieXBar");
             let base_addr: u64 = pciexbar & addr_mask;
-            self.base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .mem_region
-                .add_subregion(region, base_addr)?;
+            let bus = self.parent_bus().unwrap().upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.mem_region.add_subregion(region, base_addr)?;
         }
         Ok(())
     }
@@ -152,14 +137,9 @@ impl PciDevOps for Mch {
             CLASS_CODE_HOST_BRIDGE,
         )?;
 
-        let parent_bus = self.base.parent_bus.clone();
-        parent_bus
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .devices
-            .insert(0, Arc::new(Mutex::new(self)));
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(0, Arc::new(Mutex::new(self)))?;
         Ok(())
     }
 

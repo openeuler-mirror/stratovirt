@@ -14,19 +14,19 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::pci::{PciBus, PciDevOps};
-use crate::Bus;
+use crate::pci::PciBus;
+use crate::{convert_bus_ref, Bus, Device, PCI_BUS};
 
 pub trait HotplugOps: Send {
     /// Plug device, usually called when hot plug device in device_add.
-    fn plug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()>;
+    fn plug(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()>;
 
     /// Unplug device request, usually called when hot unplug device in device_del.
     /// Only send unplug request to the guest OS, without actually removing the device.
-    fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()>;
+    fn unplug_request(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()>;
 
     /// Remove the device.
-    fn unplug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()>;
+    fn unplug(&mut self, dev: &Arc<Mutex<dyn Device>>) -> Result<()>;
 }
 
 /// Plug the device into the bus.
@@ -41,14 +41,14 @@ pub trait HotplugOps: Send {
 /// Return Error if
 /// * No hot plug controller found.
 /// * Device plug failed.
-pub fn handle_plug(bus: &Arc<Mutex<PciBus>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-    let locked_bus = bus.lock().unwrap();
-    if let Some(hpc) = locked_bus.hotplug_controller.as_ref() {
+pub fn handle_plug(bus: &Arc<Mutex<dyn Bus>>, dev: &Arc<Mutex<dyn Device>>) -> Result<()> {
+    PCI_BUS!(bus, locked_bus, pci_bus);
+    if let Some(hpc) = pci_bus.hotplug_controller.as_ref() {
         hpc.upgrade().unwrap().lock().unwrap().plug(dev)
     } else {
         bail!(
             "No hot plug controller found for bus {} when plug",
-            locked_bus.name()
+            pci_bus.name()
         );
     }
 }
@@ -66,18 +66,18 @@ pub fn handle_plug(bus: &Arc<Mutex<PciBus>>, dev: &Arc<Mutex<dyn PciDevOps>>) ->
 /// * No hot plug controller found.
 /// * Device unplug request failed.
 pub fn handle_unplug_pci_request(
-    bus: &Arc<Mutex<PciBus>>,
-    dev: &Arc<Mutex<dyn PciDevOps>>,
+    bus: &Arc<Mutex<dyn Bus>>,
+    dev: &Arc<Mutex<dyn Device>>,
 ) -> Result<()> {
-    let locked_bus = bus.lock().unwrap();
-    let hpc = locked_bus
+    PCI_BUS!(bus, locked_bus, pci_bus);
+    let hpc = pci_bus
         .hotplug_controller
         .as_ref()
         .cloned()
         .with_context(|| {
             format!(
                 "No hot plug controller found for bus {} when unplug request",
-                locked_bus.name()
+                pci_bus.name()
             )
         })?;
     // No need to hold the lock.
