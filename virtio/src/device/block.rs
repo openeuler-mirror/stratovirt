@@ -1746,5 +1746,6 @@ mod tests {
                 break;
             }
         }
+        EventLoop::loop_clean();
     }
 }
