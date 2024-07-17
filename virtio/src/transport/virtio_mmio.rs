@@ -400,7 +400,7 @@ impl SysBusDevOps for VirtioMmioDevice {
                 };
                 LittleEndian::write_u32(data, value);
             }
-            0x100..=0xfff => {
+            0x100..=0x1ff => {
                 if let Err(ref e) = self
                     .device
                     .lock()
@@ -460,7 +460,7 @@ impl SysBusDevOps for VirtioMmioDevice {
                     self.device.lock().unwrap().set_device_activated(true);
                 }
             }
-            0x100..=0xfff => {
+            0x100..=0x1ff => {
                 let mut locked_device = self.device.lock().unwrap();
                 if locked_device.check_device_status(CONFIG_STATUS_DRIVER, CONFIG_STATUS_FAILED) {
                     if let Err(ref e) = locked_device.write_config(offset - 0x100, data) {
@@ -845,7 +845,7 @@ mod tests {
         // read the unknown register
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         assert_eq!(virtio_mmio_device.read(&mut buf[..], addr, 0xf1), false);
-        assert_eq!(virtio_mmio_device.read(&mut buf[..], addr, 0xfff + 1), true);
+        assert_eq!(virtio_mmio_device.read(&mut buf[..], addr, 0x1ff + 1), true);
         assert_eq!(buf, [0xff, 0xff, 0xff, 0xff]);
 
         // read the configuration space of virtio device
