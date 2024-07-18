@@ -1,0 +1,18 @@
+[package]
+name = "code_generator"
+version = "2.4.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+
+[lib]
+name = "code_generator"
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+regex = "1"
+serde = { version = "1.0", features = ["derive"] }
+syn = "2.0.18"
+toml = "0.7"

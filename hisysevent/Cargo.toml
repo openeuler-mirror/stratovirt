@@ -11,6 +11,7 @@ log = "0.4"
 lazy_static = "1.4.0"
 anyhow = "1.0"
 libloading = "0.7.4"
+code_generator = { path = "code_generator" }
 
 [features]
 hisysevent = []

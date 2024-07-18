@@ -13,6 +13,11 @@
 #[cfg(all(target_env = "ohos", feature = "hisysevent"))]
 mod interface;
 
+use code_generator::gen_hisysevent_func;
+
+#[cfg(all(target_env = "ohos", feature = "hisysevent"))]
+use crate::interface::*;
+
 #[macro_export]
 macro_rules! function {
     () => {{
@@ -25,3 +30,5 @@ macro_rules! function {
         &name[..name.len() - off_set]
     }};
 }
+
+gen_hisysevent_func! {}
