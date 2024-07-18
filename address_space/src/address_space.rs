@@ -611,7 +611,7 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is not mapped.
     pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
-        trace::trace_scope_start!(address_space_read, args = (&addr, count));
+        trace::address_space_read(&addr, count);
         let view = self.flat_view.load();
 
         view.read(dst, addr, count)?;
@@ -630,7 +630,7 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is not mapped.
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
-        trace::trace_scope_start!(address_space_write, args = (&addr, count));
+        trace::address_space_write(&addr, count);
         let view = self.flat_view.load();
 
         let mut buf = Vec::new();
@@ -698,10 +698,7 @@ impl AddressSpace {
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
-        trace::trace_scope_start!(
-            address_space_write_direct,
-            args = (host_addr, std::mem::size_of::<T>())
-        );
+        trace::address_space_write_direct(host_addr, std::mem::size_of::<T>());
         // Mark vmm dirty page manually if live migration is active.
         MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
 
@@ -741,10 +738,7 @@ impl AddressSpace {
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
-        trace::trace_scope_start!(
-            address_space_read_direct,
-            args = (host_addr, std::mem::size_of::<T>())
-        );
+        trace::address_space_read_direct(host_addr, std::mem::size_of::<T>());
         let mut obj = T::default();
         let mut dst = obj.as_mut_bytes();
         // SAFETY: host_addr is managed by address_space, it has been verified for legality.
