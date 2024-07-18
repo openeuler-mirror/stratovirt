@@ -315,6 +315,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "code_generator"
+version = "2.4.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "syn 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "const_format"
 version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -762,6 +774,7 @@ name = "hisysevent"
 version = "2.4.0"
 dependencies = [
  "anyhow",
+ "code_generator",
  "lazy_static",
  "libloading",
  "log",
