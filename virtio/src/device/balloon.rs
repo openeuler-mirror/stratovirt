@@ -610,7 +610,6 @@ impl BalloonIoHandler {
     /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the
     /// balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
-        trace::trace_scope_start!(process_balloon_queue);
         let queue = if req_type {
             trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
@@ -647,7 +646,7 @@ impl BalloonIoHandler {
     }
 
     fn reporting_evt_handler(&mut self) -> Result<()> {
-        trace::trace_scope_start!(reporting_evt_handler);
+        trace::reporting_evt_handler();
         let queue = self
             .report_queue
             .as_ref()
@@ -682,7 +681,7 @@ impl BalloonIoHandler {
     }
 
     fn auto_msg_evt_handler(&mut self) -> Result<()> {
-        trace::trace_scope_start!(auto_msg_evt_handler);
+        trace::auto_msg_evt_handler();
         let queue = self
             .msg_queue
             .as_ref()
