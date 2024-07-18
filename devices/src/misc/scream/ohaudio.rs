@@ -297,8 +297,8 @@ impl OhAudioProcess for OhAudioRender {
         match status {
             OhAudioStatus::Paused => return,
             OhAudioStatus::Error => {
-                self.ctx = None;
                 self.set_status(OhAudioStatus::Ready);
+                self.ctx = None;
                 return;
             }
             OhAudioStatus::Started => self.flush(),
@@ -431,8 +431,8 @@ impl OhAudioProcess for OhAudioCapture {
         match status {
             OhAudioStatus::Paused => return,
             _ => {
-                self.ctx = None;
                 self.set_status(OhAudioStatus::Ready);
+                self.ctx = None;
             }
         }
         trace::oh_scream_capture_destroy();
