@@ -57,7 +57,7 @@ impl StreamHandler {
     fn clear_stream(&self) {
         let mut stream = self.stream.try_clone().unwrap();
         stream.set_nonblocking(true).unwrap();
-        stream.read(&mut [0_u8; 1024]);
+        let _ = stream.read(&mut [0_u8; 1024]);
     }
 
     fn read_line(&self, timeout: Duration) -> String {
