@@ -19,7 +19,7 @@ use log::{error, warn};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use util::gen_base_func;
@@ -227,26 +227,8 @@ impl PFlash {
         pflash
             .set_sys_resource(sysbus, region_base, region_size, "PflashRom")
             .with_context(|| "Failed to allocate system resource for PFlash.")?;
+        pflash.set_parent_bus(sysbus.clone());
         Ok(pflash)
-    }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<PFlash>>> {
-        let region_base = self.base.res.region_base;
-        let host_mmap = self.host_mmap.clone();
-        let dev = Arc::new(Mutex::new(self));
-        let region_ops = sysbus.lock().unwrap().build_region_ops(&dev);
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
-        dev.lock().unwrap().rom = Some(rom_region.clone());
-        sysbus
-            .lock()
-            .unwrap()
-            .sys_mem
-            .root()
-            .add_subregion(rom_region, region_base)
-            .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.lock().unwrap().sysbus_attach_child(dev.clone())?;
-
-        Ok(dev)
     }
 
     fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
@@ -699,6 +681,37 @@ impl PFlash {
 
 impl Device for PFlash {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.rom
+            .as_ref()
+            .unwrap()
+            .set_rom_device_romd(true)
+            .with_context(|| "Fail to set PFlash rom region read only")?;
+        self.cmd = 0x00;
+        self.write_cycle = 0;
+        self.status = 0x80;
+        Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let region_base = self.base.res.region_base;
+        let host_mmap = self.host_mmap.clone();
+        let dev = Arc::new(Mutex::new(self));
+        let region_ops = sysbus.build_region_ops(&dev);
+        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
+        dev.lock().unwrap().rom = Some(rom_region.clone());
+        sysbus
+            .sys_mem
+            .root()
+            .add_subregion(rom_region, region_base)
+            .with_context(|| "Failed to attach PFlash to system bus")?;
+        sysbus.sysbus_attach_child(dev.clone())?;
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for PFlash {
@@ -899,18 +912,6 @@ impl SysBusDevOps for PFlash {
             .set_sys(0, region_base, region_size, region_name);
         Ok(())
     }
-
-    fn reset(&mut self) -> Result<()> {
-        self.rom
-            .as_ref()
-            .unwrap()
-            .set_rom_device_romd(true)
-            .with_context(|| "Fail to set PFlash rom region read only")?;
-        self.cmd = 0x00;
-        self.write_cycle = 0;
-        self.status = 0x80;
-        Ok(())
-    }
 }
 
 impl AmlBuilder for PFlash {
@@ -949,7 +950,7 @@ mod test {
             flash_size, fd, sector_len, 4, 2, read_only, &sysbus, flash_base,
         )
         .unwrap();
-        let dev = pflash.realize(&sysbus).unwrap();
+        let dev = pflash.realize().unwrap();
 
         dev
     }

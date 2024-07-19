@@ -22,7 +22,7 @@ use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::config::valid_id;
@@ -244,22 +244,31 @@ pub struct Ramfb {
 }
 
 impl Ramfb {
-    pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
-        Ramfb {
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>, install: bool) -> Self {
+        let mut ramfb = Ramfb {
             base: SysBusDevBase::new(SysBusDevType::Ramfb),
             ramfb_state: RamfbState::new(sys_mem, install),
-        }
-    }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-        Ok(())
+        };
+        ramfb.set_parent_bus(sysbus.clone());
+        ramfb
     }
 }
 
 impl Device for Ramfb {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.ramfb_state.reset_ramfb_state();
+        Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for Ramfb {
@@ -273,11 +282,6 @@ impl SysBusDevOps for Ramfb {
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be written!");
         false
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.ramfb_state.reset_ramfb_state();
-        Ok(())
     }
 }
 

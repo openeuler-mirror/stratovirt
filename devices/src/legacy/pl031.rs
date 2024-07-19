@@ -18,7 +18,7 @@ use byteorder::{ByteOrder, LittleEndian};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use migration::{
@@ -95,21 +95,9 @@ impl PL031 {
         pl031
             .set_sys_resource(sysbus, region_base, region_size, "PL031")
             .with_context(|| LegacyError::SetSysResErr)?;
+        pl031.set_parent_bus(sysbus.clone());
 
         Ok(pl031)
-    }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-
-        MigrationManager::register_device_instance(
-            PL031State::descriptor(),
-            dev,
-            PL031_SNAPSHOT_ID,
-        );
-
-        Ok(())
     }
 
     /// Get current clock value.
@@ -120,6 +108,21 @@ impl PL031 {
 
 impl Device for PL031 {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            PL031State::descriptor(),
+            dev.clone(),
+            PL031_SNAPSHOT_ID,
+        );
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for PL031 {

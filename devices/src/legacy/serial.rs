@@ -18,7 +18,7 @@ use log::{debug, error};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
     AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
@@ -141,31 +141,8 @@ impl Serial {
         serial
             .set_sys_resource(sysbus, region_base, region_size, "Serial")
             .with_context(|| LegacyError::SetSysResErr)?;
+        serial.set_parent_bus(sysbus.clone());
         Ok(serial)
-    }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
-        self.chardev
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize chardev")?;
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-
-        MigrationManager::register_device_instance(
-            SerialState::descriptor(),
-            dev.clone(),
-            SERIAL_SNAPSHOT_ID,
-        );
-        let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
-            None,
-        )
-        .with_context(|| LegacyError::RegNotifierErr)?;
-        Ok(())
     }
 
     fn unpause_rx(&mut self) {
@@ -375,6 +352,33 @@ impl InputReceiver for Serial {
 
 impl Device for Serial {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        self.chardev
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            SerialState::descriptor(),
+            dev.clone(),
+            SERIAL_SNAPSHOT_ID,
+        );
+        let locked_dev = dev.lock().unwrap();
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
+            None,
+        )
+        .with_context(|| LegacyError::RegNotifierErr)?;
+        drop(locked_dev);
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for Serial {

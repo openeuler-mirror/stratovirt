@@ -18,7 +18,8 @@ use crate::micro_common::syscall::syscall_whitelist;
 use crate::{register_shutdown_event, LightMachine, MachineBase, MachineError, MachineOps};
 use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
-use devices::legacy::FwCfgOps;
+use devices::legacy::{FwCfgOps, Serial, SERIAL_ADDR};
+use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 use machine_manager::config::{SerialConfig, VmConfig};
@@ -128,14 +129,13 @@ impl MachineOps for LightMachine {
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
-        use devices::legacy::{Serial, SERIAL_ADDR};
-
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
         let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize serial device.")
+            .realize()
+            .with_context(|| "Failed to realize serial device.")?;
+        Ok(())
     }
 
     fn realize(vm: &Arc<RwLock<Self>>, vm_config: &mut VmConfig) -> Result<()> {

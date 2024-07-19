@@ -165,12 +165,8 @@ impl PvPanicPci {
 
 impl Device for PvPanicPci {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for PvPanicPci {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         le_write_u16(
@@ -222,14 +218,18 @@ impl PciDevOps for PvPanicPci {
             .unwrap()
             .dev_id
             .store(device_id, Ordering::Release);
-        locked_bus.attach_child(devfn as u64, dev)?;
+        locked_bus.attach_child(devfn as u64, dev.clone())?;
 
-        Ok(())
+        Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+impl PciDevOps for PvPanicPci {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();

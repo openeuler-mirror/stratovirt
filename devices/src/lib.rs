@@ -101,9 +101,32 @@ pub trait Device: Any + AsAny + Send + Sync {
         self.device_base().parent.clone()
     }
 
+    fn set_parent_bus(&mut self, bus: Arc<Mutex<dyn Bus>>) {
+        self.device_base_mut().parent = Some(Arc::downgrade(&bus));
+    }
+
     /// Get the bus which this device has.
     fn child_bus(&self) -> Option<Arc<Mutex<dyn Bus>>> {
         self.device_base().child.clone()
+    }
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Realize device.
+    fn realize(self) -> Result<Arc<Mutex<Self>>>
+    where
+        Self: Sized,
+    {
+        // Note: Only PciHost does not have its own realization logic,
+        // but it will not be called.
+        bail!("Realize of the device {} is not implemented", self.name());
+    }
+
+    /// Unrealize device.
+    fn unrealize(&mut self) -> Result<()> {
+        bail!("Unrealize of the device {} is not implemented", self.name());
     }
 }
 
@@ -224,6 +247,18 @@ pub trait Bus: Any + AsAny + Send + Sync {
             .children
             .remove(&key)
             .with_context(|| format!("No such device using key {} in bus {}.", key, self.name()))?;
+
+        Ok(())
+    }
+
+    /// Bus reset means that all devices attached to this bus should reset.
+    fn reset(&self) -> Result<()> {
+        for dev in self.child_devices().values() {
+            let mut locked_dev = dev.lock().unwrap();
+            locked_dev
+                .reset(true)
+                .with_context(|| format!("Failed to reset device {}", locked_dev.name()))?;
+        }
 
         Ok(())
     }

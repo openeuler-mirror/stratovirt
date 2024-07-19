@@ -1002,12 +1002,21 @@ impl VirtioPciDevice {
 
 impl Device for VirtioPciDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for VirtioPciDevice {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        info!("func: reset, id: {:?}", &self.base.base.id);
+        self.deactivate_device();
+        self.device
+            .lock()
+            .unwrap()
+            .reset()
+            .with_context(|| "Failed to reset virtio device")?;
+        self.base.config.reset()?;
 
-    fn realize(mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         info!("func: realize, id: {:?}", &self.base.base.id);
         let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
@@ -1161,9 +1170,13 @@ impl PciDevOps for VirtioPciDevice {
         let bus = parent_bus.upgrade().unwrap();
         bus.lock().unwrap().attach_child(devfn, dev.clone())?;
 
-        MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
+        MigrationManager::register_transport_instance(
+            VirtioPciState::descriptor(),
+            dev.clone(),
+            &name,
+        );
 
-        Ok(())
+        Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
@@ -1182,6 +1195,10 @@ impl PciDevOps for VirtioPciDevice {
 
         Ok(())
     }
+}
+
+impl PciDevOps for VirtioPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         trace::virtio_tpt_read_config(&self.base.base.id, offset as u64, data.len());
@@ -1212,19 +1229,6 @@ impl PciDevOps for VirtioPciDevice {
             Some(&pci_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        info!("func: reset, id: {:?}", &self.base.base.id);
-        self.deactivate_device();
-        self.device
-            .lock()
-            .unwrap()
-            .reset()
-            .with_context(|| "Failed to reset virtio device")?;
-        self.base.config.reset()?;
-
-        Ok(())
     }
 
     fn get_dev_path(&self) -> Option<String> {

@@ -55,14 +55,12 @@ use devices::misc::scream::{Scream, ScreamConfig};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{
-    devices_register_pcidevops_type, register_pcidevops_type, to_pcidevops, PciBus, PciDevOps,
-    PciHost, RootPort, RootPortConfig,
+    devices_register_pcidevops_type, register_pcidevops_type, PciBus, PciDevOps, PciHost, RootPort,
+    RootPortConfig,
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
-use devices::sysbus::{
-    devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevOps, SysBusDevType,
-};
+use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
@@ -77,7 +75,7 @@ use devices::usb::UsbDevice;
 use devices::InterruptController;
 use devices::ScsiBus::get_scsi_key;
 use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
-use devices::{convert_bus_ref, Bus, Device, PCI_BUS, PCI_BUS_DEVICE, SYS_BUS_DEVICE};
+use devices::{convert_bus_ref, Bus, Device, PCI_BUS, SYS_BUS_DEVICE};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -957,18 +955,15 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     fn reset_all_devices(&mut self) -> Result<()> {
-        for dev in self.get_sysbus_devices().values() {
-            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
-            sysbusdev
-                .reset()
-                .with_context(|| "Fail to reset sysbus device")?;
-        }
+        let sysbus = self.machine_base().sysbus.clone();
+        sysbus.lock().unwrap().reset()?;
 
+        // Todo: this logic will be deleted after deleting pci_host in machine struct.
         if let Ok(pci_host) = self.get_pci_host() {
             pci_host
                 .lock()
                 .unwrap()
-                .reset()
+                .reset(true)
                 .with_context(|| "Fail to reset pci host")?;
         }
 
@@ -1226,16 +1221,15 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Wrong! Two scsi devices have the same scsi-id and lun!");
         }
         let iothread = cntlr.config.iothread.clone();
-
-        let device = Arc::new(Mutex::new(ScsiDevice::new(
+        let scsi_device = ScsiDevice::new(
             device_cfg.clone(),
             drive_arg,
             self.get_drive_files(),
             iothread,
-        )));
-        device.lock().unwrap().realize()?;
-        bus.lock().unwrap().attach_child(key, device.clone())?;
-        device.lock().unwrap().base.parent = Some(Arc::downgrade(bus) as Weak<Mutex<dyn Bus>>);
+            bus.clone(),
+        );
+        let device = scsi_device.realize()?;
+        bus.lock().unwrap().attach_child(key, device)?;
 
         if let Some(bootindex) = device_cfg.bootindex {
             // Eg: OpenFirmware device path(virtio-scsi disk):
@@ -1535,10 +1529,11 @@ pub trait MachineOps: MachineLifecycle {
         drop(locked_bus);
         // It's safe to call devfn.unwrap(), because the bus exists.
         match locked_pci_host.find_device(0, devfn.unwrap() as u8) {
-            Some(dev) => {
-                PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
-                pci_dev.reset(false).with_context(|| "Failed to reset bus")
-            }
+            Some(dev) => dev
+                .lock()
+                .unwrap()
+                .reset(false)
+                .with_context(|| "Failed to reset bus"),
             None => bail!("Failed to found device"),
         }
     }
@@ -1950,7 +1945,8 @@ pub trait MachineOps: MachineLifecycle {
         let sys_mem = self.get_sys_mem().clone();
         let demo_dev = DemoDev::new(config, devfn, sys_mem, parent_bus);
 
-        demo_dev.realize()
+        demo_dev.realize()?;
+        Ok(())
     }
 
     /// Return the syscall whitelist for seccomp.

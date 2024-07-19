@@ -19,7 +19,7 @@ use crate::{register_shutdown_event, LightMachine, MachineOps};
 use address_space::{AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
-use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
+use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
 use machine_manager::config::{Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
@@ -112,8 +112,9 @@ impl MachineOps for LightMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )?;
         pl031
-            .realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize pl031.")
+            .realize()
+            .with_context(|| "Failed to realize pl031.")?;
+        Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
@@ -121,9 +122,7 @@ impl MachineOps for LightMachine {
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
         let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
             .with_context(|| "Failed to create PL011")?;
-        pl011
-            .realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize PL011")?;
+        pl011.realize().with_context(|| "Failed to realize PL011")?;
         let mut bs = self.base.boot_source.lock().unwrap();
         bs.kernel_cmdline.push(Param {
             param_type: "earlycon".to_string(),

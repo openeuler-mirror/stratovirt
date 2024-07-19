@@ -20,7 +20,7 @@ use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AcpiLocalApic, AmlAcquire, AmlAddressSpaceType, AmlArg, AmlBuffer, AmlBuilder,
     AmlCallWithArgs1, AmlCallWithArgs2, AmlCallWithArgs4, AmlDevice, AmlEisaId, AmlEqual, AmlField,
@@ -107,15 +107,9 @@ impl CpuController {
             .set_sys_resource(sysbus, region_base, region_size, "CPUController")
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
         cpu_controller.set_boot_vcpu(boot_vcpus)?;
+        cpu_controller.set_parent_bus(sysbus.clone());
 
         Ok(cpu_controller)
-    }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<CpuController>>> {
-        let dev = Arc::new(Mutex::new(self));
-        let ret_dev = dev.clone();
-        sysbus.lock().unwrap().attach_device(&dev)?;
-        Ok(ret_dev)
     }
 
     fn eject_cpu(&mut self, vcpu_id: u8) -> Result<()> {
@@ -254,6 +248,14 @@ impl CpuController {
 
 impl Device for CpuController {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for CpuController {

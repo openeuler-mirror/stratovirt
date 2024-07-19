@@ -19,7 +19,7 @@ use log::info;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldAccessType,
     AmlFieldLockRule, AmlFieldUnit, AmlFieldUpdateRule, AmlIndex, AmlInteger, AmlMethod, AmlName,
@@ -99,6 +99,7 @@ impl PowerDev {
         };
         pdev.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
+        pdev.set_parent_bus(sysbus.clone());
         Ok(pdev)
     }
 
@@ -183,27 +184,6 @@ impl PowerDev {
     fn send_power_event(&self, evt: AcpiEvent) {
         self.ged.lock().unwrap().inject_acpi_event(evt);
     }
-
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-
-        let pdev_available: bool;
-        {
-            let mut pdev = dev.lock().unwrap();
-            pdev_available = pdev.power_battery_init_info().is_ok();
-            if pdev_available {
-                pdev.send_power_event(AcpiEvent::BatteryInf);
-            }
-        }
-        if pdev_available {
-            power_status_update(&dev);
-        } else {
-            let mut pdev = dev.lock().unwrap();
-            pdev.power_load_static_status();
-        }
-        Ok(())
-    }
 }
 
 impl StateTransfer for PowerDev {
@@ -231,6 +211,30 @@ impl MigrationHook for PowerDev {
 
 impl Device for PowerDev {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        let pdev_available: bool;
+        {
+            let mut pdev = dev.lock().unwrap();
+            pdev_available = pdev.power_battery_init_info().is_ok();
+            if pdev_available {
+                pdev.send_power_event(AcpiEvent::BatteryInf);
+            }
+        }
+        if pdev_available {
+            power_status_update(&dev);
+        } else {
+            let mut pdev = dev.lock().unwrap();
+            pdev.power_load_static_status();
+        }
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for PowerDev {

@@ -172,14 +172,6 @@ pub trait PciDevOps: Device + Send {
         Ok(())
     }
 
-    /// Realize PCI/PCIe device.
-    fn realize(self) -> Result<()>;
-
-    /// Unrealize PCI/PCIe device.
-    fn unrealize(&mut self) -> Result<()> {
-        bail!("Unrealize of the pci device is not implemented");
-    }
-
     /// Configuration space read.
     ///
     /// # Arguments
@@ -211,11 +203,6 @@ pub trait PciDevOps: Device + Send {
     fn set_dev_id(&self, bus_num: u8, devfn: u8) -> u16 {
         let bus_shift: u16 = 8;
         ((bus_num as u16) << bus_shift) | (devfn as u16)
-    }
-
-    /// Reset device
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Ok(())
     }
 
     /// Get the path of the PCI bus where the device resides.
@@ -433,6 +420,25 @@ mod tests {
 
     impl Device for TestPciDevice {
         gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+        fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+            let devfn = self.base.devfn as u64;
+            self.init_write_mask(false)?;
+            self.init_write_clear_mask(false)?;
+
+            let dev = Arc::new(Mutex::new(self));
+            let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+            parent_bus
+                .lock()
+                .unwrap()
+                .attach_child(devfn, dev.clone())?;
+
+            Ok(dev)
+        }
+
+        fn unrealize(&mut self) -> Result<()> {
+            Ok(())
+        }
     }
 
     impl PciDevOps for TestPciDevice {
@@ -447,22 +453,6 @@ mod tests {
                 None,
                 None,
             );
-        }
-
-        fn realize(mut self) -> Result<()> {
-            let devfn = self.base.devfn as u64;
-            self.init_write_mask(false)?;
-            self.init_write_clear_mask(false)?;
-
-            let dev = Arc::new(Mutex::new(self));
-            let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
-            parent_bus.lock().unwrap().attach_child(devfn, dev)?;
-
-            Ok(())
-        }
-
-        fn unrealize(&mut self) -> Result<()> {
-            Ok(())
         }
 
         fn init_write_mask(&mut self, _is_bridge: bool) -> Result<()> {

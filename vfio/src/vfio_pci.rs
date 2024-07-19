@@ -815,12 +815,14 @@ impl VfioPciDevice {
 
 impl Device for VfioPciDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
-}
 
-impl PciDevOps for VfioPciDevice {
-    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+            "Fail to reset vfio dev"
+        })
+    }
 
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
@@ -866,9 +868,9 @@ impl PciDevOps for VfioPciDevice {
         let dev = Arc::new(Mutex::new(self));
         let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = parent_bus.lock().unwrap();
-        locked_bus.attach_child(devfn, dev)?;
+        locked_bus.attach_child(devfn, dev.clone())?;
 
-        Ok(())
+        Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
@@ -878,6 +880,10 @@ impl PciDevOps for VfioPciDevice {
         }
         Ok(())
     }
+}
+
+impl PciDevOps for VfioPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
@@ -987,12 +993,6 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         }
-    }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
-            "Fail to reset vfio dev"
-        })
     }
 }
 

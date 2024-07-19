@@ -17,7 +17,7 @@ use anyhow::Result;
 use log::{debug, error, warn};
 
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlBuilder, AmlDevice, AmlEisaId, AmlIoDecode, AmlIoResource, AmlIrqNoFlags, AmlNameDecl,
     AmlResTemplate, AmlScopeBuilder,
@@ -143,6 +143,7 @@ impl RTC {
         rtc.init_rtc_reg();
 
         rtc.set_sys_resource(sysbus, RTC_PORT_INDEX, 8, "RTC")?;
+        rtc.set_parent_bus(sysbus.clone());
 
         Ok(rtc)
     }
@@ -264,12 +265,6 @@ impl RTC {
         true
     }
 
-    pub fn realize(self, sysbus: &Arc<Mutex<SysBus>>) -> Result<()> {
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-        Ok(())
-    }
-
     /// Get current clock value.
     fn get_current_value(&self) -> i64 {
         (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
@@ -346,6 +341,21 @@ impl RTC {
 
 impl Device for RTC {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.cmos_data.fill(0);
+        self.init_rtc_reg();
+        self.set_memory(self.mem_size, self.gap_start);
+        Ok(())
+    }
+
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for RTC {
@@ -371,13 +381,6 @@ impl SysBusDevOps for RTC {
         } else {
             self.write_data(data)
         }
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.cmos_data.fill(0);
-        self.init_rtc_reg();
-        self.set_memory(self.mem_size, self.gap_start);
-        Ok(())
     }
 }
 

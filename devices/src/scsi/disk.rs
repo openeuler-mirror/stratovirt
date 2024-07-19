@@ -24,6 +24,8 @@ use machine_manager::event_loop::EventLoop;
 use util::aio::{Aio, AioEngine, WriteZeroesState};
 use util::gen_base_func;
 
+use super::bus::ScsiBus;
+
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
 pub const SCSI_TYPE_TAPE: u32 = 0x01;
@@ -133,6 +135,61 @@ impl ScsiDevState {
 
 impl Device for ScsiDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base);
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        match self.scsi_type {
+            SCSI_TYPE_DISK => {
+                self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
+                self.state.product = "STRA HARDDISK".to_string();
+            }
+            SCSI_TYPE_ROM => {
+                self.block_size = SCSI_CDROM_DEFAULT_BLOCK_SIZE;
+                self.state.product = "STRA CDROM".to_string();
+            }
+            _ => {
+                bail!("Scsi type {} does not support now", self.scsi_type);
+            }
+        }
+
+        if let Some(serial) = &self.dev_cfg.serial {
+            self.state.serial = serial.clone();
+        }
+
+        let drive_files = self.drive_files.lock().unwrap();
+        // File path can not be empty string. And it has also been checked in command parsing by using `Clap`.
+        let file = VmConfig::fetch_drive_file(&drive_files, &self.drive_cfg.path_on_host)?;
+
+        let alignments = VmConfig::fetch_drive_align(&drive_files, &self.drive_cfg.path_on_host)?;
+        self.req_align = alignments.0;
+        self.buf_align = alignments.1;
+        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
+        drop(drive_files);
+
+        let mut thread_pool = None;
+        if self.drive_cfg.aio != AioEngine::Off {
+            thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
+        }
+        let aio = Aio::new(Arc::new(aio_complete_cb), self.drive_cfg.aio, thread_pool)?;
+        let conf = BlockProperty {
+            id: drive_id,
+            format: self.drive_cfg.format,
+            iothread: self.iothread.clone(),
+            direct: self.drive_cfg.direct,
+            req_align: self.req_align,
+            buf_align: self.buf_align,
+            discard: false,
+            write_zeroes: WriteZeroesState::Off,
+            l2_cache_size: self.drive_cfg.l2_cache_size,
+            refcount_cache_size: self.drive_cfg.refcount_cache_size,
+        };
+        let backend = create_block_backend(file, aio, conf)?;
+        let disk_size = backend.lock().unwrap().disk_size()?;
+        self.block_backend = Some(backend);
+        self.disk_sectors = disk_size >> SECTOR_SHIFT;
+
+        let dev = Arc::new(Mutex::new(self));
+        Ok(dev)
+    }
 }
 
 /// Convert from Arc<Mutex<dyn Device>> to &ScsiDevice.
@@ -143,6 +200,7 @@ macro_rules! SCSI_DEVICE {
     };
 }
 
+#[derive(Default)]
 pub struct ScsiDevice {
     pub base: DeviceBase,
     /// Configuration of the scsi device.
@@ -181,80 +239,27 @@ impl ScsiDevice {
         drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
         iothread: Option<String>,
+        scsi_bus: Arc<Mutex<ScsiBus>>,
     ) -> ScsiDevice {
         let scsi_type = match dev_cfg.classtype.as_str() {
             "scsi-hd" => SCSI_TYPE_DISK,
             _ => SCSI_TYPE_ROM,
         };
 
-        ScsiDevice {
+        let mut scsi_dev = ScsiDevice {
             base: DeviceBase::new(dev_cfg.id.clone(), false, None),
             dev_cfg,
             drive_cfg,
             state: ScsiDevState::new(),
-            block_backend: None,
             req_align: 1,
             buf_align: 1,
-            disk_sectors: 0,
-            block_size: 0,
             scsi_type,
             drive_files,
-            aio: None,
             iothread,
-        }
-    }
-
-    pub fn realize(&mut self) -> Result<()> {
-        match self.scsi_type {
-            SCSI_TYPE_DISK => {
-                self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
-                self.state.product = "STRA HARDDISK".to_string();
-            }
-            SCSI_TYPE_ROM => {
-                self.block_size = SCSI_CDROM_DEFAULT_BLOCK_SIZE;
-                self.state.product = "STRA CDROM".to_string();
-            }
-            _ => {
-                bail!("Scsi type {} does not support now", self.scsi_type);
-            }
-        }
-
-        if let Some(serial) = &self.dev_cfg.serial {
-            self.state.serial = serial.clone();
-        }
-
-        let drive_files = self.drive_files.lock().unwrap();
-        // File path can not be empty string. And it has also been checked in command parsing by using `Clap`.
-        let file = VmConfig::fetch_drive_file(&drive_files, &self.drive_cfg.path_on_host)?;
-
-        let alignments = VmConfig::fetch_drive_align(&drive_files, &self.drive_cfg.path_on_host)?;
-        self.req_align = alignments.0;
-        self.buf_align = alignments.1;
-        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
-
-        let mut thread_pool = None;
-        if self.drive_cfg.aio != AioEngine::Off {
-            thread_pool = Some(EventLoop::get_ctx(None).unwrap().thread_pool.clone());
-        }
-        let aio = Aio::new(Arc::new(aio_complete_cb), self.drive_cfg.aio, thread_pool)?;
-        let conf = BlockProperty {
-            id: drive_id,
-            format: self.drive_cfg.format,
-            iothread: self.iothread.clone(),
-            direct: self.drive_cfg.direct,
-            req_align: self.req_align,
-            buf_align: self.buf_align,
-            discard: false,
-            write_zeroes: WriteZeroesState::Off,
-            l2_cache_size: self.drive_cfg.l2_cache_size,
-            refcount_cache_size: self.drive_cfg.refcount_cache_size,
+            ..Default::default()
         };
-        let backend = create_block_backend(file, aio, conf)?;
-        let disk_size = backend.lock().unwrap().disk_size()?;
-        self.block_backend = Some(backend);
-        self.disk_sectors = disk_size >> SECTOR_SHIFT;
-
-        Ok(())
+        scsi_dev.set_parent_bus(scsi_bus);
+        scsi_dev
     }
 }
 

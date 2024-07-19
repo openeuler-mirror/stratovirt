@@ -175,6 +175,14 @@ impl Bus for SysBus {
     gen_base_func!(bus_base, bus_base_mut, BusBase, base);
 }
 
+/// Convert from Arc<Mutex<dyn Bus>> to &mut SysBus.
+#[macro_export]
+macro_rules! MUT_SYS_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_mut!($trait_bus, $lock_bus, $struct_bus, SysBus);
+    };
+}
+
 #[derive(Clone)]
 pub struct SysRes {
     // Note: region_base/region_size are both 0 means that this device doesn't have its own memory layout.
@@ -330,10 +338,6 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder {
                 e
             )
         });
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        Ok(())
     }
 }
 

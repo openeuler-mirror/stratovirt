@@ -46,10 +46,6 @@ pub struct PciBus {
     pub msi_irq_manager: Option<Arc<dyn MsiIrqManager>>,
 }
 
-impl Bus for PciBus {
-    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
-}
-
 /// Convert from Arc<Mutex<dyn Bus>> to &mut PciBus.
 #[macro_export]
 macro_rules! MUT_PCI_BUS {
@@ -64,6 +60,26 @@ macro_rules! PCI_BUS {
     ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
         convert_bus_ref!($trait_bus, $lock_bus, $struct_bus, PciBus);
     };
+}
+
+impl Bus for PciBus {
+    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
+
+    fn reset(&self) -> Result<()> {
+        for dev in self.child_devices().values() {
+            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
+            pci_dev
+                .reset(false)
+                .with_context(|| format!("Fail to reset pci dev {}", pci_dev.name()))?;
+
+            if let Some(bus) = pci_dev.child_bus() {
+                MUT_PCI_BUS!(bus, locked_bus, pci_bus);
+                pci_bus.reset().with_context(|| "Fail to reset child bus")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl PciBus {
@@ -221,22 +237,6 @@ impl PciBus {
         locked_bus
             .detach_child(devfn)
             .with_context(|| format!("Device {} not found in the bus", pci_dev.name()))?;
-
-        Ok(())
-    }
-
-    pub fn reset(&mut self) -> Result<()> {
-        for dev in self.child_devices().values() {
-            PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
-            pci_dev
-                .reset(false)
-                .with_context(|| format!("Fail to reset pci dev {}", pci_dev.name()))?;
-
-            if let Some(bus) = pci_dev.child_bus() {
-                MUT_PCI_BUS!(bus, locked_bus, pci_bus);
-                pci_bus.reset().with_context(|| "Fail to reset child bus")?;
-            }
-        }
 
         Ok(())
     }

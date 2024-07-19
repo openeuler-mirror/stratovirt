@@ -36,7 +36,7 @@ use devices::legacy::{
     error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
-use devices::pci::{PciBus, PciDevOps, PciHost};
+use devices::pci::{PciBus, PciHost};
 use devices::{convert_bus_mut, Device, MUT_PCI_BUS};
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
@@ -191,7 +191,8 @@ impl StdMachine {
             .with_context(|| "Fail to register reset event in LPC")?;
         register_shutdown_event(ich.shutdown_req.clone(), vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
-        ich.realize()
+        ich.realize()?;
+        Ok(())
     }
 
     pub fn get_vcpu_reg_val(&self, _addr: u64, _vcpu: usize) -> Option<u128> {
@@ -226,7 +227,7 @@ impl StdMachine {
             self.base.cpus.clone(),
         )?;
         let realize_controller = cpu_controller
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize Cpu Controller")?;
         self.register_hotplug_vcpu_event(hotplug_cpu_req, vm)?;
         self.cpu_controller = Some(realize_controller);
@@ -268,7 +269,8 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
-        mch.realize()
+        mch.realize()?;
+        Ok(())
     }
 
     fn add_fwcfg_device(
@@ -286,7 +288,8 @@ impl StdMachineOps for StdMachine {
             .add_file_entry("bootorder", boot_order)
             .with_context(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &self.base.sysbus)
+        let fwcfg_dev = fwcfg
+            .realize()
             .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
@@ -441,8 +444,9 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        rtc.realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize RTC device")
+        rtc.realize()
+            .with_context(|| "Failed to realize RTC device")?;
+        Ok(())
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
@@ -457,8 +461,7 @@ impl MachineOps for StdMachine {
             ged_event,
         )?;
 
-        ged.realize(&self.base.sysbus)
-            .with_context(|| "Failed to realize Ged")?;
+        ged.realize().with_context(|| "Failed to realize Ged")?;
         Ok(())
     }
 
@@ -467,7 +470,7 @@ impl MachineOps for StdMachine {
         let region_size: u64 = 8;
         let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&self.base.sysbus)
+            .realize()
             .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
@@ -623,7 +626,7 @@ impl MachineOps for StdMachine {
             )
             .with_context(|| MachineError::InitPflashErr)?;
             pflash
-                .realize(&self.base.sysbus)
+                .realize()
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_end -= pfl_size;
         }

@@ -27,7 +27,7 @@ use crate::{
 };
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use devices::{Device, DeviceBase};
+use devices::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -159,22 +159,9 @@ impl VirtioMmioDevice {
             interrupt_cb: None,
         };
         mmio_device.set_sys_resource(sysbus, region_base, region_size, "VirtioMmio")?;
+        mmio_device.set_parent_bus(sysbus.clone());
 
         Ok(mmio_device)
-    }
-
-    pub fn realize(mut self, sysbus: &Arc<Mutex<SysBus>>) -> Result<Arc<Mutex<Self>>> {
-        self.assign_interrupt_cb();
-        self.device
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize virtio.")?;
-
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.lock().unwrap().attach_device(&dev)?;
-
-        Ok(dev)
     }
 
     /// Activate the virtio device, this function is called by vcpu thread when frontend
@@ -375,6 +362,22 @@ impl VirtioMmioDevice {
 
 impl Device for VirtioMmioDevice {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        self.assign_interrupt_cb();
+        self.device
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize virtio.")?;
+
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        Ok(dev)
+    }
 }
 
 impl SysBusDevOps for VirtioMmioDevice {
