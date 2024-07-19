@@ -461,6 +461,15 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .required(false),
         )
         .arg(
+            Arg::with_name("hardware-signature")
+            .multiple(false)
+            .long("hardware-signature")
+            .value_name("<32bit integer>")
+            .help("set ACPI Hardware Signature")
+            .takes_value(true)
+            .required(false),
+        )
+        .arg(
             Arg::with_name("smbios")
             .multiple(true)
             .long("smbios")
@@ -576,6 +585,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
         vm_cfg,
         add_kernel_cmdline,
         vec
+    );
+    add_args_to_config!(
+        (args.value_of("hardware-signature")),
+        vm_cfg,
+        add_hw_signature
     );
     add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
     add_args_to_config_multi!((args.values_of("object")), vm_cfg, add_object);
