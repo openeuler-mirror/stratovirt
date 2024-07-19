@@ -708,6 +708,11 @@ fn blk_all_features() {
         let device_args = Rc::new(String::from(
             ",multifunction=on,serial=111111,num-queues=4,bootindex=1,iothread=iothread1",
         ));
+        #[cfg(target_env = "ohos")]
+        let drive_args = Rc::new(String::from(
+            ",direct=false,readonly=off,throttling.iops-total=1024",
+        ));
+        #[cfg(not(target_env = "ohos"))]
         let drive_args = if aio_probe(AioEngine::IoUring).is_ok() {
             Rc::new(String::from(
                 ",direct=on,aio=io_uring,readonly=off,throttling.iops-total=1024",
@@ -1038,16 +1043,18 @@ fn blk_iops() {
 ///   1/2/3: success.
 #[test]
 fn blk_with_different_aio() {
-    const BLOCK_DRIVER_CFG: [(ImageType, &str, AioEngine); 6] = [
+    let block_driver_cfg: Vec<(ImageType, &str, AioEngine)> = vec![
         (ImageType::Raw, "off", AioEngine::Off),
         (ImageType::Qcow2, "off", AioEngine::Off),
         (ImageType::Raw, "off", AioEngine::Threads),
         (ImageType::Qcow2, "off", AioEngine::Threads),
+        #[cfg(not(target_env = "ohos"))]
         (ImageType::Raw, "on", AioEngine::Native),
+        #[cfg(not(target_env = "ohos"))]
         (ImageType::Raw, "on", AioEngine::IoUring),
     ];
 
-    for (image_type, direct, aio_engine) in BLOCK_DRIVER_CFG {
+    for (image_type, direct, aio_engine) in block_driver_cfg {
         println!("Image type: {:?}", image_type);
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1, &image_type));
         let device_args = Rc::new(String::from(""));
@@ -1106,6 +1113,7 @@ fn blk_with_different_aio() {
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn blk_aio_io_uring() {
     for image_type in ImageType::IMAGE_TYPE {
