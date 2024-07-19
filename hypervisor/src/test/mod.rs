@@ -41,7 +41,7 @@ use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, Trigger
 use devices::{GICVersion, GICv3, ICGICConfig, InterruptController, GIC_IRQ_INTERNAL};
 use machine_manager::machine::HypervisorType;
 use migration::{MigrateMemSlot, MigrateOps};
-use util::test_helper::{IntxInfo, MsixMsg, TEST_INTX_LIST, TEST_MSIX_LIST};
+use util::test_helper::{add_msix_msg, IntxInfo, TEST_INTX_LIST};
 
 pub struct TestHypervisor {}
 
@@ -301,19 +301,6 @@ impl TestInterruptManager {
     pub fn arch_map_irq(&self, gsi: u32) -> u32 {
         gsi + GIC_IRQ_INTERNAL
     }
-
-    pub fn add_msix_msg(addr: u64, data: u32) {
-        let new_msg = MsixMsg::new(addr, data);
-        let mut msix_list_lock = TEST_MSIX_LIST.lock().unwrap();
-
-        for msg in msix_list_lock.iter() {
-            if new_msg.addr == msg.addr && new_msg.data == msg.data {
-                return;
-            }
-        }
-
-        msix_list_lock.push(new_msg);
-    }
 }
 
 impl LineIrqManager for TestInterruptManager {
@@ -405,7 +392,7 @@ impl MsiIrqManager for TestInterruptManager {
         let data = vector.msg_data;
         let mut addr: u64 = vector.msg_addr_hi as u64;
         addr = (addr << 32) + vector.msg_addr_lo as u64;
-        TestInterruptManager::add_msix_msg(addr, data);
+        add_msix_msg(addr, data);
         Ok(())
     }
 
