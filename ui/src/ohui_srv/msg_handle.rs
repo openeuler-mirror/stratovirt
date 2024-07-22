@@ -57,7 +57,6 @@ fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
 struct WindowState {
     width: u32,
     height: u32,
-    led_state: Option<u8>,
 }
 
 impl WindowState {
@@ -96,19 +95,10 @@ impl WindowState {
         input_point_sync()
     }
 
-    fn update_host_ledstate(&mut self, led: u8) {
-        self.led_state = Some(led);
-    }
-
-    fn sync_kbd_led_state(&mut self) -> Result<()> {
-        if self.led_state.is_none() {
-            return Ok(());
-        }
-
-        let host_stat = self.led_state.unwrap();
+    fn sync_kbd_led_state(&mut self, led: u8) -> Result<()> {
         let guest_stat = get_kbd_led_state();
-        if host_stat != guest_stat {
-            let sync_bits = host_stat ^ guest_stat;
+        if led != guest_stat {
+            let sync_bits = led ^ guest_stat;
             if (sync_bits & CAPS_LOCK_LED) != 0 {
                 trigger_key(KEYCODE_CAPS_LOCK)?;
             }
@@ -119,7 +109,6 @@ impl WindowState {
                 trigger_key(KEYCODE_SCR_LOCK)?;
             }
         }
-        self.led_state = None;
         Ok(())
     }
 }
@@ -260,8 +249,7 @@ impl OhUiMsgHandler {
         self.state
             .lock()
             .unwrap()
-            .update_host_ledstate(ke.led_state);
-        self.state.lock().unwrap().sync_kbd_led_state()?;
+            .sync_kbd_led_state(ke.led_state)?;
         let hmkey = ke.keycode;
         let keycode = match self.hmcode2svcode.get(&hmkey) {
             Some(k) => *k,
@@ -304,14 +292,6 @@ impl OhUiMsgHandler {
             }
         }
         trace::oh_event_windowinfo(wi.width, wi.height);
-    }
-
-    fn handle_ledstate(&self, led: &LedstateEvent) {
-        self.state
-            .lock()
-            .unwrap()
-            .update_host_ledstate(led.state as u8);
-        trace::oh_event_ledstate(led.state);
     }
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {
