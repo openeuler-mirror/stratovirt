@@ -564,7 +564,17 @@ impl SerialPortHandler {
                 let locked_port = port.lock().unwrap();
                 let locked_cdev = locked_port.chardev.lock().unwrap();
                 if locked_cdev.outbuf_is_full() {
+                    // disable further notifications until space appears
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, true)
+                        .with_context(|| "Failed to disable tx queue notify")?;
                     break;
+                } else {
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, false)
+                        .with_context(|| "Failed to enable tx queue notify")?;
                 }
             }
             if self.migrating.load(Ordering::SeqCst) {
