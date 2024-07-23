@@ -315,6 +315,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "code_generator"
+version = "2.4.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "syn 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "const_format"
 version = "0.2.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -756,6 +768,17 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hisysevent"
+version = "2.4.0"
+dependencies = [
+ "anyhow",
+ "code_generator",
+ "lazy_static",
+ "libloading",
+ "log",
+]
 
 [[package]]
 name = "hypervisor"
@@ -1584,6 +1607,7 @@ name = "stratovirt"
 version = "2.4.0"
 dependencies = [
  "anyhow",
+ "hisysevent",
  "log",
  "machine",
  "machine_manager",

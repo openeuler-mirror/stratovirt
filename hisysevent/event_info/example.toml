@@ -1,0 +1,5 @@
+[[events]]
+name = "example"
+event_type = "Behavior"
+args = "example_bool: bool, example_str: String, example_integer: u32, example_array: &[u8]"
+enabled = true
