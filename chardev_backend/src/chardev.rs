@@ -270,6 +270,10 @@ impl Chardev {
         self.outbuf.len() == self.outbuf.capacity()
     }
 
+    pub fn outbuf_free_size(&self) -> usize {
+        self.outbuf.capacity() - self.outbuf.len()
+    }
+
     pub fn fill_outbuf(&mut self, buf: Vec<u8>, listener_fd: Option<Arc<EventFd>>) -> Result<()> {
         match self.backend {
             ChardevType::File { .. } | ChardevType::Pty { .. } | ChardevType::Stdio { .. } => {
@@ -278,15 +282,10 @@ impl Chardev {
                 }
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
-            ChardevType::Socket { .. } => {
-                if self.output.is_none() {
-                    warn!("Output is none. Discard outbuf data.");
-                    return Ok(());
-                }
-                if listener_fd.is_none() {
-                    return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
-                }
-            }
+            ChardevType::Socket { .. } => (),
+        }
+        if self.output.is_none() {
+            return Ok(());
         }
 
         if self.outbuf_is_full() {
@@ -297,6 +296,10 @@ impl Chardev {
         let _ = self.kick_out_evt.as_ref().write(1);
 
         Ok(())
+    }
+
+    pub fn set_outbuf_listener(&mut self, listener_fd: Option<Arc<EventFd>>) {
+        self.output_listener_fd = listener_fd;
     }
 
     fn consume_outbuf(&mut self) -> Result<()> {
@@ -645,10 +648,9 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             send_buffers_cb()
         });
 
-        let send_buffers_cb = send_buffers.clone();
         let send_handler = Rc::new(move |_event, fd| {
             read_fd(fd);
-            send_buffers_cb()
+            send_buffers()
         });
 
         Some(vec![
