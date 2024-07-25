@@ -54,6 +54,12 @@ impl StreamHandler {
             .unwrap();
     }
 
+    fn clear_stream(&self) {
+        let mut stream = self.stream.try_clone().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        stream.read(&mut [0_u8; 1024]);
+    }
+
     fn read_line(&self, timeout: Duration) -> String {
         let start = Instant::now();
         let mut resp = self.read_buffer.borrow_mut();
@@ -137,6 +143,7 @@ impl TestState {
 
     pub fn qmp(&self, cmd: &str) -> Value {
         let timeout = Duration::from_secs(10);
+        self.qmp_sock.clear_stream();
         self.qmp_sock.write_line(cmd);
         serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap()
     }
