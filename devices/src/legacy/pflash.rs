@@ -69,11 +69,10 @@ impl PFlash {
         read_only: bool,
     ) -> Result<u64> {
         // We don't have to occupy the whole memory region.
-        // If flash is read-only, expose just real data size,
-        // rounded up to page_size
+        // Expose just real data size, rounded up to page_size.
         if let Some(fd) = backend.as_ref() {
             let len = fd.as_ref().metadata().unwrap().len();
-            if len > region_max_size || len == 0 || (!read_only && len != region_max_size) {
+            if len > region_max_size || len == 0 || (!read_only && len % host_page_size() != 0) {
                 bail!(
                     "Invalid flash file: Region size 0x{region_max_size:X}, file size 0x{len:X}; read_only {read_only}"
                 );
