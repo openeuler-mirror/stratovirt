@@ -40,6 +40,10 @@ pub struct UiContext {
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 fn get_dir_path(p: &str) -> Result<String> {
+    if cfg!(debug_assertions) {
+        return Ok(p.to_string());
+    }
+
     let path = std::fs::canonicalize(p)
         .with_context(|| format!("Failed to get real directory path: {:?}", p))?;
     if !path.exists() {
@@ -81,7 +85,7 @@ pub struct DisplayConfig {
     pub sock_path: String,
     /// Define the directory path for OHUI framebuffer and cursor.
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-    #[arg(long, alias = "ui-path", default_value = "/dev/shm/hwf/", value_parser = get_dir_path)]
+    #[arg(long, alias = "ui-path", default_value_if("display_type", "ohui", "/dev/shm/hwf/"), default_value = "/tmp/", value_parser = get_dir_path)]
     pub ui_path: String,
 }
 
