@@ -171,10 +171,10 @@ impl OhUiServer {
         Ok(cursorbuffer)
     }
 
-    pub fn new(path: String) -> Result<Self> {
-        let channel = Self::init_channel(&path)?;
-        let (fb_file, framebuffer) = Self::init_fb_file(&path)?;
-        let cursorbuffer = Self::init_cursor_file(&path)?;
+    pub fn new(ui_path: String, sock_path: String) -> Result<Self> {
+        let channel = Self::init_channel(&sock_path)?;
+        let (fb_file, framebuffer) = Self::init_fb_file(&ui_path)?;
+        let cursorbuffer = Self::init_cursor_file(&ui_path)?;
 
         Ok(OhUiServer {
             passthru: OnceCell::new(),
