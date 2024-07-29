@@ -39,7 +39,7 @@ pub struct UiContext {
 }
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-fn get_sock_path(p: &str) -> Result<String> {
+fn get_dir_path(p: &str) -> Result<String> {
     let path = std::fs::canonicalize(p)
         .with_context(|| format!("Failed to get real directory path: {:?}", p))?;
     if !path.exists() {
@@ -75,16 +75,24 @@ pub struct DisplayConfig {
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
     #[arg(long)]
     pub iothread: Option<String>,
-    /// Confirm related files' path. Default ui path is "/tmp".
+    /// Confirm socket path. Default socket path is "/tmp".
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-    #[arg(long, alias = "socks-path", default_value = "/tmp/", value_parser = get_sock_path)]
-    pub path: String,
+    #[arg(long, alias = "socks-path", default_value = "/tmp/", value_parser = get_dir_path)]
+    pub sock_path: String,
+    /// Define the directory path for OHUI framebuffer and cursor.
+    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+    #[arg(long, alias = "ui-path", default_value = "/dev/shm/hwf/", value_parser = get_dir_path)]
+    pub ui_path: String,
 }
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 impl DisplayConfig {
+    pub fn get_sock_path(&self) -> String {
+        self.sock_path.clone()
+    }
+
     pub fn get_ui_path(&self) -> String {
-        self.path.clone()
+        self.ui_path.clone()
     }
 }
 

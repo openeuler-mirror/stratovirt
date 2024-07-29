@@ -312,7 +312,10 @@ impl StdMachine {
             if dpy.display_type != "ohui" {
                 return Ok(());
             }
-            self.ohui_server = Some(Arc::new(OhUiServer::new(dpy.get_ui_path())?));
+            self.ohui_server = Some(Arc::new(OhUiServer::new(
+                dpy.get_ui_path(),
+                dpy.get_sock_path(),
+            )?));
         }
         Ok(())
     }
