@@ -18,7 +18,7 @@ use std::sync::{
 };
 use std::{cmp, io::Read, ptr, thread, time::Duration};
 
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
@@ -237,6 +237,7 @@ impl OhAudioProcess for OhAudioRender {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
+                info!("Renderer start");
                 self.status = AudioStatus::Started;
                 trace::oh_scream_render_init(&self.ctx);
             }
@@ -248,6 +249,7 @@ impl OhAudioProcess for OhAudioRender {
     }
 
     fn destroy(&mut self) {
+        info!("Renderer destroy");
         match self.status {
             AudioStatus::Error => {
                 self.ctx = None;
@@ -384,6 +386,7 @@ impl OhAudioProcess for OhAudioCapture {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
+                info!("Capturer start");
                 self.status = AudioStatus::Started;
                 trace::oh_scream_capture_init(&self.ctx);
                 true
@@ -396,6 +399,7 @@ impl OhAudioProcess for OhAudioCapture {
     }
 
     fn destroy(&mut self) {
+        info!("Capturer destroy");
         self.status = AudioStatus::Ready;
         self.ctx = None;
         self.stream.reset();
