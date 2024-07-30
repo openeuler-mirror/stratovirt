@@ -46,6 +46,9 @@ use crate::{
 use address_space::AddressSpace;
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
+use machine_manager::state_query::{
+    register_state_query_callback, unregister_state_query_callback,
+};
 use migration::{
     migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
     StateTransfer,
@@ -1462,6 +1465,21 @@ impl VirtioDevice for Net {
             self.taps = None;
         }
 
+        if let Some(ref taps) = self.taps {
+            for (idx, tap) in taps.iter().enumerate() {
+                let upload_stats = tap.upload_stats.clone();
+                let download_stats = tap.download_stats.clone();
+                register_state_query_callback(
+                    format!("tap-{}", idx),
+                    Arc::new(move || {
+                        let upload = upload_stats.load(Ordering::SeqCst);
+                        let download = download_stats.load(Ordering::SeqCst);
+                        format!("upload: {} download: {}", upload, download)
+                    }),
+                )
+            }
+        }
+
         self.init_config_features()?;
 
         Ok(())
@@ -1521,6 +1539,11 @@ impl VirtioDevice for Net {
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        if let Some(ref taps) = self.taps {
+            for (idx, _) in taps.iter().enumerate() {
+                unregister_state_query_callback(&format!("tap-{}", idx));
+            }
+        }
         mark_mac_table(&self.config_space.lock().unwrap().mac, false);
         MigrationManager::unregister_device_instance(
             VirtioNetState::descriptor(),
@@ -1732,6 +1755,16 @@ impl VirtioDevice for Net {
         )?;
         self.update_evts.clear();
         self.ctrl_info = None;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        if let Some(ref mut taps) = self.taps {
+            for tap in taps.iter_mut() {
+                tap.download_stats.store(0, Ordering::SeqCst);
+                tap.upload_stats.store(0, Ordering::SeqCst);
+            }
+        }
         Ok(())
     }
 }
