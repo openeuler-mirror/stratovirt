@@ -14,7 +14,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -57,6 +60,8 @@ pub struct IfReq {
 pub struct Tap {
     pub file: Arc<File>,
     pub enabled: bool,
+    pub upload_stats: Arc<AtomicU64>,
+    pub download_stats: Arc<AtomicU64>,
 }
 
 impl Tap {
@@ -127,6 +132,8 @@ impl Tap {
         Ok(Tap {
             file: Arc::new(file),
             enabled: true,
+            upload_stats: Arc::new(AtomicU64::new(0)),
+            download_stats: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -214,6 +221,8 @@ impl Tap {
                 }
             }
             error!("Failed to call readv for net handle_rx: {:?}", e);
+        } else {
+            self.download_stats.fetch_add(size as u64, Ordering::SeqCst);
         }
 
         size
@@ -237,7 +246,10 @@ impl Tap {
                     // Ignore other errors which can not be handled.
                     _ => error!("Failed to call writev for net handle_tx: {:?}", e),
                 }
+            } else {
+                self.upload_stats.fetch_add(size as u64, Ordering::SeqCst);
             }
+
             break;
         }
         0_i8

@@ -534,6 +534,17 @@ Query the display image of virtiogpu. Currently only stdvm and gtk supports.
 <- { "return": { "fileDir": "/tmp/stratovirt-images", "isSuccess": true } }
 ```
 
+### query-workloads
+
+Query the workloads of the vm.
+
+#### Example
+
+```json
+-> {"execute": "query-workloads", "arguments": {}}
+<- {"return":[{"module":"scream-play","state":"Off"},{"module":"tap-0","state":"upload: 0 download: 0"}]}
+```
+
 ### trace-get-state
 
 Query whether the trace state is enabled.
