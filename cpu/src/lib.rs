@@ -65,14 +65,16 @@ use std::cell::RefCell;
 use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info, warn};
 use nix::unistd::gettid;
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
-use machine_manager::machine::{HypervisorType, MachineInterface};
+use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
@@ -412,7 +414,17 @@ impl CPUInterface for CPU {
                     vm.lock().unwrap().destroy();
                 }
                 ShutdownActionPause => {
-                    vm.lock().unwrap().pause();
+                    let now = Instant::now();
+                    while !vm.lock().unwrap().pause() {
+                        thread::sleep(Duration::from_millis(5));
+                        if now.elapsed() > Duration::from_secs(2) {
+                            // Not use resume() to avoid unnecessary qmp event.
+                            vm.lock()
+                                .unwrap()
+                                .notify_lifecycle(VmState::Paused, VmState::Running);
+                            bail!("Failed to pause VM");
+                        }
+                    }
                 }
             }
         } else {

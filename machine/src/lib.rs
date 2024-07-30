@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use log::{info, warn};
+use log::{error, info, warn};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -2244,6 +2244,10 @@ fn register_shutdown_event(
         if handle_destroy_request(&vm) {
             Some(gen_delete_notifiers(&[shutdown_req_fd]))
         } else {
+            warn!("Fail to shutdown VM, try again");
+            if shutdown_req.write(1).is_err() {
+                error!("Failed to send shutdown request");
+            }
             None
         }
     });

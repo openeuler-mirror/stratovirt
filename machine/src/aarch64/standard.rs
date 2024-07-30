@@ -63,7 +63,7 @@ use machine_manager::config::{
     BootIndexInfo, DriveConfig, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::machine::MachineLifecycle;
+use machine_manager::machine::{MachineLifecycle, VmState};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
@@ -289,8 +289,9 @@ impl StdMachine {
         if let Some(vcpu) = self.get_cpus().get(vcpu_index) {
             let (cpu_state, _) = vcpu.state();
             let cpu_state = *cpu_state.lock().unwrap();
-            if cpu_state != CpuLifecycleState::Paused {
-                self.pause();
+            if cpu_state != CpuLifecycleState::Paused && !self.pause() {
+                self.notify_lifecycle(VmState::Paused, VmState::Running);
+                return None;
             }
 
             let value = match vcpu.hypervisor_cpu.get_one_reg(addr) {

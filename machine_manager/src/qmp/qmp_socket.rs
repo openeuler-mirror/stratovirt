@@ -15,6 +15,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
@@ -25,7 +27,7 @@ use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
 use crate::event;
 use crate::event_loop::EventLoop;
-use crate::machine::MachineExternalInterface;
+use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
 use crate::temp_cleaner::TempCleaner;
@@ -431,7 +433,6 @@ fn qmp_command_exec(
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
         qmp_command.clone(); controller.lock().unwrap(); qmp_response;
-        (stop, pause),
         (cont, resume),
         (system_powerdown, powerdown),
         (system_reset, reset),
@@ -492,6 +493,27 @@ fn qmp_command_exec(
     // Handle the Qmp command which macro can't cover
     if id.is_none() {
         id = match qmp_command {
+            QmpCommand::stop { arguments: _, id } => {
+                let now = Instant::now();
+                while !controller.lock().unwrap().pause() {
+                    thread::sleep(Duration::from_millis(5));
+                    if now.elapsed() > Duration::from_secs(2) {
+                        // Not use resume() to avoid unnecessary qmp event.
+                        controller
+                            .lock()
+                            .unwrap()
+                            .notify_lifecycle(VmState::Paused, VmState::Running);
+                        qmp_response = Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(
+                                "Failed to pause VM".to_string(),
+                            ),
+                            None,
+                        );
+                        break;
+                    }
+                }
+                id
+            }
             QmpCommand::quit { id, .. } => {
                 controller.lock().unwrap().destroy();
                 shutdown_flag = true;

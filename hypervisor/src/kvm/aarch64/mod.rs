@@ -259,6 +259,7 @@ impl KvmCpu {
                     .get_one_reg(KVM_REG_ARM_TIMER_CNT)
                     .with_context(|| "Failed to get virtual timer count")?
                     as u64;
+                locked_arch_cpu.vtimer_cnt_valid = true;
             }
         }
 
@@ -270,7 +271,7 @@ impl KvmCpu {
         arch_cpu: Arc<Mutex<ArchCPU>>,
         regs_index: RegsIndex,
     ) -> Result<()> {
-        let locked_arch_cpu = arch_cpu.lock().unwrap();
+        let mut locked_arch_cpu = arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
         match regs_index {
             RegsIndex::CoreRegs => {
@@ -300,8 +301,11 @@ impl KvmCpu {
                 }
             }
             RegsIndex::VtimerCount => {
-                self.set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
-                    .with_context(|| "Failed to set virtual timer count")?;
+                if locked_arch_cpu.vtimer_cnt_valid {
+                    self.set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
+                        .with_context(|| "Failed to set virtual timer count")?;
+                    locked_arch_cpu.vtimer_cnt_valid = false;
+                }
             }
         }
 

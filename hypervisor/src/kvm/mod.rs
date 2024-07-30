@@ -645,7 +645,9 @@ impl CPUHypervisorOps for KvmCpu {
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
             cvar.notify_one()
-        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused {
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused
+            && pause_signal.load(Ordering::SeqCst)
+        {
             return Ok(());
         }
 
@@ -662,10 +664,13 @@ impl CPUHypervisorOps for KvmCpu {
         }
 
         // It shall wait for the vCPU pause state from hypervisor exits.
-        loop {
-            if pause_signal.load(Ordering::SeqCst) {
-                break;
+        let mut sleep_times = 0;
+        while !pause_signal.load(Ordering::SeqCst) {
+            if sleep_times >= 5 {
+                bail!(CpuError::StopVcpu("timeout".to_string()));
             }
+            thread::sleep(Duration::from_millis(5));
+            sleep_times += 1;
         }
 
         Ok(())
