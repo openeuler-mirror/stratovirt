@@ -72,7 +72,7 @@ const POLL_DELAY_US: u64 = (TARGET_LATENCY_MS as u64) * 1000 / 8;
 
 pub const SCREAM_MAGIC: u64 = 0x02032023;
 
-#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd)]
 pub enum AudioStatus {
     // Processor is ready and waiting for play/capture.
     #[default]
@@ -81,6 +81,8 @@ pub enum AudioStatus {
     Started,
     // OH audio framework error occurred.
     Error,
+    // OH audio stream is interrupted.
+    Intr,
 }
 
 type AuthorityNotify = dyn Fn() + Send + Sync;
