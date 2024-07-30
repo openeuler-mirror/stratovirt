@@ -14,7 +14,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use hex::FromHexError;
 use vmm_sys_util::epoll::EventSet;
@@ -27,11 +27,11 @@ use util::test_helper::{eoi_intx, get_test_clock, has_msix_msg, query_intx, set_
 
 pub struct TestSock {
     stream: UnixStream,
-    controller: Arc<RwLock<dyn MachineTestInterface>>,
+    controller: Arc<Mutex<dyn MachineTestInterface>>,
 }
 
 impl TestSock {
-    pub fn new(path: &str, controller: Arc<RwLock<dyn MachineTestInterface>>) -> Self {
+    pub fn new(path: &str, controller: Arc<Mutex<dyn MachineTestInterface>>) -> Self {
         let stream = match UnixStream::connect(path) {
             Ok(s) => s,
             Err(e) => {
@@ -115,7 +115,7 @@ fn update_clock(target: u64) {
     }
 }
 
-fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInterface>>) {
+fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<Mutex<dyn MachineTestInterface>>) {
     let mut handler = SocketHandler::new(stream_fd);
     let msg = handler.get_line().unwrap().unwrap();
 
@@ -129,7 +129,7 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInte
             let mut data = vec![0_u8; size];
 
             controller
-                .read()
+                .lock()
                 .unwrap()
                 .mmio_read(addr, data.as_mut_slice());
             handler
@@ -149,7 +149,7 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInte
             let mut data = vec![0_u8; 8];
 
             controller
-                .read()
+                .lock()
                 .unwrap()
                 .mmio_read(addr, data[..size].as_mut());
             data.reverse();
@@ -170,7 +170,7 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInte
             };
             assert!(data.len() == size);
 
-            controller.read().unwrap().mmio_write(addr, data.as_slice());
+            controller.lock().unwrap().mmio_write(addr, data.as_slice());
             handler.send_str("OK").unwrap();
         }
         "writeb" | "writew" | "writel" | "writeq" => {
@@ -193,7 +193,7 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInte
             data[size - input.len()..].copy_from_slice(input.as_slice());
             data.reverse();
 
-            controller.read().unwrap().mmio_write(addr, data.as_slice());
+            controller.lock().unwrap().mmio_write(addr, data.as_slice());
             handler.send_str("OK").unwrap();
         }
         "memset" => {
@@ -207,7 +207,7 @@ fn handle_test_cmd(stream_fd: RawFd, controller: &Arc<RwLock<dyn MachineTestInte
                 data[index] = pat[index % pat_size];
             }
 
-            controller.read().unwrap().mmio_write(addr, data.as_slice());
+            controller.lock().unwrap().mmio_write(addr, data.as_slice());
             handler.send_str("OK").unwrap();
         }
         "clock_step" => {

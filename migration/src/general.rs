@@ -260,7 +260,7 @@ pub trait Lifecycle {
     /// Pause VM during migration.
     fn pause() -> Result<()> {
         if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
-            locked_vm.read().unwrap().pause();
+            locked_vm.lock().unwrap().pause();
         }
 
         Ok(())

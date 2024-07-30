@@ -578,7 +578,7 @@ impl MigrationManager {
     /// Clear live migration environment and shut down VM.
     fn clear_migration() -> Result<()> {
         if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
-            locked_vm.read().unwrap().destroy();
+            locked_vm.lock().unwrap().destroy();
         }
 
         Ok(())
@@ -587,7 +587,7 @@ impl MigrationManager {
     /// Recover the virtual machine if migration is failed.
     pub fn recover_from_migration() -> Result<()> {
         if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
-            locked_vm.read().unwrap().resume();
+            locked_vm.lock().unwrap().resume();
         }
 
         Ok(())

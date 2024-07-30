@@ -12,7 +12,7 @@
 
 use std::io::Write;
 use std::process::{ExitCode, Termination};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
@@ -154,12 +154,12 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
 
     let listeners = check_api_channel(cmd_args, vm_config)?;
     let mut sockets = Vec::new();
-    let vm: Arc<RwLock<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
+    let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
         MachineType::MicroVm => {
             if is_test_enabled() {
                 panic!("module test framework does not support microvm.")
             }
-            let vm = Arc::new(RwLock::new(
+            let vm = Arc::new(Mutex::new(
                 LightMachine::new(vm_config).with_context(|| "Failed to init MicroVM")?,
             ));
             MachineOps::realize(&vm, vm_config).with_context(|| "Failed to realize micro VM.")?;
@@ -171,7 +171,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             vm
         }
         MachineType::StandardVm => {
-            let vm = Arc::new(RwLock::new(
+            let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).with_context(|| "Failed to init StandardVM")?,
             ));
             MachineOps::realize(&vm, vm_config)
@@ -199,7 +199,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             if is_test_enabled() {
                 panic!("please specify machine type.")
             }
-            let vm = Arc::new(RwLock::new(
+            let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
             EventLoop::set_manager(vm.clone());
@@ -213,7 +213,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
 
     let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
     if !cmd_args.is_present("disable-seccomp") {
-        vm.read()
+        vm.lock()
             .unwrap()
             .register_seccomp(balloon_switch_on)
             .with_context(|| "Failed to register seccomp rules.")?;

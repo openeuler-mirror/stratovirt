@@ -63,7 +63,7 @@ pub use x86_64::X86RegsIndex as RegsIndex;
 
 use std::cell::RefCell;
 use std::sync::atomic::{fence, AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 
 use anyhow::{anyhow, Context, Result};
@@ -216,7 +216,7 @@ pub struct CPU {
     /// The thread tid of this VCPU.
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
-    vm: Weak<RwLock<dyn MachineInterface + Send + Sync>>,
+    vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
     /// Sync the pause state of vCPU in hypervisor and userspace.
@@ -238,7 +238,7 @@ impl CPU {
         hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        vm: Arc<RwLock<dyn MachineInterface + Send + Sync>>,
+        vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
     ) -> Self {
         CPU {
             id,
@@ -294,7 +294,7 @@ impl CPU {
         &self.hypervisor_cpu
     }
 
-    pub fn vm(&self) -> Weak<RwLock<dyn MachineInterface + Send + Sync>> {
+    pub fn vm(&self) -> Weak<Mutex<dyn MachineInterface + Send + Sync>> {
         self.vm.clone()
     }
 
@@ -404,15 +404,15 @@ impl CPUInterface for CPU {
 
     fn guest_shutdown(&self) -> Result<()> {
         if let Some(vm) = self.vm.upgrade() {
-            let shutdown_act = vm.read().unwrap().get_shutdown_action();
+            let shutdown_act = vm.lock().unwrap().get_shutdown_action();
             match shutdown_act {
                 ShutdownActionPoweroff => {
                     let (cpu_state, _) = &*self.state;
                     *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-                    vm.read().unwrap().destroy();
+                    vm.lock().unwrap().destroy();
                 }
                 ShutdownActionPause => {
-                    vm.read().unwrap().pause();
+                    vm.lock().unwrap().pause();
                 }
             }
         } else {
@@ -434,7 +434,7 @@ impl CPUInterface for CPU {
         if let Some(vm) = self.vm.upgrade() {
             let (cpu_state, _) = &*self.state;
             *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
-            vm.read().unwrap().reset();
+            vm.lock().unwrap().reset();
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));
         }

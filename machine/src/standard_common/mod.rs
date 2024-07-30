@@ -20,7 +20,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::string::String;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::u64;
 
 use anyhow::{bail, Context, Result};
@@ -242,7 +242,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     ///
     /// * `clone_vm` - Reference of the StdMachine.
     #[cfg(target_arch = "x86_64")]
-    fn add_vcpu_device(&mut self, clone_vm: Arc<RwLock<StdMachine>>) -> Result<()>;
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()>;
 
     /// Register event notifier for hotplug vcpu event.
     ///
@@ -254,7 +254,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn register_hotplug_vcpu_event(
         &self,
         hotplug_req: Arc<EventFd>,
-        clone_vm: Arc<RwLock<StdMachine>>,
+        clone_vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
         let hotplug_req_fd = hotplug_req.as_raw_fd();
         let hotplug_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
@@ -300,7 +300,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn register_reset_event(
         &self,
         reset_req: Arc<EventFd>,
-        clone_vm: Arc<RwLock<StdMachine>>,
+        clone_vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
         let reset_req_fd = reset_req.as_raw_fd();
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
@@ -325,12 +325,12 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn register_pause_event(
         &self,
         pause_req: Arc<EventFd>,
-        clone_vm: Arc<RwLock<StdMachine>>,
+        clone_vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
         let pause_req_fd = pause_req.as_raw_fd();
         let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = pause_req.read();
-            if !clone_vm.read().unwrap().pause() {
+            if !clone_vm.lock().unwrap().pause() {
                 error!("VM pause failed");
             }
             None
@@ -350,12 +350,12 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn register_resume_event(
         &self,
         resume_req: Arc<EventFd>,
-        clone_vm: Arc<RwLock<StdMachine>>,
+        clone_vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
         let resume_req_fd = resume_req.as_raw_fd();
         let resume_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = resume_req.read();
-            if !clone_vm.read().unwrap().resume() {
+            if !clone_vm.lock().unwrap().resume() {
                 error!("VM resume failed!");
             }
             None
@@ -980,7 +980,7 @@ impl MachineLifecycle for StdMachine {
             .shutdown_action
     }
 
-    fn reset(&self) -> bool {
+    fn reset(&mut self) -> bool {
         if self.reset_req.write(1).is_err() {
             error!("Standard vm write reset request failed");
             return false;
