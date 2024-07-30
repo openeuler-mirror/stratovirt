@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 
 use anyhow::{bail, Context, Result};
-use log::error;
+use log::{error, warn};
 use util::set_termi_canon_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -306,7 +306,10 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             read_fd(reset_req_fd);
             if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
-                error!("Fail to reboot standard VM, {:?}", e);
+                warn!("Fail to reboot standard VM, {:?}, try again", e);
+                if reset_req.write(1).is_err() {
+                    error!("Failed to send VM reset request");
+                }
             }
 
             None
@@ -331,7 +334,10 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = pause_req.read();
             if !clone_vm.lock().unwrap().pause() {
-                error!("VM pause failed");
+                warn!("VM pause failed, try again");
+                if pause_req.write(1).is_err() {
+                    error!("Failed to send VM pause request");
+                }
             }
             None
         });
