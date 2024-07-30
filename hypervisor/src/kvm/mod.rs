@@ -419,23 +419,23 @@ impl KvmCpu {
                 match run {
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::IoIn(addr, data) => {
-                        vm.read().unwrap().pio_in(u64::from(addr), data);
+                        vm.lock().unwrap().pio_in(u64::from(addr), data);
                     }
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::IoOut(addr, data) => {
                         #[cfg(feature = "boot_time")]
                         capture_boot_signal(addr as u64, data);
 
-                        vm.read().unwrap().pio_out(u64::from(addr), data);
+                        vm.lock().unwrap().pio_out(u64::from(addr), data);
                     }
                     VcpuExit::MmioRead(addr, data) => {
-                        vm.read().unwrap().mmio_read(addr, data);
+                        vm.lock().unwrap().mmio_read(addr, data);
                     }
                     VcpuExit::MmioWrite(addr, data) => {
                         #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
                         capture_boot_signal(addr, data);
 
-                        vm.read().unwrap().mmio_write(addr, data);
+                        vm.lock().unwrap().mmio_write(addr, data);
                     }
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::Hlt => {
@@ -919,7 +919,7 @@ impl MsiIrqManager for KVMInterruptManager {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Arc, Mutex, RwLock};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[cfg(target_arch = "x86_64")]
@@ -1002,7 +1002,7 @@ mod test {
             return;
         }
 
-        let vm = Arc::new(RwLock::new(TestVm::new()));
+        let vm = Arc::new(Mutex::new(TestVm::new()));
 
         let code_seg = kvm_segment {
             base: 0,
@@ -1118,7 +1118,7 @@ mod test {
             vcpu_fd,
         ));
 
-        let vm = Arc::new(RwLock::new(TestVm::new()));
+        let vm = Arc::new(Mutex::new(TestVm::new()));
         let cpu = CPU::new(
             hypervisor_cpu.clone(),
             0,

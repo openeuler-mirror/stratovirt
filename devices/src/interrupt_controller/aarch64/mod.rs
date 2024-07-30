@@ -73,7 +73,7 @@ pub trait GICDevice: MachineLifecycle {
     fn realize(&self) -> Result<()>;
 
     /// Reset 'GIC'
-    fn reset_state(&self) -> Result<()> {
+    fn reset(&self) -> Result<()> {
         Ok(())
     }
 
@@ -117,9 +117,7 @@ impl InterruptController {
 
     /// Reset the InterruptController
     pub fn reset(&self) -> Result<()> {
-        self.gic
-            .reset_state()
-            .with_context(|| "Failed to reset GIC")
+        self.gic.reset().with_context(|| "Failed to reset GIC")
     }
 
     /// Change `InterruptController` lifecycle state to `Stopped`.

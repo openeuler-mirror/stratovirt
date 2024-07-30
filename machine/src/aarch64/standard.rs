@@ -15,7 +15,7 @@ pub use crate::error::MachineError;
 use std::mem::size_of;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use std::sync::RwLock;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 #[cfg(feature = "ramfb")]
@@ -180,8 +180,8 @@ impl StdMachine {
         })
     }
 
-    pub fn handle_reset_request(vm: &Arc<RwLock<Self>>) -> Result<()> {
-        let mut locked_vm = vm.write().unwrap();
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let mut locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
@@ -523,9 +523,9 @@ impl MachineOps for StdMachine {
         }
     }
 
-    fn realize(vm: &Arc<RwLock<Self>>, vm_config: &mut VmConfig) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
-        let mut locked_vm = vm.write().unwrap();
+        let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
             .with_context(|| "Failed to register shutdown event")?;
