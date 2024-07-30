@@ -430,6 +430,10 @@ impl DisplayChangeListenerOperations for OhUiServer {
         Ok(())
     }
 
+    fn dpy_get_left_pressing(&self) -> bool {
+        self.msg_handler.get_left_pressing()
+    }
+
     fn dpy_cursor_update(&self, cursor: &DisplayMouse) -> Result<()> {
         let mut locked_cursor = self.cursor.lock().unwrap();
         if locked_cursor.buffer == 0 {
