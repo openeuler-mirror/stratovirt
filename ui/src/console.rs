@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use log::error;
 use once_cell::sync::Lazy;
 
@@ -158,6 +158,10 @@ pub trait DisplayChangeListenerOperations {
     /// Set the current display as major.
     fn dpy_set_major(&self) -> Result<()> {
         Ok(())
+    }
+    /// Get button is left-pressing or not.
+    fn dpy_get_left_pressing(&self) -> bool {
+        false
     }
 }
 
@@ -596,6 +600,24 @@ pub fn display_cursor_define(
         (*dcl_opts).dpy_cursor_update(cursor)?;
     }
     Ok(())
+}
+
+/// Get cursor pressing status from display.
+pub fn display_get_cursor_status(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<bool> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => {
+            bail!("Failed to find console!")
+        }
+    };
+    let con_id = con.lock().unwrap().con_id;
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
+
+    if let Some(dcl) = related_listeners.first() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        return Ok((*dcl_opts).dpy_get_left_pressing());
+    }
+    bail!("No display console found!");
 }
 
 /// Set specific screen as the main display screen.

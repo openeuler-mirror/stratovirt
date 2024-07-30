@@ -75,6 +75,9 @@ struct CursorState {
 struct WindowState {
     width: u32,
     height: u32,
+    // Status to check whether the mouse's left button
+    // is pressing or not.
+    left_pressing: bool,
     cursor: CursorState,
 }
 
@@ -89,12 +92,26 @@ impl WindowState {
             return Ok(());
         }
         input_button(btn, true)?;
-        input_point_sync()
+        input_point_sync()?;
+        // This should be faster than interrupt to guest.
+        if btn == INPUT_POINT_LEFT {
+            self.left_pressing = true;
+        }
+        Ok(())
     }
 
     fn release_btn(&mut self, btn: u32) -> Result<()> {
         input_button(btn, false)?;
-        input_point_sync()
+        input_point_sync()?;
+        // This should be faster than interrupt to guest.
+        if btn == INPUT_POINT_LEFT {
+            self.left_pressing = false;
+        }
+        Ok(())
+    }
+
+    fn get_left_pressing(&self) -> bool {
+        self.left_pressing
     }
 
     fn do_key_action(&self, keycode: u16, action: u16) -> Result<()> {
@@ -231,6 +248,10 @@ impl OhUiMsgHandler {
         );
 
         self.input_state.lock().unwrap().input_notifier_id = register_input_notifier(notifier);
+    }
+
+    pub fn get_left_pressing(&self) -> bool {
+        self.state.lock().unwrap().get_left_pressing()
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
