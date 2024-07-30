@@ -225,7 +225,7 @@ impl OhAudioProcess for OhAudioRender {
                 stream.fmt.size,
                 stream.fmt.get_rate(),
                 stream.fmt.channels,
-                AudioProcessCb::RendererCb(Some(on_write_data_cb)),
+                AudioProcessCb::RendererCb(Some(on_write_data_cb), Some(render_on_interrupt_cb)),
                 ptr::addr_of!(*self) as *mut c_void,
             ) {
                 Ok(()) => self.ctx = Some(context),
@@ -251,7 +251,7 @@ impl OhAudioProcess for OhAudioRender {
     fn destroy(&mut self) {
         info!("Renderer destroy");
         match self.status {
-            AudioStatus::Error => {
+            AudioStatus::Error | AudioStatus::Intr => {
                 self.ctx = None;
                 self.status = AudioStatus::Ready;
                 return;
@@ -278,8 +278,11 @@ impl OhAudioProcess for OhAudioRender {
             recv_data.audio_size as usize,
         ));
 
-        if self.status == AudioStatus::Error {
-            error!("Audio server error occurred. Destroy and reconnect it.");
+        if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
+            error!(
+                "Audio server {:?} occurred. Destroy and reconnect it.",
+                self.status
+            );
             self.destroy();
         }
 
@@ -375,7 +378,7 @@ impl OhAudioProcess for OhAudioCapture {
             stream.fmt.size,
             stream.fmt.get_rate(),
             stream.fmt.channels,
-            AudioProcessCb::CapturerCb(Some(on_read_data_cb)),
+            AudioProcessCb::CapturerCb(Some(on_read_data_cb), Some(capture_on_interrupt_cb)),
             ptr::addr_of!(*self) as *mut c_void,
         ) {
             Ok(()) => self.ctx = Some(context),
@@ -411,7 +414,7 @@ impl OhAudioProcess for OhAudioCapture {
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 
-        if self.status == AudioStatus::Error {
+        if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
             self.destroy();
         }
 
@@ -437,6 +440,51 @@ impl OhAudioProcess for OhAudioCapture {
     fn get_status(&self) -> AudioStatus {
         self.status
     }
+}
+
+extern "C" fn render_on_interrupt_cb(
+    _renderer: *mut OhAudioRenderer,
+    user_data: *mut ::std::os::raw::c_void,
+    source_type: capi::OHAudioInterruptSourceType,
+    hint: capi::OHAudioInterruptHint,
+) -> i32 {
+    info!(
+        "Render interrupts, type is {}, hint is {}",
+        source_type, hint
+    );
+    // SAFETY: we make sure that it is OhAudioRender when register callback.
+    let render = unsafe {
+        (user_data as *mut OhAudioRender)
+            .as_mut()
+            .unwrap_unchecked()
+    };
+    if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
+        render.status = AudioStatus::Intr;
+    }
+    0
+}
+
+extern "C" fn capture_on_interrupt_cb(
+    _capturer: *mut OhAudioCapturer,
+    user_data: *mut ::std::os::raw::c_void,
+    source_type: capi::OHAudioInterruptSourceType,
+    hint: capi::OHAudioInterruptHint,
+) -> i32 {
+    info!(
+        "Capture interrupts, type is {}, hint is {}",
+        source_type, hint
+    );
+
+    // SAFETY: we make sure that it is OhAudioCapture when register callback.
+    let capture = unsafe {
+        (user_data as *mut OhAudioCapture)
+            .as_mut()
+            .unwrap_unchecked()
+    };
+    if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
+        capture.status = AudioStatus::Intr;
+    }
+    0
 }
 
 extern "C" fn on_write_data_cb(

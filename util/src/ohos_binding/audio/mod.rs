@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod sys;
+pub mod sys;
 
 use std::os::raw::c_void;
 use std::ptr;
@@ -20,7 +20,7 @@ use log::error;
 use once_cell::sync::Lazy;
 
 use super::hwf_adapter::{hwf_adapter_volume_api, volume::VolumeFuncTable};
-use sys as capi;
+pub use sys as capi;
 
 const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
@@ -187,6 +187,14 @@ pub enum AudioProcessCb {
                 length: i32,
             ) -> i32,
         >,
+        Option<
+            extern "C" fn(
+                capturer: *mut capi::OhAudioCapturer,
+                userData: *mut c_void,
+                source_type: capi::OHAudioInterruptSourceType,
+                hint: capi::OHAudioInterruptHint,
+            ) -> i32,
+        >,
     ),
     RendererCb(
         Option<
@@ -195,6 +203,14 @@ pub enum AudioProcessCb {
                 userData: *mut c_void,
                 buffer: *mut c_void,
                 length: i32,
+            ) -> i32,
+        >,
+        Option<
+            extern "C" fn(
+                capturer: *mut capi::OhAudioRenderer,
+                userData: *mut c_void,
+                source_type: capi::OHAudioInterruptSourceType,
+                hint: capi::OHAudioInterruptHint,
             ) -> i32,
         >,
     ),
@@ -258,8 +274,9 @@ impl AudioContext {
 
     fn create_renderer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioRendererCallbacks::default();
-        if let AudioProcessCb::RendererCb(f) = cb {
-            cbs.oh_audio_renderer_on_write_data = f;
+        if let AudioProcessCb::RendererCb(data_cb, interrupt_cb) = cb {
+            cbs.oh_audio_renderer_on_write_data = data_cb;
+            cbs.oh_audio_renderer_on_interrupt_event = interrupt_cb;
         }
         call_capi!(OH_AudioStreamBuilder_SetRendererCallback(
             self.builder,
@@ -274,8 +291,9 @@ impl AudioContext {
 
     fn create_capturer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioCapturerCallbacks::default();
-        if let AudioProcessCb::CapturerCb(v) = cb {
-            cbs.oh_audio_capturer_on_read_data = v;
+        if let AudioProcessCb::CapturerCb(data_cb, interrupt_cb) = cb {
+            cbs.oh_audio_capturer_on_read_data = data_cb;
+            cbs.oh_audio_capturer_on_interrupt_event = interrupt_cb;
         }
         call_capi!(OH_AudioStreamBuilder_SetCapturerCallback(
             self.builder,
