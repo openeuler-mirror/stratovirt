@@ -1941,6 +1941,8 @@ mod tests {
 
     #[test]
     fn test_iothread() {
+        EventLoop::object_init(&None).unwrap();
+
         let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
         net.net_cfg.iothread = Some("iothread".to_string());
         if let Err(err) = net.realize() {
@@ -1952,5 +1954,7 @@ mod tests {
         } else {
             assert!(false);
         }
+
+        EventLoop::loop_clean();
     }
 }

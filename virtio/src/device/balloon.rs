@@ -1240,6 +1240,7 @@ mod tests {
     use crate::tests::{address_space_init, MEMORY_SIZE};
     use crate::*;
     use address_space::{AddressRange, HostMemMapping, Region};
+    use machine_manager::event_loop::EventLoop;
 
     const QUEUE_SIZE: u16 = 256;
 
@@ -1532,6 +1533,8 @@ mod tests {
 
     #[test]
     fn test_balloon_activate() {
+        EventLoop::object_init(&None).unwrap();
+
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
@@ -1548,18 +1551,20 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
-        queue_config_inf.desc_table = GuestAddress(0);
-        queue_config_inf.avail_ring = GuestAddress(4096);
-        queue_config_inf.used_ring = GuestAddress(8192);
-        queue_config_inf.ready = true;
-        queue_config_inf.size = QUEUE_SIZE;
-
         let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::new();
-        let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
-        queues.push(queue1);
-        let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
-        let queue_evts: Vec<Arc<EventFd>> = vec![event_inf.clone()];
+        let mut queue_evts: Vec<Arc<EventFd>> = Vec::new();
+        for i in 0..QUEUE_NUM_BALLOON as u64 {
+            let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
+            queue_config_inf.desc_table = GuestAddress(12288 * i + 0);
+            queue_config_inf.avail_ring = GuestAddress(12288 * i + 4096);
+            queue_config_inf.used_ring = GuestAddress(12288 * i + 8192);
+            queue_config_inf.ready = true;
+            queue_config_inf.size = QUEUE_SIZE;
+            let queue = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
+            queues.push(queue);
+            let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            queue_evts.push(event_inf);
+        }
 
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
@@ -1568,7 +1573,9 @@ mod tests {
         };
         let mut bln = Balloon::new(bln_cfg, mem_space.clone());
         bln.base.queues = queues;
-        assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_err());
+        assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_ok());
+
+        EventLoop::loop_clean();
     }
 
     #[test]
