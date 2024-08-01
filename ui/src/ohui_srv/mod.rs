@@ -219,11 +219,12 @@ impl OhUiServer {
         stride: i32,
         pos: (i32, i32),
         size: (i32, i32),
+        force_copy: bool,
     ) {
         let (x, y) = pos;
         let (w, h) = size;
 
-        if self.framebuffer == 0 || *self.passthru.get_or_init(|| false) {
+        if self.framebuffer == 0 || (!force_copy && *self.passthru.get_or_init(|| false)) {
             return;
         }
 
@@ -297,6 +298,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
             locked_surface.stride,
             (0, 0),
             (locked_surface.width, locked_surface.height),
+            true,
         );
 
         if !self.connected() {
@@ -328,6 +330,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
             locked_surface.stride,
             (x, y),
             (w, h),
+            false,
         );
 
         self.msg_handler
