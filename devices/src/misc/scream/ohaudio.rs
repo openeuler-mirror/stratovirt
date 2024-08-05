@@ -23,15 +23,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use log::{error, warn};
+use log::{error, info, warn};
 
+use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
+use crate::pci::{le_read_u32, le_write_u32};
 use machine_manager::notifier::register_vm_pause_notifier;
 use util::ohos_binding::audio::*;
 
 const STREAM_DATA_VEC_CAPACITY: usize = 15;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
+const IVSHMEM_BAR0_VOLUME: u64 = 240;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
@@ -628,6 +631,76 @@ impl AudioInterface for OhAudio {
 
     fn destroy(&mut self) {
         self.processor.destroy();
+    }
+}
+
+pub struct OhAudioVolume {
+    shm_dev: Arc<Mutex<Ivshmem>>,
+    ohos_vol: RwLock<u32>,
+}
+
+impl GuestVolumeNotifier for OhAudioVolume {
+    fn notify(&self, vol: u32) {
+        *self.ohos_vol.write().unwrap() = vol;
+        self.shm_dev.lock().unwrap().trigger_msix(0);
+    }
+}
+
+impl OhAudioVolume {
+    pub fn new(shm_dev: Arc<Mutex<Ivshmem>>) -> Arc<Self> {
+        let vol = Arc::new(Self {
+            shm_dev,
+            ohos_vol: RwLock::new(0),
+        });
+        register_guest_volume_notifier(vol.clone());
+        vol
+    }
+
+    fn set_volume(&self, vol: u32) {
+        set_ohos_volume(vol);
+    }
+
+    fn get_volume(&self) -> u32 {
+        *self.ohos_vol.read().unwrap()
+    }
+
+    fn init_volume(&self) {
+        *self.ohos_vol.write().unwrap() = get_ohos_volume();
+    }
+
+    pub fn init_volume_sync(ivshmem: Arc<Mutex<Ivshmem>>) {
+        let ohvol = OhAudioVolume::new(ivshmem.clone());
+        let ohvol2 = ohvol.clone();
+        ohvol.init_volume();
+        let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
+            match offset {
+                IVSHMEM_BAR0_VOLUME => match le_read_u32(data, 0) {
+                    Ok(v) => ohvol.set_volume(v),
+                    Err(e) => error!("ohaudio le_read_u32 failed: {e}"),
+                },
+                _ => {
+                    info!("ivshmem-scream on ohaudio: unsupported write:{offset}");
+                }
+            }
+            true
+        });
+        let bar0_read = Arc::new(move |data: &mut [u8], offset: u64| {
+            match offset {
+                IVSHMEM_BAR0_VOLUME => {
+                    if let Err(e) = le_write_u32(data, 0, ohvol2.get_volume()) {
+                        error!("ohaudio le_write_u32 failed: {e}");
+                    }
+                }
+                _ => {
+                    info!("ivshmem-scream on ohaudio: unsupported read:{offset}");
+                }
+            }
+            true
+        });
+        ivshmem
+            .lock()
+            .unwrap()
+            .set_bar0_ops((bar0_write, bar0_read));
     }
 }
 

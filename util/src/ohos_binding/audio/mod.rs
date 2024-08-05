@@ -14,9 +14,12 @@ mod sys;
 
 use std::os::raw::c_void;
 use std::ptr;
+use std::sync::{Arc, RwLock};
 
 use log::error;
+use once_cell::sync::Lazy;
 
+use super::hwf_adapter::{hwf_adapter_volume_api, volume::VolumeFuncTable};
 use sys as capi;
 
 const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
@@ -364,6 +367,76 @@ impl AudioContext {
             .set(size, rate, channels)
             .map_or(false, |_| (self.spec == other))
     }
+}
+
+// From here, the code is related to ohaudio volume.
+static OH_VOLUME_ADAPTER: Lazy<RwLock<OhVolume>> = Lazy::new(|| RwLock::new(OhVolume::new()));
+
+pub trait GuestVolumeNotifier: Send + Sync {
+    fn notify(&self, vol: u32);
+}
+
+struct OhVolume {
+    capi: Arc<VolumeFuncTable>,
+    notifiers: Vec<Arc<dyn GuestVolumeNotifier>>,
+}
+
+impl OhVolume {
+    fn new() -> Self {
+        let capi = hwf_adapter_volume_api();
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        Self {
+            capi,
+            notifiers: Vec::new(),
+        }
+    }
+
+    fn get_ohos_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_volume)() as u32 }
+    }
+
+    fn set_ohos_volume(&self, volume: i32) {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.set_volume)(volume) };
+    }
+
+    fn notify_volume_change(&self, volume: i32) {
+        for notifier in self.notifiers.iter() {
+            notifier.notify(volume as u32);
+        }
+    }
+
+    fn register_guest_notifier(&mut self, notifier: Arc<dyn GuestVolumeNotifier>) {
+        self.notifiers.push(notifier);
+    }
+}
+
+// SAFETY: use RW lock to ensure the security of resources.
+unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
+    OH_VOLUME_ADAPTER
+        .read()
+        .unwrap()
+        .notify_volume_change(volume);
+}
+
+pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
+    OH_VOLUME_ADAPTER
+        .write()
+        .unwrap()
+        .register_guest_notifier(notifier);
+}
+
+pub fn get_ohos_volume() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_ohos_volume()
+}
+
+pub fn set_ohos_volume(vol: u32) {
+    OH_VOLUME_ADAPTER
+        .read()
+        .unwrap()
+        .set_ohos_volume(vol as i32);
 }
 
 #[cfg(test)]
