@@ -231,6 +231,7 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32)
 }
 
 pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
