@@ -163,7 +163,7 @@ pub struct Vmm {
     /// Vm config
     pub config: Arc<Mutex<VmConfig>>,
     /// Trait to represent a Vm.
-    pub vm: Option<Arc<RwLock<dyn MachineLifecycle + Send + Sync>>>,
+    pub vm: Option<Arc<Mutex<dyn MachineLifecycle + Send + Sync>>>,
     /// Trait to represent CPU devices.
     pub cpus: HashMap<u64, Arc<dyn MigrationHook + Send + Sync>>,
     /// Trait to represent memory devices.
@@ -245,7 +245,7 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `vm` - vm instance with MachineLifecycle trait.
-    pub fn register_vm_instance<T>(vm: Arc<RwLock<T>>)
+    pub fn register_vm_instance<T>(vm: Arc<Mutex<T>>)
     where
         T: MachineLifecycle + Sync + Send + 'static,
     {

@@ -12,7 +12,7 @@
 
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
-use std::sync::{Arc, Barrier, Mutex, RwLock};
+use std::sync::{Arc, Barrier, Mutex};
 
 use anyhow::{bail, Context, Result};
 
@@ -149,8 +149,8 @@ impl StdMachine {
         })
     }
 
-    pub fn handle_reset_request(vm: &Arc<RwLock<Self>>) -> Result<()> {
-        let mut locked_vm = vm.write().unwrap();
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
             cpu.pause()
@@ -179,7 +179,7 @@ impl StdMachine {
         Ok(())
     }
 
-    fn init_ich9_lpc(&self, vm: Arc<RwLock<StdMachine>>) -> Result<()> {
+    fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().child_bus().unwrap());
         let ich = ich9_lpc::LPCBridge::new(
             root_bus,
@@ -199,8 +199,8 @@ impl StdMachine {
         None
     }
 
-    pub fn handle_hotplug_vcpu_request(vm: &Arc<RwLock<Self>>) -> Result<()> {
-        let mut locked_vm = vm.write().unwrap();
+    pub fn handle_hotplug_vcpu_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        let mut locked_vm = vm.lock().unwrap();
         locked_vm.add_vcpu_device(vm.clone())
     }
 
@@ -208,7 +208,7 @@ impl StdMachine {
         &mut self,
         boot_config: CPUBootConfig,
         cpu_topology: CPUTopology,
-        vm: Arc<RwLock<StdMachine>>,
+        vm: Arc<Mutex<StdMachine>>,
     ) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::CpuController as usize].1;
@@ -300,7 +300,7 @@ impl StdMachineOps for StdMachine {
         self.cpu_controller.as_ref().unwrap()
     }
 
-    fn add_vcpu_device(&mut self, clone_vm: Arc<RwLock<StdMachine>>) -> Result<()> {
+    fn add_vcpu_device(&mut self, clone_vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let mut locked_controller = self.cpu_controller.as_ref().unwrap().lock().unwrap();
         let device_id;
         let vcpu_id;
@@ -314,7 +314,7 @@ impl StdMachineOps for StdMachine {
             let boot_cfg = locked_controller.get_boot_config();
             let topology = locked_controller.get_topology_config();
 
-            let hypervisor = clone_vm.read().unwrap().base.hypervisor.clone();
+            let hypervisor = clone_vm.lock().unwrap().base.hypervisor.clone();
             let vcpu = <StdMachine as MachineOps>::create_vcpu(
                 vcpu_id,
                 clone_vm,
@@ -479,10 +479,10 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<RwLock<Self>>, vm_config: &mut VmConfig) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let max_cpus = vm_config.machine_config.max_cpus;
-        let mut locked_vm = vm.write().unwrap();
+        let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm.base.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;

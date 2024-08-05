@@ -116,7 +116,7 @@ pub trait MachineLifecycle {
     }
 
     /// Reset VM, stop running and restart a new VM.
-    fn reset(&self) -> bool {
+    fn reset(&mut self) -> bool {
         self.notify_lifecycle(VmState::Running, VmState::Shutdown)
     }
 

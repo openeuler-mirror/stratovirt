@@ -15,6 +15,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
@@ -25,7 +27,7 @@ use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
 use crate::event;
 use crate::event_loop::EventLoop;
-use crate::machine::MachineExternalInterface;
+use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
 use crate::temp_cleaner::TempCleaner;
@@ -100,7 +102,7 @@ pub struct Socket {
     /// Socket stream with RwLock
     stream: RwLock<Option<SocketStream>>,
     /// Perform socket command
-    performer: Option<Arc<RwLock<dyn MachineExternalInterface>>>,
+    performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
 }
 
 impl Socket {
@@ -112,7 +114,7 @@ impl Socket {
     /// * `performer` - The `VM` to perform socket command.
     pub fn from_listener(
         listener: SocketListener,
-        performer: Option<Arc<RwLock<dyn MachineExternalInterface>>>,
+        performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
     ) -> Self {
         Socket {
             listener,
@@ -275,13 +277,12 @@ impl EventNotifierHelper for Socket {
 }
 
 /// Macro: to execute handle func with every arguments.
-/// Attentions: Lifecycle commands cannot hold a write lock on the executor to avoid deadlock.
 macro_rules! qmp_command_match {
     ( $func:tt, $executor:expr, $ret:expr ) => {
-        $ret = $executor.read().unwrap().$func().into();
+        $ret = $executor.$func().into();
     };
     ( $func:tt, $executor:expr, $cmd:expr, $ret:expr, $($arg:tt),* ) => {
-        $ret = $executor.write().unwrap().$func(
+        $ret = $executor.$func(
             $($cmd.$arg),*
         ).into();
     };
@@ -290,7 +291,7 @@ macro_rules! qmp_command_match {
 /// Macro: to execute handle func with all arguments.
 macro_rules! qmp_command_match_with_argument {
     ( $func:tt, $executor:expr, $cmd:expr, $ret:expr ) => {
-        $ret = $executor.write().unwrap().$func($cmd).into();
+        $ret = $executor.$func($cmd).into();
     };
 }
 
@@ -366,7 +367,7 @@ fn parse_tcp_uri(uri: &str) -> Result<(String, u16)> {
 /// This function will fail when json parser failed or socket file description broke.
 fn handle_qmp(
     stream_fd: RawFd,
-    controller: &Arc<RwLock<dyn MachineExternalInterface>>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     leak_bucket: &mut LeakBucket,
 ) -> Result<()> {
     let mut qmp_service = crate::socket::SocketHandler::new(stream_fd);
@@ -423,7 +424,7 @@ fn handle_qmp(
 /// function, and exec this qmp command.
 fn qmp_command_exec(
     qmp_command: QmpCommand,
-    controller: &Arc<RwLock<dyn MachineExternalInterface>>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     if_fd: Option<RawFd>,
 ) -> (String, bool) {
     let mut qmp_response = Response::create_empty_response();
@@ -431,8 +432,7 @@ fn qmp_command_exec(
 
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
-        qmp_command.clone(); controller; qmp_response;
-        (stop, pause),
+        qmp_command.clone(); controller.lock().unwrap(); qmp_response;
         (cont, resume),
         (system_powerdown, powerdown),
         (system_reset, reset),
@@ -493,13 +493,34 @@ fn qmp_command_exec(
     // Handle the Qmp command which macro can't cover
     if id.is_none() {
         id = match qmp_command {
+            QmpCommand::stop { arguments: _, id } => {
+                let now = Instant::now();
+                while !controller.lock().unwrap().pause() {
+                    thread::sleep(Duration::from_millis(5));
+                    if now.elapsed() > Duration::from_secs(2) {
+                        // Not use resume() to avoid unnecessary qmp event.
+                        controller
+                            .lock()
+                            .unwrap()
+                            .notify_lifecycle(VmState::Paused, VmState::Running);
+                        qmp_response = Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(
+                                "Failed to pause VM".to_string(),
+                            ),
+                            None,
+                        );
+                        break;
+                    }
+                }
+                id
+            }
             QmpCommand::quit { id, .. } => {
-                controller.read().unwrap().destroy();
+                controller.lock().unwrap().destroy();
                 shutdown_flag = true;
                 id
             }
             QmpCommand::getfd { arguments, id } => {
-                qmp_response = controller.read().unwrap().getfd(arguments.fd_name, if_fd);
+                qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
             QmpCommand::trace_get_state { arguments, id } => {
