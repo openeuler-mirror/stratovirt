@@ -12,7 +12,7 @@
 
 use std::cell::RefCell;
 use std::fs::{remove_file, File};
-use std::process::{exit, Command};
+use std::process::Command;
 use std::rc::Rc;
 use std::string::String;
 

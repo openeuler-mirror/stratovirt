@@ -27,6 +27,7 @@ use mod_test::libdriver::virtio::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
+#[cfg(not(target_env = "ohos"))]
 use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
 use util::offset_of;
@@ -505,6 +506,7 @@ impl std::fmt::Display for ScsiDeviceType {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Copy)]
 enum TestAioType {
     AioOff = 0,
@@ -1865,6 +1867,7 @@ fn aio_model_test() {
     let mut lun = 0x2;
     let mut device_vec: Vec<ScsiDeviceConfig> = Vec::new();
 
+    #[cfg(not(target_env = "ohos"))]
     if aio_probe(AioEngine::IoUring).is_ok() {
         // Scsi Disk 1. AIO io_uring. Direct false.
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw));
@@ -1916,6 +1919,7 @@ fn aio_model_test() {
     // Scsi Disk 5. AIO native. Direct false. This is not allowed.
     // Stratovirt will report "native aio type should be used with direct on"
 
+    #[cfg(not(target_env = "ohos"))]
     if aio_probe(AioEngine::Native).is_ok() {
         // Scsi Disk 6. AIO native. Direct true.
         lun += 1;
