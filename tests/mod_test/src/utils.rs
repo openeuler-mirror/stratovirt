@@ -127,3 +127,31 @@ pub fn cleanup_img(image_path: String) {
 
     fs::remove_file(img_path).expect("lack permissions to remove the file");
 }
+
+pub fn support_numa() -> bool {
+    let numa_nodes_path = "/sys/devices/system/node/";
+
+    if Path::new(numa_nodes_path).exists() {
+        match fs::read_dir(numa_nodes_path) {
+            Ok(entries) => {
+                let mut has_nodes = false;
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        if entry.file_name().to_str().unwrap_or("").starts_with("node") {
+                            has_nodes = true;
+                            break;
+                        }
+                    }
+                }
+                if has_nodes {
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    } else {
+        return false;
+    }
+}

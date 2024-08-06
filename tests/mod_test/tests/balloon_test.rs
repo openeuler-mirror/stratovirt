@@ -13,10 +13,11 @@
 use std::cell::RefCell;
 use std::fs::{remove_file, File};
 use std::io::{self, BufRead, BufReader};
-use std::process::Command;
+use std::process::{exit, Command};
 use std::rc::Rc;
 use std::{thread, time};
 
+use mod_test::utils::support_numa;
 use serde_json::json;
 
 use mod_test::libdriver::machine::TestStdMachine;
@@ -1054,6 +1055,10 @@ fn auto_balloon_test_001() {
 /// Expect:
 ///     1/2.Success
 fn balloon_numa1() {
+    if !support_numa() {
+        return;
+    }
+
     let page_num = 255_u32;
     let mut idx = 0_u32;
     let balloon = VirtioBalloonTest::numa_node_new();
