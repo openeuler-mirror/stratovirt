@@ -475,6 +475,7 @@ fn prealloc_ram_read_write() {
 ///   4. Destroy device.
 /// Expect:
 ///   1/2/3/4: success.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn hugepage_ram_read_write() {
     // crate hugetlbfs directory
