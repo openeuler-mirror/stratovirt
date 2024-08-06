@@ -36,7 +36,7 @@ use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-use ohaudio::OhAudio;
+use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
@@ -48,6 +48,8 @@ pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
 pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 
 pub const TARGET_LATENCY_MS: u32 = 50;
+
+const IVSHMEM_VECTORS_NR: u32 = 1;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -543,8 +545,17 @@ impl Scream {
 
         let devfn = (self.config.addr.0 << 3) + self.config.addr.1;
         let mem_region = Region::init_ram_region(host_mmap, "ivshmem_ram");
-        let ivshmem = Ivshmem::new("ivshmem".to_string(), devfn, parent_bus, mem_region);
-        ivshmem.realize()?;
+        let ivshmem = Ivshmem::new(
+            "ivshmem".to_string(),
+            devfn,
+            parent_bus,
+            mem_region,
+            IVSHMEM_VECTORS_NR,
+        );
+        let _ivshmem = ivshmem.realize()?;
+
+        #[cfg(target_env = "ohos")]
+        OhAudioVolume::init_volume_sync(_ivshmem);
 
         self.start_play_thread_fn()?;
         self.start_record_thread_fn()
