@@ -12,10 +12,11 @@
 
 use std::cell::RefCell;
 use std::fs::{remove_file, File};
-use std::process::Command;
+use std::process::{exit, Command};
 use std::rc::Rc;
 use std::string::String;
 
+use mod_test::utils::support_numa;
 use serde_json::{json, Value::String as JsonString};
 
 use mod_test::{
@@ -474,6 +475,7 @@ fn prealloc_ram_read_write() {
 ///   4. Destroy device.
 /// Expect:
 ///   1/2/3/4: success.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn hugepage_ram_read_write() {
     // crate hugetlbfs directory
@@ -609,6 +611,10 @@ fn ram_readwrite_exception() {
 ///   1/2/3/4: success.
 #[test]
 fn ram_readwrite_numa() {
+    if !support_numa() {
+        return;
+    }
+
     let mut args: Vec<&str> = Vec::new();
     let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
@@ -665,6 +671,10 @@ fn ram_readwrite_numa() {
 ///   1/2/3/4: success.
 #[test]
 fn ram_readwrite_numa1() {
+    if !support_numa() {
+        return;
+    }
+
     let mut args: Vec<&str> = Vec::new();
     let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
