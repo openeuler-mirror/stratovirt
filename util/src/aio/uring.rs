@@ -13,7 +13,7 @@
 use std::os::unix::io::AsRawFd;
 
 use anyhow::{bail, Context};
-use io_uring::{opcode, squeue, types, IoUring};
+use io_uring::{opcode, types, IoUring};
 use libc;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -70,17 +70,12 @@ impl<T: Clone> AioContext<T> for IoUringContext {
                 OpCode::Preadv => opcode::Readv::new(fd, iovs as *const libc::iovec, len as u32)
                     .offset(offset)
                     .build()
-                    .flags(squeue::Flags::ASYNC)
                     .user_data(data),
                 OpCode::Pwritev => opcode::Writev::new(fd, iovs as *const libc::iovec, len as u32)
                     .offset(offset)
                     .build()
-                    .flags(squeue::Flags::ASYNC)
                     .user_data(data),
-                OpCode::Fdsync => opcode::Fsync::new(fd)
-                    .build()
-                    .flags(squeue::Flags::ASYNC)
-                    .user_data(data),
+                OpCode::Fdsync => opcode::Fsync::new(fd).build().user_data(data),
                 _ => {
                     bail!("Invalid entry code");
                 }
