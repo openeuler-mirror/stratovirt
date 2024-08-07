@@ -70,7 +70,7 @@ of settings.
 ### log
 
 StratoVirt supports outputting trace to the log file at trace level. Turn on
-the **trace_to_logger** feature to use is.
+the **trace_to_logger** feature to use it.
 
 ### Ftrace
 
@@ -80,7 +80,7 @@ suited for performance issues.
 
 It can be enabled by turning on the **trace_to_ftrace** feature during compilation.
 StratoVirt use ftrace by writing trace data to ftrace marker, and developers can
-read trace records from trace file under mounted ftrace director,
+read trace records from trace file under mounted ftrace directory,
 e.g. /sys/kernel/debug/tracing/trace.
 
 ### HiTraceMeter
