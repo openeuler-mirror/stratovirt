@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::pci::intx::Intx;
 use crate::pci::msix::{Msix, MSIX_TABLE_ENTRY_SIZE};
@@ -383,6 +383,8 @@ pub enum PcieDevType {
 /// Configuration space of PCI/PCIe device.
 #[derive(Clone)]
 pub struct PciConfig {
+    /// Device number and function number.
+    pub devfn: u8,
     /// Configuration space data.
     pub config: Vec<u8>,
     /// Mask of writable bits.
@@ -412,7 +414,7 @@ impl PciConfig {
     ///
     /// * `config_size` - Configuration size in bytes.
     /// * `nr_bar` - Number of BARs.
-    pub fn new(config_size: usize, nr_bar: u8) -> Self {
+    pub fn new(devfn: u8, config_size: usize, nr_bar: u8) -> Self {
         let mut bars = Vec::new();
         for _ in 0..nr_bar as usize {
             bars.push(Bar {
@@ -426,6 +428,7 @@ impl PciConfig {
         }
 
         PciConfig {
+            devfn,
             config: vec![0; config_size],
             write_mask: vec![0; config_size],
             write_clear_mask: vec![0; config_size],
@@ -905,6 +908,10 @@ impl PciConfig {
                     }
                 }
 
+                info!(
+                    "pci dev {} delete bar {} mapping: addr 0x{:X} size {}",
+                    self.devfn, id, self.bars[id].address, self.bars[id].size
+                );
                 trace::pci_update_mappings_del(id, self.bars[id].address, self.bars[id].size);
                 self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
@@ -939,6 +946,10 @@ impl PciConfig {
                     }
                 }
 
+                info!(
+                    "pci dev {} update bar {} mapping: addr 0x{:X} size {}",
+                    self.devfn, id, new_addr, self.bars[id].size
+                );
                 trace::pci_update_mappings_add(id, self.bars[id].address, self.bars[id].size);
                 self.bars[id].address = new_addr;
             }
@@ -1209,7 +1220,7 @@ mod tests {
 
     #[test]
     fn test_find_pci_cap() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
         let offset = pci_config.find_pci_cap(MSIX_CAP_ID);
         assert_eq!(offset, 0xff);
 
@@ -1239,7 +1250,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(8192, region_ops.clone(), "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
@@ -1316,7 +1327,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(8192, region_ops, "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 6);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
@@ -1413,7 +1424,7 @@ mod tests {
 
     #[test]
     fn test_add_pci_cap() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 2);
 
         // Overflow.
         assert!(pci_config
@@ -1430,7 +1441,7 @@ mod tests {
 
     #[test]
     fn test_add_pcie_ext_cap() {
-        let mut pci_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2);
+        let mut pci_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 2);
 
         // Overflow.
         assert!(pci_config
@@ -1451,7 +1462,7 @@ mod tests {
 
     #[test]
     fn test_get_ext_cap_size() {
-        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        let mut pcie_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 3);
         let offset1 = pcie_config.add_pcie_ext_cap(1, 0x10, 1).unwrap();
         let offset2 = pcie_config.add_pcie_ext_cap(1, 0x40, 1).unwrap();
         pcie_config.add_pcie_ext_cap(1, 0x20, 1).unwrap();
@@ -1464,7 +1475,7 @@ mod tests {
 
     #[test]
     fn test_reset_common_regs() {
-        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        let mut pcie_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 3);
         pcie_config.init_common_write_mask().unwrap();
         pcie_config.init_common_write_clear_mask().unwrap();
 
@@ -1489,7 +1500,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(4096, region_ops, "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
 
         // bar is unmapped
         #[cfg(target_arch = "x86_64")]
