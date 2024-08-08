@@ -912,7 +912,7 @@ impl PciConfig {
                     "pci dev {} delete bar {} mapping: addr 0x{:X} size {}",
                     self.devfn, id, self.bars[id].address, self.bars[id].size
                 );
-                trace::pci_update_mappings_del(id, self.bars[id].address, self.bars[id].size);
+
                 self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
 
@@ -950,7 +950,7 @@ impl PciConfig {
                     "pci dev {} update bar {} mapping: addr 0x{:X} size {}",
                     self.devfn, id, new_addr, self.bars[id].size
                 );
-                trace::pci_update_mappings_add(id, self.bars[id].address, self.bars[id].size);
+
                 self.bars[id].address = new_addr;
             }
         }
