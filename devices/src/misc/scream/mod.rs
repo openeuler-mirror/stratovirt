@@ -20,7 +20,7 @@ mod pulseaudio;
 
 use std::str::FromStr;
 use std::sync::atomic::{fence, Ordering};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::{mem, thread};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -35,6 +35,7 @@ use super::ivshmem::Ivshmem;
 use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use machine_manager::notifier::register_vm_pause_notifier;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
@@ -58,6 +59,17 @@ const IVSHMEM_VECTORS_NR: u32 = 1;
 const POLL_DELAY_US: u64 = (TARGET_LATENCY_MS as u64) * 1000 / 8;
 
 pub const SCREAM_MAGIC: u64 = 0x02032023;
+
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd)]
+pub enum AudioStatus {
+    // Processor is ready and waiting for play/capture.
+    #[default]
+    Ready,
+    // Processor is started and doing job.
+    Started,
+    // OH audio framework error occurred.
+    Error,
+}
 
 /// The scream device defines the audio directions.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -191,6 +203,10 @@ pub struct StreamData {
     pub audio_size: u32,
     /// Location of the played or recorded audio data in the shared memory.
     pub audio_base: u64,
+    /// used for VM pause
+    cond: Arc<Condvar>,
+    paused: Arc<Mutex<bool>>,
+    pause_notifier_id: u64,
 }
 
 impl StreamData {
@@ -198,6 +214,27 @@ impl StreamData {
         fence(Ordering::Acquire);
         self.fmt = header.fmt;
         self.chunk_idx = header.chunk_idx;
+    }
+
+    #[inline(always)]
+    fn wait_if_paused(&mut self, interface: Arc<Mutex<dyn AudioInterface>>) {
+        let mut locked_pause = self.paused.lock().unwrap();
+        while *locked_pause {
+            interface.lock().unwrap().destroy();
+            locked_pause = self.cond.wait(locked_pause).unwrap();
+        }
+    }
+
+    fn register_pause_notifier(&mut self) {
+        let cond = self.cond.clone();
+        let cond_pause = self.paused.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            *cond_pause.lock().unwrap() = paused;
+            if !paused {
+                cond.notify_all();
+            }
+        });
+        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
     }
 
     fn wait_for_ready(
@@ -221,6 +258,7 @@ impl StreamData {
             if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
                 interface.lock().unwrap().destroy();
                 while header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+                    self.wait_if_paused(interface.clone());
                     thread::sleep(time::Duration::from_millis(10));
                     header =
                         // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
@@ -293,6 +331,8 @@ impl StreamData {
         let play = &header.play;
 
         loop {
+            self.wait_if_paused(interface.clone());
+
             if play.fmt.fmt_generation != self.fmt.fmt_generation {
                 break;
             }
@@ -337,6 +377,8 @@ impl StreamData {
 
         interface.lock().unwrap().pre_receive(addr, capt);
         while capt.is_started != 0 {
+            self.wait_if_paused(interface.clone());
+
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
@@ -483,6 +525,7 @@ impl Scream {
             .spawn(move || {
                 let clone_interface = interface.clone();
                 let mut play_data = StreamData::default();
+                play_data.register_pause_notifier();
 
                 loop {
                     play_data.wait_for_ready(
@@ -510,6 +553,7 @@ impl Scream {
             .spawn(move || {
                 let clone_interface = interface.clone();
                 let mut capt_data = StreamData::default();
+                capt_data.register_pause_notifier();
 
                 loop {
                     capt_data.wait_for_ready(
