@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::os::raw::c_void;
 use std::sync::{
     atomic::{fence, AtomicBool, AtomicI32, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 use std::{
     cmp,
