@@ -333,7 +333,7 @@ impl VirtioPciDevice {
         VirtioPciDevice {
             base: PciDevBase {
                 base: DeviceBase::new(name, true, Some(parent_bus)),
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
             },
             device,

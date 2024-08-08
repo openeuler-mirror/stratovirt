@@ -65,7 +65,7 @@ impl LPCBridge {
         Ok(Self {
             base: PciDevBase {
                 base: DeviceBase::new("ICH9 LPC bridge".to_string(), false, Some(parent_bus)),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                config: PciConfig::new(0x1F << 3, PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
             },
             sys_io,

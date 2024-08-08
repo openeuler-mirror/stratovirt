@@ -646,7 +646,7 @@ mod tests {
         let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
         };
         // Too many vectors.
@@ -751,7 +751,7 @@ mod tests {
         let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
         };
         init_msix(&mut base, 0, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();

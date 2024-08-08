@@ -126,7 +126,7 @@ impl RootPort {
         Self {
             base: PciDevBase {
                 base: dev_base,
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
             },
             port_num: cfg.port,

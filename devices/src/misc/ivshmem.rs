@@ -70,7 +70,7 @@ impl Ivshmem {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new(name, false, Some(parent_bus)),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
+                config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
             },
             dev_id: Arc::new(AtomicU16::new(0)),

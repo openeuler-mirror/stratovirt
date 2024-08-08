@@ -133,7 +133,7 @@ impl VfioPciDevice {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
                 base: DeviceBase::new(name, true, Some(parent_bus)),
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
             },
             config_size: 0,
@@ -185,7 +185,7 @@ impl VfioPciDevice {
         // Cache the pci config space to avoid overwriting the original config space. Because we
         // will parse the chain of extended caps in cache config and insert them into original
         // config space.
-        let mut config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
+        let mut config = PciConfig::new(self.base.devfn, PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
         config.config = config_data;
         let mut next = PCI_CONFIG_SPACE_SIZE;
         while (PCI_CONFIG_SPACE_SIZE..PCIE_CONFIG_SPACE_SIZE).contains(&next) {
