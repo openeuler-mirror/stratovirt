@@ -37,6 +37,7 @@ use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
+use machine_manager::state_query::register_state_query_callback;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
@@ -524,6 +525,8 @@ impl Scream {
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         self.interface_resource.push(interface.clone());
+        let cloned_interface = interface.clone();
+        self.register_state_query("scream-play".to_string(), cloned_interface);
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
@@ -552,6 +555,8 @@ impl Scream {
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         let _ti = self.token_id.clone();
         self.interface_resource.push(interface.clone());
+        let cloned_interface = interface.clone();
+        self.register_state_query("scream-record".to_string(), cloned_interface);
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -577,6 +582,16 @@ impl Scream {
             })
             .with_context(|| "Failed to create thread scream")?;
         Ok(())
+    }
+
+    fn register_state_query(&self, module: String, interface: Arc<Mutex<dyn AudioInterface>>) {
+        register_state_query_callback(
+            module,
+            Arc::new(move || match interface.lock().unwrap().get_status() {
+                AudioStatus::Started => "On".to_string(),
+                _ => "Off".to_string(),
+            }),
+        );
     }
 
     pub fn realize(&mut self, parent_bus: Weak<Mutex<dyn Bus>>) -> Result<()> {
